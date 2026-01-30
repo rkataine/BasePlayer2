@@ -1,8 +1,10 @@
 package org.baseplayer.draw;
 
 import java.util.function.Function;
+
 import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
+
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
@@ -25,7 +27,7 @@ public class DrawFunctions extends Canvas {
   static int minZoom = 40;
   public static BooleanProperty update = new SimpleBooleanProperty(false);
  
-  private GraphicsContext gc;
+  private final GraphicsContext gc;
   public GraphicsContext reactivegc;
   private boolean lineZoomer = false;
   public static Color lineColor = new Color(0.5, 0.8, 0.8, 0.5);
@@ -35,13 +37,13 @@ public class DrawFunctions extends Canvas {
     new Stop(0, javafx.scene.paint.Color.rgb(105, 255, 0, 0.2)),  
     new Stop(1, javafx.scene.paint.Color.rgb(0, 200, 255, 0.2))
   );
-  static Font tekstifont = new Font("Arial", 10);
+
   
   Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
-  Function<Double, Double> heightToScreen = height -> getHeight()/SharedModel.visibleSamples.getAsInt() * height;
+  Function<Double, Double> heightToScreen = height -> getHeight()/SharedModel.visibleSamples().getAsInt() * height;
   Function<Double, Integer> screenPosToChromPos = screenPos -> (int)(drawStack.start + screenPos * drawStack.scale);
   private double mousePressedX;
-  private Canvas reactiveCanvas;
+  private final Canvas reactiveCanvas;
   private double mouseDraggedX;
   private boolean zoomDrag;
   public static double zoomFactor = 20;
@@ -65,8 +67,7 @@ public class DrawFunctions extends Canvas {
 
     parent.heightProperty().addListener((obs, oldVal, newVal) -> { resizing = true; update.set(!update.get()); resizing = false; });
    
-   
-    setReactiveCanvas(reactiveCanvas);
+    setupReactiveCanvas();
     // Platform.runLater(() -> { setStartEnd(drawStack.start, end); });
   }
 
@@ -79,7 +80,7 @@ public class DrawFunctions extends Canvas {
   }
   public Canvas getReactiveCanvas() { return reactiveCanvas; }
   
-  void setReactiveCanvas(Canvas reactiveCanvas) {
+  private void setupReactiveCanvas() {
     
     reactivegc = reactiveCanvas.getGraphicsContext2D();
    
@@ -95,9 +96,9 @@ public class DrawFunctions extends Canvas {
       
     if (event.isControlDown()) {        
         // Zoom
-        double zoomFactor = event.getDeltaY();
+        double scrollZoom = event.getDeltaY();
         double mousePos = event.getX();
-        zoom(zoomFactor, mousePos);
+        zoom(scrollZoom, mousePos);
     } else {
         // Scroll
         double acceleration = drawStack.viewLength/getWidth() * 2;
@@ -145,7 +146,6 @@ public class DrawFunctions extends Canvas {
       zoomAnimation(start, end);
     }
   }
-  void clearReactive(double x, double y, double width) { reactivegc.clearRect(x, y, width, getHeight()); }
   void clearReactive() { reactivegc.clearRect(0, 0, getWidth(), getHeight()); }
   void setStart(double start) {
     if (start < 1) start = 1;
@@ -156,7 +156,7 @@ public class DrawFunctions extends Canvas {
     if (end - start < minZoom) {
         start = (start+(end-start)/2) - minZoom/2;
         end = start + minZoom;
-    };
+    }
     if (start < 1) start = 1.0;
     if (end >= drawStack.chromSize - 1) end = drawStack.chromSize + 1;
     drawStack.start = start;
@@ -166,7 +166,7 @@ public class DrawFunctions extends Canvas {
     drawStack.scale = drawStack.viewLength / getWidth();
     update.set(!update.get());
   }
-  void zoomout() { zoomAnimation(1, drawStack.chromSize ); };
+
 
   void zoom(double zoomDirection, double mousePos) {
    
@@ -200,7 +200,12 @@ public class DrawFunctions extends Canvas {
           break;
         }
         
-        try { Thread.sleep(10); } catch (InterruptedException e) { e.printStackTrace(); break; }
+        try { 
+          Thread.sleep(10); 
+        } catch (InterruptedException e) { 
+          Thread.currentThread().interrupt();
+          break; 
+        }
       }
       if (!ended) Platform.runLater(() -> setStartEnd(drawStack.start, end) );
     }).start();

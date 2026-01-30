@@ -122,7 +122,7 @@ public class MainApp extends Application {
                 });               
                
             } catch (IOException e) {
-                e.printStackTrace();
+                System.err.println("Error loading FXML: " + e.getMessage());
             }
         }).start();
         

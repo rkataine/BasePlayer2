@@ -1,11 +1,15 @@
 package org.baseplayer.controllers;
 
+import java.util.Arrays;
+import java.util.Comparator;
+
 import org.baseplayer.MainApp;
 import org.baseplayer.SharedModel;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.draw.DrawSampleData;
-import org.baseplayer.variant.Variant;
 import org.baseplayer.io.FileDialog;
+import org.baseplayer.variant.Variant;
+
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
@@ -17,8 +21,6 @@ import javafx.scene.shape.Line;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.stage.Window;
-import java.util.Arrays;
-import java.util.Comparator;
 
 public class MenuBarController {
   @FXML private TextField positionField;
@@ -52,12 +54,12 @@ public class MenuBarController {
         }
         Arrays.sort(variants, Comparator.comparing(variant -> variant.line.getStartX()));    
         SharedModel.lastVisibleSample = samples - 1;
-        SharedModel.sampleHeight = MainController.drawPane.getHeight() / SharedModel.visibleSamples.getAsInt();
+        SharedModel.sampleHeight = MainController.drawPane.getHeight() / SharedModel.visibleSamples().getAsInt();
         MainController.drawStacks.get(0).variants = variants;
         DrawFunctions.update.set(!DrawFunctions.update.get());
       } 
-      boolean multiSelect = filtertype.equals("SES") ? false : true; // TODO myöhemmin kun avataan bam tai vcf trackille, refactoroi toimimaan myös sille
-      /* FileDialog fileDialog =  */new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
+      boolean multiSelect = !filtertype.equals("SES"); // TODO myöhemmin kun avataan bam tai vcf trackille, refactoroi toimimaan myös sille
+      new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
   }
   public void addStack(ActionEvent event) { MainController.addStack(true); }
   public void removeStack(ActionEvent event) { MainController.addStack(false); }

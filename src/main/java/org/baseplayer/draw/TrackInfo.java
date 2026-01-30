@@ -1,10 +1,12 @@
 package org.baseplayer.draw;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import java.util.ArrayList;
+
 import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
+
+import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.paint.Color;
 
 public class TrackInfo {
   SideBarStack sidebar;
@@ -38,7 +40,7 @@ public class TrackInfo {
           SharedModel.firstVisibleSample = SharedModel.hoverSample.get();
           SharedModel.lastVisibleSample = SharedModel.hoverSample.get();
         }
-        SharedModel.sampleHeight = sidebar.sideCanvas.getHeight() / SharedModel.visibleSamples.getAsInt();
+        SharedModel.sampleHeight = sidebar.sideCanvas.getHeight() / SharedModel.visibleSamples().getAsInt();
         SharedModel.scrollBarPosition = SharedModel.firstVisibleSample * SharedModel.sampleHeight;
         DrawFunctions.update.set(!DrawFunctions.update.get());
       }
@@ -50,7 +52,7 @@ public class TrackInfo {
     gc.clearRect(0, 0, sidebar.sideCanvas.getWidth(), sidebar.sideCanvas.getHeight());
     gc.setFill(Color.WHITE);
     gc.setStroke(Color.GRAY);
-    if (tracks.size() == 0) return;
+    if (tracks.isEmpty()) return;
     for (int i = SharedModel.firstVisibleSample; i < SharedModel.lastVisibleSample + 1; i++) {
       gc.fillText(tracks.get(i), 10, gc.getFont().getSize() + i * SharedModel.sampleHeight - SharedModel.scrollBarPosition);
       gc.strokeLine(0, i * SharedModel.sampleHeight, sidebar.sideCanvas.getWidth(), i * SharedModel.sampleHeight);

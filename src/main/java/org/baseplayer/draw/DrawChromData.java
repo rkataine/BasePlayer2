@@ -1,17 +1,16 @@
 package org.baseplayer.draw;
 
+import org.baseplayer.controllers.MainController;
+import org.baseplayer.utils.BaseUtils;
+
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
-import java.util.function.Function;
-
-import org.baseplayer.controllers.MainController;
-import org.baseplayer.utils.BaseUtils;
 
 public class DrawChromData extends DrawFunctions {
-  private GraphicsContext gc;
+  private final GraphicsContext gc;
 
   public DrawChromData(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
@@ -21,7 +20,6 @@ public class DrawChromData extends DrawFunctions {
     gc.setFont(new Font("Segoe UI Regular", 8));
   }
 
-  Function<Double, Double> heightToScreen = height -> getHeight() * height;
   @Override
   public void draw() {
     
@@ -37,7 +35,6 @@ public class DrawChromData extends DrawFunctions {
     gc.setStroke(Color.INDIANRED);
     double xpos = drawStack.start / drawStack.chromSize * getWidth() + 3;
     double width = Math.max(20, drawStack.viewLength / drawStack.chromSize * getWidth() - 6);
-    //gc.strokeRect(xpos, 1, width, 10);
     gc.fillRoundRect(xpos, 3, width, 20, 20, 20);
     gc.strokeRoundRect(xpos, 3, width, 20, 20, 20);
     
@@ -90,7 +87,7 @@ public class DrawChromData extends DrawFunctions {
       if (postfix != null) 
         text = ""+(int)(i/scale) + postfix;
       int textWidth = (int)gc.getFont().getSize() * text.length();
-      if (!skip) gc.fillText(text.toString(), linepos - textWidth/3 , getHeight()-lineheight);
+      if (!skip) gc.fillText(text, linepos - textWidth/3 , getHeight()-lineheight);
      
       gc.strokeLine(linepos, getHeight()-lineheight, linepos, getHeight());
     }
