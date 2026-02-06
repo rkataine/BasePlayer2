@@ -49,15 +49,17 @@ public class TrackInfo {
   }
 
   public void draw() {
-    gc.clearRect(0, 0, sidebar.sideCanvas.getWidth(), sidebar.sideCanvas.getHeight());
-    gc.setFill(Color.WHITE);
-    gc.setStroke(Color.GRAY);
+    // Fill with sidebar background color (VS Code style)
+    gc.setFill(DrawFunctions.sidebarColor);
+    gc.fillRect(0, 0, sidebar.sideCanvas.getWidth(), sidebar.sideCanvas.getHeight());
+    gc.setFill(Color.web("#cccccc")); // VS Code text color
+    gc.setStroke(DrawFunctions.borderColor);
     if (tracks.isEmpty()) return;
     for (int i = SharedModel.firstVisibleSample; i < SharedModel.lastVisibleSample + 1; i++) {
       gc.fillText(tracks.get(i), 10, gc.getFont().getSize() + i * SharedModel.sampleHeight - SharedModel.scrollBarPosition);
       gc.strokeLine(0, i * SharedModel.sampleHeight, sidebar.sideCanvas.getWidth(), i * SharedModel.sampleHeight);
       for(DrawStack stack : MainController.drawStacks) {
-        stack.drawCanvas.getGraphicsContext2D().setStroke(SharedModel.hoverSample.get() == i ? Color.WHITE : Color.GRAY);
+        stack.drawCanvas.getGraphicsContext2D().setStroke(SharedModel.hoverSample.get() == i ? Color.WHITE : DrawFunctions.borderColor);
         stack.drawCanvas.getGraphicsContext2D().strokeLine(0, i * SharedModel.sampleHeight, stack.drawCanvas.getWidth(), i * SharedModel.sampleHeight);
       }
     }

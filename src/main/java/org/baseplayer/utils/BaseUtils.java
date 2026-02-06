@@ -23,4 +23,8 @@ public class BaseUtils {
 	public static String formatNumber(int number) {
 		return NumberFormat.getNumberInstance(Locale.US).format(number);
 	}
+	
+	public static String formatNumber(long number) {
+		return NumberFormat.getNumberInstance(Locale.US).format(number);
+	}
 }

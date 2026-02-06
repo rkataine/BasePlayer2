@@ -2,17 +2,20 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.ComboBox?>
+<?import javafx.scene.control.Label?>
 <?import javafx.scene.control.Menu?>
 <?import javafx.scene.control.MenuBar?>
 <?import javafx.scene.control.MenuItem?>
 <?import javafx.scene.control.SeparatorMenuItem?>
 <?import javafx.scene.control.SplitPane?>
 <?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.Tooltip?>
 <?import javafx.scene.layout.AnchorPane?>
 <?import javafx.scene.layout.VBox?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.control.ToolBar?>
 <?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.Pane?>
 
 <HBox fx:controller="org.baseplayer.controllers.MenuBarController" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1">
 
@@ -53,13 +56,18 @@
   <ToolBar HBox.hgrow="ALWAYS" styleClass="toolBar">
     <items>
       <Button text="Variant Manager" />
-      <ComboBox fx:id="chromosomeDropdown" styleClass="flat-combo-box" prefHeight="20.0" prefWidth="67.0" promptText="Chr1" />
       <Button onAction="#removeStack" text="&lt;" />
-      <TextField prefHeight="0.0" prefWidth="149.0" promptText="Search" />
+      <TextField fx:id="geneSearchField" prefHeight="0.0" prefWidth="149.0" promptText="Search gene" />
       <Button onAction="#addStack" text="&gt;" />
-      <TextField fx:id="positionField" editable="false" prefHeight="20.0" prefWidth="200.0" promptText="position" />
-      <Button onAction="#zoomout" text="Zoomout" />
+      <HBox fx:id="positionBox" styleClass="position-box" prefHeight="20.0" prefWidth="200.0" spacing="0">
+        <Label fx:id="chromosomeLabel" text="chr1:" styleClass="chromosome-label" />
+        <TextField fx:id="positionField" prefHeight="20.0" prefWidth="150.0" promptText="1-100000" styleClass="position-text-field" />
+      </HBox>
+      <Label fx:id="viewLengthLabel" text="200Mb" styleClass="view-length-label" minWidth="70" prefWidth="70" alignment="CENTER_RIGHT" />
+      <Button fx:id="zoomInButton" text="+" onAction="#zoomIn" styleClass="zoom-button" />
+      <Button fx:id="zoomOutButton" text="−" onAction="#zoomOut" styleClass="zoom-button" />
        <Region HBox.hgrow="ALWAYS" />
+      <Pane fx:id="memoryBar" prefWidth="80" prefHeight="10" styleClass="memory-bar" />
       <Button fx:id="minimizeButton" text=" _ " onAction="#minimizeWindow" />
       <Button fx:id="maximizeButton" text="[  ]" onAction="#maximizeWindow" />
       <Button fx:id="closeButton" text=" X " onAction="#closeWindow" />

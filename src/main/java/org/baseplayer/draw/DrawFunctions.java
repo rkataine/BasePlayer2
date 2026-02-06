@@ -5,6 +5,7 @@ import java.util.function.Function;
 import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 
+import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
@@ -24,18 +25,20 @@ import javafx.scene.text.Font;
 public class DrawFunctions extends Canvas {
   //private Pane parent;
   public DrawStack drawStack;
-  static int minZoom = 40;
+  public static int minZoom = 40;
   public static BooleanProperty update = new SimpleBooleanProperty(false);
  
   private final GraphicsContext gc;
   public GraphicsContext reactivegc;
-  private boolean lineZoomer = false;
   public static Color lineColor = new Color(0.5, 0.8, 0.8, 0.5);
-  public static Color backgroundColor = new Color(0.2, 0.2, 0.2, 1);
+  // VS Code dark mode colors
+  public static Color backgroundColor = Color.web("#1e1e1e");        // Editor background
+  public static Color sidebarColor = Color.web("#252526");           // Sidebar background
+  public static Color borderColor = Color.web("#3c3c3c");            // Border color
   static LinearGradient zoomColor = new LinearGradient(
     0, 0, 1, 1, true, javafx.scene.paint.CycleMethod.NO_CYCLE,
-    new Stop(0, javafx.scene.paint.Color.rgb(105, 255, 0, 0.2)),  
-    new Stop(1, javafx.scene.paint.Color.rgb(0, 200, 255, 0.2))
+    new Stop(0, javafx.scene.paint.Color.rgb(30, 144, 255, 0.3)),  
+    new Stop(1, javafx.scene.paint.Color.rgb(100, 180, 255, 0.3))
   );
 
   
@@ -45,11 +48,22 @@ public class DrawFunctions extends Canvas {
   private double mousePressedX;
   private final Canvas reactiveCanvas;
   private double mouseDraggedX;
+	private double mouseDragDeltaX = 0;
+  private double mousePressedY;
+  private boolean lineZoomer = false;
   private boolean zoomDrag;
-  public static double zoomFactor = 20;
+  public static double zoomFactor = 10;
   public int zoomY = - 1;
   public static boolean resizing = false;
   public static boolean animationRunning = false;
+  
+  private double scrollVelocity = 0;
+  private long lastScrollTime = 0;
+  private long lastFrameTime = 0;
+  private AnimationTimer momentumTimer;
+  private boolean momentumTimerRunning = false;
+  private static final double MAX_VELOCITY = 50000.0; // Cap maximum scroll velocity
+  private static final long SCROLL_IDLE_THRESHOLD = 50_000_000; // 50ms in nanoseconds
 
   public DrawFunctions(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
@@ -67,59 +81,166 @@ public class DrawFunctions extends Canvas {
 
     parent.heightProperty().addListener((obs, oldVal, newVal) -> { resizing = true; update.set(!update.get()); resizing = false; });
    
+    initializeMomentumTimer();
     setupReactiveCanvas();
-    // Platform.runLater(() -> { setStartEnd(drawStack.start, end); });
   }
 
-  void draw() {
+  protected void draw() {
     
     if (MainController.drawStacks.size() > 1 && drawStack.equals(MainController.hoverStack)) {
       gc.setStroke(Color.WHITESMOKE);
       gc.strokeRect(1, -1, getWidth()-2, getHeight()+2);
     }
+    
+    drawMiddleLines();
+  }
+  
+  protected void drawMiddleLines() {
+    if (drawStack.viewLength < 200) {
+      gc.setStroke(Color.GRAY);
+      gc.setLineDashes(2, 4);
+      double lineStart = getWidth() / 2 - drawStack.pixelSize / 2;
+      double lineEnd = lineStart + drawStack.pixelSize;
+      gc.strokeLine(lineStart, 0, lineStart, getHeight());
+      gc.strokeLine(lineEnd, 0, lineEnd, getHeight());
+      gc.setLineDashes(0);
+    }
   }
   public Canvas getReactiveCanvas() { return reactiveCanvas; }
+  
+  private void initializeMomentumTimer() {
+    momentumTimer = new AnimationTimer() {
+      @Override
+      public void handle(long now) {
+        // Only apply momentum if user has stopped scrolling
+        if (now - lastScrollTime < SCROLL_IDLE_THRESHOLD) {
+          lastFrameTime = now;
+          return;
+        }
+        
+        // Dynamic minimum velocity based on zoom level (logarithmic scaling)
+        // At 40bp: minVelocity ~40, at 100k: ~500, at 1M: ~2000
+        double logScale = Math.log10(Math.max(10, drawStack.viewLength));
+        double minVelocity = Math.max(10.0, drawStack.viewLength / (500.0 / logScale));
+        
+        // Dynamic deceleration: faster decay when zoomed in, slower when zoomed out
+        // At 40bp: ~0.92 (fast decay), at 100k: ~0.96, at 1M+: ~0.98
+        double deceleration = 0.90 + Math.min(0.08, logScale * 0.015);
+        
+        if (Math.abs(scrollVelocity) > minVelocity) {
+          // Calculate actual time delta for smooth animation
+          double deltaTime = lastFrameTime > 0 ? (now - lastFrameTime) / 1_000_000_000.0 : 0.016;
+          deltaTime = Math.min(deltaTime, 0.05); // Cap delta time to avoid jumps
+          
+          double movement = -scrollVelocity * deltaTime;
+          setStart(drawStack.start + movement);
+          scrollVelocity *= deceleration;
+          lastFrameTime = now;
+        } else {
+          setStart(Math.round(drawStack.start) + 0.5);
+          scrollVelocity = 0;
+          lastFrameTime = 0;
+          momentumTimerRunning = false;
+          stop();
+        }
+      }
+      
+      @Override
+      public void start() {
+        momentumTimerRunning = true;
+        lastFrameTime = System.nanoTime();
+        super.start();
+      }
+      
+      @Override
+      public void stop() {
+        momentumTimerRunning = false;
+        lastFrameTime = 0;
+        super.stop();
+      }
+    };
+  }
   
   private void setupReactiveCanvas() {
     
     reactivegc = reactiveCanvas.getGraphicsContext2D();
    
     reactiveCanvas.setOnMouseClicked(event -> { });
-    reactiveCanvas.setOnMousePressed(event -> { mousePressedX = event.getX(); } );
+    reactiveCanvas.setOnMousePressed(event -> { 
+      mousePressedX = event.getX(); 
+      mousePressedY = event.getY();
+      mouseDraggedX = 0; // Reset for delta calculation
+    });
     reactiveCanvas.setOnMouseDragged(event -> handleDrag(event));
     reactiveCanvas.setOnScroll(event -> handleScroll(event) );
-    //reactiveCanvas.setOnMouseMoved(event -> { });
     reactiveCanvas.setOnMouseReleased(event -> { handleMouseRelease(event); });
   }
   void handleScroll(ScrollEvent event) {
     event.consume();
       
     if (event.isControlDown()) {        
-        // Zoom
         double scrollZoom = event.getDeltaY();
-        double mousePos = event.getX();
-        zoom(scrollZoom, mousePos);
+        zoom(scrollZoom, event.getX());
     } else {
-        // Scroll
-        double acceleration = drawStack.viewLength/getWidth() * 2;
-        double xPos = event.getDeltaX() * acceleration;
-        setStart(drawStack.start - xPos);
+        double scrollDelta = event.getDeltaX();
+        if (scrollDelta == 0) return;
+        
+        double scrollMultiplier = 0.3;
+        double adjustedDelta = scrollDelta * scrollMultiplier;
+        
+        double genomeDelta = adjustedDelta * drawStack.scale;
+        setStart(drawStack.start - genomeDelta);
+        
+        if (drawStack.viewLength < 5000000) { // Enable momentum up to 5M bp
+          long currentTime = System.nanoTime();
+          
+          // Calculate velocity based on scroll events
+          if (lastScrollTime > 0) {
+            double timeDelta = (currentTime - lastScrollTime) / 1_000_000_000.0;
+            if (timeDelta > 0 && timeDelta < 0.2) {
+              // Smooth velocity accumulation
+              double newVelocity = genomeDelta / timeDelta;
+              newVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, newVelocity));
+              // Blend with existing velocity for smoother transitions
+              scrollVelocity = scrollVelocity * 0.3 + newVelocity * 0.7;
+            }
+          } else {
+            // First scroll event - estimate initial velocity
+            scrollVelocity = genomeDelta * 60; // Assume ~60fps
+            scrollVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, scrollVelocity));
+          }
+          lastScrollTime = currentTime;
+          
+          // Dynamic velocity threshold based on zoom level (logarithmic)
+          double logScale = Math.log10(Math.max(10, drawStack.viewLength));
+          double velocityThreshold = Math.max(100.0, drawStack.viewLength / (200.0 / logScale));
+          
+          // Start momentum timer if not running and velocity is significant
+          if (Math.abs(scrollVelocity) > velocityThreshold && !momentumTimerRunning) {
+            momentumTimer.start();
+          }
+        } else {
+          scrollVelocity = 0;
+          lastScrollTime = 0;
+        }
     }
   }
   void handleDrag(MouseEvent event) {
     double dragX = event.getX();
-    
-    if (event.getButton() == MouseButton.SECONDARY) {      
-      setStart(drawStack.start - (dragX - mousePressedX) / drawStack.pixelSize);
-      mousePressedX = dragX;
+		double dragY = event.getY();
+    if (event.getButton() == MouseButton.SECONDARY) {
+      // Calculate delta from last drag position for smooth scrolling
+      double deltaX = dragX - (mouseDraggedX != 0 ? mouseDraggedX : mousePressedX);
+      setStart(drawStack.start - deltaX * drawStack.scale);
+      mouseDraggedX = dragX;
       return;
     }
     
     reactivegc.setFill(zoomColor);
-    reactivegc.setStroke(Color.INDIANRED);
+    reactivegc.setStroke(Color.DODGERBLUE);
     zoomDrag = true;
+		mouseDragDeltaX = dragX - mouseDraggedX;
     mouseDraggedX = dragX;
-    //clearReactive();
     if (!lineZoomer && mouseDraggedX >= mousePressedX) {
       clearReactive();
       reactivegc.fillRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight());
@@ -127,9 +248,9 @@ public class DrawFunctions extends Canvas {
     } else {
       zoomDrag = false;
       lineZoomer = true;
-      
-      zoom(dragX - mousePressedX, mousePressedX);
-      mousePressedX = dragX;
+			clearReactive();
+			reactivegc.strokeLine(mousePressedX, mousePressedY, mouseDraggedX, dragY);
+      zoom(mouseDragDeltaX, mousePressedX);
     }
   }
   void handleMouseRelease(MouseEvent event) {
@@ -152,11 +273,11 @@ public class DrawFunctions extends Canvas {
     if (start + drawStack.viewLength > drawStack.chromSize + 1) return;
     setStartEnd(start, start+drawStack.viewLength);
   }
-  void setStartEnd(Double start, double end) {
+  public void setStartEnd(Double start, double end) {
     if (end - start < minZoom) {
-        start = (start+(end-start)/2) - minZoom/2;
-        end = start + minZoom;
-    }
+			start = drawStack.middlePos() - minZoom / 2;
+			end = drawStack.middlePos() + minZoom / 2;
+		}
     if (start < 1) start = 1.0;
     if (end >= drawStack.chromSize - 1) end = drawStack.chromSize + 1;
     drawStack.start = start;
@@ -168,14 +289,13 @@ public class DrawFunctions extends Canvas {
   }
 
 
-  void zoom(double zoomDirection, double mousePos) {
-   
+  void zoom(double zoomDirection, double targetX) {
+		if (zoomDirection == 0.0) return;
     int direction = zoomDirection > 0 ? 1 : -1;
-    double pivot = mousePos / getWidth();
-    double acceleration = drawStack.viewLength/getWidth() * 15;
+    double pivot = targetX / getWidth();
+    double acceleration = drawStack.viewLength/getWidth() * 10;
     double newSize = drawStack.viewLength - zoomFactor * acceleration * direction;
-    if (newSize < minZoom) newSize = minZoom;
-    double start = Math.max(1, screenPosToChromPos.apply(mousePos) - (pivot * newSize));
+    double start = Math.max(1, screenPosToChromPos.apply(targetX) - (pivot * newSize));
     double end = Math.min(drawStack.chromSize + 1, start + newSize);
     if (drawStack.start == start && drawStack.end == end) return;
     setStartEnd(start, end);
@@ -186,8 +306,8 @@ public class DrawFunctions extends Canvas {
       animationRunning = true;
       final DoubleProperty currentStart = new SimpleDoubleProperty(drawStack.start);
       final DoubleProperty currentEnd = new SimpleDoubleProperty(drawStack.end);
-      int startStep = (int)(start - drawStack.start)/10;
-      int endStep = (int)(drawStack.end - end)/10;
+      double startStep = (start - drawStack.start)/10;
+      double endStep = (drawStack.end - end)/10;
       boolean ended = false;
       for(int i = 0; i < 10; i++) {
         Platform.runLater(() -> { setStartEnd(currentStart.get(), currentEnd.get()); });

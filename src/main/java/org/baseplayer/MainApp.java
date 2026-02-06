@@ -8,43 +8,63 @@ import org.baseplayer.draw.DrawFunctions;
 import javafx.animation.Animation;
 import javafx.animation.FadeTransition;
 import javafx.animation.KeyFrame;
-import javafx.animation.PauseTransition;
 import javafx.animation.Timeline;
-import javafx.animation.TranslateTransition;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.fxml.FXMLLoader;
-import javafx.geometry.Rectangle2D;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
-import javafx.scene.effect.BlendMode;
 import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
-import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
-import javafx.scene.paint.CycleMethod;
-import javafx.scene.paint.LinearGradient;
-import javafx.scene.paint.Stop;
-import javafx.scene.shape.Rectangle;
-import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.util.Duration;
 
 public class MainApp extends Application {
     public static Stage stage;
-    public static Stage splashStage; 
     static Scene scene;
     public static boolean darkMode = false;
     public static Image icon;
+    private static javafx.application.HostServices hostServices;
+    private SplashScreen splashScreen;
     Timeline timeline = new Timeline(new KeyFrame(Duration.seconds(0.1), e -> stage.setOpacity(1)));
     @Override
     public void start(Stage primaryStage) throws Exception {
+        hostServices = getHostServices();
         icon = new Image(getResource("BasePlayer_icon.png").toString());
-        showShplashScreen();
-        PauseTransition delay = new PauseTransition(Duration.seconds(1));
-        delay.setOnFinished(event -> { showMainStage(primaryStage); });
-        delay.play();
+        splashScreen = new SplashScreen();
+        splashScreen.show();
+        
+        // Start loading immediately in background
+        long startTime = System.currentTimeMillis();
+        new Thread(() -> {
+            try {
+                Parent root = loadFXML("Main");
+                stage = primaryStage;
+                scene = new Scene(root);
+                scene.setFill(Color.BLACK);
+                scene.getStylesheets().add(getResource("styles.css").toExternalForm());
+                setDarkMode();       
+                stage.initStyle(StageStyle.UNDECORATED);
+                stage.getIcons().add(icon);
+                stage.setTitle("BasePlayer 2");
+                
+                // Ensure minimum splash screen display time (1.5 seconds)
+                long elapsed = System.currentTimeMillis() - startTime;
+                long minDisplayTime = 1500;
+                if (elapsed < minDisplayTime) {
+                    Thread.sleep(minDisplayTime - elapsed);
+                }
+                
+                Platform.runLater(() -> {
+                    showMainStage(primaryStage);
+                });
+            } catch (Exception e) {
+                System.err.println("Error loading application: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }).start();
+        
         primaryStage.xProperty().addListener((obs, oldVal, newVal) -> {
              if (timeline.getStatus() == Animation.Status.RUNNING)
                 timeline.stop();
@@ -65,67 +85,15 @@ public class MainApp extends Application {
         });
     }
    
-    void showShplashScreen() {
-        splashStage = new Stage();
-        splashStage.setOpacity(0.85);
-        splashStage.initStyle(StageStyle.UNDECORATED);
-        splashStage.getIcons().add(icon);
-        ImageView imageView = new ImageView(icon);
-        Rectangle shine = new Rectangle(200, 200);
-        shine.setFill(new LinearGradient(0, 0, 1, 0, true, CycleMethod.NO_CYCLE,
-            new Stop(0, Color.TRANSPARENT),
-            new Stop(0.5, Color.WHITE),
-            new Stop(1, Color.TRANSPARENT)));
-        shine.setBlendMode(BlendMode.OVERLAY);
-
-        // Create a TranslateTransition for the shine effect
-        TranslateTransition tt = new TranslateTransition(Duration.seconds(1), shine);
-        tt.setFromX(-200);
-        tt.setToX(200);
-        tt.setCycleCount(1);
-        tt.play();
-        StackPane splashRoot = new StackPane(imageView, shine);
-        Scene splashScene = new Scene(splashRoot, 200, 200);
-        splashStage.setScene(splashScene);
-        splashStage.show();
-    }
     void showMainStage(Stage primaryStage) {
-        primaryStage.setWidth(1);
-        primaryStage.setHeight(1); 
-        new Thread(() -> {
-            try {
-
-                Parent root = loadFXML("Main");
-                stage = primaryStage;
-                scene = new Scene(root);
-                scene.setFill(Color.BLACK);
-                scene.getStylesheets().add(getResource("styles.css").toExternalForm());
-                setDarkMode();       
-                stage.initStyle(StageStyle.DECORATED);
-                stage.getIcons().add(icon);
-                stage.setTitle("BasePlayer 2");
-                
-                Platform.runLater(() -> {
-                  
-                    stage.setScene(scene);
-                    FadeTransition ft = new FadeTransition(Duration.seconds(1), stage.getScene().getRoot());
-                    ft.setFromValue(0);
-                    ft.setToValue(1);
-                    stage.show(); 
-                    splashStage.close();
-                    Rectangle2D screenBounds = Screen.getPrimary().getVisualBounds();
-                    stage.setX(screenBounds.getWidth()/2 - 600);
-                    stage.setY(50);
-                    stage.setWidth(1200);
-                    stage.setHeight(800);
-                    ft.play();
-                });               
-               
-            } catch (IOException e) {
-                System.err.println("Error loading FXML: " + e.getMessage());
-            }
-        }).start();
-        
+        stage.setScene(scene);
+        FadeTransition ft = new FadeTransition(Duration.seconds(1), stage.getScene().getRoot());
+        ft.setFromValue(0);
+        ft.setToValue(1);
+        stage.setMaximized(true);
+        stage.show(); 
+        splashScreen.close();
+        ft.play();
     }
     private static Parent loadFXML(String fxml) throws IOException {
         FXMLLoader fxmlLoader = new FXMLLoader(getResource(fxml + ".fxml"));
@@ -138,6 +106,24 @@ public class MainApp extends Application {
         darkMode = !darkMode;
         DrawFunctions.update.set(!DrawFunctions.update.get());
     }
-    static URL getResource(String string) { return MainApp.class.getResource(string); }
+    static URL getResource(String string) {
+        URL url = MainApp.class.getResource(string);
+        if (url == null) {
+            // Try absolute path anchored at the package
+            url = MainApp.class.getResource("/org/baseplayer/" + string);
+        }
+        if (url == null) {
+            String cp = System.getProperty("java.class.path");
+            throw new RuntimeException("Resource '" + string + "' not found. Searched '" + string + "' and '/org/baseplayer/" + string + "'.\n" +
+                    "Ensure build/resources/main is on the runtime classpath and that you rebuilt the project.\n" +
+                    "Current classpath: " + cp);
+        }
+        return url;
+    }
+    
+    public static javafx.application.HostServices getHostServicesInstance() {
+        return hostServices;
+    }
+    
     public static void main(String[] args) { launch(args); }
 }

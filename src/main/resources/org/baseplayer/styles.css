@@ -1,30 +1,247 @@
 .split-pane *.split-pane-divider {
    -fx-padding: 0 2 0 2;
    padding: 0 1 0 1;
-   /*  -fx-background-color: #373737;
-    background-color: #404040; */
 }
+
 .toolBar {
-    -fx-background-color: #303030;
-    background-color: #404040;
-    -fx-padding: 4 4 4 4;
-    padding: 4 4 4 4;
+  -fx-background-color: #333333;
+  background-color: #333333;
+  -fx-padding: 4 4 4 4;
+  padding: 4 4 4 4;
+  -fx-border-color: transparent transparent #3c3c3c transparent;
+  -fx-border-width: 0 0 1 0;
 }
+
 .menuBar {
-    -fx-padding: 5 5 5 5;
-    padding: 4 4 4 4;
+  -fx-padding: 5 5 5 5;
+  padding: 4 4 4 4;
+  -fx-background-color: #333333;
 }
 
 .flat-combo-box .list-cell {
-    -fx-padding: 4px;
-    padding: 4px;
+  -fx-padding: 4px;
+  padding: 4px;
+  -fx-text-fill: #cccccc;
 }
 
 .flat-combo-box {
-    -fx-background-color: -fx-box-border, -fx-control-inner-background;
-    background-color: -fx-box-border, -fx-control-inner-background;
-    -fx-background-insets: 0, 1;
-    -fx-padding: 1;
-    padding: 1;
-  
+  -fx-background-color: #3c3c3c;
+  background-color: #3c3c3c;
+  -fx-border-color: #3c3c3c;
+  -fx-border-width: 1;
+  -fx-padding: 1;
+  padding: 1;
+}
+
+.flat-combo-box .arrow-button {
+  -fx-background-color: transparent;
+}
+
+.flat-combo-box .arrow {
+  -fx-background-color: #cccccc;
+}
+
+/* Anchor pane backgrounds for different panels */
+.anchor-pane, AnchorPane {
+  -fx-background-color: #1e1e1e;
+}
+
+/* Sidebar style - slightly different shade */
+#chromSideBar, #drawSideBar {
+  -fx-background-color: #252526;
+}
+
+/* Stack pane backgrounds */
+.stack-pane, StackPane {
+  -fx-background-color: #1e1e1e;
+}
+
+/* Pane backgrounds */
+Pane {
+  -fx-background-color: #1e1e1e;
+}
+
+/* VBox background */
+VBox {
+  -fx-background-color: #1e1e1e;
+}
+
+/* Sidebar panels - slightly lighter shade like VS Code */
+.sidebar-panel {
+  -fx-background-color: #252526;
+}
+
+/* Minimal combo box - just text and arrow, no box */
+.minimal-combo-box {
+  -fx-background-color: transparent;
+  -fx-border-color: transparent;
+  -fx-border-width: 0;
+  -fx-padding: 2 4 2 0;
+}
+
+.minimal-combo-box:hover {
+  -fx-background-color: rgba(255, 255, 255, 0.1);
+}
+
+.minimal-combo-box .list-cell {
+  -fx-padding: 2px 4px;
+  -fx-text-fill: #7e99b4;
+  -fx-background-color: transparent;
+}
+
+.minimal-combo-box .arrow-button {
+  -fx-background-color: transparent;
+  -fx-padding: 0 4 0 4;
+}
+
+.minimal-combo-box .arrow {
+  -fx-background-color: #888888;
+  -fx-shape: "M 0 0 L 4 4 L 8 0 Z";
+}
+
+/* Memory bar styles */
+.memory-bar {
+  -fx-background-color: #3c3c3c;
+  -fx-background-radius: 3;
+  -fx-border-radius: 3;
+  -fx-border-color: #555555;
+  -fx-border-width: 1;
+}
+
+.memory-bar-fill {
+  -fx-background-radius: 2;
+}
+
+/* Text field styles */
+.text-field {
+  -fx-prompt-text-fill: #888888;
+  -fx-text-fill: #cccccc;
+  -fx-background-color: #3c3c3c;
+  -fx-border-color: #555555;
+  -fx-border-width: 1;
+  -fx-padding: 2 4 2 4;
+}
+
+.text-field:focused {
+  -fx-border-color: #007acc;
+  -fx-background-color: #2d2d2d;
+}
+
+#geneSearchField {
+  -fx-prompt-text-fill: #888888;
+}
+
+/* Sidebar label styles */
+.sidebar-label {
+  -fx-text-fill: #709076;
+  -fx-font-size: 11px;
+}
+
+/* Position box styles */
+.position-box {
+  -fx-background-color: #3c3c3c;
+  -fx-border-color: #555555;
+  -fx-border-width: 1;
+  -fx-border-radius: 2;
+  -fx-background-radius: 2;
+  -fx-padding: 0;
+  -fx-alignment: center-left;
+}
+
+.chromosome-label {
+  -fx-text-fill: #569cd6;
+  -fx-padding: 2 4 2 6;
+  -fx-font-size: 12px;
+  -fx-cursor: hand;
+}
+
+.chromosome-label:hover {
+  -fx-background-color: rgba(255, 255, 255, 0.1);
+}
+
+.position-text-field {
+  -fx-background-color: transparent;
+  -fx-border-color: transparent;
+  -fx-text-fill: #cccccc;
+  -fx-padding: 2 6 2 2;
+  -fx-font-size: 12px;
+}
+
+.position-text-field:focused {
+  -fx-background-color: rgba(255, 255, 255, 0.05);
+  -fx-border-color: transparent;
+}
+
+.view-length-label {
+  -fx-text-fill: #858585;
+  -fx-font-size: 11px;
+  -fx-padding: 0 8 0 8;
+}
+
+.zoom-button {
+  -fx-background-color: #3c3c3c;
+  -fx-text-fill: #cccccc;
+  -fx-border-color: #555555;
+  -fx-border-width: 1;
+  -fx-border-radius: 2;
+  -fx-background-radius: 2;
+  -fx-padding: 2 8 2 8;
+  -fx-font-size: 14px;
+  -fx-font-weight: bold;
+  -fx-cursor: hand;
+  -fx-min-width: 24;
+  -fx-min-height: 20;
+}
+
+.zoom-button:hover {
+  -fx-background-color: #4a4a4a;
+}
+
+.icon-button {
+  -fx-background-color: transparent;
+  -fx-text-fill: #cccccc;
+  -fx-border-color: transparent;
+  -fx-border-width: 0;
+  -fx-padding: 0;
+  -fx-font-size: 14px;
+  -fx-cursor: hand;
+  -fx-min-width: 22;
+  -fx-min-height: 22;
+  -fx-max-width: 22;
+  -fx-max-height: 22;
+}
+
+.icon-button:hover {
+  -fx-background-color: rgba(255, 255, 255, 0.1);
+  -fx-background-radius: 2;
+}
+
+/* Dark mode checkbox for popups */
+.dark-checkbox {
+  -fx-text-fill: white;
+}
+
+.dark-checkbox .box {
+  -fx-background-color: #3c3c3c;
+  -fx-border-color: #666666;
+  -fx-border-width: 1;
+  -fx-border-radius: 2;
+  -fx-background-radius: 2;
+}
+
+.dark-checkbox:selected .box {
+  -fx-background-color: #3c3c3c;
+  -fx-border-color: #888888;
+}
+
+.dark-checkbox .mark {
+  -fx-background-color: transparent;
+}
+
+.dark-checkbox:selected .mark {
+  -fx-background-color: white;
+}
+
+.dark-checkbox:hover .box {
+  -fx-border-color: #888888;
 }

@@ -22,6 +22,13 @@ javafx {
 
 application {
     mainClass = "org.baseplayer.MainApp"
+    
+    // Add Ikonli modules to the module path
+    applicationDefaultJvmArgs = [
+        '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
+        '--add-opens', 'javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
+        '--add-exports', 'javafx.base/com.sun.javafx.event=ALL-UNNAMED'
+    ]
 }
 shadowJar {
     mergeServiceFiles()
@@ -53,4 +60,7 @@ dependencies {
         [group: 'com.github.samtools', name: 'htsjdk', version: '4.1.3']
     )
     
+    // Ikonli icon font library for JavaFX
+    implementation 'org.kordamp.ikonli:ikonli-javafx:12.3.1'
+    implementation 'org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1'
 }

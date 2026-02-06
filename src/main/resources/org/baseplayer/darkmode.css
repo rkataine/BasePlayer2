@@ -1,45 +1,97 @@
-
+/* VS Code Dark Mode Style */
 .root {
-  -fx-base: #202020;
-  -fx-background: #404040;
-  background: #303030;
-  -fx-control-inner-background: #303030;
-  -fx-accent: #4a4a4a;
-  -fx-default-button: #585858;
-  -fx-focus-color: #686868;
-  -fx-faint-focus-color: #68686822;
-  -fx-selection-bar: #606060;
-  -fx-selection-bar-non-focused: #1d1d1d;
-  -fx-text-fill: #e0e0e0;
-  -fx-text-background-color: #202020;
+  -fx-base: #1e1e1e;
+  -fx-background: #1e1e1e;
+  background: #1e1e1e;
+  -fx-control-inner-background: #3c3c3c;
+  -fx-accent: #0e639c;
+  -fx-default-button: #0e639c;
+  -fx-focus-color: #007acc;
+  -fx-faint-focus-color: #007acc22;
+  -fx-selection-bar: #094771;
+  -fx-selection-bar-non-focused: #37373d;
+  -fx-text-fill: #cccccc;
+  -fx-text-background-color: #1e1e1e;
 }
 
 .menu-bar {
-  -fx-background-color: #303030;
-  background-color: #303030;
+  -fx-background-color: #333333;
+  background-color: #333333;
+  -fx-border-color: transparent transparent #3c3c3c transparent;
+  -fx-border-width: 0 0 1 0;
 }
 
 .menu {
-  -fx-text-fill: #e0e0e0;
+  -fx-text-fill: #cccccc;
 }
 
 .menu-item {
-  -fx-text-fill: #e0e0e0;
+  -fx-text-fill: #cccccc;
+  -fx-background-color: #252526;
+}
+
+.menu-item:hover, .menu-item:focused {
+  -fx-background-color: #094771;
+}
+
+.context-menu {
+  -fx-background-color: #252526;
+  -fx-border-color: #3c3c3c;
+  -fx-border-width: 1;
 }
 
 .text-field {
-  -fx-text-fill: #e0e0e0;
-  -fx-background-color: #404040;
-  background-color: #404040;
+  -fx-text-fill: #cccccc;
+  -fx-background-color: #3c3c3c;
+  background-color: #3c3c3c;
+  -fx-border-color: #3c3c3c;
+  -fx-border-width: 1;
 }
+
+.text-field:focused {
+  -fx-border-color: #007acc;
+}
+
+.tool-bar {
+  -fx-background-color: #333333;
+  background-color: #333333;
+  -fx-border-color: transparent transparent #3c3c3c transparent;
+  -fx-border-width: 0 0 1 0;
+}
+
 .tool-bar .button {
-  -fx-background-color: #202020;
-  background-color: #202020;
+  -fx-background-color: transparent;
+  background-color: transparent;
   -fx-border-color: transparent;
   border-color: transparent;
-  -fx-text-fill: white;
+  -fx-text-fill: #cccccc;
 }
+
 .tool-bar .button:hover {
-  -fx-background-color: #404040;
-  background-color: #404040;
+  -fx-background-color: #3c3c3c;
+  background-color: #3c3c3c;
+}
+
+.label {
+  -fx-text-fill: #cccccc;
+}
+
+.scroll-bar {
+  -fx-background-color: #1e1e1e;
+}
+
+.scroll-bar .thumb {
+  -fx-background-color: #424242;
+}
+
+.scroll-bar .thumb:hover {
+  -fx-background-color: #4f4f4f;
+}
+
+.scroll-bar .increment-button, .scroll-bar .decrement-button {
+  -fx-background-color: transparent;
+}
+
+.scroll-bar .increment-arrow, .scroll-bar .decrement-arrow {
+  -fx-background-color: #424242;
 }

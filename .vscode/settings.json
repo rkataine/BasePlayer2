@@ -1,3 +1,18 @@
 {
-  "java.configuration.updateBuildConfiguration": "automatic"
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.debug.settings.hotCodeReplace": "manual",
+  "java.autobuild.enabled": true,
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-23",
+      "path": "/usr/lib/jvm/temurin-23-jdk-amd64",
+      "default": true
+    }
+  ],
+  "editor.tabSize": 2,
+  "editor.insertSpaces": false,
+  "editor.detectIndentation": false,
+  "[java]": { "editor.tabSize": 2 },
+  "[xml]": { "editor.tabSize": 2 },
+  "[javascript]": { "editor.tabSize": 2 }
 }

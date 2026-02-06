@@ -20,6 +20,19 @@
           "endsPattern": "^.*Listening for transport.*$"
         }
       }
+    },
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": [
+        "classes"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gradle"
     }
   ]
 }

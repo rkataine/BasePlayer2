@@ -8,6 +8,14 @@
       "hostName": "localhost",
       "port": 5005,
       "preLaunchTask": "gradle-debug"
+    },
+    {
+      "type": "java",
+      "name": "Debug with Hot Reload",
+      "request": "launch",
+      "mainClass": "org.baseplayer.MainApp",
+      "vmArgs": "--module-path ${userHome}/.gradle/caches/modules-2/files-2.1/org.openjfx/javafx-base/25.0.2/2ec3d6fdfb259c161e018cb90e4a689987aeb294:${userHome}/.gradle/caches/modules-2/files-2.1/org.openjfx/javafx-graphics/25.0.2/721f558e87b036cfaf9923a635b828316dcbc1d6:${userHome}/.gradle/caches/modules-2/files-2.1/org.openjfx/javafx-controls/25.0.2/387cde53045336104a1e2c37b33b62909bf530d8:${userHome}/.gradle/caches/modules-2/files-2.1/org.openjfx/javafx-fxml/25.0.2/ef20217b9145de418d75c4094a0532ae866e28b2 --add-modules javafx.controls,javafx.fxml",
+      "preLaunchTask": "build"
     }
   ]
 }
