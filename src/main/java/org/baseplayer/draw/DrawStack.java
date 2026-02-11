@@ -140,11 +140,11 @@ public class DrawStack {
     
     // Add default tracks
     ConservationTrack conservationTrack = new ConservationTrack();
-    conservationTrack.setVisible(true);
+    conservationTrack.setVisible(false);
     featureTracksCanvas.addTrack(conservationTrack);
     
     GnomadTrack gnomadTrack = new GnomadTrack();
-    gnomadTrack.setVisible(true);
+    gnomadTrack.setVisible(false);
     featureTracksCanvas.addTrack(gnomadTrack);
     
     featureTracksCanvas.setCollapsed(false);

@@ -13,6 +13,7 @@ public class SideBarStack {
     reactiveCanvas = new Canvas();
     sideCanvas.heightProperty().bind(drawSideBarStackPane.heightProperty());
     sideCanvas.widthProperty().bind(drawSideBarStackPane.widthProperty());
+    reactiveCanvas.setMouseTransparent(true); // Allow clicks to pass through
     drawSideBarStackPane.getChildren().addAll(sideCanvas, reactiveCanvas);
     trackInfo = new TrackInfo(this);
   }

@@ -6,6 +6,7 @@ import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 
 import javafx.animation.AnimationTimer;
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
@@ -56,6 +57,10 @@ public class DrawFunctions extends Canvas {
   public int zoomY = - 1;
   public static boolean resizing = false;
   public static boolean animationRunning = false;
+  /** True while the user is actively dragging, scrolling, or zoom-animating. BAM fetches are deferred. */
+  public static volatile boolean navigating = false;
+  /** Timer to clear navigating after scroll wheel stops */
+  private PauseTransition scrollIdleTimer;
   
   private double scrollVelocity = 0;
   private long lastScrollTime = 0;
@@ -77,7 +82,7 @@ public class DrawFunctions extends Canvas {
     parent.widthProperty().addListener((obs, oldVal, newVal) -> { 
       resizing = true; update.set(!update.get()); resizing = false;
     });
-    reactiveCanvas.setOnMouseEntered(event -> { MainController.hoverStack = drawStack; resizing = true; update.set(!update.get()); resizing = false; });
+    reactiveCanvas.setOnMouseEntered(event -> { MainController.hoverStack = drawStack; update.set(!update.get()); });
 
     parent.heightProperty().addListener((obs, oldVal, newVal) -> { resizing = true; update.set(!update.get()); resizing = false; });
    
@@ -141,6 +146,8 @@ public class DrawFunctions extends Canvas {
           scrollVelocity = 0;
           lastFrameTime = 0;
           momentumTimerRunning = false;
+          navigating = false;
+          update.set(!update.get());
           stop();
         }
       }
@@ -171,9 +178,9 @@ public class DrawFunctions extends Canvas {
       mousePressedY = event.getY();
       mouseDraggedX = 0; // Reset for delta calculation
     });
-    reactiveCanvas.setOnMouseDragged(event -> handleDrag(event));
-    reactiveCanvas.setOnScroll(event -> handleScroll(event) );
-    reactiveCanvas.setOnMouseReleased(event -> { handleMouseRelease(event); });
+    reactiveCanvas.setOnMouseDragged(event -> { navigating = true; handleDrag(event); });
+    reactiveCanvas.setOnScroll(event -> { navigating = true; handleScroll(event); } );
+    reactiveCanvas.setOnMouseReleased(event -> { navigating = false; handleMouseRelease(event); });
   }
   void handleScroll(ScrollEvent event) {
     event.consume();
@@ -181,6 +188,8 @@ public class DrawFunctions extends Canvas {
     if (event.isControlDown()) {        
         double scrollZoom = event.getDeltaY();
         zoom(scrollZoom, event.getX());
+        // Reset scroll-idle timer to clear navigating after zoom stops
+        resetScrollIdleTimer();
     } else {
         double scrollDelta = event.getDeltaX();
         if (scrollDelta == 0) return;
@@ -222,6 +231,7 @@ public class DrawFunctions extends Canvas {
         } else {
           scrollVelocity = 0;
           lastScrollTime = 0;
+          resetScrollIdleTimer();
         }
     }
   }
@@ -256,18 +266,37 @@ public class DrawFunctions extends Canvas {
   void handleMouseRelease(MouseEvent event) {
     clearReactive();
    
-    if (lineZoomer) { lineZoomer = false; return; }
+    if (lineZoomer) { 
+      lineZoomer = false; 
+      update.set(!update.get()); 
+      return; 
+    }
     if (zoomDrag) {
       zoomDrag = false;
      
-      if (mousePressedX > mouseDraggedX) return;
+      if (mousePressedX > mouseDraggedX) { update.set(!update.get()); return; }
 
       double start = screenPosToChromPos.apply(mousePressedX);
       double end = screenPosToChromPos.apply(mouseDraggedX);
       zoomAnimation(start, end);
+    } else {
+      // Right-click pan release or no-op — trigger redraw to start BAM fetch
+      update.set(!update.get());
     }
   }
   void clearReactive() { reactivegc.clearRect(0, 0, getWidth(), getHeight()); }
+
+  /** Start or restart a short timer that clears navigating after scroll events stop. */
+  private void resetScrollIdleTimer() {
+    if (scrollIdleTimer == null) {
+      scrollIdleTimer = new PauseTransition(javafx.util.Duration.millis(200));
+      scrollIdleTimer.setOnFinished(e -> {
+        navigating = false;
+        update.set(!update.get());
+      });
+    }
+    scrollIdleTimer.playFromStart();
+  }
   void setStart(double start) {
     if (start < 1) start = 1;
     if (start + drawStack.viewLength > drawStack.chromSize + 1) return;
@@ -304,19 +333,18 @@ public class DrawFunctions extends Canvas {
   public void zoomAnimation(double start, double end) {
     new Thread(() -> {
       animationRunning = true;
+      navigating = true;
       final DoubleProperty currentStart = new SimpleDoubleProperty(drawStack.start);
       final DoubleProperty currentEnd = new SimpleDoubleProperty(drawStack.end);
       double startStep = (start - drawStack.start)/10;
       double endStep = (drawStack.end - end)/10;
-      boolean ended = false;
+      final boolean[] ended = {false};
       for(int i = 0; i < 10; i++) {
         Platform.runLater(() -> { setStartEnd(currentStart.get(), currentEnd.get()); });
         currentStart.set(currentStart.get() + startStep);
         currentEnd.set(currentEnd.get() - endStep);
         if ((startStep > 0 && currentStart.get() >= start) || (startStep < 0 && currentStart.get() <= start)) {
-          animationRunning = false;
-          ended = true;
-          Platform.runLater(() -> setStartEnd(start, end) );
+          ended[0] = true;
           break;
         }
         
@@ -327,7 +355,15 @@ public class DrawFunctions extends Canvas {
           break; 
         }
       }
-      if (!ended) Platform.runLater(() -> setStartEnd(drawStack.start, end) );
+      
+      // Schedule final position update and flag clearing together
+      Platform.runLater(() -> {
+        // Set final position (either target or current depending on early termination)
+        setStartEnd(ended[0] ? start : drawStack.start, end);
+        animationRunning = false;
+        navigating = false;
+        update.set(!update.get());
+      });
     }).start();
   }
 }

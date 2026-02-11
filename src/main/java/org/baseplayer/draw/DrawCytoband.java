@@ -103,6 +103,7 @@ public class DrawCytoband extends Canvas {
       if (indicatorDragging) {
         isDragging = false;
         indicatorDragging = false;
+        DrawFunctions.update.set(!DrawFunctions.update.get());
         event.consume();
       } else if (selectDragging) {
         double cytoWidth = getWidth() - 2 * CYTO_PADDING_X;

@@ -28,9 +28,26 @@ public class FileDialog {
   }
 
   public List<File> chooseFiles() {
-      final FileChooser fileChooser = new FileChooser(); // FileDialog.LOAD FileDialog.SAVE
+      final FileChooser fileChooser = new FileChooser();
       fileChooser.setTitle(header);
-      fileChooser.setInitialDirectory(defaultPaths.get(filtertype));
+      // Use persisted directory, fall back to in-memory default
+      File lastDir = UserPreferences.getLastDirectory(filtertype);
+      if (lastDir != null) {
+        try {
+          fileChooser.setInitialDirectory(lastDir);
+        } catch (IllegalArgumentException e) {
+          // Directory became inaccessible, use default
+          System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+          lastDir = null;
+        }
+      }
+      if (lastDir == null && defaultPaths.get(filtertype) != null && defaultPaths.get(filtertype).exists()) {
+        try {
+          fileChooser.setInitialDirectory(defaultPaths.get(filtertype));
+        } catch (IllegalArgumentException e) {
+          // Even default not accessible, FileChooser will use system default
+        }
+      }
       ExtensionFilter extFilter = new ExtensionFilter(filtertype, filefilters.get(filtertype));
       fileChooser.getExtensionFilters().add(extFilter);
       List<File> files = null;
@@ -41,6 +58,10 @@ public class FileDialog {
         files = Collections.singletonList(fileChooser.showSaveDialog(MainApp.stage));
       } else {
         files = Collections.singletonList(fileChooser.showOpenDialog(MainApp.stage));
+      }
+      // Persist selected directory
+      if (files != null && !files.isEmpty() && files.get(0) != null) {
+        UserPreferences.setLastDirectory(filtertype, files.get(0));
       }
       return files;
   }
@@ -58,12 +79,12 @@ public class FileDialog {
     savePaths.put("CTRL", "DefaultControlDir");
     savePaths.put("BED", "TrackDir");
     savePaths.put("JSON", "DefaultProjectDir");
-    File file = new File("C:\\");
-    defaultPaths.put("VCF", file);
-    defaultPaths.put("BAM", file);
-    defaultPaths.put("CTRL", file);
-    defaultPaths.put("BED", file);
-    defaultPaths.put("JSON", file);
+    File home = new File(System.getProperty("user.home"));
+    defaultPaths.put("VCF", home);
+    defaultPaths.put("BAM", home);
+    defaultPaths.put("CTRL", home);
+    defaultPaths.put("BED", home);
+    defaultPaths.put("JSON", home);
 
     filefilters.put("VCF", "*.vcf.gz");
     filefilters.put("BAM", "*.bam, *.cram");

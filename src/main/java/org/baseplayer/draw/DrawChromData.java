@@ -11,7 +11,6 @@ import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.annotation.Gene;
 import org.baseplayer.annotation.Transcript;
-import org.baseplayer.controllers.MainController;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseColors;
 import org.baseplayer.utils.GeneColors;
@@ -24,6 +23,7 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
+import javafx.stage.Window;
 
 public class DrawChromData extends DrawFunctions {
   private final GraphicsContext gc;
@@ -86,8 +86,6 @@ public class DrawChromData extends DrawFunctions {
 
   public DrawChromData(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
-    reactiveCanvas.setOnMouseEntered(event -> { MainController.hoverStack = drawStack; resizing = true; update.set(!update.get()); resizing = false; });
-  
     gc = getGraphicsContext2D();
     gc.setFont(AppFonts.getUIFont());
     
@@ -130,17 +128,32 @@ public class DrawChromData extends DrawFunctions {
         double screenX = event.getScreenX();
         double screenY = event.getScreenY();
         
-        // Check for amino acid hit first (more specific)
+        // Get window owner for popups
+        Window owner = null;
+        if (getScene() != null) {
+          owner = getScene().getWindow();
+        } else if (reactiveCanvas.getScene() != null) {
+          owner = reactiveCanvas.getScene().getWindow();
+        }
+        
+        if (owner == null) {
+          System.err.println("Warning: Cannot show popup - no window available");
+          return;
+        }
+        
+        // Find what's at the click position directly (don't rely on hover state)
         AminoAcidHitBox aaHit = findAminoAcidAt(mouseX, mouseY);
+        Gene geneHit = findGeneAt(mouseX, mouseY);
+        
         if (aaHit != null) {
           genePopup.hide();
           aminoAcidPopup.setData(aaHit.aminoAcid(), aaHit.codon(), aaHit.aminoAcidNumber(),
                                   aaHit.genomicStart(), aaHit.cdsPosition(), aaHit.geneName(), aaHit.isReverse());
-          aminoAcidPopup.show(getScene().getWindow(), screenX + 10, screenY + 10);
-        } else if (hoveredGene != null) {
+          aminoAcidPopup.show(owner, screenX + 10, screenY + 10);
+        } else if (geneHit != null) {
           // Show gene popup if no amino acid hit
           aminoAcidPopup.hide();
-          genePopup.show(hoveredGene, drawStack, getScene().getWindow(), screenX + 10, screenY + 10);
+          genePopup.show(geneHit, drawStack, owner, screenX + 10, screenY + 10);
         } else {
           genePopup.hide();
           aminoAcidPopup.hide();

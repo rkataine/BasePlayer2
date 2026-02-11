@@ -6,6 +6,7 @@ import java.util.List;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.scene.canvas.Canvas;
@@ -310,12 +311,30 @@ public class FeatureTracksCanvas extends DrawFunctions {
   private void showAddFileDialog(String type, String... extensions) {
     FileChooser chooser = new FileChooser();
     chooser.setTitle("Add " + type + " Track");
+    
+    // Use appropriate file type for directory preference
+    String fileType = type.toUpperCase();
+    if (type.equals("BigWig")) {
+      fileType = "BIGWIG";
+    }
+    
+    java.io.File lastDir = UserPreferences.getLastDirectory(fileType);
+    if (lastDir != null) {
+      try {
+        chooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        // Directory became inaccessible, FileChooser will use system default
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    
     chooser.getExtensionFilters().add(
         new FileChooser.ExtensionFilter(type + " files", extensions)
     );
     
     java.io.File file = chooser.showOpenDialog(getScene().getWindow());
     if (file != null) {
+      UserPreferences.setLastDirectory(fileType, file.getParentFile());
       try {
         Track track;
         if (type.equals("BED")) {

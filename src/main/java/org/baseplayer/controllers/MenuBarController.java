@@ -498,17 +498,27 @@ public class MenuBarController {
     GeneLocation loc = AnnotationData.getGeneLocation(geneName);
     if (loc == null) return;
     
-    // Switch chromosome if needed
-    if (!loc.chrom().equals(SharedModel.currentChromosome)) {
-      onChromosomeSelected(loc.chrom());
-    }
-    
-    // Navigate to gene location with some padding
-    long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
-    double newStart = loc.start() - padding;
-    double newEnd = loc.end() + padding;
-    
-    for (var stack : MainController.drawStacks) {
+    // Only navigate the active/hover stack
+    if (MainController.hoverStack != null) {
+      DrawStack stack = MainController.hoverStack;
+      
+      // Switch chromosome if needed (only for this stack)
+      if (!loc.chrom().equals(stack.chromosome)) {
+        Long chromLength = DrawStack.CHROMOSOME_SIZES.get(loc.chrom());
+        if (chromLength != null) {
+          stack.chromosome = loc.chrom();
+          stack.chromSize = chromLength;
+          stack.chromosomeDropdown.setValue(loc.chrom());
+          stack.loadSimulatedVariants();
+          stack.drawCanvas.setStartEnd(1.0, chromLength + 1);
+          stack.chromCanvas.setStartEnd(1.0, chromLength + 1);
+        }
+      }
+      
+      // Navigate to gene location with some padding
+      long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
+      double newStart = loc.start() - padding;
+      double newEnd = loc.end() + padding;
       stack.drawCanvas.zoomAnimation(newStart, newEnd);
     }
     

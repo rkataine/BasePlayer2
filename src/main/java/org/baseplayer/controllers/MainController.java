@@ -103,7 +103,7 @@ public class MainController {
         }
       });
   }
-  
+
   private void setupFeatureTracksSidebar() {
     // Create the sidebar - it will use the first stack's canvas initially
     featureTracksSidebar = new FeatureTracksSidebar(featureTracksSideBarPane);
@@ -328,17 +328,12 @@ public class MainController {
   void addUpdateListener() {
     DrawSampleData.update.addListener((observable, oldValue, newValue) -> {
        
-      if (DrawFunctions.resizing) {
-        for (DrawStack pane : drawStacks) {
-          pane.cytobandCanvas.draw();
-          pane.chromCanvas.draw();
-          pane.drawCanvas.draw();
-        }
-      }
-      if (hoverStack != null) {
-        hoverStack.cytobandCanvas.draw();
-        hoverStack.chromCanvas.draw();
-        hoverStack.drawCanvas.draw();
+      // Always draw all stacks so that data updates (e.g. BAM fetch completion)
+      // are reflected everywhere, not just on the hover stack
+      for (DrawStack pane : drawStacks) {
+        pane.cytobandCanvas.draw();
+        pane.chromCanvas.draw();
+        pane.drawCanvas.draw();
       }
       
       // Update feature tracks when region changes

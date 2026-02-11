@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.geometry.Insets;
@@ -216,6 +217,15 @@ public class FeatureTracksSidebar {
   private void addBedTrack() {
     FileChooser fileChooser = new FileChooser();
     fileChooser.setTitle("Open BED File");
+    File lastDir = UserPreferences.getLastDirectory("BED");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        // Directory became inaccessible, FileChooser will use system default
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
     fileChooser.getExtensionFilters().addAll(
       new FileChooser.ExtensionFilter("BED files", "*.bed", "*.bed.gz"),
       new FileChooser.ExtensionFilter("All files", "*.*")
@@ -223,6 +233,7 @@ public class FeatureTracksSidebar {
     
     File file = fileChooser.showOpenDialog(canvas.getScene().getWindow());
     if (file != null && featureTracksCanvas != null) {
+      UserPreferences.setLastDirectory("BED", file.getParentFile());
       try {
         BedTrack track = new BedTrack(file.toPath());
         featureTracksCanvas.addTrack(track);
@@ -237,6 +248,15 @@ public class FeatureTracksSidebar {
   private void addBigWigTrack() {
     FileChooser fileChooser = new FileChooser();
     fileChooser.setTitle("Open BigWig File");
+    File lastDir = UserPreferences.getLastDirectory("BIGWIG");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        // Directory became inaccessible, FileChooser will use system default
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
     fileChooser.getExtensionFilters().addAll(
       new FileChooser.ExtensionFilter("BigWig files", "*.bw", "*.bigwig", "*.bigWig"),
       new FileChooser.ExtensionFilter("All files", "*.*")
@@ -244,6 +264,7 @@ public class FeatureTracksSidebar {
     
     File file = fileChooser.showOpenDialog(canvas.getScene().getWindow());
     if (file != null && featureTracksCanvas != null) {
+      UserPreferences.setLastDirectory("BIGWIG", file.getParentFile());
       try {
         BigWigTrack track = new BigWigTrack(file.toPath());
         featureTracksCanvas.addTrack(track);
