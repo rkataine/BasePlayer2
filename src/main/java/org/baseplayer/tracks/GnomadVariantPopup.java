@@ -51,7 +51,7 @@ public class GnomadVariantPopup extends TrackDataPopup {
     // Gene symbol if available
     if (variant.geneSymbol() != null && !variant.geneSymbol().isEmpty()) {
       addClickableInfoRow("Gene", variant.geneSymbol(), 
-          () -> openUrl("https://gnomad.broadinstitute.org/gene/" + variant.geneSymbol() + "?dataset=gnomad_r3"));
+          () -> openUrl("https://gnomad.broadinstitute.org/gene/" + variant.geneSymbol() + "?dataset=gnomad_r4"));
     }
     
     addSeparator();
@@ -101,7 +101,7 @@ public class GnomadVariantPopup extends TrackDataPopup {
     // gnomAD link
     String variantId = String.format("%d-%s-%s", variant.position(), variant.ref(), variant.alt());
     addClickableInfoRow("gnomAD", "View in gnomAD",
-        () -> openUrl("https://gnomad.broadinstitute.org/variant/" + variantId + "?dataset=gnomad_r3"));
+        () -> openUrl("https://gnomad.broadinstitute.org/variant/" + variantId + "?dataset=gnomad_r4"));
     
     // ClinVar link
     addClickableInfoRow("ClinVar", "Search ClinVar",

@@ -9,23 +9,33 @@ import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.annotation.Gene;
 import org.baseplayer.annotation.Transcript;
+import org.baseplayer.io.AlphaFoldApiClient;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
+import javafx.scene.Scene;
+import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.Popup;
+import javafx.stage.Screen;
+import javafx.stage.Stage;
 import javafx.stage.Window;
 
 /**
@@ -150,6 +160,9 @@ public class GeneInfoPopup {
       buildCosmicSection(cosmic);
     }
     
+    // AlphaFold Structure section (async loading)
+    buildAlphaFoldSection(gene.name());
+
     // Transcripts - combine MANE (from gene) and non-MANE (loaded on demand)
     List<Transcript> allTranscripts = new ArrayList<>();
     if (gene.transcripts() != null) {
@@ -325,6 +338,320 @@ public class GeneInfoPopup {
   }
   
   /**
+   * Build the AlphaFold Structure section with async loading.
+   */
+  private void buildAlphaFoldSection(String geneName) {
+    // Create placeholder section
+    VBox alphaFoldBox = new VBox(4);
+    alphaFoldBox.setVisible(false);
+    alphaFoldBox.setManaged(false);
+    
+    Separator separator = new Separator();
+    separator.setVisible(false);
+    separator.setManaged(false);
+    
+    // Insert separator and box - will show when data loads
+    content.getChildren().add(separator);
+    content.getChildren().add(alphaFoldBox);
+    
+    System.out.println("AlphaFold: Fetching data for gene: " + geneName);
+    
+    // Async fetch AlphaFold data
+    AlphaFoldApiClient.getAlphaFoldForGene(geneName).thenAccept(entry -> {
+      System.out.println("AlphaFold: Got response for " + geneName + ": " + (entry != null ? entry.uniprotId() : "null"));
+      if (entry == null) return;
+
+      Runnable uiUpdate = () -> {
+        // Show the section
+        separator.setVisible(true);
+        separator.setManaged(true);
+        alphaFoldBox.setVisible(true);
+        alphaFoldBox.setManaged(true);
+
+        // Header
+        HBox header = new HBox(8);
+        header.setAlignment(Pos.CENTER_LEFT);
+
+        Label title = new Label("AlphaFold Structure");
+        title.setFont(AppFonts.getBoldFont(12));
+        title.setTextFill(Color.web("#4fc3f7"));
+
+        // pLDDT confidence badge
+        double plddt = entry.globalMetricValue();
+        String plddtText = String.format("pLDDT: %.1f", plddt);
+        Label plddtLabel = new Label(plddtText);
+        plddtLabel.setFont(AppFonts.getMonoFont(10));
+        plddtLabel.setTextFill(Color.WHITE);
+        String plddtColor = plddt >= 90 ? "#1565c0" : plddt >= 70 ? "#4caf50" : plddt >= 50 ? "#ff9800" : "#f44336";
+        plddtLabel.setStyle("-fx-background-color: " + plddtColor + "; -fx-padding: 2 6; -fx-background-radius: 3;");
+
+        header.getChildren().addAll(title, plddtLabel);
+        alphaFoldBox.getChildren().add(header);
+          
+          // UniProt ID
+          addAlphaFoldRow(alphaFoldBox, "UniProt ID", entry.uniprotId(), () -> openUniProt(entry.uniprotId()));
+          
+        // UniProt / links
+        HBox links = new HBox(8);
+        links.setAlignment(Pos.CENTER_LEFT);
+        Hyperlink view = new Hyperlink("View in AlphaFold DB");
+        view.setOnAction(e -> openUrl(entry.getAlphaFoldUrl()));
+        view.setFocusTraversable(false);
+        view.setStyle(view.getStyle() + "; -fx-focus-color: transparent; -fx-faint-focus-color: transparent;");
+        links.getChildren().add(view);
+        alphaFoldBox.getChildren().add(links);
+
+        // Description
+        if (entry.uniprotDescription() != null && !entry.uniprotDescription().isEmpty()) {
+          Label desc = new Label(cleanDescription(entry.uniprotDescription()));
+          desc.setWrapText(true);
+          desc.setFont(AppFonts.getUIFont(11));
+          alphaFoldBox.getChildren().add(desc);
+        }
+
+        // Model images (only create Image if URL is present)
+        HBox images = new HBox(8);
+        images.setAlignment(Pos.CENTER_LEFT);
+        boolean hasAnyImage = false;
+        String paeUrl = entry.paeImageUrl();
+        if (paeUrl != null && !paeUrl.isBlank()) {
+          try {
+            ImageView pae = new ImageView(new Image(paeUrl, 180, 80, true, true, true));
+            pae.setSmooth(true);
+            pae.setPreserveRatio(true);
+            pae.setCursor(javafx.scene.Cursor.HAND);
+            pae.setOnMouseClicked(ev -> openImageWindow(paeUrl, "PAE: " + entry.uniprotId()));
+            images.getChildren().add(pae);
+            hasAnyImage = true;
+          } catch (Exception e) {
+            System.err.println("AlphaFold: failed to load PAE image: " + e.getMessage());
+          }
+        }
+
+        String modelImageUrl = entry.modelUrl();
+        if (modelImageUrl != null && !modelImageUrl.isBlank()) {
+          try {
+            ImageView modelImg = new ImageView(new Image(modelImageUrl, 180, 80, true, true, true));
+            modelImg.setSmooth(true);
+            modelImg.setPreserveRatio(true);
+            modelImg.setCursor(javafx.scene.Cursor.HAND);
+            modelImg.setOnMouseClicked(ev -> openImageWindow(modelImageUrl, "Model: " + entry.uniprotId()));
+            images.getChildren().add(modelImg);
+            hasAnyImage = true;
+          } catch (Exception e) {
+            System.err.println("AlphaFold: failed to load model image: " + e.getMessage());
+          }
+        }
+
+        if (hasAnyImage) {
+          alphaFoldBox.getChildren().add(images);
+        }
+      };
+
+      if (Platform.isFxApplicationThread()) {
+        uiUpdate.run();
+      } else {
+        Platform.runLater(uiUpdate);
+      }
+    });
+  }
+  
+  private void addAlphaFoldRow(VBox container, String label, String value, Runnable onClick) {
+    HBox row = new HBox(8);
+    row.setAlignment(Pos.CENTER_LEFT);
+    
+    Label labelNode = new Label(label + ":");
+    labelNode.setFont(AppFonts.getUIFont());
+    labelNode.setTextFill(Color.GRAY);
+    labelNode.setMinWidth(80);
+    
+    Label valueNode = new Label(value);
+    valueNode.setFont(AppFonts.getUIFont());
+    valueNode.setTextFill(Color.LIGHTBLUE);
+    valueNode.setStyle("-fx-cursor: hand; -fx-underline: true;");
+    valueNode.setOnMouseClicked(e -> {
+      onClick.run();
+      hide();
+    });
+    
+    row.getChildren().addAll(labelNode, valueNode);
+    container.getChildren().add(row);
+  }
+  
+  private void addAlphaFoldInfoRow(VBox container, String label, String value) {
+    HBox row = new HBox(8);
+    row.setAlignment(Pos.CENTER_LEFT);
+    
+    Label labelNode = new Label(label + ":");
+    labelNode.setFont(AppFonts.getUIFont());
+    labelNode.setTextFill(Color.GRAY);
+    labelNode.setMinWidth(80);
+    
+    Label valueNode = new Label(value);
+    valueNode.setFont(AppFonts.getUIFont());
+    valueNode.setTextFill(Color.LIGHTGRAY);
+    
+    row.getChildren().addAll(labelNode, valueNode);
+    container.getChildren().add(row);
+  }
+  
+  private void openAlphaFold(String uniprotId) {
+    try {
+      String url = "https://alphafold.ebi.ac.uk/entry/" + uniprotId;
+      javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
+      if (hostServices != null) {
+        hostServices.showDocument(url);
+      }
+    } catch (Exception e) {
+      System.err.println("Failed to open AlphaFold: " + e.getMessage());
+    }
+  }
+  
+  private void openUniProt(String uniprotId) {
+    try {
+      String url = "https://www.uniprot.org/uniprotkb/" + uniprotId;
+      javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
+      if (hostServices != null) {
+        hostServices.showDocument(url);
+      }
+    } catch (Exception e) {
+      System.err.println("Failed to open UniProt: " + e.getMessage());
+    }
+  }
+  
+  private void openPdbDownload(String pdbUrl) {
+    try {
+      if (pdbUrl != null && !pdbUrl.isEmpty()) {
+        javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
+        if (hostServices != null) {
+          hostServices.showDocument(pdbUrl);
+        }
+      }
+    } catch (Exception e) {
+      System.err.println("Failed to download PDB: " + e.getMessage());
+    }
+  }
+
+  private void openEmbeddedViewer(String url, String title) {
+    // Embedded viewer removed — open external URL instead
+    openUrl(url);
+  }
+
+  private void openImageWindow(String imageUrl, String title) {
+    try {
+      if (imageUrl == null || imageUrl.isBlank()) return;
+      Image img = new Image(imageUrl, true);
+      ImageView iv = new ImageView(img);
+      iv.setPreserveRatio(true);
+      iv.setSmooth(true);
+      iv.setFitWidth(980);
+
+      StackPane root = new StackPane(iv);
+      root.setStyle("-fx-background-color: #000000;");
+      // Provide an explicit initial scene size so window is visible before image finishes loading
+      Scene scene = new Scene(root, 1000, 800);
+      Stage stage = new Stage();
+      stage.setTitle(title);
+      stage.setScene(scene);
+
+      // Try to set owner so the stage stacks relative to the main window
+      try {
+        Window owner = popup.getOwnerWindow();
+        if (owner != null) {
+          stage.initOwner(owner);
+        }
+      } catch (Exception ignored) {}
+
+      // Position the image stage beside the popup (right side if possible,
+      // otherwise place to the left). Keep within visual screen bounds.
+      try {
+        double gap = 8;
+        Rectangle2D vb = Screen.getPrimary().getVisualBounds();
+        double popupX = popup.getX();
+        double popupY = popup.getY();
+        double popupW = content.getWidth() > 0 ? content.getWidth() : 300;
+        double popupH = content.getHeight() > 0 ? content.getHeight() : 200;
+
+        double stageW = scene.getWidth();
+        double stageH = scene.getHeight();
+
+        double targetX = popupX + popupW + gap; // try right
+        double targetY = popupY; // align top
+
+        // If placing to the right would go off-screen, place to the left.
+        if (targetX + stageW > vb.getMaxX()) {
+          targetX = popupX - stageW - gap;
+        }
+
+        // Clamp into visual bounds
+        if (targetX < vb.getMinX() + gap) targetX = vb.getMinX() + gap;
+        if (targetY + stageH > vb.getMaxY() - gap) targetY = Math.max(vb.getMinY() + gap, vb.getMaxY() - stageH - gap);
+
+        stage.setX(targetX);
+        stage.setY(targetY);
+      } catch (Exception ignored) {}
+
+      // Keep the gene popup open while the image window is shown.
+      // Temporarily disable autoHide and restore when image window is closed.
+      try {
+        popup.setAutoHide(false);
+      } catch (Exception ignored) {}
+
+      stage.setOnHidden(evt -> {
+        try { popup.setAutoHide(true); } catch (Exception ignored) {}
+      });
+      stage.setOnCloseRequest(evt -> {
+        try { popup.setAutoHide(true); } catch (Exception ignored) {}
+      });
+
+      // When image metadata loads, adjust window to fit (but cap to reasonable max)
+      img.widthProperty().addListener((obs, oldVal, newVal) -> {
+        try {
+          double iw = newVal.doubleValue();
+          double ih = img.getHeight();
+          if (iw > 0 && ih > 0) {
+            double maxW = 1200;
+            double maxH = 900;
+            double targetW = Math.min(iw, maxW);
+            double targetH = Math.min(ih, maxH);
+            iv.setFitWidth(targetW);
+            stage.setWidth(targetW + 20);
+            stage.setHeight(targetH + 60);
+          }
+        } catch (Exception ignored) {}
+      });
+
+      stage.show();
+
+      // Ensure the image stage appears above the popup: briefly bring to front
+      Platform.runLater(() -> {
+        try {
+          stage.setAlwaysOnTop(true);
+          stage.toFront();
+          stage.requestFocus();
+          // briefly ensure it's top, then allow normal stacking
+          stage.setAlwaysOnTop(false);
+        } catch (Exception ignored) {}
+      });
+    } catch (Exception e) {
+      System.err.println("Failed to open image window: " + e.getMessage());
+    }
+  }
+
+  private void openUrl(String url) {
+    try {
+      if (url != null && !url.isEmpty()) {
+        javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
+        if (hostServices != null) {
+          hostServices.showDocument(url);
+        }
+      }
+    } catch (Exception e) {
+      System.err.println("Failed to open URL: " + e.getMessage());
+    }
+  }
+
+  /**
    * Build the COSMIC Cancer Gene Census section.
    */
   private void buildCosmicSection(CosmicCensusEntry cosmic) {
@@ -434,15 +761,19 @@ public class GeneInfoPopup {
     pane.setPadding(new Insets(0, 0, 0, 8));
     pane.setMaxWidth(MAX_WIDTH - 30);
     
-    // Split by comma and create badges
+    // Split by comma, normalize and deduplicate while keeping order
     String[] tumours = tumourTypes.split(",\\s*");
+    java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
     for (String tumour : tumours) {
       tumour = tumour.trim();
       if (tumour.isEmpty()) continue;
-      
       // Map to standardized cancer type name
       String displayName = CancerTypeMapper.mapCancerType(tumour);
-      
+      if (displayName == null || displayName.isEmpty()) continue;
+      seen.add(displayName);
+    }
+
+    for (String displayName : seen) {
       Label badge = new Label(displayName);
       badge.setFont(AppFonts.getUIFont(10));
       badge.setTextFill(Color.WHITE);

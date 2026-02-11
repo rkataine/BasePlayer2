@@ -213,26 +213,6 @@ public class FeatureTracksCanvas extends DrawFunctions {
     MenuItem toggleItem = new MenuItem("Collapse/Expand");
     toggleItem.setOnAction(e -> setCollapsed(!collapsed));
     
-    // Add conservation track
-    MenuItem addConservation = new MenuItem("Add PhyloP Conservation (UCSC)");
-    addConservation.setOnAction(e -> {
-      boolean hasConservation = tracks.stream()
-          .anyMatch(t -> t instanceof ConservationTrack);
-      if (!hasConservation) {
-        addTrack(new ConservationTrack());
-      }
-    });
-    
-    // Add gnomAD track
-    MenuItem addGnomad = new MenuItem("Add gnomAD Variants");
-    addGnomad.setOnAction(e -> {
-      boolean hasGnomad = tracks.stream()
-          .anyMatch(t -> t instanceof GnomadTrack);
-      if (!hasGnomad) {
-        addTrack(new GnomadTrack());
-      }
-    });
-    
     // Add from file
     MenuItem addBedFile = new MenuItem("Add BED file...");
     addBedFile.setOnAction(e -> showAddFileDialog("BED", "*.bed", "*.bed.gz"));
@@ -246,9 +226,6 @@ public class FeatureTracksCanvas extends DrawFunctions {
     
     contextMenu.getItems().addAll(
         toggleItem,
-        new SeparatorMenuItem(),
-        addConservation,
-        addGnomad,
         new SeparatorMenuItem(),
         addBedFile,
         addBigWigFile,

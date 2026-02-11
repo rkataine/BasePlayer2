@@ -25,6 +25,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.SVGPath;
 import javafx.stage.FileChooser;
 import javafx.stage.Popup;
 
@@ -428,10 +429,37 @@ public class FeatureTracksSidebar {
     title.setStyle("-fx-text-fill: #ddd; -fx-font-weight: bold;");
     content.getChildren().add(title);
     
-    // Auto-scale checkbox
+    // Auto-scale checkbox with visible green checkmark
     CheckBox autoScale = new CheckBox("Auto-scale");
     autoScale.setSelected(track.isAutoScale());
     autoScale.setStyle("-fx-text-fill: #ccc;");
+    
+    // Create a custom checkmark graphic that replaces the native one
+    StackPane customBox = new StackPane();
+    customBox.setPrefSize(16, 16);
+    customBox.setStyle("-fx-border-color: #66cc66; -fx-border-width: 1.5; -fx-background-color: #333;");
+    
+    SVGPath checkMark = new SVGPath();
+    checkMark.setContent("M 2 8 L 6 12 L 14 2");
+    checkMark.setStroke(Color.web("#66cc66"));
+    checkMark.setStrokeWidth(2.5);
+    checkMark.setFill(null);
+    checkMark.visibleProperty().bind(autoScale.selectedProperty());
+    
+    customBox.getChildren().add(checkMark);
+    
+    // Create HBox with custom checkbox and label
+    HBox autoRow = new HBox(6);
+    autoRow.setAlignment(Pos.CENTER_LEFT);
+    
+    // Make customBox clickable to toggle checkbox
+    customBox.setOnMouseClicked(e -> autoScale.setSelected(!autoScale.isSelected()));
+    
+    Label autoLabel = new Label("Auto-scale");
+    autoLabel.setStyle("-fx-text-fill: #ccc;");
+    autoLabel.setOnMouseClicked(e -> autoScale.setSelected(!autoScale.isSelected()));
+    
+    autoRow.getChildren().addAll(customBox, autoLabel);
     
     // Min/Max value fields
     GridPane grid = new GridPane();
@@ -505,7 +533,7 @@ public class FeatureTracksSidebar {
     
     buttons.getChildren().addAll(cancelBtn, applyBtn);
     
-    content.getChildren().addAll(autoScale, grid, buttons);
+    content.getChildren().addAll(autoRow, grid, buttons);
     
     settingsPopup.getContent().add(content);
     settingsPopup.show(canvas.getScene().getWindow(), screenX, screenY);

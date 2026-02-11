@@ -215,14 +215,16 @@ public abstract class TrackDataPopup {
     return badge;
   }
   
-  /**
-   * Open URL in default browser.
-   */
   protected void openUrl(String url) {
     try {
-      java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
+      javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
+      if (hostServices != null) {
+        hostServices.showDocument(url);
+      } else {
+        System.err.println("HostServices not available for opening URL: " + url);
+      }
     } catch (Exception e) {
-      System.err.println("Failed to open URL: " + url);
+      System.err.println("Failed to open URL: " + url + " - " + e.getMessage());
     }
   }
   

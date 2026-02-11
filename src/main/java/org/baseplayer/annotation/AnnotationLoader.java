@@ -21,8 +21,8 @@ import java.util.zip.GZIPOutputStream;
  */
 public final class AnnotationLoader {
   
-  private static final int CACHE_VERSION = 4;  // Increment when format changes
-  private static final int TRANSCRIPT_CACHE_VERSION = 1;  // Version for non-MANE transcript cache
+  private static final int CACHE_VERSION = 5;  // Increment when format changes (added CDS bounds)
+  private static final int TRANSCRIPT_CACHE_VERSION = 2;  // Version for non-MANE transcript cache (added CDS bounds)
   
   private AnnotationLoader() {} // Utility class
   
@@ -108,6 +108,7 @@ public final class AnnotationLoader {
     Map<String, GeneBuilder> geneBuilders = new HashMap<>();
     Map<String, TranscriptBuilder> transcriptBuilders = new HashMap<>();
     Map<String, List<long[]>> exonsByTranscript = new HashMap<>();
+    Map<String, long[]> cdsBoundsByTranscript = new HashMap<>();  // CDS start/end per transcript
     
     try (BufferedReader reader = new BufferedReader(
            new InputStreamReader(new GZIPInputStream(Files.newInputStream(gff3File))))) {
@@ -131,11 +132,13 @@ public final class AnnotationLoader {
           parseTranscript(start, end, attributes, transcriptBuilders);
         } else if (type.equals("exon")) {
           parseExon(start, end, attributes, exonsByTranscript);
+        } else if (type.equals("CDS")) {
+          parseCDS(start, end, attributes, cdsBoundsByTranscript);
         }
       }
       
       // Build final gene objects
-      buildGenes(geneBuilders, transcriptBuilders, exonsByTranscript);
+      buildGenes(geneBuilders, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
       
       AnnotationData.setGenesLoaded(true);
       
@@ -143,7 +146,7 @@ public final class AnnotationLoader {
       saveGenesToCache(cacheFile, geneBuilders);
       
       // Save non-MANE transcripts to separate cache
-      saveNonManeTranscriptsToCache(txCacheFile, geneBuilders, transcriptBuilders, exonsByTranscript);
+      saveNonManeTranscriptsToCache(txCacheFile, geneBuilders, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
       
     } catch (IOException e) {
       System.err.println("Failed to load genes: " + e.getMessage());
@@ -207,19 +210,39 @@ public final class AnnotationLoader {
     }
   }
   
+  private static void parseCDS(long start, long end, String attributes,
+                                Map<String, long[]> cdsBoundsByTranscript) {
+    String parentId = extractAttribute(attributes, "Parent");
+    if (parentId != null) {
+      // Update CDS bounds for this transcript - track min start and max end
+      long[] bounds = cdsBoundsByTranscript.get(parentId);
+      if (bounds == null) {
+        cdsBoundsByTranscript.put(parentId, new long[]{start, end});
+      } else {
+        bounds[0] = Math.min(bounds[0], start);
+        bounds[1] = Math.max(bounds[1], end);
+      }
+    }
+  }
+  
   private static void buildGenes(Map<String, GeneBuilder> geneBuilders,
                                   Map<String, TranscriptBuilder> transcriptBuilders,
-                                  Map<String, List<long[]>> exonsByTranscript) {
+                                  Map<String, List<long[]>> exonsByTranscript,
+                                  Map<String, long[]> cdsBoundsByTranscript) {
     
     // Assign transcripts to genes
     for (TranscriptBuilder tb : transcriptBuilders.values()) {
       GeneBuilder gb = geneBuilders.get(tb.parentGeneId);
       if (gb != null) {
-        // Build transcript with its exons
+        // Build transcript with its exons and CDS bounds
         List<long[]> txExons = exonsByTranscript.getOrDefault(tb.id, new ArrayList<>());
+        long[] cdsBounds = cdsBoundsByTranscript.get(tb.id);
+        long cdsStart = cdsBounds != null ? cdsBounds[0] : 0;
+        long cdsEnd = cdsBounds != null ? cdsBounds[1] : 0;
+        
         Transcript transcript = new Transcript(
             tb.id, tb.name, tb.start, tb.end, tb.biotype,
-            tb.isManeSelect, tb.isManeClinic, txExons
+            tb.isManeSelect, tb.isManeClinic, txExons, cdsStart, cdsEnd
         );
         
         // Only add MANE transcripts to the gene object (others saved separately)
@@ -310,6 +333,8 @@ public final class AnnotationLoader {
           out.writeUTF(tx.biotype() != null ? tx.biotype() : "");
           out.writeBoolean(tx.isManeSelect());
           out.writeBoolean(tx.isManeClinic());
+          out.writeLong(tx.cdsStart());
+          out.writeLong(tx.cdsEnd());
           
           // Write transcript exons
           out.writeInt(tx.exons().size());
@@ -373,6 +398,8 @@ public final class AnnotationLoader {
           if (txBiotype.isEmpty()) txBiotype = null;
           boolean isManeSelect = in.readBoolean();
           boolean isManeClinic = in.readBoolean();
+          long cdsStart = in.readLong();
+          long cdsEnd = in.readLong();
           
           // Read transcript exons
           int txExonCount = in.readInt();
@@ -382,7 +409,7 @@ public final class AnnotationLoader {
           }
           
           transcripts.add(new Transcript(txId, txName, txStart, txEnd, txBiotype, 
-                                          isManeSelect, isManeClinic, txExons));
+                                          isManeSelect, isManeClinic, txExons, cdsStart, cdsEnd));
         }
         
         // Read merged exons
@@ -424,7 +451,8 @@ public final class AnnotationLoader {
   private static void saveNonManeTranscriptsToCache(Path txCacheFile, 
       Map<String, GeneBuilder> geneBuilders,
       Map<String, TranscriptBuilder> transcriptBuilders,
-      Map<String, List<long[]>> exonsByTranscript) {
+      Map<String, List<long[]>> exonsByTranscript,
+      Map<String, long[]> cdsBoundsByTranscript) {
     
     try (DataOutputStream out = new DataOutputStream(
            new GZIPOutputStream(Files.newOutputStream(txCacheFile)))) {
@@ -436,9 +464,12 @@ public final class AnnotationLoader {
       for (TranscriptBuilder tb : transcriptBuilders.values()) {
         if (!tb.isManeSelect && !tb.isManeClinic) {
           List<long[]> txExons = exonsByTranscript.getOrDefault(tb.id, new ArrayList<>());
+          long[] cdsBounds = cdsBoundsByTranscript.get(tb.id);
+          long cdsStart = cdsBounds != null ? cdsBounds[0] : 0;
+          long cdsEnd = cdsBounds != null ? cdsBounds[1] : 0;
           Transcript transcript = new Transcript(
               tb.id, tb.name, tb.start, tb.end, tb.biotype,
-              false, false, txExons
+              false, false, txExons, cdsStart, cdsEnd
           );
           nonManeByGene.computeIfAbsent(tb.parentGeneId, k -> new ArrayList<>()).add(transcript);
         }
@@ -458,6 +489,8 @@ public final class AnnotationLoader {
           out.writeLong(tx.start());
           out.writeLong(tx.end());
           out.writeUTF(tx.biotype() != null ? tx.biotype() : "");
+          out.writeLong(tx.cdsStart());
+          out.writeLong(tx.cdsEnd());
           
           out.writeInt(tx.exons().size());
           for (long[] exon : tx.exons()) {
@@ -509,6 +542,8 @@ public final class AnnotationLoader {
           long txEnd = in.readLong();
           String txBiotype = in.readUTF();
           if (txBiotype.isEmpty()) txBiotype = null;
+          long cdsStart = in.readLong();
+          long cdsEnd = in.readLong();
           
           int exonCount = in.readInt();
           List<long[]> exons = new ArrayList<>(exonCount);
@@ -517,7 +552,7 @@ public final class AnnotationLoader {
           }
           
           transcripts.add(new Transcript(txId, txName, txStart, txEnd, txBiotype, 
-                                          false, false, exons));
+                                          false, false, exons, cdsStart, cdsEnd));
         }
         
         nonManeTranscripts.put(geneId, transcripts);

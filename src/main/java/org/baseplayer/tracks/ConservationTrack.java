@@ -252,9 +252,6 @@ public class ConservationTrack extends AbstractTrack {
     // For per-base data at high zoom, use optimized drawing
     boolean isBaseLevelData = currentData.isBaseLevelData();
     
-    // Offset to align with reference bases (centered on the base position)
-    double baseOffset = pixelsPerBase;
-    
     for (int i = 0; i < bins; i++) {
       double score = scores[i];
       if (score == 0) continue;
@@ -266,9 +263,9 @@ public class ConservationTrack extends AbstractTrack {
       // Skip if outside view
       if (binGenomicEnd < viewStart || binGenomicStart > viewEnd) continue;
       
-      // Map to screen coordinates with offset for base alignment
-      double screenX1 = x + ((binGenomicStart - viewStart) / viewLength) * width + baseOffset;
-      double screenX2 = x + ((binGenomicEnd - viewStart) / viewLength) * width + baseOffset;
+      // Map to screen coordinates
+      double screenX1 = x + ((binGenomicStart - viewStart) / viewLength) * width;
+      double screenX2 = x + ((binGenomicEnd - viewStart) / viewLength) * width;
       double binWidth = Math.max(1, screenX2 - screenX1);
       
       double barDisplayHeight = Math.abs(score) / maxAbsScore * halfHeight;

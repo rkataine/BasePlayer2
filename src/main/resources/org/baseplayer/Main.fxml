@@ -22,7 +22,7 @@
       <children>
         <fx:include source="MenuBar.fxml" />
         
-        <SplitPane fx:id="mainSplit" dividerPositions="0.20, 0.25" orientation="VERTICAL" VBox.vgrow="ALWAYS">
+        <SplitPane fx:id="mainSplit" dividerPositions="0.55, 0.70" orientation="VERTICAL" VBox.vgrow="ALWAYS">
           <items>
             <AnchorPane fx:id="chromPane" minWidth="0.0">
               <SplitPane fx:id="chromSplit" dividerPositions="0.15" orientation="HORIZONTAL"
@@ -41,7 +41,7 @@
               </SplitPane>
               <Pane fx:id="chromScroll" minHeight="10" minWidth="10" maxWidth="10" AnchorPane.topAnchor="0" AnchorPane.rightAnchor="0" AnchorPane.bottomAnchor="0" />
             </AnchorPane>
-            <AnchorPane fx:id="featureTracksPane" minHeight="18" prefHeight="50">
+            <AnchorPane fx:id="featureTracksPane" minHeight="18" prefHeight="40">
               <SplitPane fx:id="featureTracksSplit" dividerPositions="0.15" orientation="HORIZONTAL"
                 AnchorPane.topAnchor="0" AnchorPane.rightAnchor="10" AnchorPane.bottomAnchor="0" AnchorPane.leftAnchor="0">
                 <items>

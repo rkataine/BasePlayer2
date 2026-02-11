@@ -9,6 +9,7 @@ import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.tracks.ConservationTrack;
 import org.baseplayer.tracks.FeatureTracksCanvas;
+import org.baseplayer.tracks.GnomadTrack;
 import org.baseplayer.variant.Variant;
 
 import javafx.geometry.Insets;
@@ -132,12 +133,21 @@ public class DrawStack {
     drawCanvas = new DrawSampleData(new Canvas(), drawStack, this);
     drawStack.getChildren().addAll(drawCanvas, drawCanvas.getReactiveCanvas());
     
-    // Create feature tracks canvas with default conservation track
+    // Create feature tracks canvas with default conservation and gnomAD tracks
     featureTracksStack.setMinSize(0, 0);
     featureTracksCanvas = new FeatureTracksCanvas(new Canvas(), featureTracksStack, this);
     featureTracksStack.getChildren().addAll(featureTracksCanvas, featureTracksCanvas.getReactiveCanvas());
-    featureTracksCanvas.addTrack(new ConservationTrack());
-    featureTracksCanvas.setCollapsed(true);
+    
+    // Add default tracks
+    ConservationTrack conservationTrack = new ConservationTrack();
+    conservationTrack.setVisible(true);
+    featureTracksCanvas.addTrack(conservationTrack);
+    
+    GnomadTrack gnomadTrack = new GnomadTrack();
+    gnomadTrack.setVisible(true);
+    featureTracksCanvas.addTrack(gnomadTrack);
+    
+    featureTracksCanvas.setCollapsed(false);
     
     // Show close button on hover
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());
