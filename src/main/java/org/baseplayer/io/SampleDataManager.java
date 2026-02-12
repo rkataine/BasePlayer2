@@ -37,7 +37,7 @@ public class SampleDataManager {
       }
     }
     fileChooser.getExtensionFilters().addAll(
-      new ExtensionFilter("BAM Files", "*.bam"),
+      new ExtensionFilter("BAM/CRAM Files", "*.bam", "*.cram"),
       new ExtensionFilter("All Files", "*.*")
     );
 
@@ -116,7 +116,7 @@ public class SampleDataManager {
       }
     }
     fileChooser.getExtensionFilters().addAll(
-      new ExtensionFilter("BAM Files", "*.bam"),
+      new ExtensionFilter("BAM/CRAM Files", "*.bam", "*.cram"),
       new ExtensionFilter("All Files", "*.*")
     );
     

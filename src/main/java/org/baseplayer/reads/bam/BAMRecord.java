@@ -35,6 +35,16 @@ public class BAMRecord {
   public int[] cigarOps;    // raw cigar: each is (opLen << 4 | op)
   public String readName;
 
+  /**
+   * Mismatches relative to the reference.
+   * Packed as pairs: [refPos0, base0, refPos1, base1, ...]
+   * where refPos is the 1-based genomic position and base is the ASCII code of the read base (A/C/G/T/N).
+   */
+  public int[] mismatches;
+
+  /** Temporary read sequence for reference-based mismatch computation when no MD tag. Nulled after use. */
+  public char[] seq;
+
   // Display: row assigned during packing
   public int row = -1;
 

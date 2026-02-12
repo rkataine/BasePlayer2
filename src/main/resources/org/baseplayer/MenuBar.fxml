@@ -37,6 +37,8 @@
       <Menu text="Tools">
         <items>
           <MenuItem text="Table Browser" />
+          <MenuItem text="Settings" onAction="#openSettings" />
+          <SeparatorMenuItem />
           <MenuItem text="Clean memory" onAction="#cleanMemory" />
         </items>
       </Menu>

@@ -562,6 +562,16 @@ public class MenuBarController {
   public void removeStack(ActionEvent event) { MainController.addStack(false); }
   public void setDarkMode(ActionEvent event) { MainApp.setDarkMode(); }
   public void cleanMemory(ActionEvent event) { System.gc(); }
+
+  @FXML
+  public void openSettings(ActionEvent event) {
+    try {
+      new SettingsDialog().show();
+    } catch (Exception e) {
+      System.err.println("Error opening settings: " + e.getMessage());
+      e.printStackTrace();
+    }
+  }
   
   private long lastZoomInClick = 0;
   private long lastZoomOutClick = 0;

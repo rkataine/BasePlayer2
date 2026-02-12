@@ -138,7 +138,7 @@ public class TrackInfo {
     bamItem.setOnAction(e -> SampleDataManager.addBamFiles());
 
     MenuItem cramItem = new MenuItem("CRAM");
-    cramItem.setDisable(true);
+    cramItem.setOnAction(e -> SampleDataManager.addBamFiles());
 
     MenuItem vcfItem = new MenuItem("VCF");
     vcfItem.setDisable(true);
