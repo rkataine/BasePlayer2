@@ -122,22 +122,37 @@ public class ReferenceGenome {
             
             long fileOffset = idx.offset() + (linesBeforeStart * (long) idx.lineChars()) + posInLine;
             
-            fastaFile.seek(fileOffset);
+            // Estimate raw bytes needed (bases + newlines)
+            int newlines = length / idx.lineBytes() + 2;
+            int rawLen = length + newlines;
+            byte[] raw;
             
-            StringBuilder result = new StringBuilder(length);
-            int basesRead = 0;
-            
-            while (basesRead < length) {
-                int c = fastaFile.read();
-                if (c == -1) break;
-                if (c == '\n' || c == '\r') continue;
-                
-                result.append((char) Character.toUpperCase(c));
-                basesRead++;
+            // Synchronize on fastaFile to prevent concurrent seek+read races.
+            // Multiple threads call getBases() concurrently (BAM/CRAM fetch threads,
+            // async reference display fetch in DrawChromData, etc.). Without this lock,
+            // one thread's seek() can be overwritten by another thread's seek() before
+            // the first thread reads, returning wrong bases and corrupting mismatch data.
+            synchronized (fastaFile) {
+                fastaFile.seek(fileOffset);
+                raw = new byte[rawLen];
+                int totalRead = 0;
+                while (totalRead < rawLen) {
+                    int n = fastaFile.read(raw, totalRead, rawLen - totalRead);
+                    if (n == -1) break;
+                    totalRead += n;
+                }
+                rawLen = totalRead;
             }
             
-            return result.toString();
-            
+            // Strip newlines and uppercase outside the lock
+            char[] result = new char[length];
+            int basesRead = 0;
+            for (int i = 0; i < rawLen && basesRead < length; i++) {
+                byte b = raw[i];
+                if (b == '\n' || b == '\r') continue;
+                result[basesRead++] = (char) Character.toUpperCase(b);
+            }
+            return new String(result, 0, basesRead);
         } catch (IOException e) {
             System.err.println("Error reading bases from " + chromosome + ":" + start + "-" + end + ": " + e.getMessage());
             return "";

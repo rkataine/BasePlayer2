@@ -68,7 +68,7 @@
       <Label fx:id="viewLengthLabel" text="200Mb" styleClass="view-length-label" minWidth="70" prefWidth="70" alignment="CENTER_RIGHT" />
       <Button fx:id="zoomInButton" text="+" onAction="#zoomIn" styleClass="zoom-button" />
       <Button fx:id="zoomOutButton" text="−" onAction="#zoomOut" styleClass="zoom-button" />
-       <Region HBox.hgrow="ALWAYS" />
+      <Region HBox.hgrow="ALWAYS" />
       <Pane fx:id="memoryBar" prefWidth="80" prefHeight="10" styleClass="memory-bar" />
       <Button fx:id="minimizeButton" text=" _ " onAction="#minimizeWindow" />
       <Button fx:id="maximizeButton" text="[  ]" onAction="#maximizeWindow" />

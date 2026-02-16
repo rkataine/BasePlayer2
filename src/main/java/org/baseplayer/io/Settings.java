@@ -18,6 +18,7 @@ public class Settings {
 
   private static final String KEY_MAX_READ_VIEW_LENGTH    = "maxReadViewLength";
   private static final String KEY_MAX_COVERAGE_VIEW_LENGTH = "maxCoverageViewLength";
+  private static final String KEY_ENABLE_SAMPLED_COVERAGE = "enableSampledCoverage";
   private static final String KEY_SAMPLED_COVERAGE_POINTS = "sampledCoveragePoints";
   private static final String KEY_COVERAGE_FRACTION       = "coverageFraction";
   private static final String KEY_READ_GAP                = "readGap";
@@ -28,6 +29,7 @@ public class Settings {
 
   public static final int    DEF_MAX_READ_VIEW_LENGTH     = 60_000;
   public static final int    DEF_MAX_COVERAGE_VIEW_LENGTH = 2_000_000;
+  public static final boolean DEF_ENABLE_SAMPLED_COVERAGE = false;  // Off by default for exome data
   public static final int    DEF_SAMPLED_COVERAGE_POINTS  = 20;
   public static final double DEF_COVERAGE_FRACTION        = 0.30;
   public static final double DEF_READ_GAP                 = 2.5;
@@ -38,6 +40,7 @@ public class Settings {
 
   private int    maxReadViewLength;
   private int    maxCoverageViewLength;
+  private boolean enableSampledCoverage;
   private int    sampledCoveragePoints;
   private double coverageFraction;
   private double readGap;
@@ -54,6 +57,7 @@ public class Settings {
   public void load() {
     maxReadViewLength     = prefs.getInt(KEY_MAX_READ_VIEW_LENGTH, DEF_MAX_READ_VIEW_LENGTH);
     maxCoverageViewLength = prefs.getInt(KEY_MAX_COVERAGE_VIEW_LENGTH, DEF_MAX_COVERAGE_VIEW_LENGTH);
+    enableSampledCoverage = prefs.getBoolean(KEY_ENABLE_SAMPLED_COVERAGE, DEF_ENABLE_SAMPLED_COVERAGE);
     sampledCoveragePoints = prefs.getInt(KEY_SAMPLED_COVERAGE_POINTS, DEF_SAMPLED_COVERAGE_POINTS);
     coverageFraction      = prefs.getDouble(KEY_COVERAGE_FRACTION, DEF_COVERAGE_FRACTION);
     readGap               = prefs.getDouble(KEY_READ_GAP, DEF_READ_GAP);
@@ -66,8 +70,11 @@ public class Settings {
   /** Max view length (bp) for showing individual reads (below this: reads view). */
   public int getMaxReadViewLength() { return maxReadViewLength; }
 
-  /** Max view length (bp) for coverage-only mode (above this: sampled coverage). */
+  /** Max view length (bp) for coverage-only mode (above this: sampled coverage if enabled). */
   public int getMaxCoverageViewLength() { return maxCoverageViewLength; }
+
+  /** Whether to use sampled coverage at extreme zoom (useful to disable for exome data). */
+  public boolean isEnableSampledCoverage() { return enableSampledCoverage; }
 
   /** Number of sample points for chromosome-level sampled coverage. */
   public int getSampledCoveragePoints() { return sampledCoveragePoints; }
@@ -88,6 +95,7 @@ public class Settings {
 
   public void setMaxReadViewLength(int bp)            { this.maxReadViewLength = bp; prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp); }
   public void setMaxCoverageViewLength(int bp)        { this.maxCoverageViewLength = bp; prefs.putInt(KEY_MAX_COVERAGE_VIEW_LENGTH, bp); }
+  public void setEnableSampledCoverage(boolean enable) { this.enableSampledCoverage = enable; prefs.putBoolean(KEY_ENABLE_SAMPLED_COVERAGE, enable); }
   public void setSampledCoveragePoints(int n)         { this.sampledCoveragePoints = n; prefs.putInt(KEY_SAMPLED_COVERAGE_POINTS, n); }
   public void setCoverageFraction(double f)           { this.coverageFraction = f; prefs.putDouble(KEY_COVERAGE_FRACTION, f); }
   public void setReadGap(double px)                   { this.readGap = px; prefs.putDouble(KEY_READ_GAP, px); }
@@ -98,6 +106,7 @@ public class Settings {
   public void resetDefaults() {
     setMaxReadViewLength(DEF_MAX_READ_VIEW_LENGTH);
     setMaxCoverageViewLength(DEF_MAX_COVERAGE_VIEW_LENGTH);
+    setEnableSampledCoverage(DEF_ENABLE_SAMPLED_COVERAGE);
     setSampledCoveragePoints(DEF_SAMPLED_COVERAGE_POINTS);
     setCoverageFraction(DEF_COVERAGE_FRACTION);
     setReadGap(DEF_READ_GAP);

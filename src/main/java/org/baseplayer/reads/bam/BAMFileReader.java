@@ -107,10 +107,8 @@ public class BAMFileReader implements AlignmentReader {
    * Coordinates are 0-based half-open.
    */
   public List<BAMRecord> query(String chrom, int start, int end) throws IOException {
-    // Try with and without "chr" prefix
-    Integer refId = refNameToId.get(chrom);
-    if (refId == null) refId = refNameToId.get("chr" + chrom);
-    if (refId == null && chrom.startsWith("chr")) refId = refNameToId.get(chrom.substring(3));
+    // Try with and without "chr" prefix, and M <-> MT mapping
+    Integer refId = resolveRefId(chrom);
     if (refId == null) return new ArrayList<>();
 
     List<BAIIndex.Chunk> chunks = index.getChunks(refId, start, end);
@@ -160,13 +158,26 @@ public class BAMFileReader implements AlignmentReader {
    */
   public void queryStreaming(String chrom, int start, int end,
                              Predicate<BAMRecord> consumer) throws IOException {
-    Integer refId = refNameToId.get(chrom);
-    if (refId == null) refId = refNameToId.get("chr" + chrom);
-    if (refId == null && chrom.startsWith("chr")) refId = refNameToId.get(chrom.substring(3));
+    Integer refId = resolveRefId(chrom);
     if (refId == null) return;
 
     List<BAIIndex.Chunk> chunks = index.getChunks(refId, start, end);
     Set<Long> seenOffsets = new HashSet<>();
+
+    // Pre-fetch reference bases into memory ONCE before streaming records.
+    // This avoids per-read file seeks on the reference FASTA and eliminates
+    // concurrent access issues. The buffer covers read overhangs beyond the query region.
+    String refBases = null;
+    int refStart = 0;
+    if (SharedModel.referenceGenome != null) {
+      // Buffer size scales with query size (reads often overhang by ~500bp)
+      // but use at least 10kb for small queries
+      int queryLen = end - start;
+      int buffer = Math.max(10000, Math.min(50000, queryLen / 10));
+      refStart = Math.max(1, start - buffer);
+      int refEnd = end + buffer;
+      refBases = SharedModel.referenceGenome.getBases(chrom, refStart, refEnd);
+    }
 
     synchronized (bgzf) {
       outer:
@@ -189,9 +200,12 @@ public class BAMFileReader implements AlignmentReader {
           // Before query start - skip this read
           if (record.end <= start) continue;
           
-          // Resolve SEQ-based mismatches before passing to consumer
+          // Resolve SEQ-based mismatches using the pre-fetched in-memory reference
           if (record.seq != null && record.mismatches == null) {
-            resolveSeqMismatchesSingle(record, chrom);
+            if (refBases != null && !refBases.isEmpty()) {
+              record.mismatches = computeSeqMismatches(record.seq, record.cigarOps, record.pos, refBases, refStart);
+            }
+            record.seq = null; // free memory
           }
 
           if (!consumer.test(record)) break outer;
@@ -504,9 +518,7 @@ public class BAMFileReader implements AlignmentReader {
    */
   @Override
   public void querySampledCounts(String chrom, int[] positions, int window, int[] counts, Runnable onChunkDone) throws IOException {
-    Integer refId = refNameToId.get(chrom);
-    if (refId == null) refId = refNameToId.get("chr" + chrom);
-    if (refId == null && chrom.startsWith("chr")) refId = refNameToId.get(chrom.substring(3));
+    Integer refId = resolveRefId(chrom);
     if (refId == null) return;
 
     // Collect chunks for all windows and merge
@@ -565,7 +577,7 @@ public class BAMFileReader implements AlignmentReader {
 
   /**
    * Batch-resolve mismatches by comparing SEQ against reference for records without MD tag.
-   * Fetches the reference once for the query region, then compares each read.
+   * Fetches the reference once for the query region, then compares each read in memory.
    */
   private static void resolveSeqMismatches(List<BAMRecord> records, String chrom, int start, int end) {
     if (SharedModel.referenceGenome == null) return;
@@ -593,19 +605,6 @@ public class BAMFileReader implements AlignmentReader {
         rec.seq = null; // free memory
       }
     }
-  }
-
-  /**
-   * Resolve mismatches for a single record by comparing SEQ against reference.
-   * Used in the streaming path where we can't batch.
-   */
-  private static void resolveSeqMismatchesSingle(BAMRecord rec, String chrom) {
-    if (SharedModel.referenceGenome == null) return;
-    String refBases = SharedModel.referenceGenome.getBases(chrom, rec.pos, rec.end);
-    if (!refBases.isEmpty()) {
-      rec.mismatches = computeSeqMismatches(rec.seq, rec.cigarOps, rec.pos, refBases, rec.pos);
-    }
-    rec.seq = null;
   }
 
   /**
@@ -659,6 +658,18 @@ public class BAMFileReader implements AlignmentReader {
       result[i * 2 + 1] = mismatches.get(i)[1];
     }
     return result;
+  }
+
+  private Integer resolveRefId(String chrom) {
+    Integer refId = refNameToId.get(chrom);
+    if (refId == null) refId = refNameToId.get("chr" + chrom);
+    if (refId == null && chrom.startsWith("chr")) refId = refNameToId.get(chrom.substring(3));
+    // Handle M <-> MT mapping for mitochondrial chromosome
+    if (refId == null && chrom.equals("MT")) refId = refNameToId.get("M");
+    if (refId == null && chrom.equals("M")) refId = refNameToId.get("MT");
+    if (refId == null && chrom.equals("chrMT")) refId = refNameToId.get("chrM");
+    if (refId == null && chrom.equals("chrM")) refId = refNameToId.get("chrMT");
+    return refId;
   }
 
   @Override

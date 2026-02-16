@@ -128,9 +128,9 @@ public class DrawFunctions extends Canvas {
         double logScale = Math.log10(Math.max(10, drawStack.viewLength));
         double minVelocity = Math.max(10.0, drawStack.viewLength / (500.0 / logScale));
         
-        // Dynamic deceleration: faster decay when zoomed in, slower when zoomed out
-        // At 40bp: ~0.92 (fast decay), at 100k: ~0.96, at 1M+: ~0.98
-        double deceleration = 0.90 + Math.min(0.08, logScale * 0.015);
+        // Dynamic deceleration with more friction: faster decay at all zoom levels
+        // At 40bp: ~0.88 (faster decay), at 100k: ~0.91, at 1M+: ~0.93
+        double deceleration = 0.88 + Math.min(0.05, logScale * 0.012);
         
         if (Math.abs(scrollVelocity) > minVelocity) {
           // Calculate actual time delta for smooth animation
@@ -207,15 +207,15 @@ public class DrawFunctions extends Canvas {
           if (lastScrollTime > 0) {
             double timeDelta = (currentTime - lastScrollTime) / 1_000_000_000.0;
             if (timeDelta > 0 && timeDelta < 0.2) {
-              // Smooth velocity accumulation
+              // Smooth velocity accumulation - reduced blending to lower momentum buildup
               double newVelocity = genomeDelta / timeDelta;
               newVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, newVelocity));
-              // Blend with existing velocity for smoother transitions
-              scrollVelocity = scrollVelocity * 0.3 + newVelocity * 0.7;
+              // Blend with less retention of old velocity for less momentum
+              scrollVelocity = scrollVelocity * 0.1 + newVelocity * 0.9;
             }
           } else {
-            // First scroll event - estimate initial velocity
-            scrollVelocity = genomeDelta * 60; // Assume ~60fps
+            // First scroll event - estimate initial velocity with reduced coefficient
+            scrollVelocity = genomeDelta * 30; // Reduced from 60fps assumption for less initial momentum
             scrollVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, scrollVelocity));
           }
           lastScrollTime = currentTime;

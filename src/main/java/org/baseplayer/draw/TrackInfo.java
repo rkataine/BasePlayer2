@@ -5,18 +5,23 @@ import java.util.ArrayList;
 import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
+import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.SampleFile;
 
+import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 
@@ -154,6 +159,17 @@ public class TrackInfo {
   }
 
   private void handleMasterTrackClick(double x, double y, double sideW) {
+    // Settings button (⚙) - left side of master track
+    double settingsX = 0;
+    double settingsW = 28;
+    if (x >= settingsX && x < settingsX + settingsW) {
+      Point2D pt = sidebar.sideCanvas.localToScreen(x, y);
+      if (pt != null) {
+        showGlobalSettingsMenu(pt.getX(), pt.getY());
+      }
+      return;
+    }
+    
     // "+" button on right side of master track
     double plusX = sideW - 22;
     if (x >= plusX) {
@@ -201,8 +217,7 @@ public class TrackInfo {
     // Visible checkbox
     CheckBox visCb = new CheckBox();
     visCb.setSelected(file.visible);
-    visCb.setStyle("-fx-text-fill: white; -fx-mark-color: white; -fx-mark-highlight-color: white; " +
-                   "-fx-background-color: #333; -fx-border-color: #666;");
+    visCb.getStyleClass().add("dark-checkbox");
     visCb.selectedProperty().addListener((obs, o, n) -> {
       file.visible = n;
       redraw();
@@ -211,8 +226,8 @@ public class TrackInfo {
     // Overlay checkbox
     CheckBox ovrCb = new CheckBox("Overlay");
     ovrCb.setSelected(file.overlay);
-    ovrCb.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11; -fx-mark-color: #88bb88; " +
-                   "-fx-mark-highlight-color: #88bb88; -fx-background-color: #333; -fx-border-color: #666;");
+    ovrCb.getStyleClass().add("dark-checkbox");
+    ovrCb.setStyle("-fx-font-size: 11;");
     ovrCb.selectedProperty().addListener((obs, o, n) -> {
       file.overlay = n;
       redraw();
@@ -242,6 +257,71 @@ public class TrackInfo {
 
     CustomMenuItem item = new CustomMenuItem(row, false);
     return item;
+  }
+
+  private void showGlobalSettingsMenu(double screenX, double screenY) {
+    ContextMenu settingsMenu = new ContextMenu();
+    settingsMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+
+    // Title item
+    Label titleLabel = new Label("Global Settings");
+    titleLabel.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 13; -fx-font-weight: bold; -fx-padding: 4 8 2 8;");
+    CustomMenuItem titleItem = new CustomMenuItem(titleLabel, false);
+    settingsMenu.getItems().add(titleItem);
+    settingsMenu.getItems().add(new SeparatorMenuItem());
+
+    // Sampled coverage enable/disable checkbox
+    VBox sampledCoverageBox = new VBox(4);
+    sampledCoverageBox.setPadding(new Insets(4, 8, 4, 8));
+
+    CheckBox enableSampledCoverageCb = new CheckBox("Enable sampled coverage");
+    enableSampledCoverageCb.setSelected(Settings.get().isEnableSampledCoverage());
+    enableSampledCoverageCb.getStyleClass().add("dark-checkbox");
+    enableSampledCoverageCb.setStyle("-fx-font-size: 12;");
+    enableSampledCoverageCb.selectedProperty().addListener((obs, oldVal, newVal) -> {
+      Settings.get().setEnableSampledCoverage(newVal);
+      redraw();
+    });
+
+    // Sample points text field with refresh button
+    HBox samplePointsBox = new HBox(6);
+    Label samplePointsLabel = new Label("Sample points:");
+    samplePointsLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    
+    TextField samplePointsField = new TextField(String.valueOf(Settings.get().getSampledCoveragePoints()));
+    samplePointsField.setStyle("-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+    samplePointsField.setPrefWidth(80);
+    
+    Button refreshButton = new Button("Refresh");
+    refreshButton.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11; " +
+                          "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+    refreshButton.setOnAction(e -> {
+      try {
+        int value = Integer.parseInt(samplePointsField.getText());
+        if (value > 0 && value <= 10000) {
+          Settings.get().setSampledCoveragePoints(value);
+          // Clear cached sampled coverage for all sample files
+          for (SampleFile sample : SharedModel.bamFiles) {
+            sample.clearSampledCoverageCache();
+            for (SampleFile overlay : sample.getOverlays()) {
+              overlay.clearSampledCoverageCache();
+            }
+          }
+          redraw();
+          settingsMenu.hide();
+        }
+      } catch (NumberFormatException ex) {
+        samplePointsField.setText(String.valueOf(Settings.get().getSampledCoveragePoints()));
+      }
+    });
+    
+    samplePointsBox.getChildren().addAll(samplePointsLabel, samplePointsField, refreshButton);
+    
+    sampledCoverageBox.getChildren().addAll(enableSampledCoverageCb, samplePointsBox);
+    CustomMenuItem sampledCoverageItem = new CustomMenuItem(sampledCoverageBox, false);
+    settingsMenu.getItems().add(sampledCoverageItem);
+
+    settingsMenu.show(sidebar.sideCanvas.getScene().getWindow(), screenX, screenY);
   }
 
   private void redraw() {
@@ -333,11 +413,22 @@ public class TrackInfo {
     gc.setFill(Color.web("#2b2d30"));
     gc.fillRect(0, 0, sideW, MASTER_TRACK_HEIGHT);
 
+    // Settings button (⚙) on left
+    double settingsX = 4;
+    double settingsY = (MASTER_TRACK_HEIGHT - 18) / 2;
+    gc.setFill(Color.web("#3c3c3c"));
+    gc.fillRoundRect(settingsX, settingsY, 18, 18, 4, 4);
+    gc.setStroke(Color.web("#555555"));
+    gc.strokeRoundRect(settingsX, settingsY, 18, 18, 4, 4);
+    gc.setFont(Font.font("Segoe UI", 12));
+    gc.setFill(Color.web("#cccccc"));
+    gc.fillText("⚙", settingsX + 3, settingsY + 13);
+
     // Label
     gc.setFont(MASTER_FONT);
     gc.setFill(Color.web("#999999"));
     String label = tracks.isEmpty() ? "Tracks" : "Tracks (" + tracks.size() + ")";
-    gc.fillText(label, 8, MASTER_TRACK_HEIGHT / 2 + 4);
+    gc.fillText(label, 30, MASTER_TRACK_HEIGHT / 2 + 4);
 
     // "+" button on right
     double plusX = sideW - 22;

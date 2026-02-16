@@ -1291,6 +1291,11 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     Integer refId = refNameToId.get(chrom);
     if (refId == null) refId = refNameToId.get("chr" + chrom);
     if (refId == null && chrom.startsWith("chr")) refId = refNameToId.get(chrom.substring(3));
+    // Handle M <-> MT mapping for mitochondrial chromosome
+    if (refId == null && chrom.equals("MT")) refId = refNameToId.get("M");
+    if (refId == null && chrom.equals("M")) refId = refNameToId.get("MT");
+    if (refId == null && chrom.equals("chrMT")) refId = refNameToId.get("chrM");
+    if (refId == null && chrom.equals("chrM")) refId = refNameToId.get("chrMT");
     return refId;
   }
 

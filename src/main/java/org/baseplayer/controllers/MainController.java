@@ -218,7 +218,7 @@ public class MainController {
     
     CheckBox cancerGenesOnly = new CheckBox("Show only cancer genes");
     cancerGenesOnly.setSelected(showOnlyCancerGenes);
-    cancerGenesOnly.setStyle("-fx-text-fill: white; -fx-mark-color: white; -fx-background-color: transparent;");
+    cancerGenesOnly.setStyle("-fx-text-fill: white; -fx-background-color: transparent;");
     cancerGenesOnly.getStyleClass().add("dark-checkbox");
     cancerGenesOnly.setOnAction(e -> {
       showOnlyCancerGenes = cancerGenesOnly.isSelected();

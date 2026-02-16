@@ -97,8 +97,12 @@ public class DrawSampleData extends DrawFunctions {
     double sampleH = availableHeight / Math.max(1, SharedModel.visibleSamples().getAsInt());
     SharedModel.sampleHeight = sampleH;
     
-    // Don't query when zoomed out beyond coverage range — use sampled coverage
+    // Don't query when zoomed out beyond coverage range — use sampled coverage (if enabled)
     if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) {
+      // Only draw sampled coverage if the setting is enabled (useful to disable for exome data)
+      if (!Settings.get().isEnableSampledCoverage()) {
+        return; // Skip sampled coverage - no data at this zoom level
+      }
       String chrom = drawStack.chromosome;
       int start = Math.max(0, (int) drawStack.start);
       int end = (int) drawStack.end;
@@ -173,6 +177,14 @@ public class DrawSampleData extends DrawFunctions {
     
     if (shouldShowLoading) {
       drawLoadingIndicator(sampleY, sampleH);
+    }
+    
+    // Show status message in the track if available
+    String status = sf.getStatusMessage();
+    if (status != null && !status.isEmpty()) {
+      gc.setFill(Color.rgb(200, 200, 200, 0.9));
+      gc.setFont(javafx.scene.text.Font.font("System", javafx.scene.text.FontWeight.NORMAL, 11));
+      gc.fillText(status, 10, sampleY + 15);
     }
 
     // Pass drawStack so SampleFile caches per-stack; allow non-hover stacks to fetch during navigation

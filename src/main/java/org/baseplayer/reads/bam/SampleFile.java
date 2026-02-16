@@ -7,6 +7,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,6 +57,9 @@ public class SampleFile implements Closeable {
 
   // Per-file fetch executor — each file gets its own thread so BAM and CRAM don't block each other
   private ExecutorService fetchPool;
+  
+  // Status message shown in the track (e.g., "No reads found", "Loaded 123 reads")
+  private volatile String statusMessage = null;
 
   // Per-file coverage cache (keyed by DrawStack), so each file owns all its cached data
   public static class CoverageCache {
@@ -99,6 +104,16 @@ public class SampleFile implements Closeable {
   /** Get cached sampled coverage, or null if not yet computed. */
   public SampledCoverage getSampledCoverage(DrawStack stack) {
     return sampledCoverages.get(stack);
+  }
+
+  /** Clear all cached sampled coverage (e.g., when sample points setting changes). */
+  public void clearSampledCoverageCache() {
+    sampledCoverages.clear();
+  }
+  
+  /** Get current status message for display in the track. */
+  public String getStatusMessage() {
+    return statusMessage;
   }
 
   /**
@@ -368,12 +383,19 @@ public class SampleFile implements Closeable {
       return sc.cachedReads.get();
     }
 
-    // Defer new fetches while the user is actively navigating
+    // During navigation, still return cached reads if available, but allow new fetches
+    // to start with directional buffering (instead of blocking until navigation stops)
     if (blockDuringNavigation && (DrawFunctions.navigating || DrawCytoband.isDragging || DrawFunctions.animationRunning)) {
+      // If we have cached data, return it (but continue below to potentially start prefetch)
       if (hasOverlap) {
-        return sc.cachedReads.get();
+        // Check if there's already a fetch in progress that will cover us
+        if (chrom.equals(sc.fetchingChrom) && start >= sc.fetchingStart && end <= sc.fetchingEnd) {
+          return sc.cachedReads.get(); // Fetch in progress, return cached
+        }
+        // Fall through to trigger prefetch in scroll direction
       } else {
-        return Collections.emptyList();
+        // No cached data at all - allow immediate fetch even during navigation
+        // Fall through
       }
     }
 
@@ -393,19 +415,50 @@ public class SampleFile implements Closeable {
         sf.cancel(true);
       }
 
-      // Cancel any in-flight fetch for a stale region
+      // Detect scroll direction and apply directional buffering
+      int baseBuffer = Math.max(1000, (int)(viewLength * FETCH_BUFFER_FRACTION));
+      int leftBuffer = baseBuffer;
+      int rightBuffer = baseBuffer;
+      
+      // If we have previous view position, detect direction and apply asymmetric buffer
+      if (sc.lastViewEnd > 0) {
+        boolean movingRight = end > sc.lastViewEnd;
+        boolean movingLeft = start < sc.lastViewStart;
+        
+        if (movingRight && !movingLeft) {
+          // Scrolling right: apply 3x buffer to the right, 0.5x to the left
+          rightBuffer = baseBuffer * 3;
+          leftBuffer = baseBuffer / 2;
+        } else if (movingLeft && !movingRight) {
+          // Scrolling left: apply 3x buffer to the left, 0.5x to the right
+          leftBuffer = baseBuffer * 3;
+          rightBuffer = baseBuffer / 2;
+        }
+        // If both or neither are true (zooming or first fetch), use symmetric buffer
+      }
+      
+      int fetchStart = Math.max(0, start - leftBuffer);
+      int fetchEnd = end + rightBuffer;
+
+      // Only cancel in-flight fetch if it won't cover our new buffered region
+      // This allows fetches to complete during navigation if they're still useful
       Future<?> prev = sc.pendingFetch;
       if (prev != null && !prev.isDone()) {
-        prev.cancel(true);
-        sc.fetchingChrom = "";
-        sc.fetchingStart = -1;
-        sc.fetchingEnd = -1;
+        boolean fetchCoversNewRegion = chrom.equals(sc.fetchingChrom) 
+            && fetchStart >= sc.fetchingStart 
+            && fetchEnd <= sc.fetchingEnd;
+        
+        if (!fetchCoversNewRegion) {
+          // Stale fetch - cancel it and start new one
+          prev.cancel(true);
+          sc.fetchingChrom = "";
+          sc.fetchingStart = -1;
+          sc.fetchingEnd = -1;
+        } else {
+          // In-flight fetch will cover us - keep it running
+          return sc.cachedReads.get();
+        }
       }
-
-      // Add buffer around the requested region
-      int buffer = Math.max(1000, (int)(viewLength * FETCH_BUFFER_FRACTION));
-      int fetchStart = Math.max(0, start - buffer);
-      int fetchEnd = end + buffer;
 
       sc.fetchingChrom = chrom;
       sc.fetchingStart = fetchStart;
@@ -472,6 +525,23 @@ public class SampleFile implements Closeable {
             sc.cachedCoverageOnly = skipPacking;
             consecutiveErrors = 0;
             System.out.println("Fetched BAM (" + name + "): " + reads.size() + " reads");
+            
+            // Show status message in the track
+            if (reads.isEmpty()) {
+              String location = chrom + ":" + fetchStart + "-" + fetchEnd;
+              statusMessage = "No reads found at " + location;
+            } else {
+              statusMessage = "Loaded " + reads.size() + " reads";
+            }
+            
+            // Clear status after 5 seconds
+            new Timer(true).schedule(new TimerTask() {
+              @Override
+              public void run() {
+                statusMessage = null;
+                Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
+              }
+            }, 5000);
             
             // Repack to optimize row usage now that all reads are loaded
             if (!skipPacking) {
