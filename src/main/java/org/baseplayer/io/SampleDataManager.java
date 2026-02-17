@@ -55,22 +55,33 @@ public class SampleDataManager {
     SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     
     List<String> addedSamples = new ArrayList<>();
+    
+    // Load files in background threads to keep UI responsive
     for (File file : files) {
-      try {
-        Sample sample = new Sample(file.toPath());
-        SampleTrack track = new SampleTrack(sample);
-        sampleRegistry.getSampleTracks().add(track);
-        sampleRegistry.getSampleList().add(sample.getName());
-        addedSamples.add(sample.getName());
-        System.out.println("Loaded BAM: " + sample.getName() + " (" + file.getName() + ")");
-      } catch (IOException e) {
-        System.err.println("Failed to open BAM file: " + file + " - " + e.getMessage());
-      }
+      java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        try {
+          Sample sample = new Sample(file.toPath());
+          return sample;
+        } catch (IOException e) {
+          System.err.println("Failed to open BAM file: " + file + " - " + e.getMessage());
+          return null;
+        }
+      }).thenAcceptAsync(sample -> {
+        if (sample != null) {
+          SampleTrack track = new SampleTrack(sample);
+          sampleRegistry.getSampleTracks().add(track);
+          sampleRegistry.getSampleList().add(sample.getName());
+          sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
+          sampleRegistry.setSampleHeight(0); // Will be recalculated on draw
+          System.out.println("Loaded BAM: " + sample.getName() + " (" + file.getName() + ")");
+          DrawFunctions.update.set(!DrawFunctions.update.get());
+        }
+      }, javafx.application.Platform::runLater);
+      
+      addedSamples.add(file.getName()); // Return filename immediately
     }
 
     if (!addedSamples.isEmpty()) {
-      sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
-      sampleRegistry.setSampleHeight(0); // Will be recalculated on draw
       DrawFunctions.update.set(!DrawFunctions.update.get());
     }
 
@@ -138,14 +149,21 @@ public class SampleDataManager {
     
     UserPreferences.setLastDirectory("BAM", file.getParentFile());
     
-    try {
-      Sample newSample = new Sample(file.toPath());
-      track.addSample(newSample);
-      System.out.println("Added BAM: " + newSample.getName() + " to " + track.getDisplayName());
-      DrawFunctions.update.set(!DrawFunctions.update.get());
-    } catch (IOException e) {
-      System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
-    }
+    // Load file in background to keep UI responsive
+    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+      try {
+        return new Sample(file.toPath());
+      } catch (IOException e) {
+        System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
+        return null;
+      }
+    }).thenAcceptAsync(newSample -> {
+      if (newSample != null) {
+        track.addSample(newSample);
+        System.out.println("Added BAM: " + newSample.getName() + " to " + track.getDisplayName());
+        DrawFunctions.update.set(!DrawFunctions.update.get());
+      }
+    }, javafx.application.Platform::runLater);
   }
 
   /**
@@ -178,15 +196,22 @@ public class SampleDataManager {
     
     UserPreferences.setLastDirectory("BED", file.getParentFile());
     
-    try {
-      BedTrack bedTrack = new BedTrack(file.toPath());
-      Sample newSample = new Sample(file.toPath(), bedTrack);
-      track.addSample(newSample);
-      System.out.println("Added BED: " + newSample.getName() + " to " + track.getDisplayName());
-      DrawFunctions.update.set(!DrawFunctions.update.get());
-    } catch (IOException e) {
-      System.err.println("Failed to open BED: " + file + " - " + e.getMessage());
-    }
+    // Load file in background to keep UI responsive
+    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+      try {
+        BedTrack bedTrack = new BedTrack(file.toPath());
+        return new Sample(file.toPath(), bedTrack);
+      } catch (IOException e) {
+        System.err.println("Failed to open BED: " + file + " - " + e.getMessage());
+        return null;
+      }
+    }).thenAcceptAsync(newSample -> {
+      if (newSample != null) {
+        track.addSample(newSample);
+        System.out.println("Added BED: " + newSample.getName() + " to " + track.getDisplayName());
+        DrawFunctions.update.set(!DrawFunctions.update.get());
+      }
+    }, javafx.application.Platform::runLater);
   }
   
   /**
@@ -214,14 +239,21 @@ public class SampleDataManager {
       UserPreferences.setLastDirectory("BED", file.getParentFile());
       FeatureTracksCanvas featureCanvas = MainController.getFeatureTracksCanvas();
       if (featureCanvas != null) {
-        try {
-          BedTrack track = new BedTrack(file.toPath());
-          featureCanvas.addTrack(track);
-          featureCanvas.setCollapsed(false);
-          System.out.println("Loaded BED file: " + file.getName());
-        } catch (IOException e) {
-          System.err.println("Failed to load BED file: " + e.getMessage());
-        }
+        // Load file in background to keep UI responsive
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+          try {
+            return new BedTrack(file.toPath());
+          } catch (IOException e) {
+            System.err.println("Failed to load BED file: " + e.getMessage());
+            return null;
+          }
+        }).thenAcceptAsync(track -> {
+          if (track != null) {
+            featureCanvas.addTrack(track);
+            featureCanvas.setCollapsed(false);
+            System.out.println("Loaded BED file: " + file.getName());
+          }
+        }, javafx.application.Platform::runLater);
       }
     }
   }
@@ -251,14 +283,21 @@ public class SampleDataManager {
       UserPreferences.setLastDirectory("BIGWIG", file.getParentFile());
       FeatureTracksCanvas featureCanvas = MainController.getFeatureTracksCanvas();
       if (featureCanvas != null) {
-        try {
-          BigWigTrack track = new BigWigTrack(file.toPath());
-          featureCanvas.addTrack(track);
-          featureCanvas.setCollapsed(false);
-          System.out.println("Loaded BigWig file: " + file.getName());
-        } catch (IOException e) {
-          System.err.println("Failed to load BigWig file: " + e.getMessage());
-        }
+        // Load file in background to keep UI responsive
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+          try {
+            return new BigWigTrack(file.toPath());
+          } catch (IOException e) {
+            System.err.println("Failed to load BigWig file: " + e.getMessage());
+            return null;
+          }
+        }).thenAcceptAsync(track -> {
+          if (track != null) {
+            featureCanvas.addTrack(track);
+            featureCanvas.setCollapsed(false);
+            System.out.println("Loaded BigWig file: " + file.getName());
+          }
+        }, javafx.application.Platform::runLater);
       }
     }
   }

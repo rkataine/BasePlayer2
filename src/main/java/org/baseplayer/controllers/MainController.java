@@ -116,6 +116,8 @@ public class MainController {
   private void setupFeatureTracksSidebar() {
     // Create the sidebar - it will use the first stack's canvas initially
     featureTracksSidebar = new FeatureTracksSidebar(featureTracksSideBarPane);
+    eventCoordinator.setFeatureTracksSidebar(featureTracksSidebar);
+    
     if (!drawStacks.isEmpty()) {
       featureTracksSidebar.setFeatureTracksCanvas(drawStacks.get(0).featureTracksCanvas);
       

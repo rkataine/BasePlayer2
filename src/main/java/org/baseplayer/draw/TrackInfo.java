@@ -1,7 +1,5 @@
 package org.baseplayer.draw;
 
-import java.util.ArrayList;
-
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
@@ -32,7 +30,6 @@ import javafx.scene.text.Font;
 public class TrackInfo {
   SideBarStack sidebar;
   GraphicsContext gc;
-  ArrayList<String> tracks;
   
   // Services
   private final SampleRegistry sampleRegistry;
@@ -59,7 +56,6 @@ public class TrackInfo {
     this.sidebar = sidebar;
     this.gc = sidebar.sideCanvas.getGraphicsContext2D();
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
-    this.tracks = new ArrayList<>(sampleRegistry.getSampleList());
 
     // Build the add-data context menu
     addDataMenu = createAddDataMenu();
@@ -89,10 +85,10 @@ public class TrackInfo {
       sampleRegistry.setScrollBarPosition(sampleRegistry.getScrollBarPosition() - event.getDeltaY());
       
       if (sampleRegistry.getScrollBarPosition() < 0) sampleRegistry.setScrollBarPosition(0);
-      if (sampleRegistry.getScrollBarPosition() > (sampleRegistry.getSampleList().size() - 1) * sampleRegistry.getSampleHeight()) 
-        sampleRegistry.setScrollBarPosition((sampleRegistry.getSampleList().size() - 1) * sampleRegistry.getSampleHeight());
+      if (sampleRegistry.getScrollBarPosition() > (sampleRegistry.getSampleTracks().size() - 1) * sampleRegistry.getSampleHeight()) 
+        sampleRegistry.setScrollBarPosition((sampleRegistry.getSampleTracks().size() - 1) * sampleRegistry.getSampleHeight());
       sampleRegistry.setFirstVisibleSample(Math.max(0, (int)(sampleRegistry.getScrollBarPosition() / sampleRegistry.getSampleHeight())));
-      sampleRegistry.setLastVisibleSample(Math.min(tracks.size() - 1,
+      sampleRegistry.setLastVisibleSample(Math.min(sampleRegistry.getSampleTracks().size() - 1,
         (int)((sampleRegistry.getScrollBarPosition() + sidebar.sideCanvas.getHeight() - sampleRegistry.getMasterTrackHeight()) / sampleRegistry.getSampleHeight())));
       DrawFunctions.update.set(!DrawFunctions.update.get());
     });
@@ -164,7 +160,7 @@ public class TrackInfo {
       if (event.getClickCount() == 2) {
         if (sampleRegistry.getFirstVisibleSample() == sampleRegistry.getLastVisibleSample()) {
           sampleRegistry.setFirstVisibleSample(0);
-          sampleRegistry.setLastVisibleSample(tracks.size() - 1);
+          sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleTracks().size() - 1);
         } else {
           sampleRegistry.setFirstVisibleSample(sampleRegistry.hoverSampleProperty().get());
           sampleRegistry.setLastVisibleSample(sampleRegistry.hoverSampleProperty().get());
@@ -504,9 +500,9 @@ public class TrackInfo {
 
   private int sampleIndexAtY(double y) {
     if (y < sampleRegistry.getMasterTrackHeight()) return -1;
-    if (sampleRegistry.getSampleHeight() <= 0 || tracks.isEmpty()) return -1;
+    if (sampleRegistry.getSampleHeight() <= 0 || sampleRegistry.getSampleTracks().isEmpty()) return -1;
     int idx = (int)((y - sampleRegistry.getMasterTrackHeight() + sampleRegistry.getScrollBarPosition()) / sampleRegistry.getSampleHeight());
-    if (idx < 0 || idx >= tracks.size()) return -1;
+    if (idx < 0 || idx >= sampleRegistry.getSampleTracks().size()) return -1;
     return idx;
   }
 
@@ -522,9 +518,9 @@ public class TrackInfo {
     // Always draw master track header
     drawMasterTrack(w);
 
-    if (tracks.isEmpty()) return;
+    if (sampleRegistry.getSampleTracks().isEmpty()) return;
 
-    for (int i = sampleRegistry.getFirstVisibleSample(); i <= sampleRegistry.getLastVisibleSample() && i < tracks.size(); i++) {
+    for (int i = sampleRegistry.getFirstVisibleSample(); i <= sampleRegistry.getLastVisibleSample() && i < sampleRegistry.getSampleTracks().size(); i++) {
       double sampleY = sampleRegistry.getMasterTrackHeight() + i * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
       boolean isHover = (i == hoverIndex);
       boolean hasTrack = (i < sampleRegistry.getSampleTracks().size());
@@ -553,7 +549,7 @@ public class TrackInfo {
       gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
       double textY = sampleY + gc.getFont().getSize() + 2;
       if (textY > sampleRegistry.getMasterTrackHeight()) {
-        String displayName = hasTrack ? sampleRegistry.getSampleTracks().get(i).getDisplayName() : tracks.get(i);
+        String displayName = hasTrack ? sampleRegistry.getSampleTracks().get(i).getDisplayName() : "";
         gc.fillText(displayName, 10, textY);
       }
 
@@ -621,7 +617,7 @@ public class TrackInfo {
     // Label
     gc.setFont(MASTER_FONT);
     gc.setFill(Color.web("#999999"));
-    String label = tracks.isEmpty() ? "Tracks" : "Tracks (" + tracks.size() + ")";
+    String label = sampleRegistry.getSampleTracks().isEmpty() ? "Tracks" : "Tracks (" + sampleRegistry.getSampleTracks().size() + ")";
     gc.fillText(label, 30, sampleRegistry.getMasterTrackHeight() / 2 + 4);
 
     // "+" button on right
