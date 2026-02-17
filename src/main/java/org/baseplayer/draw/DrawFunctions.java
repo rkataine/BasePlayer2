@@ -4,6 +4,8 @@ import java.util.function.Function;
 
 import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
+import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
 import javafx.animation.PauseTransition;
@@ -19,8 +21,6 @@ import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
-import javafx.scene.paint.LinearGradient;
-import javafx.scene.paint.Stop;
 import javafx.scene.text.Font;
 
 public class DrawFunctions extends Canvas {
@@ -31,16 +31,6 @@ public class DrawFunctions extends Canvas {
  
   private final GraphicsContext gc;
   public GraphicsContext reactivegc;
-  public static Color lineColor = new Color(0.5, 0.8, 0.8, 0.5);
-  // VS Code dark mode colors
-  public static Color backgroundColor = Color.web("#1e1e1e");        // Editor background
-  public static Color sidebarColor = Color.web("#252526");           // Sidebar background
-  public static Color borderColor = Color.web("#3c3c3c");            // Border color
-  static LinearGradient zoomColor = new LinearGradient(
-    0, 0, 1, 1, true, javafx.scene.paint.CycleMethod.NO_CYCLE,
-    new Stop(0, javafx.scene.paint.Color.rgb(30, 144, 255, 0.3)),  
-    new Stop(1, javafx.scene.paint.Color.rgb(100, 180, 255, 0.3))
-  );
 
   
   Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
@@ -52,6 +42,7 @@ public class DrawFunctions extends Canvas {
 	private double mouseDragDeltaX = 0;
   private double mousePressedY;
   private boolean lineZoomer = false;
+  public static volatile boolean lineZoomerActive = false; // Global flag to block fetches during line zoom
   private boolean zoomDrag;
   public static double zoomFactor = 10;
   public int zoomY = - 1;
@@ -180,7 +171,7 @@ public class DrawFunctions extends Canvas {
     });
     reactiveCanvas.setOnMouseDragged(event -> { navigating = true; handleDrag(event); });
     reactiveCanvas.setOnScroll(event -> { navigating = true; handleScroll(event); } );
-    reactiveCanvas.setOnMouseReleased(event -> { navigating = false; handleMouseRelease(event); });
+    reactiveCanvas.setOnMouseReleased(event -> { handleMouseRelease(event); });
   }
   void handleScroll(ScrollEvent event) {
     event.consume();
@@ -191,6 +182,24 @@ public class DrawFunctions extends Canvas {
         // Reset scroll-idle timer to clear navigating after zoom stops
         resetScrollIdleTimer();
     } else {
+        // Vertical scroll (deltaY) — scroll reads within the sample track under cursor
+        double deltaY = event.getDeltaY();
+        if (deltaY != 0) {
+          double mouseY = event.getY();
+          double masterOffset = SharedModel.masterTrackHeight;
+          double sampleH = SharedModel.sampleHeight;
+          if (sampleH > 0 && mouseY > masterOffset) {
+            int sampleIdx = (int)((mouseY - masterOffset + SharedModel.scrollBarPosition) / sampleH);
+            if (sampleIdx >= 0 && sampleIdx < SharedModel.bamFiles.size()) {
+              org.baseplayer.reads.bam.SampleFile sf = SharedModel.bamFiles.get(sampleIdx);
+              sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
+              // Trigger redraw
+              update.set(!update.get());
+            }
+          }
+        }
+
+        // Horizontal scroll (deltaX) — pan genomic position
         double scrollDelta = event.getDeltaX();
         if (scrollDelta == 0) return;
         
@@ -246,7 +255,7 @@ public class DrawFunctions extends Canvas {
       return;
     }
     
-    reactivegc.setFill(zoomColor);
+    reactivegc.setFill(DrawColors.ZOOM_GRADIENT);
     reactivegc.setStroke(Color.DODGERBLUE);
     zoomDrag = true;
 		mouseDragDeltaX = dragX - mouseDraggedX;
@@ -258,6 +267,7 @@ public class DrawFunctions extends Canvas {
     } else {
       zoomDrag = false;
       lineZoomer = true;
+      lineZoomerActive = true; // Block all fetches during line zoom
 			clearReactive();
 			reactivegc.strokeLine(mousePressedX, mousePressedY, mouseDraggedX, dragY);
       zoom(mouseDragDeltaX, mousePressedX);
@@ -267,10 +277,15 @@ public class DrawFunctions extends Canvas {
     clearReactive();
    
     if (lineZoomer) { 
-      lineZoomer = false; 
+      lineZoomer = false;
+      lineZoomerActive = false; // Re-enable fetches
+      navigating = false; // Allow fetches now that lineZoomer is done
       update.set(!update.get()); 
       return; 
     }
+    
+    navigating = false; // Normal case - drag/scroll ended
+    
     if (zoomDrag) {
       zoomDrag = false;
      
@@ -309,6 +324,13 @@ public class DrawFunctions extends Canvas {
 		}
     if (start < 1) start = 1.0;
     if (end >= drawStack.chromSize - 1) end = drawStack.chromSize + 1;
+
+    // If the view jumped significantly (>50% of view length), cancel stale fetches
+    double shift = Math.abs(start - drawStack.start);
+    if (shift > drawStack.viewLength * 0.5) {
+      FetchManager.get().cancelAll();
+    }
+
     drawStack.start = start;
     drawStack.end = end;
     drawStack.viewLength = end - start;
@@ -331,6 +353,8 @@ public class DrawFunctions extends Canvas {
   }
 
   public void zoomAnimation(double start, double end) {
+    // Cancel all in-flight fetches — we're jumping to a completely different region
+    FetchManager.get().cancelAll();
     new Thread(() -> {
       animationRunning = true;
       navigating = true;

@@ -11,8 +11,10 @@ import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.annotation.Gene;
 import org.baseplayer.annotation.Transcript;
+import org.baseplayer.reads.bam.FetchManager;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseColors;
+import org.baseplayer.utils.DrawColors;
 import org.baseplayer.utils.GeneColors;
 import org.baseplayer.utils.StackingAlgorithm;
 
@@ -232,7 +234,7 @@ public class DrawChromData extends DrawFunctions {
   public boolean isShowManeOnly() {
     return showManeOnly;
   }
-  
+
   /**
    * Draw hover highlight on the reactive canvas
    */
@@ -350,7 +352,7 @@ public class DrawChromData extends DrawFunctions {
 
   @Override
   public void draw() {
-    gc.setFill(backgroundColor);
+    gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth(), getHeight());
     
     // Clear hover state on redraw
@@ -762,8 +764,8 @@ public class DrawChromData extends DrawFunctions {
     if (drawStack.viewLength > BASE_DISPLAY_THRESHOLD) return;
     if (SharedModel.referenceGenome == null) return;
     
-    // Don't fetch reference sequence during cytoband dragging
-    if (DrawCytoband.isDragging) return;
+    // Don't fetch reference sequence during zoom animation or cytoband dragging
+    if (DrawFunctions.animationRunning || DrawCytoband.isDragging) return;
     
     int viewStart = (int) drawStack.start;
     int viewEnd = (int)drawStack.end;
@@ -786,16 +788,26 @@ public class DrawChromData extends DrawFunctions {
           && currentChrom.equals(pendingFetchChrom);
       
       if (!alreadyLoading && isLoadingBases.compareAndSet(false, true)) {
+        // Check FetchManager before starting async reference fetch
+        FetchManager fm = FetchManager.get();
+        if (!fm.canFetch(FetchManager.FetchType.REFERENCE, fetchEnd - fetchStart)) {
+          isLoadingBases.set(false);
+          return; // memory too low — skip, use stale cache
+        }
+
         // Start async fetch
         pendingFetchStart = fetchStart;
         pendingFetchEnd = fetchEnd;
         pendingFetchChrom = currentChrom;
-        
+
+        FetchManager.FetchTicket ticket = fm.acquire(
+            FetchManager.FetchType.REFERENCE, this, drawStack, currentChrom, fetchStart, fetchEnd);
         CompletableFuture.runAsync(() -> {
           String bases = SharedModel.referenceGenome.getBases(currentChrom, fetchStart, fetchEnd);
           Platform.runLater(() -> {
-            // Only update cache if this is still the latest request
-            if (fetchStart == pendingFetchStart && fetchEnd == pendingFetchEnd 
+            // Only update cache if this is still the latest request and not cancelled
+            if (!ticket.isCancelled()
+                && fetchStart == pendingFetchStart && fetchEnd == pendingFetchEnd 
                 && currentChrom.equals(pendingFetchChrom)) {
               cachedBases = bases;
               cachedStart = fetchStart;
@@ -803,6 +815,7 @@ public class DrawChromData extends DrawFunctions {
               cachedChromosome = currentChrom;
             }
             isLoadingBases.set(false);
+            fm.release(ticket);
             // Trigger redraw
             resizing = true; 
             update.set(!update.get()); 

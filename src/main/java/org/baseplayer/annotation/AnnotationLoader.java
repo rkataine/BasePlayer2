@@ -143,10 +143,10 @@ public final class AnnotationLoader {
       AnnotationData.setGenesLoaded(true);
       
       // Save to cache for faster subsequent loads
-      saveGenesToCache(cacheFile, geneBuilders);
+      saveGenesToCache(cacheFile);
       
       // Save non-MANE transcripts to separate cache
-      saveNonManeTranscriptsToCache(txCacheFile, geneBuilders, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
+      saveNonManeTranscriptsToCache(txCacheFile, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
       
     } catch (IOException e) {
       System.err.println("Failed to load genes: " + e.getMessage());
@@ -298,7 +298,7 @@ public final class AnnotationLoader {
     boolean isManeSelect, isManeClinic;
   }
   
-  private static void saveGenesToCache(Path cacheFile, Map<String, GeneBuilder> geneBuilders) {
+  private static void saveGenesToCache(Path cacheFile) {
     try (DataOutputStream out = new DataOutputStream(
            new GZIPOutputStream(Files.newOutputStream(cacheFile)))) {
       // Write magic bytes and version
@@ -449,7 +449,6 @@ public final class AnnotationLoader {
    * Save non-MANE transcripts to a separate cache file.
    */
   private static void saveNonManeTranscriptsToCache(Path txCacheFile, 
-      Map<String, GeneBuilder> geneBuilders,
       Map<String, TranscriptBuilder> transcriptBuilders,
       Map<String, List<long[]>> exonsByTranscript,
       Map<String, long[]> cdsBoundsByTranscript) {

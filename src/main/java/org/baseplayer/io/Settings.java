@@ -9,7 +9,7 @@ import java.util.prefs.Preferences;
  * All numeric values have sensible defaults matching the original hardcoded constants.
  * Changes are written to prefs immediately and take effect on next draw/fetch.
  */
-public class Settings {
+public final class Settings {
 
   private static final Preferences prefs = Preferences.userNodeForPackage(Settings.class);
   private static final Settings INSTANCE = new Settings();
@@ -24,6 +24,8 @@ public class Settings {
   private static final String KEY_READ_GAP                = "readGap";
   private static final String KEY_MIN_READ_HEIGHT         = "minReadHeight";
   private static final String KEY_SMOOTH_SMALL_FILES      = "smoothSmallFiles";
+  private static final String KEY_MISMATCH_MIN_FRACTION   = "mismatchMinFraction";
+  private static final String KEY_MISMATCH_MIN_COUNT      = "mismatchMinCount";
 
   // ── Defaults (matching original hardcoded values) ─────────────────────
 
@@ -35,6 +37,8 @@ public class Settings {
   public static final double DEF_READ_GAP                 = 2.5;
   public static final double DEF_MIN_READ_HEIGHT          = 3.0;
   public static final boolean DEF_SMOOTH_SMALL_FILES      = false;
+  public static final double DEF_MISMATCH_MIN_FRACTION    = 0.10;
+  public static final int    DEF_MISMATCH_MIN_COUNT       = 2;
 
   // ── Cached values (read from prefs once, written on set) ──────────────
 
@@ -46,6 +50,8 @@ public class Settings {
   private double readGap;
   private double minReadHeight;
   private boolean smoothSmallFiles;
+  private double mismatchMinFraction;
+  private int    mismatchMinCount;
 
   private Settings() {
     load();
@@ -63,6 +69,8 @@ public class Settings {
     readGap               = prefs.getDouble(KEY_READ_GAP, DEF_READ_GAP);
     minReadHeight         = prefs.getDouble(KEY_MIN_READ_HEIGHT, DEF_MIN_READ_HEIGHT);
     smoothSmallFiles      = prefs.getBoolean(KEY_SMOOTH_SMALL_FILES, DEF_SMOOTH_SMALL_FILES);
+    mismatchMinFraction   = prefs.getDouble(KEY_MISMATCH_MIN_FRACTION, DEF_MISMATCH_MIN_FRACTION);
+    mismatchMinCount      = prefs.getInt(KEY_MISMATCH_MIN_COUNT, DEF_MISMATCH_MIN_COUNT);
   }
 
   // ── Getters ───────────────────────────────────────────────────────────
@@ -91,6 +99,12 @@ public class Settings {
   /** Whether to apply smoothing to small-file sampled coverage. */
   public boolean isSmoothSmallFiles() { return smoothSmallFiles; }
 
+  /** Minimum fraction of reads (0.0–1.0) a mismatch must reach to be drawn in coverage view. */
+  public double getMismatchMinFraction() { return mismatchMinFraction; }
+
+  /** Minimum absolute read count a mismatch must reach to be drawn in coverage view. */
+  public int getMismatchMinCount() { return mismatchMinCount; }
+
   // ── Setters (persist immediately) ─────────────────────────────────────
 
   public void setMaxReadViewLength(int bp)            { this.maxReadViewLength = bp; prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp); }
@@ -101,6 +115,8 @@ public class Settings {
   public void setReadGap(double px)                   { this.readGap = px; prefs.putDouble(KEY_READ_GAP, px); }
   public void setMinReadHeight(double px)             { this.minReadHeight = px; prefs.putDouble(KEY_MIN_READ_HEIGHT, px); }
   public void setSmoothSmallFiles(boolean smooth)     { this.smoothSmallFiles = smooth; prefs.putBoolean(KEY_SMOOTH_SMALL_FILES, smooth); }
+  public void setMismatchMinFraction(double f)         { this.mismatchMinFraction = f; prefs.putDouble(KEY_MISMATCH_MIN_FRACTION, f); }
+  public void setMismatchMinCount(int n)               { this.mismatchMinCount = n; prefs.putInt(KEY_MISMATCH_MIN_COUNT, n); }
 
   /** Reset all settings to defaults. */
   public void resetDefaults() {
@@ -112,5 +128,7 @@ public class Settings {
     setReadGap(DEF_READ_GAP);
     setMinReadHeight(DEF_MIN_READ_HEIGHT);
     setSmoothSmallFiles(DEF_SMOOTH_SMALL_FILES);
+    setMismatchMinFraction(DEF_MISMATCH_MIN_FRACTION);
+    setMismatchMinCount(DEF_MISMATCH_MIN_COUNT);
   }
 }

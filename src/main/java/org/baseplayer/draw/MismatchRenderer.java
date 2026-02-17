@@ -2,6 +2,8 @@ package org.baseplayer.draw;
 
 import java.util.function.Function;
 
+import org.baseplayer.utils.DrawColors;
+
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -11,17 +13,10 @@ import javafx.scene.text.FontWeight;
  * Shared renderer for drawing mismatch markers on aligned reads.
  * Used by both BAM and CRAM read display.
  *
- * Mismatches are stored in BAMRecord.mismatches as int pairs: [pos0, base0, pos1, base1, ...]
- * where pos is 0-based genomic position and base is ASCII char code (A/C/G/T/N).
+ * Mismatches are stored in BAMRecord.mismatches as int triplets: [pos0, readBase0, refBase0, pos1, readBase1, refBase1, ...]
+ * where pos is 1-based genomic position, readBase is ASCII char code, refBase is ASCII char code of reference (0 if unknown).
  */
 public class MismatchRenderer {
-
-  // IGV-like mismatch base colors
-  public static final Color MISMATCH_A = Color.rgb(100, 200, 100);
-  public static final Color MISMATCH_C = Color.rgb(100, 100, 220);
-  public static final Color MISMATCH_G = Color.rgb(210, 180, 60);
-  public static final Color MISMATCH_T = Color.rgb(220, 80, 80);
-  public static final Color MISMATCH_OTHER = Color.rgb(150, 150, 150);
 
   // Font for base letters
   private static final Font BASE_FONT_LARGE = Font.font("Monospaced", FontWeight.BOLD, 11);
@@ -29,14 +24,30 @@ public class MismatchRenderer {
 
   /**
    * Draw mismatch markers for a single read, with base letters when zoomed in enough.
+   * Supports optional methylation filtering (suppresses C→T and G→A bisulfite conversions).
    */
   public static void drawMismatches(GraphicsContext gc, int[] mismatches,
                                     double y, double h, double canvasWidth,
-                                    Function<Double, Double> chromPosToScreen) {
+                                    Function<Double, Double> chromPosToScreen,
+                                    boolean isMethylData, boolean isReverseStrand) {
     if (mismatches == null) return;
-    for (int m = 0; m < mismatches.length; m += 2) {
+    
+    for (int m = 0; m + 2 < mismatches.length; m += 3) {
       int mmPos = mismatches[m];
       int mmBase = mismatches[m + 1];
+      int mmRefBase = mismatches[m + 2];
+      
+      // Skip bisulfite conversion mismatches: both C→T and G→A on both strands
+      // (bisulfite affects cytosines on both DNA strands)
+      if (isMethylData && mmRefBase > 0) {
+        char readB = Character.toUpperCase((char) mmBase);
+        char refB = Character.toUpperCase((char) mmRefBase);
+        // Skip C→T conversions (unmethylated C)
+        if (refB == 'C' && readB == 'T') continue;
+        // Skip G→A conversions (unmethylated C on opposite strand)
+        if (refB == 'G' && readB == 'A') continue;
+      }
+      
       double mx1 = chromPosToScreen.apply((double) mmPos);
       double mx2 = chromPosToScreen.apply((double) (mmPos + 1));
       double mw = Math.max(1, mx2 - mx1);
@@ -59,15 +70,24 @@ public class MismatchRenderer {
   }
 
   /**
+   * Draw mismatch markers without methylation filtering (backward-compatible).
+   */
+  public static void drawMismatches(GraphicsContext gc, int[] mismatches,
+                                    double y, double h, double canvasWidth,
+                                    Function<Double, Double> chromPosToScreen) {
+    drawMismatches(gc, mismatches, y, h, canvasWidth, chromPosToScreen, false, false);
+  }
+
+  /**
    * Get the display color for a given base character.
    */
   public static Color baseColor(int base) {
     return switch (Character.toUpperCase((char) base)) {
-      case 'A' -> MISMATCH_A;
-      case 'C' -> MISMATCH_C;
-      case 'G' -> MISMATCH_G;
-      case 'T' -> MISMATCH_T;
-      default -> MISMATCH_OTHER;
+      case 'A' -> DrawColors.MISMATCH_A;
+      case 'C' -> DrawColors.MISMATCH_C;
+      case 'G' -> DrawColors.MISMATCH_G;
+      case 'T' -> DrawColors.MISMATCH_T;
+      default -> DrawColors.MISMATCH_OTHER;
     };
   }
 }

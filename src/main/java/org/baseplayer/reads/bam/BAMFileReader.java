@@ -20,6 +20,9 @@ import org.baseplayer.SharedModel;
  */
 public class BAMFileReader implements AlignmentReader {
 
+  /** Print raw SAM-like line for the first record only. */
+  private static boolean firstRecordPrinted = false;
+  
   private final BGZFInputStream bgzf;
   private final BAIIndex index;
   private final String[] refNames;
@@ -106,6 +109,7 @@ public class BAMFileReader implements AlignmentReader {
    * Query reads overlapping [start, end) on the given chromosome.
    * Coordinates are 0-based half-open.
    */
+  @Override
   public List<BAMRecord> query(String chrom, int start, int end) throws IOException {
     // Try with and without "chr" prefix, and M <-> MT mapping
     Integer refId = resolveRefId(chrom);
@@ -146,7 +150,7 @@ public class BAMFileReader implements AlignmentReader {
     }
 
     // For records without MD tag, compute mismatches by comparing SEQ against reference
-    resolveSeqMismatches(records, chrom, start, end);
+    resolveSeqMismatches(records, chrom);
 
     return records;
   }
@@ -156,6 +160,7 @@ public class BAMFileReader implements AlignmentReader {
    * Each valid read is passed to the consumer as it is decoded — no intermediate list.
    * The consumer returns true to continue, false to stop.
    */
+  @Override
   public void queryStreaming(String chrom, int start, int end,
                              Predicate<BAMRecord> consumer) throws IOException {
     Integer refId = resolveRefId(chrom);
@@ -247,8 +252,10 @@ public class BAMFileReader implements AlignmentReader {
     
     rec.readLength = bgzf.readInt();
     
-    // Skip mate info: next_refID (4) + next_pos (4) + tlen (4)
-    bgzf.skip(12);
+    // Read mate info: next_refID (4) + next_pos (4) + tlen (4)
+    rec.mateRefID = bgzf.readInt();
+    rec.matePos = bgzf.readInt(); // 0-based
+    rec.insertSize = bgzf.readInt();
     
     // Read name
     byte[] nameBytes = new byte[lReadName];
@@ -283,12 +290,13 @@ public class BAMFileReader implements AlignmentReader {
       variableBytes -= qualBytes;
     }
 
-    // Parse tags to find MD:Z
+    // Parse tags to find MD:Z and detect methylation/haplotype tags
     String mdTag = null;
+    byte[] tagData = null;
     if (variableBytes > 0) {
-      byte[] tagData = new byte[variableBytes];
+      tagData = new byte[variableBytes];
       bgzf.readFully(tagData);
-      mdTag = findMDTag(tagData);
+      mdTag = extractTags(tagData, rec);
     }
 
     // Build mismatches from SEQ + MD tag, or keep seq for reference-based fallback
@@ -299,7 +307,161 @@ public class BAMFileReader implements AlignmentReader {
       rec.seq = seq;
     }
     
+    // Print raw SAM-like line for the very first record
+    if (!firstRecordPrinted) {
+      firstRecordPrinted = true;
+      printRawSamLine(rec, seq, tagData);
+    }
+    
     return rec;
+  }
+
+  /**
+   * Print a SAM-like text representation of a BAM record to stdout.
+   * Shows all parsed fields and ALL tags in their raw form.
+   */
+  private void printRawSamLine(BAMRecord rec, char[] seq, byte[] tagData) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("\n=== First BAM record (SAM-like) ===");
+    sb.append("\nQNAME: ").append(rec.readName);
+    sb.append("\nFLAG:  ").append(rec.flag);
+    sb.append("\nRNAME: ").append(rec.refID >= 0 && rec.refID < refNames.length ? refNames[rec.refID] : rec.refID);
+    sb.append("\nPOS:   ").append(rec.pos);
+    sb.append("\nMAPQ:  ").append(rec.mapq);
+    // CIGAR
+    sb.append("\nCIGAR: ");
+    if (rec.cigarOps != null) {
+      String[] opChars = {"M","I","D","N","S","H","P","=","X"};
+      for (int c : rec.cigarOps) {
+        int op = c & 0xF;
+        int len = c >>> 4;
+        sb.append(len).append(op < opChars.length ? opChars[op] : "?");
+      }
+    }
+    sb.append("\nMRNM:  ").append(rec.mateRefID >= 0 && rec.mateRefID < refNames.length ? refNames[rec.mateRefID] : rec.mateRefID);
+    sb.append("\nMPOS:  ").append(rec.matePos);
+    sb.append("\nISIZE: ").append(rec.insertSize);
+    // SEQ
+    sb.append("\nSEQ:   ");
+    if (seq != null) {
+      sb.append(new String(seq, 0, Math.min(seq.length, 80)));
+      if (seq.length > 80) sb.append("... (").append(seq.length).append(" bp)");
+    } else {
+      sb.append("(not available)");
+    }
+    // Tags - decode ALL tags from raw byte array
+    sb.append("\nTAGS:");
+    if (tagData != null && tagData.length > 0) {
+      int pos = 0;
+      while (pos + 3 <= tagData.length) {
+        char tag1 = (char) tagData[pos++];
+        char tag2 = (char) tagData[pos++];
+        char type = (char) tagData[pos++];
+        sb.append("\n  ").append(tag1).append(tag2).append(':').append(type).append('=');
+        
+        try {
+          switch (type) {
+            case 'A': // printable character
+              sb.append((char) tagData[pos++]);
+              break;
+            case 'c': // int8
+              sb.append((int) tagData[pos++]);
+              break;
+            case 'C': // uint8
+              sb.append(tagData[pos++] & 0xFF);
+              break;
+            case 's': // int16
+              sb.append((short) (((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8))));
+              pos += 2;
+              break;
+            case 'S': // uint16
+              sb.append((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8));
+              pos += 2;
+              break;
+            case 'i': // int32
+            case 'I': // uint32
+              int val = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                        ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+              sb.append(val);
+              pos += 4;
+              break;
+            case 'f': // float
+              int bits = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                         ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+              sb.append(Float.intBitsToFloat(bits));
+              pos += 4;
+              break;
+            case 'Z': // null-terminated string
+            case 'H': // hex string
+              int start = pos;
+              while (pos < tagData.length && tagData[pos] != 0) pos++;
+              String strVal = new String(tagData, start, pos - start, java.nio.charset.StandardCharsets.US_ASCII);
+              if (strVal.length() > 100) {
+                sb.append(strVal, 0, 100).append("...(").append(strVal.length()).append(" chars)");
+              } else {
+                sb.append(strVal);
+              }
+              pos++; // skip null terminator
+              break;
+            case 'B': // array
+              char subType = (char) tagData[pos++];
+              int count = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                          ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+              pos += 4;
+              sb.append(subType).append('[').append(count).append("]: ");
+              int display = Math.min(count, 20);
+              for (int i = 0; i < display; i++) {
+                if (i > 0) sb.append(',');
+                switch (subType) {
+                  case 'c': sb.append((int) tagData[pos++]); break;
+                  case 'C': sb.append(tagData[pos++] & 0xFF); break;
+                  case 's': 
+                    sb.append((short) ((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8)));
+                    pos += 2;
+                    break;
+                  case 'S':
+                    sb.append((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8));
+                    pos += 2;
+                    break;
+                  case 'i':
+                  case 'I':
+                    int v = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                            ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+                    sb.append(v);
+                    pos += 4;
+                    break;
+                  case 'f':
+                    int fb = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                             ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+                    sb.append(Float.intBitsToFloat(fb));
+                    pos += 4;
+                    break;
+                }
+              }
+              // skip remaining array elements if we didn't display all
+              if (display < count) {
+                sb.append("...(").append(count - display).append(" more)");
+                for (int i = display; i < count; i++) {
+                  switch (subType) {
+                    case 'c': case 'C': pos++; break;
+                    case 's': case 'S': pos += 2; break;
+                    case 'i': case 'I': case 'f': pos += 4; break;
+                  }
+                }
+              }
+              break;
+            default:
+              sb.append("(unknown type)");
+              break;
+          }
+        } catch (Exception e) {
+          sb.append("(parse error: ").append(e.getMessage()).append(")");
+          break;
+        }
+      }
+    }
+    sb.append("\n===");
+    System.out.println(sb);
   }
 
   /**
@@ -317,26 +479,86 @@ public class BAMFileReader implements AlignmentReader {
   }
 
   /**
-   * Find the MD:Z tag in BAM auxiliary data.
-   * Tags are: tag[0], tag[1], type, value...
+   * Extract tags from BAM auxiliary data.
+   * Finds MD:Z (returns as String), detects MM/ML/XM (methylation), and reads HP:i (haplotype).
+   * Tags format: tag[0], tag[1], type, value...
    */
-  private static String findMDTag(byte[] data) {
+  private static String extractTags(byte[] data, BAMRecord rec) {
+    String mdTag = null;
+    
     int pos = 0;
     while (pos + 2 < data.length) {
       char t1 = (char) data[pos++];
       char t2 = (char) data[pos++];
       char type = (char) data[pos++];
+      
+      // MD:Z — mismatch descriptor
       if (t1 == 'M' && t2 == 'D' && type == 'Z') {
-        // Read null-terminated string
         int start = pos;
         while (pos < data.length && data[pos] != 0) pos++;
-        return new String(data, start, pos - start);
+        mdTag = new String(data, start, pos - start);
+        pos++;
+        continue;
       }
-      // Skip value based on type
+      
+      // Methylation tags: MM:Z, Mm:Z, XM:Z
+      if (((t1 == 'M' && (t2 == 'M' || t2 == 'm')) || (t1 == 'X' && t2 == 'M')) && type == 'Z') {
+        rec.hasMethylTag = true;
+        // Parse XM:Z content for bisulfite detection: x=mismatch, h/z/Z=methylation calls, .=match
+        if (t1 == 'X' && t2 == 'M') {
+          int start = pos;
+          while (pos < data.length && data[pos] != 0) pos++;
+          rec.methylString = new String(data, start, pos - start);
+        } else {
+          while (pos < data.length && data[pos] != 0) pos++;
+        }
+        pos++;
+        continue;
+      }
+      
+      // ML:B:C or Ml:B:C — methylation likelihoods (also indicates methylation data)
+      if (t1 == 'M' && (t2 == 'L' || t2 == 'l') && type == 'B') {
+        rec.hasMethylTag = true;
+        pos = skipTagValue(data, pos, type);
+        if (pos < 0) break;
+        continue;
+      }
+      
+      // HP:i — haplotype phase
+      if (t1 == 'H' && t2 == 'P' && type == 'i') {
+        if (pos + 3 < data.length) {
+          rec.haplotype = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
+        }
+        pos += 4;
+        continue;
+      }
+      
+      // PS:i — phase set
+      if (t1 == 'P' && t2 == 'S' && type == 'i') {
+        if (pos + 3 < data.length) {
+          rec.phaseSet = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
+        }
+        pos += 4;
+        continue;
+      }
+      
+      // RG:Z — read group
+      if (t1 == 'R' && t2 == 'G' && type == 'Z') {
+        int start = pos;
+        while (pos < data.length && data[pos] != 0) pos++;
+        rec.readGroup = new String(data, start, pos - start);
+        pos++;
+        continue;
+      }
+      
+      // Skip other tags
       pos = skipTagValue(data, pos, type);
-      if (pos < 0) break; // parse error
+      if (pos < 0) break;
     }
-    return null;
+    
+    return mdTag;
   }
 
   /**
@@ -345,28 +567,40 @@ public class BAMFileReader implements AlignmentReader {
    */
   private static int skipTagValue(byte[] data, int pos, char type) {
     switch (type) {
-      case 'A': case 'c': case 'C': return pos + 1;
-      case 's': case 'S': return pos + 2;
-      case 'i': case 'I': case 'f': return pos + 4;
-      case 'd': return pos + 8;
-      case 'Z': case 'H':
-        while (pos < data.length && data[pos] != 0) pos++;
-        return pos + 1; // skip null terminator
-      case 'B':
-        if (pos + 4 >= data.length) return -1;
-        char elemType = (char) data[pos++];
-        int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+      case 'A', 'c', 'C' -> {
+          return pos + 1;
+          }
+			case 's', 'S' -> {
+					return pos + 2;
+								}
+			case 'i', 'I', 'f' -> {
+					return pos + 4;
+								}
+			case 'd' -> {
+					return pos + 8;
+					}
+			case 'Z', 'H' -> {
+     	while (pos < data.length && data[pos] != 0) pos++;
+     	return pos + 1; // skip null terminator
+          }
+      case 'B' -> {
+          if (pos + 4 >= data.length) return -1;
+          char elemType = (char) data[pos++];
+          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
                   | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-        pos += 4;
-        int elemSize = switch (elemType) {
-          case 'c', 'C' -> 1;
-          case 's', 'S' -> 2;
-          case 'i', 'I', 'f' -> 4;
-          case 'd' -> 8;
-          default -> 0;
-        };
-        return pos + count * elemSize;
-      default: return -1;
+          pos += 4;
+          int elemSize = switch (elemType) {
+              case 'c', 'C' -> 1;
+              case 's', 'S' -> 2;
+              case 'i', 'I', 'f' -> 4;
+              case 'd' -> 8;
+              default -> 0;
+          };
+          return pos + count * elemSize;
+          }
+      default -> {
+          return -1;
+          }
     }
   }
 
@@ -386,8 +620,8 @@ public class BAMFileReader implements AlignmentReader {
     // We only care about M/=/X (alignment match) positions for MD parsing.
 
     // First, build a list of aligned (read, ref) position pairs
-    int readPos = 0;
-    int refPos = alignStart; // 1-based
+    int readPos;
+    int refPos; // 1-based
 
     java.util.List<int[]> mismatches = new java.util.ArrayList<>();
 
@@ -458,7 +692,7 @@ public class BAMFileReader implements AlignmentReader {
           int rp = alignToRead[alignIdx];
           int genomicPos = alignStart + alignToRef[alignIdx];
           if (rp >= 0 && rp < seq.length) {
-            mismatches.add(new int[]{genomicPos, seq[rp]});
+            mismatches.add(new int[]{genomicPos, seq[rp], Character.toUpperCase(c)});
           }
           alignIdx++;
         }
@@ -469,10 +703,11 @@ public class BAMFileReader implements AlignmentReader {
     }
 
     if (mismatches.isEmpty()) return null;
-    int[] result = new int[mismatches.size() * 2];
+    int[] result = new int[mismatches.size() * 3];
     for (int i = 0; i < mismatches.size(); i++) {
-      result[i * 2] = mismatches.get(i)[0];
-      result[i * 2 + 1] = mismatches.get(i)[1];
+      result[i * 3] = mismatches.get(i)[0];
+      result[i * 3 + 1] = mismatches.get(i)[1];
+      result[i * 3 + 2] = mismatches.get(i)[2];
     }
     return result;
   }
@@ -487,6 +722,11 @@ public class BAMFileReader implements AlignmentReader {
    * Skips all variable-length data (name, CIGAR, SEQ, QUAL, tags) for maximum speed.
    * Returns null on EOF. Sets refID, pos, flag on the shared scratch record.
    */
+  /**
+   * Read minimal BAM record fields for fast counting.
+   * BAM fixed fields (after blockSize): refID, pos, bin_mq_nl, flag_nc, l_seq, ...
+   * Returns {refID, pos(1-based), flag, l_seq} or null at EOF.
+   */
   private int[] readRecordMinimal() throws IOException {
     int blockSize;
     try {
@@ -496,20 +736,18 @@ public class BAMFileReader implements AlignmentReader {
     }
     if (blockSize <= 0) return null;
 
-    int refID = bgzf.readInt();
-    int pos = bgzf.readInt() + 1; // 0-based -> 1-based
-    long binMqNl = bgzf.readUInt();
-    long flagNc = bgzf.readUInt();
-    int flag = (int) ((flagNc >> 16) & 0xFFFF);
-    int readLength = bgzf.readInt();
+    int refID = bgzf.readInt();          // 0: refID
+    int pos = bgzf.readInt() + 1;        // 1: pos (0-based → 1-based)
+    bgzf.readInt();                       // 2: bin_mq_nl (skip)
+    int flagNc = bgzf.readInt();          // 3: flag(16) | n_cigar_op(16)
+    int flag = (flagNc >>> 16) & 0xFFFF;
+    int lSeq = bgzf.readInt();            // 4: l_seq (sequence length)
 
-    // Skip remaining fixed fields (mate info: 12 bytes) + all variable data
-    int remaining = blockSize - 32 + 12; // 32 = core fixed, but we read 20 so far (4+4+4+4+4), skip rest
-    // We read: refID(4) + pos(4) + binMqNl(4) + flagNc(4) + readLength(4) = 20 bytes of the 32 core
-    // Remaining in block: blockSize - 20
+    // Skip remaining: blockSize total bytes after blockSize field,
+    // we already read 5 ints (20 bytes): refID, pos, bin_mq_nl, flag_nc, l_seq
     bgzf.skip(blockSize - 20);
 
-    return new int[] { refID, pos, flag, readLength };
+    return new int[] { refID, pos, flag, lSeq };
   }
 
   /**
@@ -543,7 +781,9 @@ public class BAMFileReader implements AlignmentReader {
     }
     merged.add(cur);
 
-    // Single pass through merged chunks
+    // Single pass through merged chunks, tracking progress
+    int totalChunks = merged.size();
+    int chunksProcessed = 0;
     Set<Long> seenOffsets = new HashSet<>();
     synchronized (bgzf) {
       for (BAIIndex.Chunk chunk : merged) {
@@ -569,7 +809,8 @@ public class BAMFileReader implements AlignmentReader {
             }
           }
         }
-        // Notify after each chunk so UI can update progressively
+        chunksProcessed++;
+        // Notify after each chunk so UI can update progress (pass counts to callback if needed)
         if (onChunkDone != null) onChunkDone.run();
       }
     }
@@ -579,7 +820,7 @@ public class BAMFileReader implements AlignmentReader {
    * Batch-resolve mismatches by comparing SEQ against reference for records without MD tag.
    * Fetches the reference once for the query region, then compares each read in memory.
    */
-  private static void resolveSeqMismatches(List<BAMRecord> records, String chrom, int start, int end) {
+  private static void resolveSeqMismatches(List<BAMRecord> records, String chrom) {
     if (SharedModel.referenceGenome == null) return;
 
     // Find the span of records that need reference comparison
@@ -637,7 +878,7 @@ public class BAMFileReader implements AlignmentReader {
               char readBase = Character.toUpperCase(seq[readPos]);
               char refBase = Character.toUpperCase(refBases.charAt(ri));
               if (readBase != refBase && readBase != 'N' && refBase != 'N') {
-                mismatches.add(new int[]{refPos, readBase});
+                mismatches.add(new int[]{refPos, readBase, refBase});
               }
             }
             readPos++;
@@ -652,10 +893,11 @@ public class BAMFileReader implements AlignmentReader {
     }
 
     if (mismatches.isEmpty()) return null;
-    int[] result = new int[mismatches.size() * 2];
+    int[] result = new int[mismatches.size() * 3];
     for (int i = 0; i < mismatches.size(); i++) {
-      result[i * 2] = mismatches.get(i)[0];
-      result[i * 2 + 1] = mismatches.get(i)[1];
+      result[i * 3] = mismatches.get(i)[0];
+      result[i * 3 + 1] = mismatches.get(i)[1];
+      result[i * 3 + 2] = mismatches.get(i)[2];
     }
     return result;
   }

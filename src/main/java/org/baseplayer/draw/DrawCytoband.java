@@ -6,6 +6,7 @@ import org.baseplayer.annotation.Cytoband;
 import org.baseplayer.annotation.GeneLocation;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
@@ -193,7 +194,7 @@ public class DrawCytoband extends Canvas {
   }
   
   public void draw() {
-    gc.setFill(DrawFunctions.backgroundColor);
+    gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth(), getHeight());
     
     String currentChrom = drawStack.chromosome;
@@ -202,12 +203,11 @@ public class DrawCytoband extends Canvas {
     if (!AnnotationData.isCytobandsLoaded() || currentChrom == null) return;
     
     // Find centromere positions
-    double centroStart = -1, centroEnd = -1;
+    double centroStart = -1;
     for (Cytoband band : AnnotationData.getCytobands()) {
       if (!band.chrom().equals(currentChrom)) continue;
       if (band.stain().equals("acen")) {
         if (centroStart < 0) centroStart = band.start();
-        centroEnd = band.end();
       }
     }
     

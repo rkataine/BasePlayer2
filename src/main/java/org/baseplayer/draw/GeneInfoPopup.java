@@ -44,7 +44,6 @@ import javafx.stage.Window;
 public class GeneInfoPopup {
   
   private static final double MAX_WIDTH = 450;
-  private static final double MAX_HEIGHT = 400;
   
   private final Popup popup;
   private final VBox content;
@@ -478,35 +477,6 @@ public class GeneInfoPopup {
     container.getChildren().add(row);
   }
   
-  private void addAlphaFoldInfoRow(VBox container, String label, String value) {
-    HBox row = new HBox(8);
-    row.setAlignment(Pos.CENTER_LEFT);
-    
-    Label labelNode = new Label(label + ":");
-    labelNode.setFont(AppFonts.getUIFont());
-    labelNode.setTextFill(Color.GRAY);
-    labelNode.setMinWidth(80);
-    
-    Label valueNode = new Label(value);
-    valueNode.setFont(AppFonts.getUIFont());
-    valueNode.setTextFill(Color.LIGHTGRAY);
-    
-    row.getChildren().addAll(labelNode, valueNode);
-    container.getChildren().add(row);
-  }
-  
-  private void openAlphaFold(String uniprotId) {
-    try {
-      String url = "https://alphafold.ebi.ac.uk/entry/" + uniprotId;
-      javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
-      if (hostServices != null) {
-        hostServices.showDocument(url);
-      }
-    } catch (Exception e) {
-      System.err.println("Failed to open AlphaFold: " + e.getMessage());
-    }
-  }
-  
   private void openUniProt(String uniprotId) {
     try {
       String url = "https://www.uniprot.org/uniprotkb/" + uniprotId;
@@ -519,24 +489,6 @@ public class GeneInfoPopup {
     }
   }
   
-  private void openPdbDownload(String pdbUrl) {
-    try {
-      if (pdbUrl != null && !pdbUrl.isEmpty()) {
-        javafx.application.HostServices hostServices = org.baseplayer.MainApp.getHostServicesInstance();
-        if (hostServices != null) {
-          hostServices.showDocument(pdbUrl);
-        }
-      }
-    } catch (Exception e) {
-      System.err.println("Failed to download PDB: " + e.getMessage());
-    }
-  }
-
-  private void openEmbeddedViewer(String url, String title) {
-    // Embedded viewer removed — open external URL instead
-    openUrl(url);
-  }
-
   private void openImageWindow(String imageUrl, String title) {
     try {
       if (imageUrl == null || imageUrl.isBlank()) return;
@@ -570,7 +522,6 @@ public class GeneInfoPopup {
         double popupX = popup.getX();
         double popupY = popup.getY();
         double popupW = content.getWidth() > 0 ? content.getWidth() : 300;
-        double popupH = content.getHeight() > 0 ? content.getHeight() : 200;
 
         double stageW = scene.getWidth();
         double stageH = scene.getHeight();

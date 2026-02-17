@@ -27,21 +27,15 @@ public class BigWigTrack extends AbstractTrack {
   
   private final Path filePath;
   private boolean validFile = false;
-  private boolean swapBytes = false;
   private String errorMessage = null;
   
   // BigWig header info
   private int version;
   private int zoomLevels;
-  private long chromTreeOffset;
-  private long unzoomedDataOffset;
-  private long unzoomedIndexOffset;
-  
   // Cached data for current region
-  private double[] cachedValues = null;
   private String cachedChrom = "";
-  private long cachedStart = 0;
-  private long cachedEnd = 0;
+  private final long cachedStart = 0;
+  private final long cachedEnd = 0;
   
   public BigWigTrack(Path filePath) throws IOException {
     super(filePath.getFileName().toString(), "BigWig");
@@ -63,23 +57,20 @@ public class BigWigTrack extends AbstractTrack {
       
       // Check magic number
       int magic = header.getInt();
-      if (magic == BIGWIG_MAGIC) {
-        swapBytes = false;
-        validFile = true;
-      } else if (magic == BIGWIG_MAGIC_SWAPPED) {
-        swapBytes = true;
-        header.order(ByteOrder.LITTLE_ENDIAN);
-        validFile = true;
-      } else {
-        errorMessage = "Not a valid BigWig file";
-        return;
-      }
+        switch (magic) {
+            case BIGWIG_MAGIC -> validFile = true;
+            case BIGWIG_MAGIC_SWAPPED -> {
+                header.order(ByteOrder.LITTLE_ENDIAN);
+                validFile = true;
+            }
+            default -> {
+                errorMessage = "Not a valid BigWig file";
+                return;
+            }
+        }
       
       version = header.getShort() & 0xFFFF;
       zoomLevels = header.getShort() & 0xFFFF;
-      chromTreeOffset = header.getLong();
-      unzoomedDataOffset = header.getLong();
-      unzoomedIndexOffset = header.getLong();
       
       System.out.println("Loaded BigWig: " + name + " (v" + version + ", " + zoomLevels + " zoom levels)");
       
@@ -95,7 +86,6 @@ public class BigWigTrack extends AbstractTrack {
     if (!chromosome.equals(cachedChrom) || 
         start < cachedStart - (cachedEnd - cachedStart) ||
         end > cachedEnd + (cachedEnd - cachedStart)) {
-      cachedValues = null;
       cachedChrom = "";
     }
   }
@@ -146,7 +136,7 @@ public class BigWigTrack extends AbstractTrack {
    * Read values for a region.
    * Note: Full implementation requires R-tree index traversal.
    */
-  private double[] readRegion(String chromosome, long start, long end, int bins) {
+  /* private double[] readRegion(String chromosome, long start, long end, int bins) {
     // TODO: Implement full BigWig reading with R-tree index
     // This requires:
     // 1. Reading chromosome tree to get chrom ID
@@ -155,10 +145,9 @@ public class BigWigTrack extends AbstractTrack {
     // 
     // For now, return empty array
     return new double[bins];
-  }
+  } */
   
   @Override
   public void dispose() {
-    cachedValues = null;
   }
 }

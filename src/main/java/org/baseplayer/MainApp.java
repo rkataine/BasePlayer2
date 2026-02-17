@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.URL;
 
 import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.Animation;
 import javafx.animation.FadeTransition;
@@ -102,7 +103,7 @@ public class MainApp extends Application {
     public static void setDarkMode() {        
         if (darkMode) scene.getStylesheets().remove(getResource("darkmode.css").toExternalForm());
         else scene.getStylesheets().add(getResource("darkmode.css").toExternalForm());
-        DrawFunctions.lineColor = darkMode ? DrawFunctions.lineColor = new Color(0.3, 0.6, 0.6, 0.5) : new Color(0.5, 0.8, 0.8, 0.5);
+        DrawColors.lineColor = darkMode ? DrawColors.lineColor = new Color(0.3, 0.6, 0.6, 0.5) : new Color(0.5, 0.8, 0.8, 0.5);
         darkMode = !darkMode;
         DrawFunctions.update.set(!DrawFunctions.update.get());
     }

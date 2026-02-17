@@ -10,7 +10,7 @@ import org.baseplayer.annotation.GeneLocation;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.draw.DrawSampleData;
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.io.FileDialog;
+import org.baseplayer.reads.bam.FetchManager;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
@@ -41,14 +41,15 @@ import javafx.util.Duration;
 public class MenuBarController {
   @FXML private TextField positionField;
   @FXML private TextField geneSearchField;
-  @FXML private HBox topBar;
-  @FXML private HBox positionBox;
   @FXML private Label chromosomeLabel;
   @FXML private Label viewLengthLabel;
   @FXML private MenuBar menuBar;
   @FXML private Pane memoryBar;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
+  @FXML private Button minimizeButton;
+  @FXML private Button maximizeButton;
+  @FXML private Button closeButton;
   
   // Zoom button icons for state updates
   private FontIcon zoomInIcon;
@@ -61,7 +62,7 @@ public class MenuBarController {
   private ContextMenu geneAutoComplete;
   private ContextMenu chromosomeLabelMenu;
   private List<String> currentSuggestions = new ArrayList<>();
-  private List<HBox> suggestionContainers = new ArrayList<>();
+  private final List<HBox> suggestionContainers = new ArrayList<>();
   private int selectedSuggestionIndex = -1;
   private Rectangle memoryFill;
   private Tooltip memoryTooltip;
@@ -234,6 +235,9 @@ public class MenuBarController {
   
   private void onChromosomeSelected(String chromosome) {
     if (chromosome == null) return;
+    
+    // Cancel all in-flight fetches before switching chromosome
+    FetchManager.get().cancelAll();
     
     SharedModel.currentChromosome = chromosome;
     Long chromLength = DrawStack.CHROMOSOME_SIZES.get(chromosome);
@@ -540,7 +544,7 @@ public class MenuBarController {
 
       if (filtertype.equals("VCF")) {
         int samples = 5;
-        int variantsPerChrom = 1000;
+        int variantsPerChrom = 100_000;
         
         // Generate simulated variants for all chromosomes
         DrawStack.generateSimulatedVariants(samples, variantsPerChrom);
@@ -555,8 +559,8 @@ public class MenuBarController {
         
         DrawFunctions.update.set(!DrawFunctions.update.get());
       } 
-      boolean multiSelect = !filtertype.equals("SES"); // TODO myöhemmin kun avataan bam tai vcf trackille, refactoroi toimimaan myös sille
-      new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
+      //boolean multiSelect = !filtertype.equals("SES"); // TODO myöhemmin kun avataan bam tai vcf trackille, refactoroi toimimaan myös sille
+      //new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
   }
   public void addStack(ActionEvent event) { MainController.addStack(true); }
   public void removeStack(ActionEvent event) { MainController.addStack(false); }
@@ -569,7 +573,6 @@ public class MenuBarController {
       new SettingsDialog().show();
     } catch (Exception e) {
       System.err.println("Error opening settings: " + e.getMessage());
-      e.printStackTrace();
     }
   }
   
@@ -646,22 +649,18 @@ public class MenuBarController {
     }
   }
 
-  @FXML private Button minimizeButton;
-  @FXML private Button maximizeButton;
-  @FXML private Button closeButton;
   @FXML
   private void minimizeWindow() {
     Window window = MainApp.stage.getScene().getWindow();
-    if (window instanceof Stage) {
-      ((Stage) window).setIconified(true);
+    if (window instanceof Stage stage) {
+          stage.setIconified(true);
     }
   }
 
   @FXML
   private void maximizeWindow() {
     Window window = MainApp.stage.getScene().getWindow();
-    if (window instanceof Stage) {
-      Stage stage = (Stage) window;
+    if (window instanceof Stage stage) {
       if (stage.isMaximized()) {
         Stage newStage = new Stage(StageStyle.DECORATED);
         newStage.setScene(MainApp.stage.getScene());
@@ -685,14 +684,14 @@ public class MenuBarController {
   @FXML
   private void closeWindow() {
     Window window = MainApp.stage.getScene().getWindow();
-    if (window instanceof Stage) {
-      ((Stage) window).close();
+    if (window instanceof Stage stage) {
+          stage.close();
     }
   }
   
   private static Integer tryParseInt(String s) {
     try {
-      return Integer.parseInt(s);
+      return Integer.valueOf(s);
     } catch (NumberFormatException e) {
       return null;
     }

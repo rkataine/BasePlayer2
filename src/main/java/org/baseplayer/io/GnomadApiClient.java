@@ -12,7 +12,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -39,8 +38,6 @@ public class GnomadApiClient {
   private static final HttpClient httpClient = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(15))
       .build();
-  
-  private static final Gson gson = new Gson();
   
   // In-memory cache for variant data by region key (fast access)
   private static final Map<String, VariantData> memoryCache = new ConcurrentHashMap<>();
@@ -252,7 +249,6 @@ public class GnomadApiClient {
             return data;
           } catch (Exception e) {
             System.err.println("Failed to parse gnomAD response: " + e.getMessage());
-            e.printStackTrace();
             return VariantData.error(start, end, "Parse error: " + e.getMessage());
           }
         })

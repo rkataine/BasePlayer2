@@ -7,6 +7,7 @@ import java.util.Map;
 
 import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
+import org.baseplayer.reads.bam.FetchManager;
 import org.baseplayer.tracks.ConservationTrack;
 import org.baseplayer.tracks.FeatureTracksCanvas;
 import org.baseplayer.tracks.GnomadTrack;
@@ -176,6 +177,9 @@ public class DrawStack {
   private void onChromosomeSelected() {
     String selected = chromosomeDropdown.getValue();
     if (selected == null || selected.equals(chromosome)) return;
+    
+    // Cancel all in-flight fetches before switching chromosome
+    FetchManager.get().cancelAll();
     
     chromosome = selected;
     updateChromosomeSize();

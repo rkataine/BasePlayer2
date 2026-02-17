@@ -7,6 +7,7 @@ import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
@@ -28,7 +29,6 @@ import javafx.scene.text.Font;
 public class TrackInfo {
   SideBarStack sidebar;
   GraphicsContext gc;
-  GraphicsContext reactivegc;
   ArrayList<String> tracks;
 
   // Button sizes and layout constants
@@ -38,11 +38,13 @@ public class TrackInfo {
   private static final Font NAME_FONT = Font.font("Segoe UI", 12);
   private static final Font MASTER_FONT = Font.font("Segoe UI", 11);
 
-  // Master track height (matches SharedModel constant)
-  private static final double MASTER_TRACK_HEIGHT = SharedModel.MASTER_TRACK_HEIGHT;
-
   // Track which sample the mouse is hovering over for showing buttons
   private int hoverIndex = -1;
+
+  // Master track resize state
+  private boolean isDraggingMasterEdge = false;
+  private double dragStartY = 0;
+  private double dragStartHeight = 0;
 
   // Context menu for adding data types (lives in master track)
   private final ContextMenu addDataMenu;
@@ -50,14 +52,21 @@ public class TrackInfo {
   public TrackInfo(SideBarStack sidebar) {
     this.sidebar = sidebar;
     this.gc = sidebar.sideCanvas.getGraphicsContext2D();
-    this.reactivegc = sidebar.reactiveCanvas.getGraphicsContext2D();
     this.tracks = SharedModel.sampleList;
 
     // Build the add-data context menu
     addDataMenu = createAddDataMenu();
 
     sidebar.sideCanvas.setOnMouseMoved((event) -> {
-      int idx = sampleIndexAtY(event.getY());
+      double y = event.getY();
+      // Change cursor when hovering over master track bottom edge
+      if (Math.abs(y - SharedModel.masterTrackHeight) < 4) {
+        sidebar.sideCanvas.setCursor(javafx.scene.Cursor.V_RESIZE);
+      } else {
+        sidebar.sideCanvas.setCursor(javafx.scene.Cursor.DEFAULT);
+      }
+      
+      int idx = sampleIndexAtY(y);
       if (idx != hoverIndex) {
         hoverIndex = idx;
         draw();
@@ -66,6 +75,7 @@ public class TrackInfo {
     });
     sidebar.sideCanvas.setOnMouseExited((event) -> {
       hoverIndex = -1;
+      sidebar.sideCanvas.setCursor(javafx.scene.Cursor.DEFAULT);
       draw();
     });
     sidebar.sideCanvas.setOnScroll((event) -> { 
@@ -75,8 +85,32 @@ public class TrackInfo {
       if (SharedModel.scrollBarPosition > (SharedModel.sampleList.size() - 1) * SharedModel.sampleHeight) SharedModel.scrollBarPosition = (SharedModel.sampleList.size() - 1) * SharedModel.sampleHeight;
       SharedModel.firstVisibleSample = Math.max(0, (int)(SharedModel.scrollBarPosition / SharedModel.sampleHeight));
       SharedModel.lastVisibleSample = Math.min(tracks.size() - 1,
-        (int)((SharedModel.scrollBarPosition + sidebar.sideCanvas.getHeight() - MASTER_TRACK_HEIGHT) / SharedModel.sampleHeight));
+        (int)((SharedModel.scrollBarPosition + sidebar.sideCanvas.getHeight() - SharedModel.masterTrackHeight) / SharedModel.sampleHeight));
       DrawFunctions.update.set(!DrawFunctions.update.get());
+    });
+    sidebar.sideCanvas.setOnMousePressed(event -> {
+      double y = event.getY();
+      // Check if pressing on master track bottom edge
+      if (Math.abs(y - SharedModel.masterTrackHeight) < 4) {
+        isDraggingMasterEdge = true;
+        dragStartY = y;
+        dragStartHeight = SharedModel.masterTrackHeight;
+        event.consume();
+      }
+    });
+    sidebar.sideCanvas.setOnMouseDragged(event -> {
+      if (isDraggingMasterEdge) {
+        double deltaY = event.getY() - dragStartY;
+        SharedModel.masterTrackHeight = Math.max(20, Math.min(200, dragStartHeight + deltaY));
+        DrawFunctions.update.set(!DrawFunctions.update.get());
+        event.consume();
+      }
+    });
+    sidebar.sideCanvas.setOnMouseReleased(event -> {
+      if (isDraggingMasterEdge) {
+        isDraggingMasterEdge = false;
+        event.consume();
+      }
     });
     sidebar.sideCanvas.setOnMouseClicked(event -> {
       double x = event.getX();
@@ -84,7 +118,7 @@ public class TrackInfo {
       double sideW = sidebar.sideCanvas.getWidth();
 
       // Click in master track area
-      if (y < MASTER_TRACK_HEIGHT) {
+      if (y < SharedModel.masterTrackHeight) {
         handleMasterTrackClick(x, y, sideW);
         return;
       }
@@ -92,7 +126,7 @@ public class TrackInfo {
       int idx = sampleIndexAtY(y);
 
       if (idx >= 0 && idx < SharedModel.bamFiles.size()) {
-        double sampleY = MASTER_TRACK_HEIGHT + idx * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
+        double sampleY = SharedModel.masterTrackHeight + idx * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
 
         // Check close button (✕) — top-right corner of sample strip
         double closeX = sideW - ICON_SIZE - ICON_MARGIN;
@@ -127,7 +161,7 @@ public class TrackInfo {
           SharedModel.firstVisibleSample = SharedModel.hoverSample.get();
           SharedModel.lastVisibleSample = SharedModel.hoverSample.get();
         }
-        SharedModel.sampleHeight = (sidebar.sideCanvas.getHeight() - MASTER_TRACK_HEIGHT)
+        SharedModel.sampleHeight = (sidebar.sideCanvas.getHeight() - SharedModel.masterTrackHeight)
             / SharedModel.visibleSamples().getAsInt();
         SharedModel.scrollBarPosition = SharedModel.firstVisibleSample * SharedModel.sampleHeight;
         DrawFunctions.update.set(!DrawFunctions.update.get());
@@ -139,11 +173,8 @@ public class TrackInfo {
   private ContextMenu createAddDataMenu() {
     ContextMenu menu = new ContextMenu();
 
-    MenuItem bamItem = new MenuItem("BAM");
+    MenuItem bamItem = new MenuItem("BAM/CRAM");
     bamItem.setOnAction(e -> SampleDataManager.addBamFiles());
-
-    MenuItem cramItem = new MenuItem("CRAM");
-    cramItem.setOnAction(e -> SampleDataManager.addBamFiles());
 
     MenuItem vcfItem = new MenuItem("VCF");
     vcfItem.setDisable(true);
@@ -154,7 +185,7 @@ public class TrackInfo {
     MenuItem bigwigItem = new MenuItem("BigWig");
     bigwigItem.setDisable(true);
 
-    menu.getItems().addAll(bamItem, cramItem, vcfItem, bedItem, bigwigItem);
+    menu.getItems().addAll(bamItem, vcfItem, bedItem, bigwigItem);
     return menu;
   }
 
@@ -183,10 +214,12 @@ public class TrackInfo {
   /**
    * Show a settings popup for a sample listing the main track and all sub-tracks.
    * Each gets: visible toggle, overlay (transparent) toggle, and remove button.
+   * Shows methylation/allele indicators and settings when auto-detected.
    */
   private void showSettingsPopup(int sampleIdx, double screenX, double screenY) {
     SampleFile sample = SharedModel.bamFiles.get(sampleIdx);
     ContextMenu settingsMenu = new ContextMenu();
+    settingsMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
 
     // Main sample row
     settingsMenu.getItems().add(buildTrackRow(sample, null, -1, sampleIdx));
@@ -198,6 +231,87 @@ public class TrackInfo {
         SampleFile sub = sample.getOverlays().get(i);
         settingsMenu.getItems().add(buildTrackRow(sub, sample, i, sampleIdx));
       }
+    }
+
+    // Methylation settings (always available, shows detection status)
+    settingsMenu.getItems().add(new SeparatorMenuItem());
+
+    VBox methylBox = new VBox(4);
+    methylBox.setPadding(new Insets(4, 8, 4, 8));
+
+    if (sample.isMethylationData()) {
+      Label methylLabel = new Label("🧬 Methylation tags detected (MM/ML/XM)");
+      methylLabel.setStyle("-fx-text-fill: #88ccff; -fx-font-size: 11; -fx-font-weight: bold;");
+      methylBox.getChildren().add(methylLabel);
+    } else {
+      Label methylLabel = new Label("🧬 Methylation / Bisulfite sequencing");
+      methylLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11; -fx-font-weight: bold;");
+      methylBox.getChildren().add(methylLabel);
+    }
+
+    CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C→T / G→A)");
+    Boolean currentSetting = sample.isMethylationData();
+    suppressMethylCb.setSelected(currentSetting != null && currentSetting);
+    suppressMethylCb.getStyleClass().add("dark-checkbox");
+    suppressMethylCb.setStyle("-fx-font-size: 11;");
+    suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
+      sample.setSuppressMethylMismatches(n);
+      redraw();
+    });
+
+    Label info = new Label("Enable for emSeq/WGBS data to hide C→T conversions");
+    info.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+
+    methylBox.getChildren().addAll(suppressMethylCb, info);
+    settingsMenu.getItems().add(new CustomMenuItem(methylBox, false));
+
+    // Allele/haplotype settings (shown if HP tags detected)
+    if (sample.isHaplotypeData()) {
+      settingsMenu.getItems().add(new SeparatorMenuItem());
+
+      VBox hpBox = new VBox(4);
+      hpBox.setPadding(new Insets(4, 8, 4, 8));
+
+      Label hpLabel = new Label("\uD83E\uDDE9 Phased haplotype data (HP tags)");
+      hpLabel.setStyle("-fx-text-fill: #88eebb; -fx-font-size: 11; -fx-font-weight: bold;");
+
+      Label hpInfo = new Label("Reads shown in allele-split butterfly view:");
+      hpInfo.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+      Label hpInfo2 = new Label("HP1 = top (up), HP2 = bottom (down)");
+      hpInfo2.setStyle("-fx-text-fill: #999999; -fx-font-size: 10;");
+
+      hpBox.getChildren().addAll(hpLabel, hpInfo, hpInfo2);
+      settingsMenu.getItems().add(new CustomMenuItem(hpBox, false));
+    }
+
+    // Read group split (shown if multiple read groups detected)
+    if (sample.getDetectedReadGroups().size() > 1) {
+      settingsMenu.getItems().add(new SeparatorMenuItem());
+
+      VBox rgBox = new VBox(4);
+      rgBox.setPadding(new Insets(4, 8, 4, 8));
+
+      Label rgLabel = new Label("📋 Read groups (" + sample.getDetectedReadGroups().size() + " detected)");
+      rgLabel.setStyle("-fx-text-fill: #ccaa88; -fx-font-size: 11; -fx-font-weight: bold;");
+
+      CheckBox rgSplitCb = new CheckBox("Split pileup by read group");
+      rgSplitCb.setSelected(sample.isSplitByReadGroup());
+      rgSplitCb.getStyleClass().add("dark-checkbox");
+      rgSplitCb.setStyle("-fx-font-size: 11;");
+      rgSplitCb.selectedProperty().addListener((obs, o, n) -> {
+        sample.setSplitByReadGroup(n);
+        redraw();
+      });
+
+      StringBuilder rgList = new StringBuilder();
+      for (String rg : sample.getDetectedReadGroups()) {
+        rgList.append("• ").append(rg).append("\n");
+      }
+      Label rgInfo = new Label(rgList.toString().trim());
+      rgInfo.setStyle("-fx-text-fill: #999999; -fx-font-size: 9;");
+
+      rgBox.getChildren().addAll(rgLabel, rgSplitCb, rgInfo);
+      settingsMenu.getItems().add(new CustomMenuItem(rgBox, false));
     }
 
     settingsMenu.show(sidebar.sideCanvas, screenX, screenY);
@@ -330,9 +444,9 @@ public class TrackInfo {
   }
 
   private int sampleIndexAtY(double y) {
-    if (y < MASTER_TRACK_HEIGHT) return -1;
+    if (y < SharedModel.masterTrackHeight) return -1;
     if (SharedModel.sampleHeight <= 0 || tracks.isEmpty()) return -1;
-    int idx = (int)((y - MASTER_TRACK_HEIGHT + SharedModel.scrollBarPosition) / SharedModel.sampleHeight);
+    int idx = (int)((y - SharedModel.masterTrackHeight + SharedModel.scrollBarPosition) / SharedModel.sampleHeight);
     if (idx < 0 || idx >= tracks.size()) return -1;
     return idx;
   }
@@ -342,9 +456,9 @@ public class TrackInfo {
     double h = sidebar.sideCanvas.getHeight();
     
     // Fill background
-    gc.setFill(DrawFunctions.sidebarColor);
+    gc.setFill(DrawColors.SIDEBAR);
     gc.fillRect(0, 0, w, h);
-    gc.setStroke(DrawFunctions.borderColor);
+    gc.setStroke(DrawColors.BORDER);
 
     // Always draw master track header
     drawMasterTrack(w);
@@ -352,26 +466,26 @@ public class TrackInfo {
     if (tracks.isEmpty()) return;
 
     for (int i = SharedModel.firstVisibleSample; i <= SharedModel.lastVisibleSample && i < tracks.size(); i++) {
-      double sampleY = MASTER_TRACK_HEIGHT + i * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
+      double sampleY = SharedModel.masterTrackHeight + i * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
       boolean isHover = (i == hoverIndex);
       boolean isBam = (i < SharedModel.bamFiles.size());
       boolean isVisible = !isBam || SharedModel.bamFiles.get(i).visible;
 
       // Skip if completely above master track
-      if (sampleY + SharedModel.sampleHeight < MASTER_TRACK_HEIGHT) continue;
+      if (sampleY + SharedModel.sampleHeight < SharedModel.masterTrackHeight) continue;
 
       // Hover highlight
       if (isHover) {
         gc.setFill(Color.web("#2a2d2e"));
-        gc.fillRect(0, Math.max(sampleY, MASTER_TRACK_HEIGHT), w, SharedModel.sampleHeight);
+        gc.fillRect(0, Math.max(sampleY, SharedModel.masterTrackHeight), w, SharedModel.sampleHeight);
       }
 
       // Divider line
-      if (sampleY >= MASTER_TRACK_HEIGHT) {
+      if (sampleY >= SharedModel.masterTrackHeight) {
         gc.strokeLine(0, sampleY, w, sampleY);
       }
       for (DrawStack stack : MainController.drawStacks) {
-        stack.drawCanvas.getGraphicsContext2D().setStroke(SharedModel.hoverSample.get() == i ? Color.WHITE : DrawFunctions.borderColor);
+        stack.drawCanvas.getGraphicsContext2D().setStroke(SharedModel.hoverSample.get() == i ? Color.WHITE : DrawColors.BORDER);
         stack.drawCanvas.getGraphicsContext2D().strokeLine(0, sampleY, stack.drawCanvas.getWidth(), sampleY);
       }
 
@@ -379,7 +493,7 @@ public class TrackInfo {
       gc.setFont(NAME_FONT);
       gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
       double textY = sampleY + gc.getFont().getSize() + 2;
-      if (textY > MASTER_TRACK_HEIGHT) {
+      if (textY > SharedModel.masterTrackHeight) {
         gc.fillText(tracks.get(i), 10, textY);
       }
 
@@ -391,7 +505,7 @@ public class TrackInfo {
           gc.setFont(Font.font("Segoe UI", 10));
           gc.setFill(Color.web("#888888"));
           double infoY = sampleY + gc.getFont().getSize() + 18;
-          if (infoY > MASTER_TRACK_HEIGHT) {
+          if (infoY > SharedModel.masterTrackHeight) {
             gc.fillText("+" + overlayCount + " overlay" + (overlayCount > 1 ? "s" : ""), 10, infoY);
           }
         }
@@ -399,7 +513,7 @@ public class TrackInfo {
 
       // Per-sample buttons (only shown on hover for BAM files)
       if (isHover && isBam) {
-        drawSampleButtons(i, sampleY, w, isVisible);
+        drawSampleButtons(sampleY, w, isVisible);
       }
     }
   }
@@ -411,11 +525,11 @@ public class TrackInfo {
   private void drawMasterTrack(double sideW) {
     // Background — slightly different shade
     gc.setFill(Color.web("#2b2d30"));
-    gc.fillRect(0, 0, sideW, MASTER_TRACK_HEIGHT);
+    gc.fillRect(0, 0, sideW, SharedModel.masterTrackHeight);
 
     // Settings button (⚙) on left
     double settingsX = 4;
-    double settingsY = (MASTER_TRACK_HEIGHT - 18) / 2;
+    double settingsY = (SharedModel.masterTrackHeight - 18) / 2;
     gc.setFill(Color.web("#3c3c3c"));
     gc.fillRoundRect(settingsX, settingsY, 18, 18, 4, 4);
     gc.setStroke(Color.web("#555555"));
@@ -428,11 +542,11 @@ public class TrackInfo {
     gc.setFont(MASTER_FONT);
     gc.setFill(Color.web("#999999"));
     String label = tracks.isEmpty() ? "Tracks" : "Tracks (" + tracks.size() + ")";
-    gc.fillText(label, 30, MASTER_TRACK_HEIGHT / 2 + 4);
+    gc.fillText(label, 30, SharedModel.masterTrackHeight / 2 + 4);
 
     // "+" button on right
     double plusX = sideW - 22;
-    double plusY = (MASTER_TRACK_HEIGHT - 18) / 2;
+    double plusY = (SharedModel.masterTrackHeight - 18) / 2;
     gc.setFill(Color.web("#3c3c3c"));
     gc.fillRoundRect(plusX, plusY, 18, 18, 4, 4);
     gc.setStroke(Color.web("#555555"));
@@ -443,13 +557,13 @@ public class TrackInfo {
 
     // Bottom border
     gc.setStroke(Color.web("#444444"));
-    gc.strokeLine(0, MASTER_TRACK_HEIGHT, sideW, MASTER_TRACK_HEIGHT);
+    gc.strokeLine(0, SharedModel.masterTrackHeight, sideW, SharedModel.masterTrackHeight);
   }
 
   /**
    * Draw the close (✕), settings (⚙), and overlay (+) buttons for a sample.
    */
-  private void drawSampleButtons(int idx, double sampleY, double sideW, boolean isVisible) {
+  private void drawSampleButtons(double sampleY, double sideW, boolean isVisible) {
     gc.setFont(ICON_FONT);
     
     // --- Close button (✕) top-right ---

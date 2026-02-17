@@ -20,7 +20,7 @@ public class SharedModel {
    public static ReferenceGenome referenceGenome;
    public static String currentChromosome = "1";
    
-   public static final double MASTER_TRACK_HEIGHT = 28;
+   public static double masterTrackHeight = 28;
    
    public static IntSupplier visibleSamples() {
       return () -> lastVisibleSample - firstVisibleSample + 1;

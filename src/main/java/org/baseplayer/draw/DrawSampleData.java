@@ -6,6 +6,7 @@ import org.baseplayer.SharedModel;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.BAMRecord;
 import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.Variant;
 
 import javafx.application.Platform;
@@ -18,25 +19,14 @@ import javafx.scene.paint.Color;
 public class DrawSampleData extends DrawFunctions {
   
   public Image snapshot;
-  private GraphicsContext gc;
+  private final GraphicsContext gc;
 
-  // Colors for BAM read rendering
-  private static final Color READ_FORWARD = Color.rgb(120, 160, 200, 0.85);
-  private static final Color READ_REVERSE = Color.rgb(200, 120, 130, 0.85);
-  private static final Color READ_FORWARD_STROKE = Color.rgb(90, 130, 170);
-  private static final Color READ_REVERSE_STROKE = Color.rgb(170, 90, 100);
-
-  // Overlay colors (slightly different tint)
-  private static final Color OVERLAY_FORWARD = Color.rgb(160, 200, 140, 0.7);
-  private static final Color OVERLAY_REVERSE = Color.rgb(200, 180, 100, 0.7);
-  private static final Color OVERLAY_FORWARD_STROKE = Color.rgb(130, 170, 110);
-  private static final Color OVERLAY_REVERSE_STROKE = Color.rgb(170, 150, 70);
+  /** Unified coverage data computation and drawing. */
+  private final CoverageDrawer coverageDrawer = new CoverageDrawer();
 
   // Coverage view constants
   private static final double MIN_COVERAGE_HEIGHT = 30;
   private static final double MAX_COVERAGE_HEIGHT = 60;
-  private static final Color COVERAGE_FILL = Color.rgb(100, 140, 180, 0.50);
-  private static final Color COVERAGE_SEPARATOR = Color.rgb(80, 80, 80, 0.60);
 
   // Don't query BAM when view is wider than this (too many reads to draw individually)
   // Show coverage-only view up to the coverage limit; beyond that show sampled coverage
@@ -52,10 +42,18 @@ public class DrawSampleData extends DrawFunctions {
   void drawSnapShot() { if (snapshot != null) gc.drawImage(snapshot, 0, 0, getWidth(), getHeight()); }
   @Override
   public void draw() {
-    gc.setFill(backgroundColor);
+    gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth()+1, getHeight()+1);
-    if (drawStack.variants != null) drawVariants();
+    
+    // Always calculate sampleHeight before drawing variants (needed for correct Y positioning)
+    double canvasHeight = getHeight();
+    double masterOffset = SharedModel.masterTrackHeight;
+    double availableHeight = canvasHeight - masterOffset;
+    SharedModel.sampleHeight = availableHeight / Math.max(1, SharedModel.visibleSamples().getAsInt());
+    
+    // Draw BAM reads/coverage first, then variants on top so they're visible
     drawBamReads();
+    if (drawStack.variants != null) drawVariants();
     super.draw();
   }
   void drawVariants() {    
@@ -63,21 +61,21 @@ public class DrawSampleData extends DrawFunctions {
       if (variant.line.getEndX() < drawStack.start-1) continue;
       if (variant.line.getStartX() > drawStack.end) break;
 
-      drawLine(variant, lineColor, gc);    
+      drawLine(variant, DrawColors.lineColor, gc);    
     }
   }
   void drawLine(Variant variant, Color color, GraphicsContext gc) {
     if (variant.index < SharedModel.firstVisibleSample || variant.index > SharedModel.lastVisibleSample + 1) return;
    
-    gc.setStroke(color);
     gc.setFill(color);
     double screenPos = chromPosToScreenPos.apply(variant.line.getStartX());
-    double ypos = SharedModel.MASTER_TRACK_HEIGHT + SharedModel.sampleHeight * variant.index - SharedModel.scrollBarPosition;
+    double ypos = SharedModel.masterTrackHeight + SharedModel.sampleHeight * variant.index - SharedModel.scrollBarPosition;
     double height = heightToScreen.apply(variant.line.getEndY());
     
-    if (drawStack.pixelSize > 1) 
-         gc.fillRect(screenPos, ypos - height, drawStack.pixelSize, height);
-    else gc.strokeLine(screenPos, ypos, screenPos, ypos-height);
+    // Always use fillRect — strokeLine at sub-pixel positions gets anti-aliased
+    // across two pixels, making the line invisible on top of opaque reads
+    double w = Math.max(1, drawStack.pixelSize);
+    gc.fillRect(Math.floor(screenPos), ypos - height, w, height);
   }
 
   /**
@@ -92,10 +90,8 @@ public class DrawSampleData extends DrawFunctions {
     int numSamples = SharedModel.sampleList.size();
     if (numSamples == 0) return;
     
-    double masterOffset = SharedModel.MASTER_TRACK_HEIGHT;
-    double availableHeight = canvasHeight - masterOffset;
-    double sampleH = availableHeight / Math.max(1, SharedModel.visibleSamples().getAsInt());
-    SharedModel.sampleHeight = sampleH;
+    double masterOffset = SharedModel.masterTrackHeight;
+    double sampleH = SharedModel.sampleHeight; // Use the value already calculated in draw()
     
     // Don't query when zoomed out beyond coverage range — use sampled coverage (if enabled)
     if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) {
@@ -131,29 +127,25 @@ public class DrawSampleData extends DrawFunctions {
     int end = (int) drawStack.end;
     
     try {
-      for (int sampleIdx = 0; sampleIdx < SharedModel.bamFiles.size(); sampleIdx++) {
-        if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
-        
-        SampleFile sample = SharedModel.bamFiles.get(sampleIdx);
-        if (!sample.visible) continue;
-        
-        double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
-        
-        if (coverageOnly) {
-          // Between read view and coverage view limit: coverage-only, full height
-          drawCoverageOnly(sample, chrom, start, end, sampleY, sampleH);
-        } else {
-          // Draw main sample reads (with split coverage + reads)
-          drawSampleFile(sample, chrom, start, end, sampleY, sampleH, canvasHeight);
-        }
-        
-        // Draw additional data files on the same track
-        for (SampleFile sub : sample.getOverlays()) {
-          if (!sub.visible) continue;
-          if (coverageOnly) {
-            drawCoverageOnly(sub, chrom, start, end, sampleY, sampleH);
-          } else {
-            drawSampleFile(sub, chrom, start, end, sampleY, sampleH, canvasHeight);
+      // Compute the coverage matrix for all visible samples in one pass
+      coverageDrawer.compute(drawStack, chromPosToScreenPos, (int) getWidth());
+
+      // Coverage-only mode: CoverageDrawer renders everything (coverage + methylation + master track)
+      double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
+      coverageDrawer.render(gc, getWidth(), masterOffset, sampleH, SharedModel.scrollBarPosition,
+          coverageOnly, coverageFractionH);
+
+      // In read view mode, also draw reads below the coverage area
+      if (!coverageOnly) {
+        for (int sampleIdx = 0; sampleIdx < SharedModel.bamFiles.size(); sampleIdx++) {
+          if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
+          SampleFile sample = SharedModel.bamFiles.get(sampleIdx);
+          if (!sample.visible) continue;
+          double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+          drawSampleFileReads(sample, chrom, start, end, sampleY, sampleH, canvasHeight, coverageFractionH);
+          for (SampleFile sub : sample.getOverlays()) {
+            if (!sub.visible) continue;
+            drawSampleFileReads(sub, chrom, start, end, sampleY, sampleH, canvasHeight, coverageFractionH);
           }
         }
       }
@@ -166,11 +158,12 @@ public class DrawSampleData extends DrawFunctions {
   // Vertical spacing between read rows
 
   /**
-   * Draw one SampleFile's reads in the given track strip, choosing colors based on its overlay flag.
-   * The strip is split: coverage on top, reads below.
+   * Draw one SampleFile's reads (without coverage) in the given track strip.
+   * Coverage and methylation are now handled by CoverageDrawer.
+   * The strip is split: coverage area on top (already drawn), reads below.
    */
-  private void drawSampleFile(SampleFile sf, String chrom, int start, int end,
-                               double sampleY, double sampleH, double canvasHeight) {
+  private void drawSampleFileReads(SampleFile sf, String chrom, int start, int end,
+                               double sampleY, double sampleH, double canvasHeight, double coverageH) {
     // Show loading indicator if this file is currently fetching for this stack
     boolean isHoverStack = (drawStack == org.baseplayer.controllers.MainController.hoverStack);
     boolean shouldShowLoading = sf.isLoading(drawStack) && (isHoverStack || !DrawFunctions.navigating);
@@ -187,297 +180,96 @@ public class DrawSampleData extends DrawFunctions {
       gc.fillText(status, 10, sampleY + 15);
     }
 
-    // Pass drawStack so SampleFile caches per-stack; allow non-hover stacks to fetch during navigation
-    List<BAMRecord> reads = sf.getReads(chrom, start, end, drawStack, isHoverStack);
+    // Reads are already cached by CoverageDrawer.compute(); just get them
+    List<BAMRecord> reads = sf.getCachedReads(drawStack);
+    if (reads == null || reads.isEmpty()) {
+      // Fallback: try getReads (might not be cached yet)
+      reads = sf.getReads(chrom, start, end, drawStack, isHoverStack);
+    }
     if (reads.isEmpty()) return;
 
-    // Split area: coverage on top, reads below
-    double coverageH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
     double readsY = sampleY + coverageH;
     double readsH = sampleH - coverageH;
-
-    // Draw coverage track with mismatches
-    drawCoverage(reads, start, end, sampleY, coverageH);
+    boolean isMethyl = sf.isMethylationData();
 
     // Draw separator line between coverage and reads
-    gc.setStroke(COVERAGE_SEPARATOR);
+    gc.setStroke(DrawColors.COVERAGE_SEPARATOR);
     gc.strokeLine(0, readsY, getWidth(), readsY);
 
     int maxRow = sf.getMaxRow(drawStack) + 1;
-    double readHeight = Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
+    double gap = Settings.get().getReadGap();
+    int hp2Start = sf.getHP2StartRow(drawStack);
     
-    if (sf.overlay) {
-      drawReadList(reads, readsY, readHeight, Settings.get().getReadGap(), canvasHeight, OVERLAY_FORWARD, OVERLAY_REVERSE, OVERLAY_FORWARD_STROKE, OVERLAY_REVERSE_STROKE);
+    // Apply read scroll offset
+    double scrollOffset = sf.readScrollOffset;
+    
+    if (hp2Start >= 0 && sf.isHaplotypeData()) {
+      // ── Allele butterfly view: HP1 grows up from middle, HP2 grows down ──
+      int hp1Rows = hp2Start;
+      int hp2Rows = maxRow - hp2Start;
+      int maxPerHalf = Math.max(hp1Rows, hp2Rows);
+      double readHeight = Math.max(Settings.get().getMinReadHeight(),
+          Math.min(8, (readsH / 2 - 4) / Math.max(1, maxPerHalf)));
+      double middleY = readsY + readsH / 2;
+
+      // Draw allele middle separator line
+      gc.setStroke(DrawColors.ALLELE_SEPARATOR);
+      gc.setLineWidth(1.5);
+      gc.strokeLine(0, middleY, getWidth(), middleY);
+      gc.setLineWidth(1.0);
+      // Labels
+      gc.setFill(DrawColors.ALLELE_HP1_LABEL);
+      gc.setFont(javafx.scene.text.Font.font("System", javafx.scene.text.FontWeight.BOLD, 9));
+      gc.fillText("HP1", 4, middleY - 4);
+      gc.setFill(DrawColors.ALLELE_HP2_LABEL);
+      gc.fillText("HP2", 4, middleY + 11);
+
+      // Draw reads with allele-aware y positioning
+      if (sf.overlay) {
+        drawReadListAllele(reads, middleY, readHeight, gap, canvasHeight, hp2Start,
+            DrawColors.OVERLAY_FORWARD, DrawColors.OVERLAY_REVERSE, DrawColors.OVERLAY_FORWARD_STROKE, DrawColors.OVERLAY_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
+      } else {
+        drawReadListAllele(reads, middleY, readHeight, gap, canvasHeight, hp2Start,
+            DrawColors.READ_FORWARD, DrawColors.READ_REVERSE, DrawColors.READ_FORWARD_STROKE, DrawColors.READ_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
+      }
     } else {
-      drawReadList(reads, readsY, readHeight, Settings.get().getReadGap(), canvasHeight, READ_FORWARD, READ_REVERSE, READ_FORWARD_STROKE, READ_REVERSE_STROKE);
-    }
-  }
-
-  /**
-   * Draw coverage histogram with mismatch base colors for a set of reads.
-   * Uses sweep-line for O(reads + positions) coverage computation and bins
-   * positions by pixel when zoomed out for efficient rendering.
-   */
-  private void drawCoverage(List<BAMRecord> reads, int start, int end,
-                            double coverageY, double coverageH) {
-    int regionLen = end - start + 2;
-    if (regionLen <= 0 || regionLen > 200_000) return;
-
-    // Sweep-line events for O(reads) coverage accumulation
-    int[] events = new int[regionLen + 2];
-    // Per-position mismatch base counts
-    int[] mmA = new int[regionLen];
-    int[] mmC = new int[regionLen];
-    int[] mmG = new int[regionLen];
-    int[] mmT = new int[regionLen];
-
-    for (BAMRecord read : reads) {
-      int r1 = Math.max(0, read.pos - start);
-      int r2 = Math.min(regionLen - 1, read.end - start);
-      if (r2 < 0 || r1 >= regionLen) continue;
-      events[r1]++;
-      if (r2 + 1 <= regionLen) events[r2 + 1]--;
-
-      if (read.mismatches != null) {
-        for (int m = 0; m < read.mismatches.length; m += 2) {
-          int idx = read.mismatches[m] - start;
-          if (idx < 0 || idx >= regionLen) continue;
-          switch (Character.toUpperCase((char) read.mismatches[m + 1])) {
-            case 'A' -> mmA[idx]++;
-            case 'C' -> mmC[idx]++;
-            case 'G' -> mmG[idx]++;
-            case 'T' -> mmT[idx]++;
+      // ── Normal view ──
+      double readHeight = Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
+    
+      if (sf.overlay) {
+        drawReadList(reads, readsY - scrollOffset, readHeight, gap, canvasHeight, DrawColors.OVERLAY_FORWARD, DrawColors.OVERLAY_REVERSE, DrawColors.OVERLAY_FORWARD_STROKE, DrawColors.OVERLAY_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
+      } else {
+        drawReadList(reads, readsY - scrollOffset, readHeight, gap, canvasHeight, DrawColors.READ_FORWARD, DrawColors.READ_REVERSE, DrawColors.READ_FORWARD_STROKE, DrawColors.READ_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
+      }
+    
+      // Draw read group separator lines and labels
+      java.util.Map<String, Integer> rgStartRows = sf.getReadGroupStartRows(drawStack);
+      if (rgStartRows.size() > 1) {
+        boolean first = true;
+        for (java.util.Map.Entry<String, Integer> entry : rgStartRows.entrySet()) {
+          if (first) { first = false; continue; } // skip first group (no separator above it)
+          int rgRow = entry.getValue();
+          double sepY = readsY + rgRow * (readHeight + gap) - gap - 1;
+          if (sepY > readsY && sepY < sampleY + sampleH) {
+            gc.setStroke(Color.rgb(100, 160, 200, 0.6));
+            gc.setLineDashes(6, 3);
+            gc.strokeLine(0, sepY, getWidth(), sepY);
+            gc.setLineDashes();
+            String label = entry.getKey().equals("__none__") ? "(no RG)" : entry.getKey();
+            gc.setFill(Color.rgb(150, 200, 240, 0.9));
+            gc.setFont(javafx.scene.text.Font.font("System", javafx.scene.text.FontWeight.BOLD, 9));
+            gc.fillText(label, 4, sepY + 10);
           }
         }
+        // Label the first group too
+        java.util.Map.Entry<String, Integer> firstEntry = rgStartRows.entrySet().iterator().next();
+        String firstLabel = firstEntry.getKey().equals("__none__") ? "(no RG)" : firstEntry.getKey();
+        double firstLabelY = readsY + firstEntry.getValue() * (readHeight + gap) + 10;
+        gc.setFill(Color.rgb(150, 200, 240, 0.9));
+        gc.setFont(javafx.scene.text.Font.font("System", javafx.scene.text.FontWeight.BOLD, 9));
+        gc.fillText(firstLabel, 4, firstLabelY);
       }
     }
-
-    // Build coverage array from events
-    int[] coverage = new int[regionLen];
-    int maxCov = 0, running = 0;
-    for (int i = 0; i < regionLen; i++) {
-      running += events[i];
-      coverage[i] = Math.max(0, running);
-      if (coverage[i] > maxCov) maxCov = coverage[i];
-    }
-    if (maxCov == 0) return;
-
-    double yBottom = coverageY + coverageH - 1;
-    double scale = (coverageH - 14) / maxCov; // margin for label at top
-    double cw = getWidth();
-
-    // When zoomed out, bin multiple positions per pixel for efficient drawing
-    int step = Math.max(1, (int) (1.0 / drawStack.pixelSize));
-
-    // Draw coverage fill
-    gc.setFill(COVERAGE_FILL);
-    for (int i = 0; i < regionLen; i += step) {
-      int cov = coverage[i];
-      for (int j = 1; j < step && i + j < regionLen; j++) {
-        cov = Math.max(cov, coverage[i + j]);
-      }
-      if (cov == 0) continue;
-
-      double x1 = chromPosToScreenPos.apply((double) (start + i));
-      double x2 = chromPosToScreenPos.apply((double) (start + i + step));
-      if (x1 > cw) break;
-      double w = Math.max(1, x2 - x1);
-      double h = cov * scale;
-      gc.fillRect(x1, yBottom - h, w, h);
-    }
-
-    // Draw mismatch base colors as stacked bars from bottom of coverage
-    double barW = Math.max(1, drawStack.pixelSize);
-    for (int i = 0; i < regionLen; i++) {
-      int totalMM = mmA[i] + mmC[i] + mmG[i] + mmT[i];
-      if (totalMM == 0) continue;
-
-      double x = chromPosToScreenPos.apply((double) (start + i));
-      if (x + barW < 0) continue;
-      if (x > cw) break;
-
-      double baseY = yBottom;
-      if (mmT[i] > 0) {
-        double h = mmT[i] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_T);
-        gc.fillRect(x, baseY - h, barW, h);
-        baseY -= h;
-      }
-      if (mmG[i] > 0) {
-        double h = mmG[i] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_G);
-        gc.fillRect(x, baseY - h, barW, h);
-        baseY -= h;
-      }
-      if (mmC[i] > 0) {
-        double h = mmC[i] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_C);
-        gc.fillRect(x, baseY - h, barW, h);
-        baseY -= h;
-      }
-      if (mmA[i] > 0) {
-        double h = mmA[i] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_A);
-        gc.fillRect(x, baseY - h, barW, h);
-      }
-    }
-
-    // Draw max coverage label
-    gc.setFill(Color.web("#aaaaaa"));
-    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
-    gc.fillText(String.valueOf(maxCov), 3, coverageY + 10);
-  }
-
-  /**
-   * Draw coverage-only view for a sample file, expanded to fill the full track height.
-   * Used when zoomed out beyond individual-read range but within coverage range.
-   * Bins are computed in genomic coordinates and cached per-file so that horizontal
-   * panning just re-renders from cache without recomputing smoothing.
-   */
-  private void drawCoverageOnly(SampleFile sf, String chrom, int start, int end,
-                                double sampleY, double sampleH) {
-    boolean isHoverStack = (drawStack == org.baseplayer.controllers.MainController.hoverStack);
-    boolean shouldShowLoading = sf.isLoading(drawStack) && (isHoverStack || !DrawFunctions.navigating);
-    if (shouldShowLoading) {
-      drawLoadingIndicator(sampleY, sampleH);
-    }
-
-    List<BAMRecord> reads = sf.getReads(chrom, start, end, drawStack, isHoverStack, true);
-    if (reads.isEmpty()) return;
-
-    double cw = getWidth();
-    int viewLen = end - start;
-    if (viewLen <= 0) return;
-    double binSize = (double) viewLen / cw;
-
-    // Check if cached data is still valid (cache is per-file, per-DrawStack)
-    SampleFile.CoverageCache cache = sf.getCoverageCache(drawStack);
-    int cacheGenomicEnd = cache != null ? (int)(cache.genomicStart + cache.numBins * cache.binSize) : 0;
-    boolean cacheValid = cache != null
-        && cache.sourceReads == reads
-        && Math.abs(cache.binSize - binSize) / binSize < 0.01
-        && start >= cache.genomicStart
-        && end <= cacheGenomicEnd;
-
-    if (!cacheValid) {
-      // Compute bins in genomic coordinates with buffer for panning headroom
-      int buffer = viewLen / 2;
-      int binStart = Math.max(0, start - buffer);
-      int binEnd = end + buffer;
-      int numBins = Math.max(1, (int)((binEnd - binStart) / binSize) + 1);
-
-      double[] binCov = new double[numBins];
-      double[] mmA = new double[numBins];
-      double[] mmC = new double[numBins];
-      double[] mmG = new double[numBins];
-      double[] mmT = new double[numBins];
-
-      for (BAMRecord read : reads) {
-        int b1 = Math.max(0, (int)((read.pos - binStart) / binSize));
-        int b2 = Math.min(numBins - 1, (int)((read.end - binStart) / binSize));
-        for (int b = b1; b <= b2; b++) binCov[b]++;
-        if (read.mismatches != null) {
-          for (int m = 0; m < read.mismatches.length; m += 2) {
-            int bin = (int)((read.mismatches[m] - binStart) / binSize);
-            if (bin < 0 || bin >= numBins) continue;
-            switch (Character.toUpperCase((char) read.mismatches[m + 1])) {
-              case 'A' -> mmA[bin]++;
-              case 'C' -> mmC[bin]++;
-              case 'G' -> mmG[bin]++;
-              case 'T' -> mmT[bin]++;
-            }
-          }
-        }
-      }
-
-      // Find raw max before smoothing
-      double maxRaw = 0;
-      for (double c : binCov) if (c > maxRaw) maxRaw = c;
-
-      smoothBins(binCov);
-
-      double maxSmoothed = 0;
-      for (double c : binCov) if (c > maxSmoothed) maxSmoothed = c;
-
-      cache = new SampleFile.CoverageCache();
-      cache.smoothedCov = binCov;
-      cache.rawMmA = mmA;
-      cache.rawMmC = mmC;
-      cache.rawMmG = mmG;
-      cache.rawMmT = mmT;
-      cache.genomicStart = binStart;
-      cache.binSize = binSize;
-      cache.numBins = numBins;
-      cache.scaleMax = Math.max(maxSmoothed, maxRaw);
-      cache.sourceReads = reads;
-      sf.setCoverageCache(drawStack, cache);
-    }
-
-    if (cache.scaleMax == 0) return;
-
-    // Render from cache — map genomic bins to screen coordinates
-    double yBottom = sampleY + sampleH - 1;
-    double scale = (sampleH - 14) / cache.scaleMax;
-
-    // Only iterate bins visible on screen
-    int firstBin = Math.max(0, (int)((start - cache.genomicStart) / cache.binSize) - 1);
-    int lastBin = Math.min(cache.numBins - 1, (int)((end - cache.genomicStart) / cache.binSize) + 1);
-
-    // Draw smoothed coverage
-    gc.setFill(COVERAGE_FILL);
-    for (int b = firstBin; b <= lastBin; b++) {
-      if (cache.smoothedCov[b] < 0.5) continue;
-      double gpos = cache.genomicStart + b * cache.binSize;
-      double x = chromPosToScreenPos.apply(gpos);
-      double x2 = chromPosToScreenPos.apply(gpos + cache.binSize);
-      if (x2 < 0) continue;
-      if (x > cw) break;
-      double w = Math.max(1, x2 - x);
-      double h = cache.smoothedCov[b] * scale;
-      gc.fillRect(x, yBottom - h, w, h);
-    }
-
-    // Draw raw mismatch bars at correct allelic fraction
-    for (int b = firstBin; b <= lastBin; b++) {
-      double totalMM = cache.rawMmA[b] + cache.rawMmC[b] + cache.rawMmG[b] + cache.rawMmT[b];
-      if (totalMM < 0.5) continue;
-      double gpos = cache.genomicStart + b * cache.binSize;
-      double x = chromPosToScreenPos.apply(gpos);
-      double x2 = chromPosToScreenPos.apply(gpos + cache.binSize);
-      if (x2 < 0) continue;
-      if (x > cw) break;
-      double w = Math.max(1, x2 - x);
-
-      double baseY = yBottom;
-      if (cache.rawMmT[b] >= 0.5) {
-        double h = cache.rawMmT[b] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_T);
-        gc.fillRect(x, baseY - h, w, h);
-        baseY -= h;
-      }
-      if (cache.rawMmG[b] >= 0.5) {
-        double h = cache.rawMmG[b] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_G);
-        gc.fillRect(x, baseY - h, w, h);
-        baseY -= h;
-      }
-      if (cache.rawMmC[b] >= 0.5) {
-        double h = cache.rawMmC[b] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_C);
-        gc.fillRect(x, baseY - h, w, h);
-        baseY -= h;
-      }
-      if (cache.rawMmA[b] >= 0.5) {
-        double h = cache.rawMmA[b] * scale;
-        gc.setFill(MismatchRenderer.MISMATCH_A);
-        gc.fillRect(x, baseY - h, w, h);
-      }
-    }
-
-    // Max coverage label
-    gc.setFill(Color.web("#aaaaaa"));
-    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
-    gc.fillText(String.valueOf((int) cache.scaleMax), 3, sampleY + 10);
   }
 
   /**
@@ -492,11 +284,23 @@ public class DrawSampleData extends DrawFunctions {
     int numSamples = Settings.get().getSampledCoveragePoints();
 
     SampleFile.SampledCoverage sampled = sf.requestSampledCoverage(chrom, start, end, numSamples, drawStack);
-    if (sampled == null || sampled.samplesCompleted == 0) {
+    if (sampled == null) {
       // Show loading indicator while sampling hasn't started
       gc.setFill(Color.web("#888888"));
       gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
       gc.fillText("Sampling coverage...", 10, sampleY + sampleH / 2 + 4);
+      return;
+    }
+    
+    // Show progress if still fetching (samplesCompleted == 0 but chunks being processed)
+    if (sampled.samplesCompleted == 0) {
+      gc.setFill(Color.web("#888888"));
+      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
+      if (sampled.chunksProcessed > 0) {
+        gc.fillText("Sampling coverage... (" + sampled.chunksProcessed + " chunks processed)", 10, sampleY + sampleH / 2 + 4);
+      } else {
+        gc.fillText("Sampling coverage...", 10, sampleY + sampleH / 2 + 4);
+      }
       return;
     }
 
@@ -538,7 +342,7 @@ public class DrawSampleData extends DrawFunctions {
 
     // Render as filled polygon with sub-pixel interpolation
     // First pass: ensure all non-zero samples draw at least 1 pixel
-    gc.setFill(COVERAGE_FILL);
+    gc.setFill(DrawColors.COVERAGE_FILL);
     for (int i = 0; i < count; i++) {
       if (sampled.depths[i] > 0 && sy[i] >= 0.5) {
         double px = Math.floor(sx[i]);
@@ -604,9 +408,11 @@ public class DrawSampleData extends DrawFunctions {
 
   /**
    * Draw a list of BAM reads with the given colors.
+   * clipTop/clipBottom define the visible region — reads outside are skipped.
    */
   private void drawReadList(List<BAMRecord> reads, double sampleY, double readHeight, double gap,
-                            double canvasHeight, Color fwdFill, Color revFill, Color fwdStroke, Color revStroke) {
+                            double canvasHeight, Color fwdFill, Color revFill, Color fwdStroke, Color revStroke,
+                            boolean isMethylData, double clipTop, double clipBottom) {
     double canvasWidth = getWidth();
     for (BAMRecord read : reads) {
       double x1 = chromPosToScreenPos.apply((double) read.pos);
@@ -615,16 +421,56 @@ public class DrawSampleData extends DrawFunctions {
       double y = sampleY + read.row * (readHeight + gap) + 1;
       double h = readHeight >= 3 ? readHeight - gap : readHeight;
 
-      if (y + readHeight < 0 || y > canvasHeight) continue;
+      if (y + h < clipTop || y > clipBottom) continue;
       if (x1 + width < 0 || x1 > canvasWidth) continue;
 
-      if (read.isReverseStrand()) {
-        gc.setFill(revFill);
-        gc.setStroke(revStroke);
+      // Check for discordant reads first
+      int discordantType = read.getDiscordantType();
+      Color fillColor, strokeColor;
+      
+      if (discordantType > 0) {
+        // Use discordant colors
+        switch (discordantType) {
+          case 1 -> { // Inter-chromosomal — color by mate chromosome
+            int ci = Math.abs(read.mateRefID) % DrawColors.INTERCHROM_FILLS.length;
+            fillColor = DrawColors.INTERCHROM_FILLS[ci];
+            strokeColor = DrawColors.INTERCHROM_STROKES[ci];
+          }
+          case 2 -> { // Deletion
+            fillColor = DrawColors.DISCORDANT_DELETION;
+            strokeColor = DrawColors.DISCORDANT_DELETION_STROKE;
+          }
+          case 3 -> { // Inversion
+            fillColor = DrawColors.DISCORDANT_INVERSION;
+            strokeColor = DrawColors.DISCORDANT_INVERSION_STROKE;
+          }
+          case 4 -> { // Duplication
+            fillColor = DrawColors.DISCORDANT_DUPLICATION;
+            strokeColor = DrawColors.DISCORDANT_DUPLICATION_STROKE;
+          }
+          default -> { // Normal (fallback)
+            if (read.isReverseStrand()) {
+              fillColor = revFill;
+              strokeColor = revStroke;
+            } else {
+              fillColor = fwdFill;
+              strokeColor = fwdStroke;
+            }
+          }
+        }
       } else {
-        gc.setFill(fwdFill);
-        gc.setStroke(fwdStroke);
+        // Use normal forward/reverse colors
+        if (read.isReverseStrand()) {
+          fillColor = revFill;
+          strokeColor = revStroke;
+        } else {
+          fillColor = fwdFill;
+          strokeColor = fwdStroke;
+        }
       }
+
+      gc.setFill(fillColor);
+      gc.setStroke(strokeColor);
 
       gc.fillRect(x1, y, width, h);
       if (readHeight >= 3) {
@@ -632,33 +478,65 @@ public class DrawSampleData extends DrawFunctions {
       }
 
       // Draw mismatches on top of the read
-      MismatchRenderer.drawMismatches(gc, read.mismatches, y, h, canvasWidth, chromPosToScreenPos);
+      MismatchRenderer.drawMismatches(gc, read.mismatches, y, h, canvasWidth, chromPosToScreenPos,
+          isMethylData, read.isReverseStrand());
     }
   }
 
   /**
-   * In-place Gaussian-like smoothing (3-pass box blur for approximation).
-   * Radius adapts to array length for consistent visual smoothness.
+   * Draw reads in allele butterfly layout.
+   * HP1 reads (row < hp2StartRow) grow upward from middleY.
+   * HP2+unphased reads (row >= hp2StartRow) grow downward from middleY.
    */
-  private static void smoothBins(double[] bins) {
-    int n = bins.length;
-    if (n < 5) return;
-    int radius = Math.max(1, Math.min(8, n / 80));
-    double[] tmp = new double[n];
-    for (int pass = 0; pass < 3; pass++) {
-      int window = 2 * radius + 1;
-      double sum = 0;
-      // Seed with left edge
-      for (int i = 0; i <= radius && i < n; i++) sum += bins[i];
-      for (int i = 0; i < n; i++) {
-        int right = i + radius;
-        int left = i - radius - 1;
-        if (right < n) sum += bins[right];
-        if (left >= 0) sum -= bins[left];
-        int count = Math.min(right, n - 1) - Math.max(left + 1, 0) + 1;
-        tmp[i] = sum / count;
+  private void drawReadListAllele(List<BAMRecord> reads, double middleY, double readHeight, double gap,
+                                  double canvasHeight, int hp2StartRow,
+                                  Color fwdFill, Color revFill, Color fwdStroke, Color revStroke,
+                                  boolean isMethylData, double clipTop, double clipBottom) {
+    double canvasWidth = getWidth();
+    for (BAMRecord read : reads) {
+      double x1 = chromPosToScreenPos.apply((double) read.pos);
+      double x2 = chromPosToScreenPos.apply((double) read.end);
+      double width = Math.max(1, x2 - x1);
+      double h = readHeight >= 3 ? readHeight - gap : readHeight;
+
+      // Butterfly y positioning
+      double y;
+      if (read.row < hp2StartRow) {
+        // HP1: grow upward from middle line
+        y = middleY - (read.row + 1) * (readHeight + gap);
+      } else {
+        // HP2/unphased: grow downward from middle line
+        y = middleY + (read.row - hp2StartRow) * (readHeight + gap) + 1;
       }
-      System.arraycopy(tmp, 0, bins, 0, n);
+
+      if (y + h < clipTop || y > clipBottom) continue;
+      if (x1 + width < 0 || x1 > canvasWidth) continue;
+      int discordantType = read.getDiscordantType();
+      Color fillColor, strokeColor;
+      if (discordantType > 0) {
+        switch (discordantType) {
+          case 1 -> { int ci = Math.abs(read.mateRefID) % DrawColors.INTERCHROM_FILLS.length; fillColor = DrawColors.INTERCHROM_FILLS[ci]; strokeColor = DrawColors.INTERCHROM_STROKES[ci]; }
+          case 2 -> { fillColor = DrawColors.DISCORDANT_DELETION; strokeColor = DrawColors.DISCORDANT_DELETION_STROKE; }
+          case 3 -> { fillColor = DrawColors.DISCORDANT_INVERSION; strokeColor = DrawColors.DISCORDANT_INVERSION_STROKE; }
+          case 4 -> { fillColor = DrawColors.DISCORDANT_DUPLICATION; strokeColor = DrawColors.DISCORDANT_DUPLICATION_STROKE; }
+          default -> {
+            if (read.isReverseStrand()) { fillColor = revFill; strokeColor = revStroke; }
+            else { fillColor = fwdFill; strokeColor = fwdStroke; }
+          }
+        }
+      } else {
+        if (read.isReverseStrand()) { fillColor = revFill; strokeColor = revStroke; }
+        else { fillColor = fwdFill; strokeColor = fwdStroke; }
+      }
+
+      gc.setFill(fillColor);
+      gc.setStroke(strokeColor);
+      gc.fillRect(x1, y, width, h);
+      if (readHeight >= 3) {
+        gc.strokeRect(x1, y, width, h);
+      }
+      MismatchRenderer.drawMismatches(gc, read.mismatches, y, h, canvasWidth, chromPosToScreenPos,
+          isMethylData, read.isReverseStrand());
     }
   }
 

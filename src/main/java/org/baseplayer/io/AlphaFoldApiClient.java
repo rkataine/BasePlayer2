@@ -1,5 +1,6 @@
 package org.baseplayer.io;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -19,6 +20,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 
 /**
  * Client for AlphaFold and UniProt APIs.
@@ -111,10 +113,10 @@ public class AlphaFoldApiClient {
                 double gm = obj.has("globalMetricValue") ? obj.get("globalMetricValue").getAsDouble() : 0.0;
                 return new AlphaFoldEntry(uid, desc, gene, seqLen, pdb, cif, pae, model, gm);
               }
-            } catch (Exception ignored) {
+            } catch (JsonSyntaxException | IOException ignored) {
             }
           }
-        } catch (Exception ignored) {
+        } catch (IOException ignored) {
         }
       }
 
@@ -166,7 +168,7 @@ public class AlphaFoldApiClient {
             JsonObject mig = new JsonObject();
             mig.add("predictions", arr);
             DataCacheManager.saveToCache("alphafold_missense", uniprotId, mig);
-          } catch (Exception ignored) {
+          } catch (JsonSyntaxException | IOException ignored) {
           }
         }
       }
@@ -232,7 +234,7 @@ public class AlphaFoldApiClient {
             JsonObject mig = new JsonObject();
             mig.add("variants", arr);
             DataCacheManager.saveToCache("uniprot_variants", uniprotId, mig);
-          } catch (Exception ignored) {}
+          } catch (JsonSyntaxException | IOException ignored) {}
         }
       }
       if (arr == null) return null;
@@ -382,7 +384,7 @@ public class AlphaFoldApiClient {
             } else {
               System.out.println("UniProt: No results for " + geneName);
             }
-          } catch (Exception e) {
+          } catch (JsonSyntaxException e) {
             System.err.println("UniProt parse error: " + e.getMessage());
           }
           
@@ -488,7 +490,7 @@ public class AlphaFoldApiClient {
             saveAlphaFoldToDisk(entry);
             return entry;
             
-          } catch (Exception e) {
+          } catch (JsonSyntaxException e) {
             System.err.println("AlphaFold parse error: " + e.getMessage());
             return null;
           }
@@ -616,13 +618,11 @@ public class AlphaFoldApiClient {
               String amClass = parts[2].trim();
               
               String classification;
-              if (amClass.equals("LPath") || amClass.equals("Path")) {
-                classification = "pathogenic";
-              } else if (amClass.equals("LBen") || amClass.equals("Ben")) {
-                classification = "benign";
-              } else {
-                classification = "ambiguous";
-              }
+              classification = switch (amClass) {
+                    case "LPath", "Path" -> "pathogenic";
+                    case "LBen", "Ben" -> "benign";
+                    default -> "ambiguous";
+                };
               
               allPredictions.add(new MissensePrediction(
                   varPos, refAA, altAA, pathScore, classification));
@@ -765,7 +765,7 @@ public class AlphaFoldApiClient {
         // ignore
       }
       
-    } catch (Exception e) {
+    } catch (JsonSyntaxException | IOException | InterruptedException e) {
       System.err.println("UniProt variants error: " + e.getMessage());
     }
     

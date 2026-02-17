@@ -6,8 +6,10 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.io.UcscApiClient;
 import org.baseplayer.io.UcscApiClient.ConservationData;
+import org.baseplayer.reads.bam.FetchManager;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.application.Platform;
@@ -55,6 +57,9 @@ public class ConservationTrack extends AbstractTrack {
   @Override
   public void onRegionChanged(String chromosome, long start, long end) {
     if (!visible) return;
+    
+    // Block during zoom animation
+    if (DrawFunctions.animationRunning) return;
     
     // Too large to fetch
     if (end - start > MAX_REGION_SIZE) {
@@ -117,6 +122,12 @@ public class ConservationTrack extends AbstractTrack {
         return;
       }
     }
+
+    // Check FetchManager before fetching
+    FetchManager fm = FetchManager.get();
+    if (!fm.canFetch(FetchManager.FetchType.FEATURE_TRACK, (int)(end - start))) {
+      return; // memory too low
+    }
     
     // Actually need to fetch from API - now show loading indicator
     loading = true;
@@ -131,16 +142,22 @@ public class ConservationTrack extends AbstractTrack {
     if (pendingFetch != null && !pendingFetch.isDone()) {
       pendingFetch.cancel(true);
     }
+
+    FetchManager.FetchTicket ticket = fm.acquire(
+        FetchManager.FetchType.FEATURE_TRACK, this, null, chromosome, (int) start, (int) end);
     
     // UcscApiClient will automatically use per-base data for small regions (<10kb)
     // and binned data for larger regions, with smart caching
     pendingFetch = UcscApiClient.fetchConservation(chromosome, start, end, bins)
         .thenAccept(data -> {
           Platform.runLater(() -> {
-            currentData = data;
-            cachedChromosome = chromosome;  // Track which chromosome the data is for
+            if (!ticket.isCancelled()) {
+              currentData = data;
+              cachedChromosome = chromosome;
+            }
             loading = false;
             fetching = false;
+            fm.release(ticket);
             if (onDataLoaded != null) {
               onDataLoaded.run();
             }
@@ -150,6 +167,7 @@ public class ConservationTrack extends AbstractTrack {
           Platform.runLater(() -> {
             loading = false;
             fetching = false;
+            fm.release(ticket);
           });
           return null;
         });
@@ -247,7 +265,6 @@ public class ConservationTrack extends AbstractTrack {
     
     // Map data to screen
     double viewLength = viewEnd - viewStart;
-    double pixelsPerBase = width / viewLength;
     
     // For per-base data at high zoom, use optimized drawing
     boolean isBaseLevelData = currentData.isBaseLevelData();

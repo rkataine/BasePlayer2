@@ -89,7 +89,7 @@ public class ReferenceGenome {
     
     private Integer tryParseInt(String s) {
         try {
-            return Integer.parseInt(s);
+            return Integer.valueOf(s);
         } catch (NumberFormatException e) {
             return null;
         }
@@ -157,10 +157,6 @@ public class ReferenceGenome {
             System.err.println("Error reading bases from " + chromosome + ":" + start + "-" + end + ": " + e.getMessage());
             return "";
         }
-    }
-    
-    void close() throws IOException {
-        if (fastaFile != null) fastaFile.close();
     }
     
     public String getName() {

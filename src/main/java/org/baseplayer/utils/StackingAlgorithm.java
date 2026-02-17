@@ -149,12 +149,10 @@ public class StackingAlgorithm<T> {
       double visualEnd = adapter.getVisualEnd(item, viewStart, viewLength, canvasWidth);
       
       // Find first row where item fits (visual start > row's current end)
-      boolean itemPlaced = false;
       for (int row = 0; row < maxRows; row++) {
         if (visualStart > rowEnds.get(row)) {
           rows.get(row).add(item);
           rowEnds.set(row, visualEnd);
-          itemPlaced = true;
           placed++;
           break;
         }
@@ -207,12 +205,10 @@ public class StackingAlgorithm<T> {
       long end = adapter.getEnd(item);
       
       // Find first row where item fits
-      boolean itemPlaced = false;
       for (int row = 0; row < maxRows; row++) {
         if (start > rowEnds.get(row)) {
           rows.get(row).add(item);
           rowEnds.set(row, end);
-          itemPlaced = true;
           placed++;
           break;
         }

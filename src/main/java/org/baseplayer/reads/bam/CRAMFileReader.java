@@ -2,7 +2,6 @@ package org.baseplayer.reads.bam;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.Closeable;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -26,7 +25,7 @@ import org.baseplayer.SharedModel;
  * structure, compression header, and record decoding using rANS 4x8, gzip, and
  * raw block compression. No external library (htsjdk) is used.
  */
-public class CRAMFileReader implements AlignmentReader, Closeable {
+public class CRAMFileReader implements AlignmentReader {
 
   private final Path cramPath;
   private final RandomAccessFile raf;
@@ -53,7 +52,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     raf.skipBytes(20); // file-id
 
     // 2) SAM header container
-    long headerContainerOffset = raf.getFilePointer();
     ContainerHeader ch = readContainerHeader();
     byte[] containerData = new byte[ch.length];
     raf.readFully(containerData);
@@ -79,7 +77,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
         if (n != null) { names.add(n); lengths.add(len); }
       }
     }
-    this.refNames = names.toArray(new String[0]);
+    this.refNames = names.toArray(String[]::new);
     this.refLengths = new int[lengths.size()];
     this.refNameToId = new HashMap<>();
     for (int i = 0; i < lengths.size(); i++) {
@@ -128,7 +126,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
         byte[] containerData = new byte[ch.length];
         raf.readFully(containerData);
 
-        List<BAMRecord> containerRecords = decodeContainer(containerData, refId, start, end, chrom);
+        List<BAMRecord> containerRecords = decodeContainer(containerData, chrom);
         for (BAMRecord rec : containerRecords) {
           if (rec.isUnmapped() || rec.isSecondary() || rec.isSupplementary()) continue;
           if (rec.end <= start || rec.pos >= end) continue;
@@ -171,7 +169,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
         raf.readFully(containerData);
 
         // Decode with full span of our sample windows
-        List<BAMRecord> recs = decodeContainer(containerData, refId, minPos, maxPos, chrom);
+        List<BAMRecord> recs = decodeContainer(containerData, chrom);
         for (BAMRecord rec : recs) {
           if (rec.isUnmapped() || rec.isSecondary() || rec.isSupplementary()) continue;
           // Bin into matching sample windows
@@ -194,13 +192,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
 
   private static class ContainerHeader {
     int length;       // size of remaining container data
-    int refSeqId;
-    int refPos;       // 1-based
-    int alignSpan;
-    int numRecords;
-    long recordCounter;
-    long numBases;
-    int numBlocks;
     int[] landmarks;
   }
 
@@ -209,13 +200,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     byte[] buf4 = new byte[4];
     raf.readFully(buf4);
     h.length = ByteBuffer.wrap(buf4).order(ByteOrder.LITTLE_ENDIAN).getInt();
-    h.refSeqId = readITF8FromRAF();
-    h.refPos = readITF8FromRAF();
-    h.alignSpan = readITF8FromRAF();
-    h.numRecords = readITF8FromRAF();
-    h.recordCounter = readLTF8FromRAF();
-    h.numBases = readLTF8FromRAF();
-    h.numBlocks = readITF8FromRAF();
     int numLandmarks = readITF8FromRAF();
     h.landmarks = new int[numLandmarks];
     for (int i = 0; i < numLandmarks; i++) h.landmarks[i] = readITF8FromRAF();
@@ -258,7 +242,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     return switch (method) {
       case 0 -> data; // raw
       case 1 -> decompressGzip(data, uncompressedSize);
-      case 4 -> decompressRANS(data, uncompressedSize);
+      case 4 -> decompressRANS(data);
       default -> throw new IOException("Unsupported CRAM block compression method: " + method);
     };
   }
@@ -277,7 +261,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
    * rANS 4x8 decompression (CRAM 3.0 method 4).
    * Format: order(1) + compSize(4LE) + uncompSize(4LE) + freqTable + 4×states + data
    */
-  private static byte[] decompressRANS(byte[] data, int expectedSize) throws IOException {
+  private static byte[] decompressRANS(byte[] data) throws IOException {
     if (data.length < 9) throw new IOException("rANS data too short");
     int order = data[0] & 0xFF;
     int compSize = readInt32LE(data, 1);
@@ -312,7 +296,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     // Normalize to 4096 if needed
     if (totalFreq != 4096) {
       normalizeFreqs(freq, cumFreq, 4096);
-      totalFreq = 4096;
     }
 
     // Build reverse lookup
@@ -509,8 +492,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
 
   // ── Container decoding ─────────────────────────────────────────
 
-  private List<BAMRecord> decodeContainer(byte[] data, int queryRefId,
-                                          int queryStart, int queryEnd, String chrom) throws IOException {
+  private List<BAMRecord> decodeContainer(byte[] data, String chrom) throws IOException {
     ByteStream bs = new ByteStream(data);
 
     // First block is the compression header
@@ -523,9 +505,9 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     // Remaining blocks are slices
     while (bs.remaining() > 0) {
       try {
-        List<BAMRecord> sliceRecords = decodeSlice(bs, ch, queryRefId, chrom);
+        List<BAMRecord> sliceRecords = decodeSlice(bs, ch, chrom);
         allRecords.addAll(sliceRecords);
-      } catch (Exception e) {
+      } catch (IOException e) {
         System.err.println("CRAM slice decode error: " + e.getMessage());
         break;
       }
@@ -559,7 +541,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     CompressionHeader ch = new CompressionHeader();
 
     // Preservation map
-    int pmSize = bs.readITF8(); // total byte size
     int pmCount = bs.readITF8();
     ch.readNamesIncluded = true;
     ch.apDelta = true;
@@ -589,7 +570,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     }
 
     // Data series encoding map
-    int dsSize = bs.readITF8();
     int dsCount = bs.readITF8();
     for (int i = 0; i < dsCount; i++) {
       int c1 = bs.readByte();
@@ -600,7 +580,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     }
 
     // Tag encoding map
-    int teSize = bs.readITF8();
     int teCount = bs.readITF8();
     for (int i = 0; i < teCount; i++) {
       int tagKey = bs.readITF8();
@@ -655,7 +634,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
         start = i + 1;
       }
     }
-    return entries.toArray(new byte[0][]);
+    return entries.toArray(byte[][]::new);
   }
 
   private static EncodingDescriptor readEncodingDescriptor(ByteStream bs) {
@@ -669,7 +648,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
   // ── Slice decoding ─────────────────────────────────────────────
 
   private List<BAMRecord> decodeSlice(ByteStream containerBs, CompressionHeader ch,
-                                      int queryRefId, String chrom) throws IOException {
+                                      String chrom) throws IOException {
     // Slice header block
     BlockHeader sliceHdrBlock = readBlockHeader(containerBs);
     byte[] sliceHdrData = readBlockData(containerBs, sliceHdrBlock);
@@ -679,12 +658,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     int sliceAlignStart = shBs.readITF8(); // 1-based
     int sliceAlignSpan = shBs.readITF8();
     int sliceNumRecords = shBs.readITF8();
-    long sliceRecordCounter = shBs.readLTF8();
     int sliceNumBlocks = shBs.readITF8();
-    int numContentIds = shBs.readITF8();
-    int[] contentIds = new int[numContentIds];
-    for (int i = 0; i < numContentIds; i++) contentIds[i] = shBs.readITF8();
-    int embeddedRefBlockId = shBs.readITF8();
     shBs.skip(16); // reference MD5
 
     // Read core data block and external blocks
@@ -706,7 +680,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     // Decode records
     boolean multiRef = (sliceRefSeqId == -2);
     return decodeRecords(ch, sliceNumRecords, sliceRefSeqId, sliceAlignStart, sliceAlignSpan,
-                         coreData, externalBlocks, multiRef, queryRefId, chrom);
+                         coreData, externalBlocks, multiRef, chrom);
   }
 
   // ── Record decoding ────────────────────────────────────────────
@@ -714,7 +688,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
   private List<BAMRecord> decodeRecords(CompressionHeader ch, int numRecords,
       int sliceRefId, int sliceAlignStart, int sliceAlignSpan,
       byte[] coreData, Map<Integer, byte[]> externalBlocks,
-      boolean multiRef, int queryRefId, String chrom) throws IOException {
+      boolean multiRef, String chrom) throws IOException {
 
     BitStream coreBits = new BitStream(coreData);
     Map<Integer, ByteStream> extStreams = new HashMap<>();
@@ -728,7 +702,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     IntDecoder riDec = multiRef ? buildIntDecoder(ch.dataSeriesEncodings.get("RI"), coreBits, extStreams) : null;
     IntDecoder rlDec = buildIntDecoder(ch.dataSeriesEncodings.get("RL"), coreBits, extStreams);
     IntDecoder apDec = buildIntDecoder(ch.dataSeriesEncodings.get("AP"), coreBits, extStreams);
-    IntDecoder rgDec = buildIntDecoder(ch.dataSeriesEncodings.get("RG"), coreBits, extStreams);
     IntDecoder mqDec = buildIntDecoder(ch.dataSeriesEncodings.get("MQ"), coreBits, extStreams);
     IntDecoder fnDec = buildIntDecoder(ch.dataSeriesEncodings.get("FN"), coreBits, extStreams);
     IntDecoder fpDec = buildIntDecoder(ch.dataSeriesEncodings.get("FP"), coreBits, extStreams);
@@ -778,7 +751,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
       int bamFlags = bfDec.decode();
       int cramFlags = cfDec.decode();
 
-      int recRefId = multiRef ? riDec.decode() : sliceRefId;
+      int recRefId = (multiRef && riDec != null) ? riDec.decode() : sliceRefId;
       int readLen = rlDec.decode();
 
       int ap = apDec.decode();
@@ -790,8 +763,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
         alignStart = ap;
       }
 
-      int readGroup = rgDec.decode();
-
       // Read name
       String readName = null;
       if (ch.readNamesIncluded && rnDec != null) {
@@ -802,20 +773,26 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
       // Mate info
       boolean detached = (cramFlags & 0x02) != 0;
       boolean hasMateDownstream = (cramFlags & 0x04) != 0;
+      int mateRefIDCRAM = -1;
+      int matePosValue = -1;
+      int templateSize = 0;
       if (detached) {
         if (mfDec != null) mfDec.decode(); // mate bit flags
         if (!ch.readNamesIncluded && rnDec != null) {
           byte[] rn = rnDec.decode();
           if (rn != null && readName == null) readName = new String(rn);
         }
-        if (nsDec != null) nsDec.decode(); // mate ref seq id
-        if (npDec != null) npDec.decode(); // mate pos
-        if (tsDec != null) tsDec.decode(); // template size
+        if (nsDec != null) mateRefIDCRAM = nsDec.decode(); // mate ref seq id
+        if (npDec != null) matePosValue = npDec.decode(); // mate pos
+        if (tsDec != null) templateSize = tsDec.decode(); // template size
       } else if (hasMateDownstream) {
         if (nfDec != null) nfDec.decode(); // distance to next fragment
       }
 
       // Tags
+      boolean recHasMethylTag = false;
+      int recHaplotype = 0;
+      String recMethylString = null;
       if (tlDec != null) {
         int tlIdx = tlDec.decode();
         if (ch.tagDictionary != null && tlIdx >= 0 && tlIdx < ch.tagDictionary.length) {
@@ -824,7 +801,29 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
           for (int t = 0; t + 2 < tagList.length; t += 3) {
             int tagKey = ((tagList[t] & 0xFF) << 16) | ((tagList[t + 1] & 0xFF) << 8) | (tagList[t + 2] & 0xFF);
             ByteArrayDecoder td = tagDecoders.get(tagKey);
-            if (td != null) td.decode(); // read and discard
+            if (td != null) {
+              byte[] tagValue = td.decode();
+              // Detect methylation tags: MM, Mm, ML, Ml, XM
+              char c1 = (char)(tagList[t] & 0xFF);
+              char c2 = (char)(tagList[t + 1] & 0xFF);
+              char tagType = (char)(tagList[t + 2] & 0xFF);
+              if ((c1 == 'M' && (c2 == 'M' || c2 == 'm' || c2 == 'L' || c2 == 'l'))
+                  || (c1 == 'X' && c2 == 'M')) {
+                recHasMethylTag = true;
+                // Extract XM:Z string for bisulfite detection
+                if (c1 == 'X' && c2 == 'M' && tagType == 'Z' && tagValue != null) {
+                  // String tags are null-terminated
+                  int len = tagValue.length;
+                  if (len > 0 && tagValue[len - 1] == 0) len--;
+                  recMethylString = new String(tagValue, 0, len, java.nio.charset.StandardCharsets.US_ASCII);
+                }
+              }
+              // Detect HP:i haplotype tag
+              if (c1 == 'H' && c2 == 'P' && tagValue != null && tagValue.length >= 4) {
+                recHaplotype = (tagValue[0] & 0xFF) | ((tagValue[1] & 0xFF) << 8)
+                    | ((tagValue[2] & 0xFF) << 16) | ((tagValue[3] & 0xFF) << 24);
+              }
+            }
           }
         }
       }
@@ -832,7 +831,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
       // Read features → compute reference span and collect mismatches
       boolean unmappedSeq = (cramFlags & 0x08) != 0;
       int refSpan = readLen;
-      List<int[]> mmList = null; // collected as [genomicPos0based, baseChar]
+      List<int[]> mmList = null; // collected as [genomicPos, readBase, refBase]
 
       if (!unmappedSeq && fnDec != null) {
         int numFeatures = fnDec.decode();
@@ -850,18 +849,28 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
               if (qsDec != null) qsDec.decode();
               // featurePos is 1-based in read; genomic pos = alignStart + featurePos-1 + refOffset (1-based)
               int genomicPos = alignStart + (featurePos - 1) + refOffset;
+              // Look up reference base if available
+              int refBaseChar = 0;
+              if (refBases != null) {
+                int refIdx = genomicPos - refBasesStart;
+                if (refIdx >= 0 && refIdx < refBases.length()) {
+                  refBaseChar = Character.toUpperCase(refBases.charAt(refIdx));
+                }
+              }
               if (mmList == null) mmList = new ArrayList<>();
-              mmList.add(new int[]{genomicPos, base});
+              mmList.add(new int[]{genomicPos, base, refBaseChar});
             }
             case 'X' -> { // substitution
               int bsCode = bsDec != null ? bsDec.decode() : 0;
               // Resolve read base from substitution matrix + reference
               int genomicPos = alignStart + (featurePos - 1) + refOffset; // 1-based
               char readBase = '?';
+              int refBaseX = 0;
               if (ch.subLookup != null && refBases != null) {
                 int refIdx = genomicPos - refBasesStart;
                 if (refIdx >= 0 && refIdx < refBases.length()) {
                   char refBase = refBases.charAt(refIdx);
+                  refBaseX = Character.toUpperCase(refBase);
                   int ri = switch (Character.toUpperCase(refBase)) {
                     case 'A' -> 0; case 'C' -> 1; case 'G' -> 2; case 'T' -> 3; default -> 4;
                   };
@@ -869,7 +878,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
                 }
               }
               if (mmList == null) mmList = new ArrayList<>();
-              mmList.add(new int[]{genomicPos, readBase});
+              mmList.add(new int[]{genomicPos, readBase, refBaseX});
             }
             case 'I' -> { // insertion
               byte[] ins = inDec != null ? inDec.decode() : null;
@@ -935,13 +944,22 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
       rec.readLength = readLen;
       rec.readName = readName;
       rec.cigarOps = null; // Not needed for drawing
+      
+      // Set mate information
+      rec.mateRefID = mateRefIDCRAM;
+      rec.matePos = matePosValue;
+      rec.insertSize = templateSize;
+      rec.hasMethylTag = recHasMethylTag;
+      rec.methylString = recMethylString;
+      rec.haplotype = recHaplotype;
 
-      // Pack mismatches: [pos0, base0, pos1, base1, ...]
+      // Pack mismatches: [pos0, readBase0, refBase0, pos1, readBase1, refBase1, ...]
       if (mmList != null && !mmList.isEmpty()) {
-        rec.mismatches = new int[mmList.size() * 2];
+        rec.mismatches = new int[mmList.size() * 3];
         for (int m = 0; m < mmList.size(); m++) {
-          rec.mismatches[m * 2] = mmList.get(m)[0];
-          rec.mismatches[m * 2 + 1] = mmList.get(m)[1];
+          rec.mismatches[m * 3] = mmList.get(m)[0];
+          rec.mismatches[m * 3 + 1] = mmList.get(m)[1];
+          rec.mismatches[m * 3 + 2] = mmList.get(m).length > 2 ? mmList.get(m)[2] : 0;
         }
       }
 
@@ -1051,7 +1069,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
       case 0 -> () -> new byte[0]; // NULL
       case 4 -> { // BYTE_ARRAY_LEN
         IntDecoder lenDecoder = buildIntDecoder(readEncodingDescriptor(paramBs), coreBits, extStreams);
-        ByteArrayDecoder valDecoder = buildByteArrayDecoderInner(readEncodingDescriptor(paramBs), coreBits, extStreams);
+        ByteArrayDecoder valDecoder = buildByteArrayDecoderInner(readEncodingDescriptor(paramBs), extStreams);
         yield () -> {
           int len = lenDecoder.decode();
           // Read len bytes from the value codec's external block
@@ -1068,7 +1086,7 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     };
   }
 
-  private ByteArrayDecoder buildByteArrayDecoderInner(EncodingDescriptor ed, BitStream coreBits,
+  private ByteArrayDecoder buildByteArrayDecoderInner(EncodingDescriptor ed,
                                                       Map<Integer, ByteStream> extStreams) {
     if (ed == null) return () -> new byte[0];
     ByteStream paramBs = new ByteStream(ed.params);
@@ -1200,11 +1218,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
 
     void skip(int n) { pos = Math.min(pos + n, data.length); }
 
-    int readInt32LE() {
-      int b0 = readByte(), b1 = readByte(), b2 = readByte(), b3 = readByte();
-      return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
-    }
-
     int readITF8() {
       int b = readByte();
       if ((b & 0x80) == 0) return b;
@@ -1212,18 +1225,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
       if ((b & 0xE0) == 0xC0) return ((b & 0x1F) << 16) | (readByte() << 8) | readByte();
       if ((b & 0xF0) == 0xE0) return ((b & 0x0F) << 24) | (readByte() << 16) | (readByte() << 8) | readByte();
       return ((b & 0x0F) << 28) | (readByte() << 20) | (readByte() << 12) | (readByte() << 4) | (readByte() & 0x0F);
-    }
-
-    long readLTF8() {
-      int b = readByte();
-      if ((b & 0x80) == 0) return b;
-      if ((b & 0xC0) == 0x80) return ((long)(b & 0x3F) << 8) | readByte();
-      if ((b & 0xE0) == 0xC0) return ((long)(b & 0x1F) << 16) | (readByte() << 8) | readByte();
-      if ((b & 0xF0) == 0xE0) return ((long)(b & 0x0F) << 24) | (readByte() << 16) | (readByte() << 8) | readByte();
-      if ((b & 0xF8) == 0xF0) return ((long)(b & 0x07) << 32) | ((long)readByte() << 24) | (readByte() << 16) | (readByte() << 8) | readByte();
-      if ((b & 0xFC) == 0xF8) return ((long)(b & 0x03) << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | (readByte() << 16) | (readByte() << 8) | readByte();
-      if ((b & 0xFE) == 0xFC) return ((long)(b & 0x01) << 48) | ((long)readByte() << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | (readByte() << 16) | (readByte() << 8) | readByte();
-      return ((long)readByte() << 48) | ((long)readByte() << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
     }
 
     byte[] readUntil(int stopByte) {
@@ -1273,17 +1274,6 @@ public class CRAMFileReader implements AlignmentReader, Closeable {
     return ((b & 0x0F) << 28) | (raf.read() << 20) | (raf.read() << 12) | (raf.read() << 4) | (raf.read() & 0x0F);
   }
 
-  private long readLTF8FromRAF() throws IOException {
-    int b = raf.read();
-    if ((b & 0x80) == 0) return b;
-    if ((b & 0xC0) == 0x80) return ((long)(b & 0x3F) << 8) | raf.read();
-    if ((b & 0xE0) == 0xC0) return ((long)(b & 0x1F) << 16) | (raf.read() << 8) | raf.read();
-    if ((b & 0xF0) == 0xE0) return ((long)(b & 0x0F) << 24) | (raf.read() << 16) | (raf.read() << 8) | raf.read();
-    if ((b & 0xF8) == 0xF0) return ((long)(b & 0x07) << 32) | ((long)raf.read() << 24) | (raf.read() << 16) | (raf.read() << 8) | raf.read();
-    if ((b & 0xFC) == 0xF8) return ((long)(b & 0x03) << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | (raf.read() << 16) | (raf.read() << 8) | raf.read();
-    if ((b & 0xFE) == 0xFC) return ((long)(b & 0x01) << 48) | ((long)raf.read() << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | (raf.read() << 16) | (raf.read() << 8) | raf.read();
-    return ((long)raf.read() << 48) | ((long)raf.read() << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
-  }
 
   // ── Utility ────────────────────────────────────────────────────
 

@@ -38,6 +38,8 @@ public class SettingsDialog {
   private final Spinner<Double>  readGapSpinner;
   private final Spinner<Double>  minReadHeightSpinner;
   private final CheckBox         smoothSmallFilesCheck;
+  private final Spinner<Double>  mismatchMinFractionSpinner;
+  private final Spinner<Integer> mismatchMinCountSpinner;
 
   public SettingsDialog() {
     dialog = new Stage(StageStyle.DECORATED);
@@ -56,6 +58,8 @@ public class SettingsDialog {
     minReadHeightSpinner      = dblSpinner(1.0, 20.0, settings.getMinReadHeight(), 0.5);
     smoothSmallFilesCheck     = new CheckBox("Apply smoothing to sampled coverage");
     smoothSmallFilesCheck.setSelected(settings.isSmoothSmallFiles());
+    mismatchMinFractionSpinner = dblSpinner(0.0, 1.0, settings.getMismatchMinFraction(), 0.05);
+    mismatchMinCountSpinner    = intSpinner(1, 100, settings.getMismatchMinCount(), 1);
 
     // ── Layout ──────────────────────────────────────────────────────────
 
@@ -98,6 +102,18 @@ public class SettingsDialog {
     addRow(readGrid, row++, "Min read height (px):", minReadHeightSpinner,
         "Minimum height for individual reads");
     root.getChildren().add(readGrid);
+
+    root.getChildren().add(new Separator());
+
+    // Section: Mismatch filtering
+    root.getChildren().add(sectionLabel("Mismatch Filtering"));
+    GridPane mmGrid = createGrid();
+    row = 0;
+    addRow(mmGrid, row++, "Min fraction (0–1):", mismatchMinFractionSpinner,
+        "Only show mismatches above this fraction of reads (e.g. 0.10 = 10%)");
+    addRow(mmGrid, row++, "Min read count:", mismatchMinCountSpinner,
+        "Only show mismatches with at least this many reads");
+    root.getChildren().add(mmGrid);
 
     root.getChildren().add(new Separator());
 
@@ -145,6 +161,8 @@ public class SettingsDialog {
     settings.setReadGap(readGapSpinner.getValue());
     settings.setMinReadHeight(minReadHeightSpinner.getValue());
     settings.setSmoothSmallFiles(smoothSmallFilesCheck.isSelected());
+    settings.setMismatchMinFraction(mismatchMinFractionSpinner.getValue());
+    settings.setMismatchMinCount(mismatchMinCountSpinner.getValue());
 
     // Trigger redraw so changes are visible immediately
     DrawFunctions.update.set(!DrawFunctions.update.get());
@@ -159,6 +177,8 @@ public class SettingsDialog {
     readGapSpinner.getValueFactory().setValue(Settings.DEF_READ_GAP);
     minReadHeightSpinner.getValueFactory().setValue(Settings.DEF_MIN_READ_HEIGHT);
     smoothSmallFilesCheck.setSelected(Settings.DEF_SMOOTH_SMALL_FILES);
+    mismatchMinFractionSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_FRACTION);
+    mismatchMinCountSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_COUNT);
   }
 
   // ── Helper methods ────────────────────────────────────────────────────
@@ -211,7 +231,6 @@ public class SettingsDialog {
   }
 
   /** Force-commit typed text in an editable spinner. */
-  @SuppressWarnings("unchecked")
   private static <T> void commitSpinnerValue(Spinner<T> spinner) {
     try {
       spinner.getValueFactory().setValue(

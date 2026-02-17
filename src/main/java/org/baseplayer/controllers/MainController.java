@@ -18,15 +18,12 @@ import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.fxml.FXML;
 import javafx.scene.canvas.Canvas;
-import javafx.scene.control.CheckBox;
+import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
-import javafx.scene.control.Label;
 import javafx.scene.control.SplitPane;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.StackPane;
-import javafx.scene.layout.VBox;
-import javafx.stage.Popup;
 
 public class MainController {
   @FXML private SplitPane drawCanvas;
@@ -44,6 +41,7 @@ public class MainController {
   @FXML private SplitPane featureTracksContentSplit;
   @FXML private ComboBox<ReferenceGenome> referenceComboBox;
   @FXML private ComboBox<String> annotationComboBox;
+  @FXML private Button annotationOptionsButton;
   public Canvas drawSideBarCanvas; 
   public static SplitPane chromSplitPane;
   public static SplitPane drawPane;
@@ -201,44 +199,6 @@ public class MainController {
     // Update all stacks with chromosome list
     for (var stack : MainController.drawStacks) {
       stack.setChromosomeList(chromNames);
-    }
-  }
-  
-  @FXML
-  private void showAnnotationOptions() {
-    Popup popup = new Popup();
-    popup.setAutoHide(true);
-    
-    VBox popupContent = new VBox(5);
-    popupContent.setStyle("-fx-background-color: #2b2b2b; -fx-padding: 10; -fx-border-color: #3c3c3c; -fx-border-width: 1;");
-    popupContent.getStylesheets().add(getClass().getResource("/org/baseplayer/styles.css").toExternalForm());
-    
-    Label titleLabel = new Label("Gene Display Options");
-    titleLabel.setStyle("-fx-text-fill: white; -fx-font-weight: bold;");
-    
-    CheckBox cancerGenesOnly = new CheckBox("Show only cancer genes");
-    cancerGenesOnly.setSelected(showOnlyCancerGenes);
-    cancerGenesOnly.setStyle("-fx-text-fill: white; -fx-background-color: transparent;");
-    cancerGenesOnly.getStyleClass().add("dark-checkbox");
-    cancerGenesOnly.setOnAction(e -> {
-      showOnlyCancerGenes = cancerGenesOnly.isSelected();
-      // Trigger redraw of all chromosome stacks
-      for (DrawStack stack : drawStacks) {
-        if (stack.drawCanvas != null) {
-          DrawFunctions.update.set(!DrawFunctions.update.get());
-        }
-      }
-      popup.hide();
-    });
-    
-    popupContent.getChildren().addAll(titleLabel, cancerGenesOnly);
-    popup.getContent().add(popupContent);
-    
-    // Show popup below the button
-    javafx.scene.Node button = chromSideBar.lookup("#annotationOptionsButton");
-    if (button != null) {
-      javafx.geometry.Bounds bounds = button.localToScreen(button.getBoundsInLocal());
-      popup.show(button, bounds.getMinX(), bounds.getMaxY() + 2);
     }
   }
   
@@ -415,5 +375,74 @@ public class MainController {
   void takeSnapshot() {
     for (DrawStack pane : drawStacks)
       pane.drawCanvas.snapshot = pane.drawCanvas.snapshot(null, null);    
+  }
+  
+  @FXML
+  private void showAnnotationOptions() {
+    // Create dialog
+    javafx.stage.Stage dialog = new javafx.stage.Stage();
+    dialog.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+    dialog.initOwner(annotationOptionsButton.getScene().getWindow());
+    dialog.setTitle("Gene Display Options");
+    dialog.setResizable(false);
+    
+    // Create content
+    javafx.scene.layout.VBox content = new javafx.scene.layout.VBox(15);
+    content.setPadding(new javafx.geometry.Insets(20));
+    content.setStyle("-fx-background-color: #2b2b2b;");
+    
+    // Title
+    javafx.scene.control.Label title = new javafx.scene.control.Label("Gene Display Settings");
+    title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: white;");
+    
+    // Cancer genes checkbox
+    javafx.scene.control.CheckBox cancerGenesCheckBox = new javafx.scene.control.CheckBox("Show only cancer genes (COSMIC)");
+    cancerGenesCheckBox.setSelected(showOnlyCancerGenes);
+    cancerGenesCheckBox.setStyle("-fx-text-fill: white;");
+    
+    // MANE transcripts checkbox
+    javafx.scene.control.CheckBox maneCheckBox = new javafx.scene.control.CheckBox("Show only MANE transcripts");
+    if (!drawStacks.isEmpty() && drawStacks.get(0).chromCanvas != null) {
+      maneCheckBox.setSelected(drawStacks.get(0).chromCanvas.isShowManeOnly());
+    }
+    maneCheckBox.setStyle("-fx-text-fill: white;");
+    
+    // Info label
+    javafx.scene.control.Label infoLabel = new javafx.scene.control.Label(
+      "Cancer genes are from the COSMIC Cancer Gene Census.\n" +
+      "MANE transcripts are the authoritative reference transcripts."
+    );
+    infoLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #999999; -fx-wrap-text: true;");
+    infoLabel.setMaxWidth(300);
+    
+    // Buttons
+    javafx.scene.layout.HBox buttonBox = new javafx.scene.layout.HBox(10);
+    buttonBox.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+    
+    javafx.scene.control.Button applyButton = new javafx.scene.control.Button("Apply");
+    applyButton.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-cursor: hand;");
+    applyButton.setOnAction(e -> {
+      showOnlyCancerGenes = cancerGenesCheckBox.isSelected();
+      boolean maneOnly = maneCheckBox.isSelected();
+      for (DrawStack stack : drawStacks) {
+        if (stack.chromCanvas != null) {
+          stack.chromCanvas.setShowManeOnly(maneOnly);
+        }
+      }
+      org.baseplayer.draw.DrawFunctions.update.set(!org.baseplayer.draw.DrawFunctions.update.get());
+      dialog.close();
+    });
+    
+    javafx.scene.control.Button cancelButton = new javafx.scene.control.Button("Cancel");
+    cancelButton.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: white; -fx-cursor: hand;");
+    cancelButton.setOnAction(e -> dialog.close());
+    
+    buttonBox.getChildren().addAll(cancelButton, applyButton);
+    
+    content.getChildren().addAll(title, cancerGenesCheckBox, maneCheckBox, infoLabel, buttonBox);
+    
+    javafx.scene.Scene scene = new javafx.scene.Scene(content);
+    dialog.setScene(scene);
+    dialog.show();
   }
 }

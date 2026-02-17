@@ -7,6 +7,7 @@ import java.util.List;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.utils.AppFonts;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -314,7 +315,7 @@ public class FeatureTracksSidebar {
     if (width <= 0 || height <= 0) return;
     
     // Fill background
-    gc.setFill(DrawFunctions.sidebarColor);
+    gc.setFill(DrawColors.SIDEBAR);
     gc.fillRect(0, 0, width, height);
     
     // Draw header
@@ -323,7 +324,7 @@ public class FeatureTracksSidebar {
     gc.fillText("Feature Tracks", 5, 13);
     
     // Draw border under header
-    gc.setStroke(DrawFunctions.borderColor);
+    gc.setStroke(DrawColors.BORDER);
     gc.strokeLine(0, HEADER_HEIGHT, width, HEADER_HEIGHT);
     
     if (featureTracksCanvas == null) return;
@@ -365,7 +366,7 @@ public class FeatureTracksSidebar {
       gc.fillText(track.getType(), textX, currentY + 22);
       
       // Draw separator
-      gc.setStroke(DrawFunctions.borderColor);
+      gc.setStroke(DrawColors.BORDER);
       gc.strokeLine(0, currentY + trackHeight, width, currentY + trackHeight);
       
       currentY += trackHeight;
@@ -401,33 +402,18 @@ public class FeatureTracksSidebar {
   }
   
   /**
-   * Draw cogwheel/settings icon.
+   * Draw cogwheel/settings icon (Unicode gear character).
    */
   private void drawCogwheelIcon(double x, double y, boolean trackVisible) {
     double centerX = x + ICON_SIZE / 2;
     double centerY = y + ICON_SIZE / 2;
-    double outerR = ICON_SIZE / 2 - 1;
-    double innerR = outerR * 0.5;
     
     Color color = trackVisible ? Color.rgb(140, 140, 140) : Color.rgb(80, 80, 80);
+    
+    // Draw the gear using Unicode character ⚙
+    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 12));
     gc.setFill(color);
-    gc.setStroke(color);
-    gc.setLineWidth(1.5);
-    
-    // Draw simple gear shape
-    // Center circle
-    gc.fillOval(centerX - innerR, centerY - innerR, innerR * 2, innerR * 2);
-    
-    // Draw 6 teeth
-    for (int i = 0; i < 6; i++) {
-      double angle = Math.toRadians(i * 60);
-      double x1 = centerX + Math.cos(angle) * innerR;
-      double y1 = centerY + Math.sin(angle) * innerR;
-      double x2 = centerX + Math.cos(angle) * outerR;
-      double y2 = centerY + Math.sin(angle) * outerR;
-      gc.strokeLine(x1, y1, x2, y2);
-    }
-    gc.setLineWidth(1);
+    gc.fillText("⚙", x + 1, y + ICON_SIZE - 2);
   }
   
   /**
