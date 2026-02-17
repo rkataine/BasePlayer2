@@ -14,6 +14,7 @@ import org.baseplayer.io.ReferenceGenome;
 import org.baseplayer.tracks.FeatureTracksSidebar;
 import org.baseplayer.utils.BaseUtils;
 
+import javafx.application.Platform;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.fxml.FXML;
@@ -258,6 +259,49 @@ public class MainController {
     featureTracksContentPane.setDividerPositions(drawPositions);
     chromSplitPane.setDividerPositions(drawPositions);
   
+  }
+
+  /**
+   * Add a new split panel and navigate it to a specific chromosome and position.
+   * Used for "go to mate" from the read info popup.
+   */
+  public static void addStackAtPosition(String chrom, int position) {
+    // Strip "chr" prefix if present to match internal naming
+    if (chrom.startsWith("chr")) chrom = chrom.substring(3);
+    final String finalChrom = chrom;
+
+    // Create the new stack at the target chromosome
+    DrawStack drawStack = new DrawStack(finalChrom);
+    if (SharedModel.referenceGenome != null) {
+      drawStack.setChromosomeList(SharedModel.referenceGenome.getStandardChromosomeNames());
+    }
+    drawStack.chromosomeDropdown.setValue(finalChrom);
+    drawStack.loadSimulatedVariants();
+
+    drawStacks.add(drawStack);
+    chromSplitPane.getItems().add(drawStack.chromContainer);
+    featureTracksContentPane.getItems().add(drawStack.featureTracksStack);
+    drawPane.getItems().add(drawStack.drawStack);
+
+    for (DrawStack stack : drawStacks) {
+      stack.updateControlsVisibility();
+    }
+    setDividerListeners();
+    double[] drawPositions = new double[drawPane.getItems().size() - 1];
+    for (int i = 0; i < drawStacks.size() - 1; i++) {
+      drawPositions[i] = (i + 1) / (double) drawStacks.size();
+    }
+    drawPane.setDividerPositions(drawPositions);
+    featureTracksContentPane.setDividerPositions(drawPositions);
+    chromSplitPane.setDividerPositions(drawPositions);
+
+    // Zoom to mate position after layout settles
+    Platform.runLater(() -> {
+      double viewSize = 1000; // ~1kb window around mate
+      double start = Math.max(1, position - viewSize / 2);
+      double end = start + viewSize;
+      drawStack.drawCanvas.zoomAnimation(start, end);
+    });
   }
   
   public static void removeStack(DrawStack stackToRemove) {

@@ -36,7 +36,6 @@ public class MainApp extends Application {
         splashScreen = new SplashScreen();
         splashScreen.show();
         
-        // Start loading immediately in background
         long startTime = System.currentTimeMillis();
         new Thread(() -> {
             try {

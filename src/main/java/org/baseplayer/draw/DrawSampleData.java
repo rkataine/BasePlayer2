@@ -3,6 +3,7 @@ package org.baseplayer.draw;
 import java.util.List;
 
 import org.baseplayer.SharedModel;
+import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.BAMRecord;
 import org.baseplayer.reads.bam.SampleFile;
@@ -12,11 +13,13 @@ import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.Variant;
 
 import javafx.application.Platform;
+import javafx.scene.Cursor;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
+import javafx.stage.Window;
 
 public class DrawSampleData extends DrawFunctions {
   
@@ -30,16 +33,59 @@ public class DrawSampleData extends DrawFunctions {
   private static final double MIN_COVERAGE_HEIGHT = 30;
   private static final double MAX_COVERAGE_HEIGHT = 60;
 
-  // Don't query BAM when view is wider than this (too many reads to draw individually)
-  // Show coverage-only view up to the coverage limit; beyond that show sampled coverage
+  // Read hover/click state
+  private BAMRecord hoveredRead = null;
+  private final ReadInfoPopup readInfoPopup = new ReadInfoPopup();
 
   public DrawSampleData(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
     widthProperty().addListener((obs, oldVal, newVal) -> { resizing = true; setStartEnd(drawStack.start, drawStack.end); resizing = false; });
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
-
+    setupReadMouseHandlers(reactiveCanvas);
     Platform.runLater(() -> { draw(); });
+  }
+
+  private void setupReadMouseHandlers(Canvas reactiveCanvas) {
+    reactiveCanvas.setOnMouseMoved(event -> {
+      if (navigating || animationRunning) return;
+      double mx = event.getX();
+      double my = event.getY();
+      BAMRecord hit = findReadAt(mx, my);
+      if (hit != hoveredRead) {
+        hoveredRead = hit;
+        reactiveCanvas.setCursor(hit != null ? Cursor.HAND : Cursor.DEFAULT);
+        drawReadHighlight();
+      }
+    });
+
+    reactiveCanvas.setOnMouseClicked(event -> {
+      if (event.getClickCount() == 1 && event.isStillSincePress()) {
+        BAMRecord hit = findReadAt(event.getX(), event.getY());
+        if (hit != null) {
+          Window owner = reactiveCanvas.getScene() != null ? reactiveCanvas.getScene().getWindow() : null;
+          if (owner != null) {
+            String chrom = drawStack.chromosome != null ? drawStack.chromosome : "";
+            // Resolve mate chromosome name from refID using the BAM reader
+            String mateChrName = resolveMateChromName(hit);
+            readInfoPopup.show(hit, chrom, mateChrName, owner, event.getScreenX() + 10, event.getScreenY() + 10,
+                (mateChr, matePos) -> {
+                  Platform.runLater(() -> MainController.addStackAtPosition(mateChr, matePos));
+                });
+          }
+        } else {
+          readInfoPopup.hide();
+        }
+      }
+    });
+
+    reactiveCanvas.setOnMouseExited(event -> {
+      if (hoveredRead != null) {
+        hoveredRead = null;
+        reactiveCanvas.setCursor(Cursor.DEFAULT);
+        drawReadHighlight();
+      }
+    });
   }
   void drawSnapShot() { if (snapshot != null) gc.drawImage(snapshot, 0, 0, getWidth(), getHeight()); }
   @Override
@@ -622,6 +668,166 @@ public class DrawSampleData extends DrawFunctions {
       }
       MismatchRenderer.drawMismatches(gc, read.mismatches, y, h, canvasWidth, chromPosToScreenPos,
           isMethylData, read.isReverseStrand());
+    }
+  }
+
+  // ── Read hit-testing, hover highlight, and mate navigation ──
+
+  /**
+   * Resolve the mate chromosome name from the BAM reader's reference names.
+   * Returns the stripped chromosome name (without "chr" prefix) or null.
+   */
+  private String resolveMateChromName(BAMRecord read) {
+    if (read.mateRefID < 0) return null;
+    // If same chromosome, just return current
+    if (read.mateRefID == read.refID) return drawStack.chromosome;
+    // Look up from any available BAM reader
+    for (SampleTrack track : SharedModel.sampleTracks) {
+      for (Sample sample : track.getSamples()) {
+        if (sample.getBamFile() == null) continue;
+        String[] refNames = sample.getBamFile().getReader().getRefNames();
+        if (read.mateRefID < refNames.length) {
+          String name = refNames[read.mateRefID];
+          // Strip "chr" prefix for internal use
+          if (name.startsWith("chr")) name = name.substring(3);
+          return name;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find the BAMRecord at the given screen position, or null.
+   * Replicates the same y-positioning logic used in drawing.
+   */
+  private BAMRecord findReadAt(double mx, double my) {
+    if (SharedModel.sampleTracks.isEmpty()) return null;
+    if (drawStack.viewLength > Settings.get().getMaxReadViewLength()) return null;
+
+    double masterOffset = SharedModel.masterTrackHeight;
+    double sampleH = SharedModel.sampleHeight;
+    double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
+
+    for (int sampleIdx = SharedModel.firstVisibleSample; sampleIdx <= SharedModel.lastVisibleSample && sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
+      SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+      if (!track.isVisible()) continue;
+      double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+
+      for (Sample sample : track.getSamples()) {
+        if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
+        SampleFile bamFile = sample.getBamFile();
+        if (bamFile == null) continue;
+
+        List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
+        if (reads == null || reads.isEmpty()) continue;
+
+        double readsY = sampleY + coverageFractionH;
+        double readsH = sampleH - coverageFractionH;
+        int maxRow = bamFile.getMaxRow(drawStack) + 1;
+        double gap = Settings.get().getReadGap();
+        int hp2Start = bamFile.getHP2StartRow(drawStack);
+        double scrollOffset = bamFile.readScrollOffset;
+
+        if (hp2Start >= 0 && sample.isHaplotypeData()) {
+          // Allele butterfly layout
+          int maxPerHalf = Math.max(hp2Start, maxRow - hp2Start);
+          double readHeight = Math.max(Settings.get().getMinReadHeight(),
+              Math.min(8, (readsH / 2 - 4) / Math.max(1, maxPerHalf)));
+          double middleY = readsY + readsH / 2;
+          double h = readHeight >= 3 ? readHeight - gap : readHeight;
+
+          for (BAMRecord read : reads) {
+            double x1 = chromPosToScreenPos.apply((double) read.pos);
+            double x2 = chromPosToScreenPos.apply((double) read.end);
+            double w = Math.max(1, x2 - x1);
+            double y;
+            if (read.row < hp2Start) {
+              y = middleY - (read.row + 1) * (readHeight + gap);
+            } else {
+              y = middleY + (read.row - hp2Start) * (readHeight + gap) + 1;
+            }
+            if (mx >= x1 && mx <= x1 + w && my >= y && my <= y + h) return read;
+          }
+        } else {
+          // Normal layout
+          double readHeight = Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
+          double h = readHeight >= 3 ? readHeight - gap : readHeight;
+
+          for (BAMRecord read : reads) {
+            double x1 = chromPosToScreenPos.apply((double) read.pos);
+            double x2 = chromPosToScreenPos.apply((double) read.end);
+            double w = Math.max(1, x2 - x1);
+            double y = (readsY - scrollOffset) + read.row * (readHeight + gap) + 1;
+            if (mx >= x1 && mx <= x1 + w && my >= y && my <= y + h) return read;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Draw a highlight rectangle on the reactive canvas for the hovered read.
+   */
+  private void drawReadHighlight() {
+    clearReactive();
+    if (hoveredRead == null) return;
+    if (drawStack.viewLength > Settings.get().getMaxReadViewLength()) return;
+
+    double masterOffset = SharedModel.masterTrackHeight;
+    double sampleH = SharedModel.sampleHeight;
+    double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
+
+    for (int sampleIdx = SharedModel.firstVisibleSample; sampleIdx <= SharedModel.lastVisibleSample && sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
+      SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+      if (!track.isVisible()) continue;
+      double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+
+      for (Sample sample : track.getSamples()) {
+        if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
+        SampleFile bamFile = sample.getBamFile();
+        if (bamFile == null) continue;
+
+        List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
+        if (reads == null || !reads.contains(hoveredRead)) continue;
+
+        double readsY = sampleY + coverageFractionH;
+        double readsH = sampleH - coverageFractionH;
+        int maxRow = bamFile.getMaxRow(drawStack) + 1;
+        double gap = Settings.get().getReadGap();
+        int hp2Start = bamFile.getHP2StartRow(drawStack);
+        double scrollOffset = bamFile.readScrollOffset;
+
+        double x1 = chromPosToScreenPos.apply((double) hoveredRead.pos);
+        double x2 = chromPosToScreenPos.apply((double) hoveredRead.end);
+        double w = Math.max(1, x2 - x1);
+
+        double y, h;
+        if (hp2Start >= 0 && sample.isHaplotypeData()) {
+          int maxPerHalf = Math.max(hp2Start, maxRow - hp2Start);
+          double readHeight = Math.max(Settings.get().getMinReadHeight(),
+              Math.min(8, (readsH / 2 - 4) / Math.max(1, maxPerHalf)));
+          h = readHeight >= 3 ? readHeight - gap : readHeight;
+          double middleY = readsY + readsH / 2;
+          if (hoveredRead.row < hp2Start) {
+            y = middleY - (hoveredRead.row + 1) * (readHeight + gap);
+          } else {
+            y = middleY + (hoveredRead.row - hp2Start) * (readHeight + gap) + 1;
+          }
+        } else {
+          double readHeight = Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
+          h = readHeight >= 3 ? readHeight - gap : readHeight;
+          y = (readsY - scrollOffset) + hoveredRead.row * (readHeight + gap) + 1;
+        }
+
+        // Draw highlight border
+        reactivegc.setStroke(Color.WHITE);
+        reactivegc.setLineWidth(1.5);
+        reactivegc.strokeRect(x1 - 0.5, y - 0.5, w + 1, h + 1);
+        reactivegc.setLineWidth(1.0);
+        return;
+      }
     }
   }
 

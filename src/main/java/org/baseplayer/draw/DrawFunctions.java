@@ -331,9 +331,14 @@ public class DrawFunctions extends Canvas {
     double oldViewLength = drawStack.viewLength;
     double newViewLength = end - start;
     
-    // If the view jumped significantly (>50% of view length), cancel stale fetches and clear caches
-    double shift = Math.abs(start - drawStack.start);
-    if (shift > oldViewLength * 0.5) {
+    // Cancel fetches only if we jumped to a different region (low overlap), not on zoom-in
+    double overlapStart = Math.max(start, drawStack.start);
+    double overlapEnd = Math.min(end, drawStack.end);
+    double overlapSize = Math.max(0, overlapEnd - overlapStart);
+    double overlapRatio = overlapSize / Math.max(oldViewLength, newViewLength);
+    
+    // Cancel and clear caches only if regions have <30% overlap
+    if (overlapRatio < 0.3) {
       FetchManager.get().cancelAll();
       // Clear read/coverage caches for this stack to free memory
       for (var track : org.baseplayer.SharedModel.sampleTracks) {
@@ -380,8 +385,18 @@ public class DrawFunctions extends Canvas {
   }
 
   public void zoomAnimation(double start, double end) {
-    // Cancel all in-flight fetches — we're jumping to a completely different region
-    FetchManager.get().cancelAll();
+    // Only cancel fetches if we're jumping to a different region (not zooming in on same area)
+    double overlapStart = Math.max(start, drawStack.start);
+    double overlapEnd = Math.min(end, drawStack.end);
+    double overlapSize = Math.max(0, overlapEnd - overlapStart);
+    double currentSize = drawStack.end - drawStack.start;
+    double overlapRatio = overlapSize / currentSize;
+    
+    // Cancel only if regions have <30% overlap (indicates a jump, not a zoom)
+    if (overlapRatio < 0.3) {
+      FetchManager.get().cancelAll();
+    }
+    
     new Thread(() -> {
       animationRunning = true;
       navigating = true;
