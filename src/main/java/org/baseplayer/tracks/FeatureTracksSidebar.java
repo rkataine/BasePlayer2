@@ -4,6 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.SharedModel;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.utils.AppFonts;
@@ -57,7 +58,11 @@ public class FeatureTracksSidebar {
   private Track hoveredTrack = null;
   private String hoveredIcon = null;  // "eye" or "settings"
   private ContextMenu contextMenu;
+  private ContextMenu addTracksMenu;
+  private ContextMenu masterSettingsMenu;
   private Popup settingsPopup;
+  private boolean plusButtonHovered = false;
+  private boolean settingsButtonHovered = false;
   
   public FeatureTracksSidebar(StackPane parent) {
     this.canvas = new Canvas();
@@ -74,6 +79,8 @@ public class FeatureTracksSidebar {
     reactiveGc = reactiveCanvas.getGraphicsContext2D();
     
     setupContextMenu();
+    setupAddTracksMenu();
+    setupMasterSettingsMenu();
     setupMouseHandlers();
   }
   
@@ -96,22 +103,84 @@ public class FeatureTracksSidebar {
     MenuItem addBigWigItem = new MenuItem("BigWig file...");
     addBigWigItem.setOnAction(e -> addBigWigTrack());
     
-    MenuItem addConservationItem = new MenuItem("Conservation (UCSC)");
-    addConservationItem.setOnAction(e -> addConservationTrack());
-    
-    MenuItem addGnomadItem = new MenuItem("gnomAD Variants");
-    addGnomadItem.setOnAction(e -> addGnomadTrack());
+    MenuItem browseUcscItem = new MenuItem("Browse UCSC Tracks...");
+    browseUcscItem.setOnAction(e -> showUcscTracksBrowser());
     
     addTrackMenu.getItems().addAll(addBedItem, addBigWigItem, new SeparatorMenuItem(), 
-        addConservationItem, addGnomadItem);
+        browseUcscItem);
     
     contextMenu.getItems().add(addTrackMenu);
   }
   
+  private void setupAddTracksMenu() {
+    addTracksMenu = new ContextMenu();
+    
+    // File-based tracks
+    MenuItem bedItem = new MenuItem("BED file...");
+    bedItem.setOnAction(e -> addBedTrack());
+    
+    MenuItem bigWigItem = new MenuItem("BigWig file...");
+    bigWigItem.setOnAction(e -> addBigWigTrack());
+    
+    // UCSC tracks browser
+    MenuItem ucscBrowserItem = new MenuItem("Browse UCSC Tracks...");
+    ucscBrowserItem.setOnAction(e -> showUcscTracksBrowser());
+    
+    addTracksMenu.getItems().addAll(
+        bedItem,
+        bigWigItem,
+        new SeparatorMenuItem(),
+        ucscBrowserItem
+    );
+  }
+  
+  private void setupMasterSettingsMenu() {
+    masterSettingsMenu = new ContextMenu();
+    masterSettingsMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+    
+    // Future: Add global feature track settings here
+    // For now, just placeholder
+    MenuItem placeholderItem = new MenuItem("Track Analysis (coming soon)");
+    placeholderItem.setDisable(true);
+    
+    masterSettingsMenu.getItems().add(placeholderItem);
+  }
+  
   private void setupMouseHandlers() {
     reactiveCanvas.setOnMouseMoved(event -> {
-      Track track = findTrackAt(event.getY());
-      String icon = findIconAt(event.getX(), event.getY());
+      double x = event.getX();
+      double y = event.getY();
+      
+      // Check if hovering over buttons in master track header
+      if (y < HEADER_HEIGHT) {
+        double width = reactiveCanvas.getWidth();
+        
+        // Plus button
+        double plusX = width - 20;
+        double plusY = (HEADER_HEIGHT - 14) / 2;
+        boolean wasPlusHovered = plusButtonHovered;
+        plusButtonHovered = (x >= plusX && x <= plusX + 14 && y >= plusY && y <= plusY + 14);
+        
+        // Settings button
+        double settingsX = 4;
+        double settingsY = (HEADER_HEIGHT - 14) / 2;
+        boolean wasSettingsHovered = settingsButtonHovered;
+        settingsButtonHovered = (x >= settingsX && x <= settingsX + 14 && y >= settingsY && y <= settingsY + 14);
+        
+        if (wasPlusHovered != plusButtonHovered || wasSettingsHovered != settingsButtonHovered) {
+          drawReactive();
+        }
+        if (!plusButtonHovered && !settingsButtonHovered) {
+          hoveredTrack = null;
+          hoveredIcon = null;
+        }
+        return;
+      }
+      plusButtonHovered = false;
+      settingsButtonHovered = false;
+      
+      Track track = findTrackAt(y);
+      String icon = findIconAt(x, y);
       if (track != hoveredTrack || !java.util.Objects.equals(icon, hoveredIcon)) {
         hoveredTrack = track;
         hoveredIcon = icon;
@@ -120,15 +189,40 @@ public class FeatureTracksSidebar {
     });
     
     reactiveCanvas.setOnMouseExited(event -> {
-      if (hoveredTrack != null || hoveredIcon != null) {
+      if (hoveredTrack != null || hoveredIcon != null || plusButtonHovered || settingsButtonHovered) {
         hoveredTrack = null;
         hoveredIcon = null;
+        plusButtonHovered = false;
+        settingsButtonHovered = false;
         drawReactive();
       }
     });
     
     reactiveCanvas.setOnMouseClicked(event -> {
       if (event.getButton() == MouseButton.PRIMARY) {
+        // Check if clicking buttons in master track header
+        double x = event.getX();
+        double y = event.getY();
+        if (y < HEADER_HEIGHT) {
+          double width = reactiveCanvas.getWidth();
+          
+          // Plus button
+          double plusX = width - 20;
+          double plusY = (HEADER_HEIGHT - 14) / 2;
+          if (x >= plusX && x <= plusX + 14 && y >= plusY && y <= plusY + 14) {
+            addTracksMenu.show(reactiveCanvas, event.getScreenX(), event.getScreenY());
+            return;
+          }
+          
+          // Settings button
+          double settingsX = 4;
+          double settingsY = (HEADER_HEIGHT - 14) / 2;
+          if (x >= settingsX && x <= settingsX + 14 && y >= settingsY && y <= settingsY + 14) {
+            masterSettingsMenu.show(reactiveCanvas, event.getScreenX(), event.getScreenY());
+            return;
+          }
+        }
+        
         // Check for icon clicks
         for (IconRegion region : iconRegions) {
           if (region.contains(event.getX(), event.getY())) {
@@ -196,6 +290,34 @@ public class FeatureTracksSidebar {
     }
   }
   
+  /**
+   * Calculate dynamic height for a track based on available space.
+   */
+  private double calculateTrackHeight(Track track) {
+    if (featureTracksCanvas == null) return 0;
+    
+    List<Track> tracks = featureTracksCanvas.getTracks();
+    if (tracks.isEmpty()) return 0;
+    
+    double availableHeight = canvas.getHeight() - HEADER_HEIGHT;
+    double totalPadding = TRACK_PADDING * (tracks.size() - 1);
+    double trackAreaHeight = availableHeight - totalPadding;
+    
+    // Calculate total preferred height weight
+    double totalPreferredHeight = 0;
+    for (Track t : tracks) {
+      totalPreferredHeight += t.getPreferredHeight();
+    }
+    
+    // Calculate dynamic height based on track's preferred height ratio
+    if (totalPreferredHeight > 0) {
+      double heightRatio = track.getPreferredHeight() / totalPreferredHeight;
+      return trackAreaHeight * heightRatio;
+    } else {
+      return trackAreaHeight / tracks.size();
+    }
+  }
+  
   private Track findTrackAt(double y) {
     if (featureTracksCanvas == null) return null;
     if (featureTracksCanvas.isCollapsed()) return null;
@@ -206,11 +328,11 @@ public class FeatureTracksSidebar {
     double currentY = HEADER_HEIGHT;
     for (Track track : tracks) {
       // Show all tracks (visible and invisible)
-      double trackHeight = track.getPreferredHeight() + TRACK_PADDING;
+      double trackHeight = calculateTrackHeight(track);
       if (y >= currentY && y < currentY + trackHeight) {
         return track;
       }
-      currentY += trackHeight;
+      currentY += trackHeight + TRACK_PADDING;
     }
     return null;
   }
@@ -305,6 +427,31 @@ public class FeatureTracksSidebar {
     }
   }
   
+  private void showUcscTracksBrowser() {
+    if (canvas.getScene() == null || canvas.getScene().getWindow() == null) return;
+    
+    // Get current genome from SharedModel
+    String genome = "hg38"; // Default
+    if (SharedModel.referenceGenome != null) {
+      String genomeName = SharedModel.referenceGenome.getName();
+      // Map common genome names to UCSC assembly names
+      genome = switch (genomeName.toLowerCase()) {
+        case "grch38" -> "hg38";
+        case "grch37" -> "hg19";
+        case "grcm38" -> "mm10";
+        case "grcm39" -> "mm39";
+        default -> genomeName.toLowerCase();
+      };
+    }
+    
+    UcscTracksBrowser browser = new UcscTracksBrowser(
+        (javafx.stage.Stage) canvas.getScene().getWindow(),
+        featureTracksCanvas,
+        genome
+    );
+    browser.show();
+  }
+  
   /**
    * Draw the sidebar.
    */
@@ -318,14 +465,8 @@ public class FeatureTracksSidebar {
     gc.setFill(DrawColors.SIDEBAR);
     gc.fillRect(0, 0, width, height);
     
-    // Draw header
-    gc.setFill(Color.web("#cccccc"));
-    gc.setFont(AppFonts.getUIFont(10));
-    gc.fillText("Feature Tracks", 5, 13);
-    
-    // Draw border under header
-    gc.setStroke(DrawColors.BORDER);
-    gc.strokeLine(0, HEADER_HEIGHT, width, HEADER_HEIGHT);
+    // Draw master track header
+    drawMasterTrackHeader(width);
     
     if (featureTracksCanvas == null) return;
     if (featureTracksCanvas.isCollapsed()) return;
@@ -339,7 +480,7 @@ public class FeatureTracksSidebar {
     
     for (Track track : tracks) {
       // Show all tracks (visible and invisible)
-      double trackHeight = track.getPreferredHeight() + TRACK_PADDING;
+      double trackHeight = calculateTrackHeight(track);
       boolean isVisible = track.isVisible();
       
       // Draw eye icon (left side)
@@ -369,7 +510,7 @@ public class FeatureTracksSidebar {
       gc.setStroke(DrawColors.BORDER);
       gc.strokeLine(0, currentY + trackHeight, width, currentY + trackHeight);
       
-      currentY += trackHeight;
+      currentY += trackHeight + TRACK_PADDING;
     }
   }
   
@@ -402,12 +543,52 @@ public class FeatureTracksSidebar {
   }
   
   /**
+   * Draw the master track header (similar to sample tracks).
+   * Contains settings button (⚙) and add button (+).
+   */
+  private void drawMasterTrackHeader(double width) {
+    // Background — slightly different shade
+    gc.setFill(Color.web("#2b2d30"));
+    gc.fillRect(0, 0, width, HEADER_HEIGHT);
+    
+    // Settings button (⚙) on left
+    double settingsX = 4;
+    double settingsY = (HEADER_HEIGHT - 14) / 2;
+    gc.setFill(Color.web("#3c3c3c"));
+    gc.fillRoundRect(settingsX, settingsY, 14, 14, 3, 3);
+    gc.setStroke(Color.web("#555555"));
+    gc.strokeRoundRect(settingsX, settingsY, 14, 14, 3, 3);
+    gc.setFont(AppFonts.getUIFont(10));
+    gc.setFill(Color.web("#cccccc"));
+    gc.fillText("⚙", settingsX + 2, settingsY + 11);
+    
+    // Label with track count
+    gc.setFont(AppFonts.getUIFont(10));
+    gc.setFill(Color.web("#999999"));
+    int trackCount = featureTracksCanvas != null ? featureTracksCanvas.getTracks().size() : 0;
+    String label = trackCount == 0 ? "Feature Tracks" : "Feature Tracks (" + trackCount + ")";
+    gc.fillText(label, 24, 13);
+    
+    // "+" button on right
+    double plusX = width - 20;
+    double plusY = (HEADER_HEIGHT - 14) / 2;
+    gc.setFill(Color.web("#3c3c3c"));
+    gc.fillRoundRect(plusX, plusY, 14, 14, 3, 3);
+    gc.setStroke(Color.web("#555555"));
+    gc.strokeRoundRect(plusX, plusY, 14, 14, 3, 3);
+    gc.setFont(AppFonts.getUIFont(12));
+    gc.setFill(Color.web("#cccccc"));
+    gc.fillText("+", plusX + 3, plusY + 11);
+    
+    // Bottom border
+    gc.setStroke(Color.web("#444444"));
+    gc.strokeLine(0, HEADER_HEIGHT, width, HEADER_HEIGHT);
+  }
+  
+  /**
    * Draw cogwheel/settings icon (Unicode gear character).
    */
   private void drawCogwheelIcon(double x, double y, boolean trackVisible) {
-    double centerX = x + ICON_SIZE / 2;
-    double centerY = y + ICON_SIZE / 2;
-    
     Color color = trackVisible ? Color.rgb(140, 140, 140) : Color.rgb(80, 80, 80);
     
     // Draw the gear using Unicode character ⚙
@@ -522,8 +703,8 @@ public class FeatureTracksSidebar {
         try {
           String minText = minField.getText().trim();
           String maxText = maxField.getText().trim();
-          track.setMinValue(minText.isEmpty() ? null : Double.parseDouble(minText));
-          track.setMaxValue(maxText.isEmpty() ? null : Double.parseDouble(maxText));
+          track.setMinValue(minText.isEmpty() ? null : Double.valueOf(minText));
+          track.setMaxValue(maxText.isEmpty() ? null : Double.valueOf(maxText));
         } catch (NumberFormatException ex) {
           // Ignore invalid input
         }
@@ -555,6 +736,21 @@ public class FeatureTracksSidebar {
     
     reactiveGc.clearRect(0, 0, width, height);
     
+    // Draw master track button hover effects
+    if (plusButtonHovered) {
+      double plusX = width - 20;
+      double plusY = (HEADER_HEIGHT - 14) / 2;
+      reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
+      reactiveGc.fillRoundRect(plusX, plusY, 14, 14, 3, 3);
+    }
+    
+    if (settingsButtonHovered) {
+      double settingsX = 4;
+      double settingsY = (HEADER_HEIGHT - 14) / 2;
+      reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
+      reactiveGc.fillRoundRect(settingsX, settingsY, 14, 14, 3, 3);
+    }
+    
     if (featureTracksCanvas == null) return;
     if (featureTracksCanvas.isCollapsed()) return;
     
@@ -583,7 +779,7 @@ public class FeatureTracksSidebar {
     double currentY = HEADER_HEIGHT;
     
     for (Track track : tracks) {
-      double trackHeight = track.getPreferredHeight() + TRACK_PADDING;
+      double trackHeight = calculateTrackHeight(track);
       
       if (track == hoveredTrack) {
         // Subtle highlight on track row
@@ -598,7 +794,7 @@ public class FeatureTracksSidebar {
         break;
       }
       
-      currentY += trackHeight;
+      currentY += trackHeight + TRACK_PADDING;
     }
   }
 }

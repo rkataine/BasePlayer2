@@ -190,9 +190,12 @@ public class DrawFunctions extends Canvas {
           double sampleH = SharedModel.sampleHeight;
           if (sampleH > 0 && mouseY > masterOffset) {
             int sampleIdx = (int)((mouseY - masterOffset + SharedModel.scrollBarPosition) / sampleH);
-            if (sampleIdx >= 0 && sampleIdx < SharedModel.bamFiles.size()) {
-              org.baseplayer.reads.bam.SampleFile sf = SharedModel.bamFiles.get(sampleIdx);
-              sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
+            if (sampleIdx >= 0 && sampleIdx < SharedModel.sampleTracks.size()) {
+              org.baseplayer.sample.SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+              org.baseplayer.reads.bam.SampleFile sf = track.getFirstBam();
+              if (sf != null) {
+                sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
+              }
               // Trigger redraw
               update.set(!update.get());
             }
@@ -325,10 +328,34 @@ public class DrawFunctions extends Canvas {
     if (start < 1) start = 1.0;
     if (end >= drawStack.chromSize - 1) end = drawStack.chromSize + 1;
 
-    // If the view jumped significantly (>50% of view length), cancel stale fetches
+    double oldViewLength = drawStack.viewLength;
+    double newViewLength = end - start;
+    
+    // If the view jumped significantly (>50% of view length), cancel stale fetches and clear caches
     double shift = Math.abs(start - drawStack.start);
-    if (shift > drawStack.viewLength * 0.5) {
+    if (shift > oldViewLength * 0.5) {
       FetchManager.get().cancelAll();
+      // Clear read/coverage caches for this stack to free memory
+      for (var track : org.baseplayer.SharedModel.sampleTracks) {
+        for (var sample : track.getSamples()) {
+          if (sample.getBamFile() != null) {
+            sample.getBamFile().clearAllCaches(drawStack);
+          }
+        }
+      }
+    }
+    
+    // If zooming out beyond coverage view threshold, clear detailed caches
+    if (newViewLength > org.baseplayer.io.Settings.get().getMaxCoverageViewLength() && 
+        oldViewLength <= org.baseplayer.io.Settings.get().getMaxCoverageViewLength()) {
+      // Zoomed out past coverage limit - clear read cache to free memory
+      for (var track : org.baseplayer.SharedModel.sampleTracks) {
+        for (var sample : track.getSamples()) {
+          if (sample.getBamFile() != null) {
+            sample.getBamFile().clearReadCache(drawStack);
+          }
+        }
+      }
     }
 
     drawStack.start = start;

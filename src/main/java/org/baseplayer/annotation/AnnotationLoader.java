@@ -16,6 +16,9 @@ import java.util.Map;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
+import org.baseplayer.gene.Gene;
+import org.baseplayer.gene.Transcript;
+
 /**
  * Loads annotation data (cytobands, genes) from files.
  */

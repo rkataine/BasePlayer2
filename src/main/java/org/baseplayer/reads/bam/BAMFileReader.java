@@ -361,100 +361,101 @@ public class BAMFileReader implements AlignmentReader {
         
         try {
           switch (type) {
-            case 'A': // printable character
+            case 'A' -> // printable character
               sb.append((char) tagData[pos++]);
-              break;
-            case 'c': // int8
+            case 'c' -> // int8
               sb.append((int) tagData[pos++]);
-              break;
-            case 'C': // uint8
+            case 'C' -> // uint8
               sb.append(tagData[pos++] & 0xFF);
-              break;
-            case 's': // int16
-              sb.append((short) (((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8))));
-              pos += 2;
-              break;
-            case 'S': // uint16
-              sb.append((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8));
-              pos += 2;
-              break;
-            case 'i': // int32
-            case 'I': // uint32
-              int val = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+            case 's' -> {
+                // int16
+                sb.append((short) (((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8))));
+                pos += 2;
+                }
+            case 'S' -> {
+                // uint16
+                sb.append((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8));
+                pos += 2;
+                }
+            case 'i', 'I' -> // int32
+                {
+                // uint32
+                int val = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
                         ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
-              sb.append(val);
-              pos += 4;
-              break;
-            case 'f': // float
-              int bits = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
-                         ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
-              sb.append(Float.intBitsToFloat(bits));
-              pos += 4;
-              break;
-            case 'Z': // null-terminated string
-            case 'H': // hex string
-              int start = pos;
-              while (pos < tagData.length && tagData[pos] != 0) pos++;
-              String strVal = new String(tagData, start, pos - start, java.nio.charset.StandardCharsets.US_ASCII);
-              if (strVal.length() > 100) {
-                sb.append(strVal, 0, 100).append("...(").append(strVal.length()).append(" chars)");
-              } else {
-                sb.append(strVal);
-              }
-              pos++; // skip null terminator
-              break;
-            case 'B': // array
-              char subType = (char) tagData[pos++];
-              int count = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
-                          ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
-              pos += 4;
-              sb.append(subType).append('[').append(count).append("]: ");
-              int display = Math.min(count, 20);
-              for (int i = 0; i < display; i++) {
-                if (i > 0) sb.append(',');
-                switch (subType) {
-                  case 'c': sb.append((int) tagData[pos++]); break;
-                  case 'C': sb.append(tagData[pos++] & 0xFF); break;
-                  case 's': 
-                    sb.append((short) ((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8)));
-                    pos += 2;
-                    break;
-                  case 'S':
-                    sb.append((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8));
-                    pos += 2;
-                    break;
-                  case 'i':
-                  case 'I':
-                    int v = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
-                            ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
-                    sb.append(v);
-                    pos += 4;
-                    break;
-                  case 'f':
-                    int fb = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
-                             ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
-                    sb.append(Float.intBitsToFloat(fb));
-                    pos += 4;
-                    break;
+                sb.append(val);
+                pos += 4;
                 }
-              }
-              // skip remaining array elements if we didn't display all
-              if (display < count) {
-                sb.append("...(").append(count - display).append(" more)");
-                for (int i = display; i < count; i++) {
-                  switch (subType) {
-                    case 'c': case 'C': pos++; break;
-                    case 's': case 'S': pos += 2; break;
-                    case 'i': case 'I': case 'f': pos += 4; break;
-                  }
+            case 'f' -> {
+                // float
+                int bits = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                        ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+                sb.append(Float.intBitsToFloat(bits));
+                pos += 4;
                 }
-              }
-              break;
-            default:
-              sb.append("(unknown type)");
-              break;
+            case 'Z', 'H' -> {
+                // hex string
+                int start = pos;
+                while (pos < tagData.length && tagData[pos] != 0) pos++;
+                String strVal = new String(tagData, start, pos - start, java.nio.charset.StandardCharsets.US_ASCII);
+                if (strVal.length() > 100) {
+                    sb.append(strVal, 0, 100).append("...(").append(strVal.length()).append(" chars)");
+                } else {
+                    sb.append(strVal);
+                }
+                pos++; // skip null terminator
+                }
+            case 'B' -> // null-terminated string
+                {
+                // array
+                char subType = (char) tagData[pos++];
+                int count = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                        ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+                pos += 4;
+                sb.append(subType).append('[').append(count).append("]: ");
+                int display = Math.min(count, 20);
+                for (int i = 0; i < display; i++) {
+                    if (i > 0) sb.append(',');
+                    switch (subType) {
+                        case 'c' -> sb.append((int) tagData[pos++]);
+                        case 'C' -> sb.append(tagData[pos++] & 0xFF);
+                        case 's' -> {
+                            sb.append((short) ((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8)));
+                            pos += 2;
+                        }
+                        case 'S' -> {
+                            sb.append((tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8));
+                            pos += 2;
+                        }
+                        case 'i', 'I' -> {
+                            int v = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                                    ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+                            sb.append(v);
+                            pos += 4;
+                        }
+                        case 'f' -> {
+                            int fb = (tagData[pos] & 0xFF) | ((tagData[pos+1] & 0xFF) << 8) |
+                                    ((tagData[pos+2] & 0xFF) << 16) | ((tagData[pos+3] & 0xFF) << 24);
+                            sb.append(Float.intBitsToFloat(fb));
+                            pos += 4;
+                        }
+                    }
+                }
+                // skip remaining array elements if we didn't display all
+                if (display < count) {
+                    sb.append("...(").append(count - display).append(" more)");
+                    for (int i = display; i < count; i++) {
+                        switch (subType) {
+                            case 'c', 'C' -> pos++;
+                            case 's',              'S' -> pos += 2;
+                            case 'i', 'I', 'f' -> pos += 4;
+                        }
+                    }
+                } }
+            default -> sb.append("(unknown type)");
           }
-        } catch (Exception e) {
+            // int32
+            // null-terminated string
+                    } catch (Exception e) {
           sb.append("(parse error: ").append(e.getMessage()).append(")");
           break;
         }
@@ -781,9 +782,6 @@ public class BAMFileReader implements AlignmentReader {
     }
     merged.add(cur);
 
-    // Single pass through merged chunks, tracking progress
-    int totalChunks = merged.size();
-    int chunksProcessed = 0;
     Set<Long> seenOffsets = new HashSet<>();
     synchronized (bgzf) {
       for (BAIIndex.Chunk chunk : merged) {
@@ -809,7 +807,6 @@ public class BAMFileReader implements AlignmentReader {
             }
           }
         }
-        chunksProcessed++;
         // Notify after each chunk so UI can update progress (pass counts to callback if needed)
         if (onChunkDone != null) onChunkDone.run();
       }

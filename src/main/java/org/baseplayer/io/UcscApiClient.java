@@ -1,9 +1,12 @@
 package org.baseplayer.io;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -17,6 +20,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 
 /**
  * Client for UCSC Genome Browser REST API.
@@ -37,6 +41,7 @@ public class UcscApiClient {
   private static final int MAX_REGION_SIZE = 100_000; // Max bases per request
   private static final int BASE_LEVEL_THRESHOLD = 10_000; // Fetch per-base data when view < this
   private static final String CACHE_TYPE = "conservation";
+  private static final String TRACKS_LIST_CACHE_TYPE = "ucsc_tracks_list";
   
   private static final HttpClient httpClient = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(10))
@@ -49,7 +54,183 @@ public class UcscApiClient {
   private static final Map<String, ConservationData> binnedCache = new ConcurrentHashMap<>();
   private static final int MAX_BINNED_CACHE_ENTRIES = 100;
   
+  // Cache for tracks list (in-memory)
+  private static final Map<String, java.util.List<UcscTrackInfo>> tracksListCache = new ConcurrentHashMap<>();
+  
   private UcscApiClient() {} // Utility class
+  
+  /**
+   * Fetch list of available tracks from UCSC for a genome.
+   * Returns track metadata including name, label, type, and group.
+   * Uses both file cache and in-memory cache to avoid repeated API calls for the same genome.
+   * 
+   * @param genome Genome assembly (e.g., "hg38")
+   * @return CompletableFuture with list of track info
+   */
+  public static CompletableFuture<java.util.List<UcscTrackInfo>> fetchAvailableTracks(String genome) {
+    // 1. Check file cache first (persists across sessions)
+    Optional<JsonObject> fileCached = DataCacheManager.loadFromCache(TRACKS_LIST_CACHE_TYPE, genome);
+    if (fileCached.isPresent()) {
+      try {
+        java.util.List<UcscTrackInfo> tracks = parseTracksFromCache(fileCached.get());
+        if (!tracks.isEmpty()) {
+          // Store in memory cache for faster subsequent access
+          tracksListCache.put(genome, tracks);
+          System.out.println("UCSC tracks list: Loaded " + tracks.size() + " tracks from file cache for " + genome);
+          return CompletableFuture.completedFuture(tracks);
+        }
+      } catch (Exception e) {
+        System.err.println("Failed to parse tracks from file cache: " + e.getMessage());
+        // Continue to fetch from API
+      }
+    }
+    
+    // 2. Check in-memory cache
+    java.util.List<UcscTrackInfo> cached = tracksListCache.get(genome);
+    if (cached != null) {
+      System.out.println("UCSC tracks list: Using in-memory cached data for " + genome);
+      return CompletableFuture.completedFuture(cached);
+    }
+    
+    // 3. Fetch from API
+    String url = String.format("%s/list/tracks?genome=%s", API_BASE, genome);
+    
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create(url))
+        .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+        .GET()
+        .build();
+    
+    return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+        .thenApply(response -> {
+          if (response.statusCode() != 200) {
+            System.err.println("UCSC API error fetching tracks: " + response.statusCode());
+            java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
+            return empty;
+          }
+          
+          try {
+            JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
+            JsonObject tracksObj = json.getAsJsonObject(genome);
+            if (tracksObj == null) {
+              java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
+              return empty;
+            }
+            
+            java.util.List<UcscTrackInfo> tracks = new java.util.ArrayList<>();
+            for (Map.Entry<String, JsonElement> entry : tracksObj.entrySet()) {
+              String trackName = entry.getKey();
+              JsonObject trackData = entry.getValue().getAsJsonObject();
+              
+              String shortLabel = trackData.has("shortLabel") ? trackData.get("shortLabel").getAsString() : trackName;
+              String longLabel = trackData.has("longLabel") ? trackData.get("longLabel").getAsString() : shortLabel;
+              String type = trackData.has("type") ? trackData.get("type").getAsString() : "unknown";
+              String group = trackData.has("group") ? trackData.get("group").getAsString() : "other";
+              
+              tracks.add(new UcscTrackInfo(trackName, shortLabel, longLabel, type, group));
+            }
+            
+            // Cache the result in memory
+            tracksListCache.put(genome, tracks);
+            
+            // Save to file cache for persistence across sessions
+            saveTracksToFileCache(genome, tracks);
+            
+            System.out.println("UCSC tracks list: Fetched and cached " + tracks.size() + " tracks for " + genome);
+            
+            return tracks;
+          } catch (JsonSyntaxException e) {
+            System.err.println("Failed to parse UCSC tracks list: " + e.getMessage());
+            java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
+            return empty;
+          }
+        })
+        .exceptionally(e -> {
+          System.err.println("Failed to fetch UCSC tracks: " + e.getMessage());
+          java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
+          return empty;
+        });
+  }
+  
+  /**
+   * Fetch list of available tracks from UCSC for a genome, bypassing cache.
+   * Forces a fresh fetch from the API even if cached data exists.
+   * Clears both file cache and in-memory cache for this genome.
+   * 
+   * @param genome Genome assembly (e.g., "hg38")
+   * @return CompletableFuture with list of track info
+   */
+  public static CompletableFuture<java.util.List<UcscTrackInfo>> fetchAvailableTracksForceRefresh(String genome) {
+    // Clear in-memory cache for this genome
+    tracksListCache.remove(genome);
+    
+    // Clear file cache for this genome by deleting the specific cache file
+    try {
+      Path cacheRoot = DataCacheManager.getCacheRoot();
+      Path typeDir = cacheRoot.resolve(TRACKS_LIST_CACHE_TYPE);
+      Path cacheFile = typeDir.resolve(genome + ".json");
+      if (Files.exists(cacheFile)) {
+        Files.delete(cacheFile);
+        System.out.println("UCSC tracks list: Deleted file cache for " + genome);
+      }
+    } catch (IOException e) {
+      System.err.println("Failed to delete tracks cache file: " + e.getMessage());
+    }
+    
+    System.out.println("UCSC tracks list: Cleared all caches for " + genome + ", fetching fresh data");
+    
+    // Now fetch (will not use cache since we just cleared it)
+    return fetchAvailableTracks(genome);
+  }
+  
+  /**
+   * Save tracks list to file cache.
+   */
+  private static void saveTracksToFileCache(String genome, java.util.List<UcscTrackInfo> tracks) {
+    JsonObject cacheJson = new JsonObject();
+    cacheJson.addProperty("genome", genome);
+    cacheJson.addProperty("trackCount", tracks.size());
+    
+    JsonArray tracksArray = new JsonArray();
+    for (UcscTrackInfo track : tracks) {
+      JsonObject trackJson = new JsonObject();
+      trackJson.addProperty("trackName", track.trackName());
+      trackJson.addProperty("shortLabel", track.shortLabel());
+      trackJson.addProperty("longLabel", track.longLabel());
+      trackJson.addProperty("type", track.type());
+      trackJson.addProperty("group", track.group());
+      tracksArray.add(trackJson);
+    }
+    cacheJson.add("tracks", tracksArray);
+    
+    DataCacheManager.saveToCache(TRACKS_LIST_CACHE_TYPE, genome, cacheJson);
+  }
+  
+  /**
+   * Parse tracks list from file cache.
+   */
+  private static java.util.List<UcscTrackInfo> parseTracksFromCache(JsonObject json) {
+    java.util.List<UcscTrackInfo> tracks = new java.util.ArrayList<>();
+    
+    if (!json.has("tracks")) {
+      return tracks;
+    }
+    
+    JsonArray tracksArray = json.getAsJsonArray("tracks");
+    for (JsonElement elem : tracksArray) {
+      JsonObject trackJson = elem.getAsJsonObject();
+      
+      String trackName = trackJson.has("trackName") ? trackJson.get("trackName").getAsString() : "";
+      String shortLabel = trackJson.has("shortLabel") ? trackJson.get("shortLabel").getAsString() : trackName;
+      String longLabel = trackJson.has("longLabel") ? trackJson.get("longLabel").getAsString() : shortLabel;
+      String type = trackJson.has("type") ? trackJson.get("type").getAsString() : "unknown";
+      String group = trackJson.has("group") ? trackJson.get("group").getAsString() : "other";
+      
+      tracks.add(new UcscTrackInfo(trackName, shortLabel, longLabel, type, group));
+    }
+    
+    return tracks;
+  }
   
   /**
    * Fetch PhyloP conservation scores for a region.
@@ -153,7 +334,8 @@ public class UcscApiClient {
           return result != null ? result : ConservationData.empty(start, end, (int)(end - start));
         })
         .exceptionally(e -> {
-          String errorMsg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+          Throwable cause = e.getCause();
+          String errorMsg = cause != null ? cause.getMessage() : e.getMessage();
           System.err.println("Failed to fetch conservation data: " + errorMsg);
           // Provide user-friendly error messages
           String displayMsg = "Connection error";
@@ -282,7 +464,7 @@ public class UcscApiClient {
           data.put(pos, value);
         }
       }
-    } catch (Exception e) {
+    } catch (JsonSyntaxException e) {
       System.err.println("Failed to parse raw conservation data: " + e.getMessage());
     }
     
@@ -312,7 +494,7 @@ public class UcscApiClient {
     String fileCacheKey = DataCacheManager.getCacheKey(chr, start, end, "binned_" + bins);
     Optional<JsonObject> fileCached = DataCacheManager.loadFromCache(CACHE_TYPE, fileCacheKey);
     if (fileCached.isPresent()) {
-      ConservationData data = parseBinnedDataFromCache(fileCached.get(), start, end, bins);
+      ConservationData data = parseBinnedDataFromCache(fileCached.get(), start, end);
       if (data != null && !data.hasError()) {
         binnedCache.put(memoryCacheKey, data);
         System.out.println("Conservation: Loaded binned from file cache: " + fileCacheKey);
@@ -360,7 +542,8 @@ public class UcscApiClient {
           return data;
         })
         .exceptionally(e -> {
-          String errorMsg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+          Throwable cause = e.getCause();
+          String errorMsg = cause != null ? cause.getMessage() : e.getMessage();
           System.err.println("Failed to fetch conservation data: " + errorMsg);
           // Provide user-friendly error messages
           String displayMsg = "Connection error";
@@ -398,7 +581,7 @@ public class UcscApiClient {
   /**
    * Parse binned conservation data from file cache.
    */
-  private static ConservationData parseBinnedDataFromCache(JsonObject json, long start, long end, int bins) {
+  private static ConservationData parseBinnedDataFromCache(JsonObject json, long start, long end) {
     try {
       double minScore = json.get("minScore").getAsDouble();
       double maxScore = json.get("maxScore").getAsDouble();
@@ -411,7 +594,7 @@ public class UcscApiClient {
       }
       
       return new ConservationData(start, end, scores, minScore, maxScore, hasData, null);
-    } catch (Exception e) {
+    } catch (JsonSyntaxException e) {
       System.err.println("Failed to parse cached binned data: " + e.getMessage());
       return null;
     }
@@ -476,9 +659,8 @@ public class UcscApiClient {
       return new ConservationData(start, end, scores, 
           Math.max(-14, minScore), Math.min(6, maxScore), true, null);
       
-    } catch (Exception e) {
+    } catch (JsonSyntaxException e) {
       System.err.println("Failed to parse conservation data: " + e.getMessage());
-      e.printStackTrace();
       return ConservationData.empty(start, end, bins);
     }
   }
@@ -489,6 +671,7 @@ public class UcscApiClient {
   public static void clearCache() {
     chromosomeCache.clear();
     binnedCache.clear();
+    tracksListCache.clear();
     DataCacheManager.clearCache(CACHE_TYPE);
   }
   
@@ -498,6 +681,7 @@ public class UcscApiClient {
   public static void clearMemoryCache() {
     chromosomeCache.clear();
     binnedCache.clear();
+    tracksListCache.clear();
   }
   
   /**

@@ -7,6 +7,8 @@ import org.baseplayer.SharedModel;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.BAMRecord;
 import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.sample.Sample;
+import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -28,7 +30,7 @@ public class CoverageDrawer {
    * Values are indexed by pixel column (0 .. numColumns-1).
    */
   public static class SampleRow {
-    public final SampleFile sampleFile;
+    public final Sample sample;
     public final int sampleIndex;
     /** Total coverage per pixel column */
     public final double[] coverage;
@@ -45,8 +47,8 @@ public class CoverageDrawer {
     /** True if this row is only for the master track (sample not in visible range) */
     public boolean masterTrackOnly;
 
-    SampleRow(SampleFile sf, int sampleIndex, int numColumns) {
-      this.sampleFile = sf;
+    SampleRow(Sample sample, int sampleIndex, int numColumns) {
+      this.sample = sample;
       this.sampleIndex = sampleIndex;
       this.coverage = new double[numColumns];
       this.mmA = new double[numColumns];
@@ -82,7 +84,7 @@ public class CoverageDrawer {
     this.chromPosToScreenPos = chromPosToScreenPos;
     this.numColumns = Math.max(1, screenWidth);
 
-    if (SharedModel.bamFiles.isEmpty()) { rows = new SampleRow[0]; return; }
+    if (SharedModel.sampleTracks.isEmpty()) { rows = new SampleRow[0]; return; }
 
     String chrom = drawStack.chromosome;
     int start = Math.max(0, (int) drawStack.start);
@@ -95,73 +97,56 @@ public class CoverageDrawer {
 
     // Build one SampleRow per visible BAM file
     java.util.List<SampleRow> rowList = new java.util.ArrayList<>();
-    java.util.Set<SampleFile> processedFiles = new java.util.HashSet<>();
-    for (int sIdx = 0; sIdx < SharedModel.bamFiles.size(); sIdx++) {
+    java.util.Set<Sample> processedFiles = new java.util.HashSet<>();
+    for (int sIdx = 0; sIdx < SharedModel.sampleTracks.size(); sIdx++) {
       if (sIdx < SharedModel.firstVisibleSample || sIdx > SharedModel.lastVisibleSample) continue;
-      SampleFile sf = SharedModel.bamFiles.get(sIdx);
-      if (!sf.visible) continue;
-      processedFiles.add(sf);
+      SampleTrack track = SharedModel.sampleTracks.get(sIdx);
 
-      SampleRow row = buildRow(sf, sIdx, chrom, start, end, coverageOnly, isHoverStack);
-      if (row != null) {
-        if (sf.isMethylationData()) {
-          row.methylColorIndex = methylColorIdx++;
-        }
-        rowList.add(row);
-      }
+      for (Sample sf : track.getSamples()) {
+        if (!sf.visible) continue;
+        processedFiles.add(sf);
 
-      // Also handle overlays
-      for (SampleFile sub : sf.getOverlays()) {
-        if (!sub.visible) continue;
-        processedFiles.add(sub);
-        SampleRow subRow = buildRow(sub, sIdx, chrom, start, end, coverageOnly, isHoverStack);
-        if (subRow != null) {
-          if (sub.isMethylationData()) {
-            subRow.methylColorIndex = methylColorIdx++;
+        SampleRow row = buildRow(sf, sIdx, chrom, start, end, coverageOnly, isHoverStack);
+        if (row != null) {
+          if (sf.isMethylationData()) {
+            row.methylColorIndex = methylColorIdx++;
           }
-          rowList.add(subRow);
+          rowList.add(row);
         }
       }
     }
 
     // Also build rows for non-visible methylation samples (master track only)
-    for (int sIdx = 0; sIdx < SharedModel.bamFiles.size(); sIdx++) {
+    for (int sIdx = 0; sIdx < SharedModel.sampleTracks.size(); sIdx++) {
       if (sIdx >= SharedModel.firstVisibleSample && sIdx <= SharedModel.lastVisibleSample) continue;
-      SampleFile sf = SharedModel.bamFiles.get(sIdx);
-      if (!sf.visible || !sf.isMethylationData() || processedFiles.contains(sf)) continue;
+      SampleTrack track = SharedModel.sampleTracks.get(sIdx);
 
-      SampleRow row = buildRow(sf, sIdx, chrom, start, end, coverageOnly, isHoverStack);
-      if (row != null) {
-        row.methylColorIndex = methylColorIdx++;
-        row.masterTrackOnly = true;
-        rowList.add(row);
-      }
+      for (Sample sf : track.getSamples()) {
+        if (!sf.visible || !sf.isMethylationData() || processedFiles.contains(sf)) continue;
 
-      for (SampleFile sub : sf.getOverlays()) {
-        if (!sub.visible || !sub.isMethylationData() || processedFiles.contains(sub)) continue;
-        SampleRow subRow = buildRow(sub, sIdx, chrom, start, end, coverageOnly, isHoverStack);
-        if (subRow != null) {
-          subRow.methylColorIndex = methylColorIdx++;
-          subRow.masterTrackOnly = true;
-          rowList.add(subRow);
+        SampleRow row = buildRow(sf, sIdx, chrom, start, end, coverageOnly, isHoverStack);
+        if (row != null) {
+          row.methylColorIndex = methylColorIdx++;
+          row.masterTrackOnly = true;
+          rowList.add(row);
         }
       }
     }
-    rows = rowList.toArray(new SampleRow[0]);
+    rows = rowList.toArray(SampleRow[]::new);
   }
 
   /**
    * Build one SampleRow by computing coverage, mismatches, and methylation
    * from the sample's reads in a single pass.
    */
-  private SampleRow buildRow(SampleFile sf, int sampleIndex, String chrom,
+  private SampleRow buildRow(Sample sample, int sampleIndex, String chrom,
                              int start, int end, boolean coverageOnly, boolean isHoverStack) {
-    boolean isMethyl = sf.isMethylationData();
+    boolean isMethyl = sample.isMethylationData();
 
     if (coverageOnly) {
-      return buildRowCoverageOnly(sf, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
+      return buildRowCoverageOnly(sample, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
     } else {
-      return buildRowFromReads(sf, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
+      return buildRowFromReads(sample, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
     }
   }
 
@@ -173,15 +158,17 @@ public class CoverageDrawer {
    * samples, a small base-level sweep-line and bisConv array are kept so per-CpG
    * ratios remain accurate.
    */
-  private SampleRow buildRowFromReads(SampleFile sf, int sampleIndex, String chrom,
+  private SampleRow buildRowFromReads(Sample sample, int sampleIndex, String chrom,
                                       int start, int end, boolean isMethyl, boolean isHoverStack) {
-    List<BAMRecord> reads = sf.getReads(chrom, start, end, drawStack, isHoverStack);
+    SampleFile bamFile = sample.getBamFile();
+    if (bamFile == null) return null;
+    List<BAMRecord> reads = bamFile.getReads(chrom, start, end, drawStack, isHoverStack);
     if (reads.isEmpty()) return null;
 
     int regionLen = end - start + 2;
     if (regionLen <= 0 || regionLen > 200_000) return null;
 
-    SampleRow row = new SampleRow(sf, sampleIndex, numColumns);
+    SampleRow row = new SampleRow(sample, sampleIndex, numColumns);
 
     // ── Pixel-level coverage sweep-line (replaces regionLen-sized events[]) ──
     int[] pixEvents = new int[numColumns + 2];
@@ -246,7 +233,8 @@ public class CoverageDrawer {
       row.coverage[px] = Math.max(0, running);
       if (row.coverage[px] > maxCov) maxCov = row.coverage[px];
     }
-    if (maxCov == 0) return null;
+    // Don't create row if coverage is effectively zero (below rendering threshold)
+    if (maxCov < 0.5) return null;
     row.maxCoverage = maxCov;
 
     // ── Methylation: per-position ratios binned to pixels ──
@@ -315,18 +303,21 @@ public class CoverageDrawer {
    * Build a SampleRow for coverage-only mode (zoomed out, binned).
    * Uses cached bin data when available, or computes from reads.
    */
-  private SampleRow buildRowCoverageOnly(SampleFile sf, int sampleIndex, String chrom,
+  private SampleRow buildRowCoverageOnly(Sample sample, int sampleIndex, String chrom,
                                          int start, int end, boolean isMethyl, boolean isHoverStack) {
+    SampleFile bamFile = sample.getBamFile();
+    if (bamFile == null) return null;
+
     double cw = numColumns;
     int viewLen = end - start;
     if (viewLen <= 0) return null;
     double binSize = (double) viewLen / cw;
 
-    List<BAMRecord> reads = sf.getReads(chrom, start, end, drawStack, isHoverStack, true);
+    List<BAMRecord> reads = bamFile.getReads(chrom, start, end, drawStack, isHoverStack, true);
     if (reads.isEmpty()) return null;
 
     // Check if cached data is still valid
-    SampleFile.CoverageCache cache = sf.getCoverageCache(drawStack);
+    SampleFile.CoverageCache cache = bamFile.getCoverageCache(drawStack);
     int cacheGenomicEnd = cache != null ? (int)(cache.genomicStart + cache.numBins * cache.binSize) : 0;
     boolean cacheValid = cache != null
         && cache.sourceReads == reads
@@ -335,14 +326,15 @@ public class CoverageDrawer {
         && end <= cacheGenomicEnd;
 
     if (!cacheValid) {
-      cache = computeCoverageCache(sf, reads, start, end, viewLen, binSize, isMethyl, chrom);
-      sf.setCoverageCache(drawStack, cache);
+      cache = computeCoverageCache(reads, start, end, viewLen, binSize, isMethyl, chrom);
+      bamFile.setCoverageCache(drawStack, cache);
     }
 
-    if (cache == null || cache.scaleMax == 0) return null;
+    // Don't create row if coverage is effectively zero (below rendering threshold)
+    if (cache == null || cache.scaleMax < 0.5) return null;
 
     // Map cached bins to SampleRow at screen-pixel resolution
-    SampleRow row = new SampleRow(sf, sampleIndex, numColumns);
+    SampleRow row = new SampleRow(sample, sampleIndex, numColumns);
     row.maxCoverage = cache.scaleMax;
 
     int firstBin = Math.max(0, (int)((start - cache.genomicStart) / cache.binSize) - 1);
@@ -406,7 +398,7 @@ public class CoverageDrawer {
    * at bin level using the reference genome and per-bin bisulfite counts, avoiding
    * the previous regionLen-sized intermediate arrays (up to 48 MB).
    */
-  private SampleFile.CoverageCache computeCoverageCache(SampleFile sf, List<BAMRecord> reads,
+  private SampleFile.CoverageCache computeCoverageCache(List<BAMRecord> reads,
       int start, int end, int viewLen, double binSize, boolean isMethyl, String chrom) {
 
     int buffer = viewLen / 2;
@@ -542,7 +534,7 @@ public class CoverageDrawer {
     // Determine which samples have methylation data for master track
     java.util.List<SampleRow> methylRows = new java.util.ArrayList<>();
     for (SampleRow row : rows) {
-      if (row.sampleFile.isMethylationData() && row.smoothedMethylRatio != null) {
+      if (row.sample.isMethylationData() && row.smoothedMethylRatio != null) {
         methylRows.add(row);
       }
     }
@@ -615,7 +607,7 @@ public class CoverageDrawer {
       }
 
       // Per-sample methylation line
-      if (row.sampleFile.isMethylationData()) {
+      if (row.sample.isMethylationData()) {
         double methylTop = sampleY + 2;
         double methylBottom = sampleY + covH - 2;
         double methylH = methylBottom - methylTop;
@@ -671,7 +663,7 @@ public class CoverageDrawer {
       double legendX = 4;
       for (SampleRow row : methylRows) {
         Color color = DrawColors.SAMPLE_METHYL_COLORS[row.methylColorIndex % DrawColors.SAMPLE_METHYL_COLORS.length];
-        String label = row.sampleFile.name;
+        String label = row.sample.getName();
         if (label.length() > 20) label = label.substring(0, 18) + "..";
         gc.setFill(color);
         gc.fillRect(legendX, masterTrackHeight - 10, 8, 6);
@@ -686,11 +678,11 @@ public class CoverageDrawer {
     }
   }
 
-  /** Get the SampleRow for a given sample file, or null. */
-  public SampleRow getRow(SampleFile sf) {
+  /** Get the SampleRow for a given sample, or null. */
+  public SampleRow getRow(Sample sample) {
     if (rows == null) return null;
     for (SampleRow row : rows) {
-      if (row.sampleFile == sf) return row;
+      if (row.sample == sample) return row;
     }
     return null;
   }

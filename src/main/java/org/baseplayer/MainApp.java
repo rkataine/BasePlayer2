@@ -60,9 +60,8 @@ public class MainApp extends Application {
                 Platform.runLater(() -> {
                     showMainStage(primaryStage);
                 });
-            } catch (Exception e) {
+            } catch (IOException | InterruptedException e) {
                 System.err.println("Error loading application: " + e.getMessage());
-                e.printStackTrace();
             }
         }).start();
         
@@ -107,7 +106,7 @@ public class MainApp extends Application {
         darkMode = !darkMode;
         DrawFunctions.update.set(!DrawFunctions.update.get());
     }
-    static URL getResource(String string) {
+    public static URL getResource(String string) {
         URL url = MainApp.class.getResource(string);
         if (url == null) {
             // Try absolute path anchored at the package

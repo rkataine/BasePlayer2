@@ -378,8 +378,8 @@ public class MainController {
   }
   
   @FXML
+  @SuppressWarnings("unused")
   private void showAnnotationOptions() {
-    // Create dialog
     javafx.stage.Stage dialog = new javafx.stage.Stage();
     dialog.initModality(javafx.stage.Modality.APPLICATION_MODAL);
     dialog.initOwner(annotationOptionsButton.getScene().getWindow());
@@ -409,9 +409,9 @@ public class MainController {
     
     // Info label
     javafx.scene.control.Label infoLabel = new javafx.scene.control.Label(
-      "Cancer genes are from the COSMIC Cancer Gene Census.\n" +
-      "MANE transcripts are the authoritative reference transcripts."
-    );
+      """
+      Cancer genes are from the COSMIC Cancer Gene Census.
+      MANE transcripts are the authoritative reference transcripts.""");
     infoLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #999999; -fx-wrap-text: true;");
     infoLabel.setMaxWidth(300);
     
@@ -444,5 +444,14 @@ public class MainController {
     javafx.scene.Scene scene = new javafx.scene.Scene(content);
     dialog.setScene(scene);
     dialog.show();
+  }
+  
+  /**
+   * Get the feature tracks canvas (from the first draw stack).
+   * Used by SampleDataManager to add BED/BigWig tracks.
+   */
+  public static org.baseplayer.tracks.FeatureTracksCanvas getFeatureTracksCanvas() {
+    if (drawStacks.isEmpty()) return null;
+    return drawStacks.get(0).featureTracksCanvas;
   }
 }

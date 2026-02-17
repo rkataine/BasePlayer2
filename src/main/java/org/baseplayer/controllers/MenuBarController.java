@@ -47,9 +47,12 @@ public class MenuBarController {
   @FXML private Pane memoryBar;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
-  @FXML private Button minimizeButton;
-  @FXML private Button maximizeButton;
-  @FXML private Button closeButton;
+  @FXML@SuppressWarnings("unused")
+ private Button minimizeButton;
+  @FXML@SuppressWarnings("unused")
+ private Button maximizeButton;
+  @FXML@SuppressWarnings("unused")
+ private Button closeButton;
   
   // Zoom button icons for state updates
   private FontIcon zoomInIcon;
@@ -102,6 +105,13 @@ public class MenuBarController {
     memoryTooltip.setShowDelay(Duration.millis(100));
     Tooltip.install(memoryBar, memoryTooltip);
     memoryTooltip.setText("Memory: calculating...");
+    
+    // Double-click to run garbage collector
+    memoryBar.setOnMouseClicked(e -> {
+      if (e.getClickCount() == 2) {
+        System.gc();
+      }
+    });
   }
   
   private void setupPositionField() {
@@ -238,6 +248,15 @@ public class MenuBarController {
     
     // Cancel all in-flight fetches before switching chromosome
     FetchManager.get().cancelAll();
+    
+    // Clear all cached read and coverage data when changing chromosomes
+    for (var track : SharedModel.sampleTracks) {
+      for (var sample : track.getSamples()) {
+        if (sample.getBamFile() != null) {
+          sample.getBamFile().clearAllCaches();
+        }
+      }
+    }
     
     SharedModel.currentChromosome = chromosome;
     Long chromLength = DrawStack.CHROMOSOME_SIZES.get(chromosome);
@@ -650,6 +669,7 @@ public class MenuBarController {
   }
 
   @FXML
+  @SuppressWarnings("unused")
   private void minimizeWindow() {
     Window window = MainApp.stage.getScene().getWindow();
     if (window instanceof Stage stage) {
@@ -658,6 +678,7 @@ public class MenuBarController {
   }
 
   @FXML
+  @SuppressWarnings("unused")
   private void maximizeWindow() {
     Window window = MainApp.stage.getScene().getWindow();
     if (window instanceof Stage stage) {
@@ -682,6 +703,7 @@ public class MenuBarController {
   }
 
   @FXML
+  @SuppressWarnings("unused")
   private void closeWindow() {
     Window window = MainApp.stage.getScene().getWindow();
     if (window instanceof Stage stage) {

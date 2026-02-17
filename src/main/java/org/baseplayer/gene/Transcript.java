@@ -1,4 +1,4 @@
-package org.baseplayer.annotation;
+package org.baseplayer.gene;
 
 import java.util.List;
 

@@ -72,12 +72,12 @@ public class BedTrack extends AbstractTrack {
           long start = Long.parseLong(parts[1]);
           long end = Long.parseLong(parts[2]);
           
-          String name = parts.length > 3 ? parts[3] : "";
+          String featureName = parts.length > 3 ? parts[3] : "";
           double score = parts.length > 4 ? parseScore(parts[4]) : 0;
           String strand = parts.length > 5 ? parts[5] : ".";
           Color featureColor = parts.length > 8 ? parseColor(parts[8]) : this.color;
           
-          BedFeature feature = new BedFeature(chrom, start, end, name, score, strand, featureColor);
+          BedFeature feature = new BedFeature(chrom, start, end, featureName, score, strand, featureColor);
           featuresByChrom.computeIfAbsent(chrom, k -> new ArrayList<>()).add(feature);
           
         } catch (NumberFormatException e) {
@@ -109,7 +109,7 @@ public class BedTrack extends AbstractTrack {
             Integer.parseInt(rgb[2].trim())
         );
       }
-    } catch (Exception e) {
+    } catch (NumberFormatException e) {
       // Fall through
     }
     return this.color;

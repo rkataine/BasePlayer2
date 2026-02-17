@@ -5,6 +5,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.baseplayer.gene.Gene;
+import org.baseplayer.gene.Transcript;
+
 /**
  * Holds loaded annotation data (genes, cytobands) for application-wide access.
  * Data is loaded by AnnotationLoader and accessed from here.

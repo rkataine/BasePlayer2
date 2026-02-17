@@ -7,6 +7,8 @@ import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.sample.Sample;
+import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.geometry.Insets;
@@ -125,7 +127,7 @@ public class TrackInfo {
 
       int idx = sampleIndexAtY(y);
 
-      if (idx >= 0 && idx < SharedModel.bamFiles.size()) {
+      if (idx >= 0 && idx < SharedModel.sampleTracks.size()) {
         double sampleY = SharedModel.masterTrackHeight + idx * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
 
         // Check close button (✕) — top-right corner of sample strip
@@ -143,11 +145,11 @@ public class TrackInfo {
           return;
         }
 
-        // Check overlay add button (+) — bottom-left of sample strip
+        // Check add-file button (+) — bottom-left of sample strip
         double overlayX = ICON_MARGIN;
         double overlayY = sampleY + SharedModel.sampleHeight - ICON_SIZE - ICON_MARGIN;
         if (x >= overlayX && x <= overlayX + ICON_SIZE && y >= overlayY && y <= overlayY + ICON_SIZE) {
-          SampleDataManager.addOverlayBam(idx);
+          showAddFileMenu(idx, event.getScreenX(), event.getScreenY());
           return;
         }
       }
@@ -180,10 +182,10 @@ public class TrackInfo {
     vcfItem.setDisable(true);
 
     MenuItem bedItem = new MenuItem("BED");
-    bedItem.setDisable(true);
+    bedItem.setOnAction(e -> SampleDataManager.addBedFile());
 
     MenuItem bigwigItem = new MenuItem("BigWig");
-    bigwigItem.setDisable(true);
+    bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
 
     menu.getItems().addAll(bamItem, vcfItem, bedItem, bigwigItem);
     return menu;
@@ -212,25 +214,19 @@ public class TrackInfo {
   }
 
   /**
-   * Show a settings popup for a sample listing the main track and all sub-tracks.
-   * Each gets: visible toggle, overlay (transparent) toggle, and remove button.
+   * Show a settings popup for an individual listing all data files.
+   * Each gets: visible toggle and remove button.
    * Shows methylation/allele indicators and settings when auto-detected.
    */
   private void showSettingsPopup(int sampleIdx, double screenX, double screenY) {
-    SampleFile sample = SharedModel.bamFiles.get(sampleIdx);
+    SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
     ContextMenu settingsMenu = new ContextMenu();
     settingsMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
 
-    // Main sample row
-    settingsMenu.getItems().add(buildTrackRow(sample, null, -1, sampleIdx));
-
-    // Sub-track rows
-    if (!sample.getOverlays().isEmpty()) {
-      settingsMenu.getItems().add(new SeparatorMenuItem());
-      for (int i = 0; i < sample.getOverlays().size(); i++) {
-        SampleFile sub = sample.getOverlays().get(i);
-        settingsMenu.getItems().add(buildTrackRow(sub, sample, i, sampleIdx));
-      }
+    // All data file rows (equal treatment)
+    for (int i = 0; i < track.getSamples().size(); i++) {
+      Sample sample = track.getSamples().get(i);
+      settingsMenu.getItems().add(buildTrackRow(sample, track, i, sampleIdx));
     }
 
     // Methylation settings (always available, shows detection status)
@@ -239,7 +235,7 @@ public class TrackInfo {
     VBox methylBox = new VBox(4);
     methylBox.setPadding(new Insets(4, 8, 4, 8));
 
-    if (sample.isMethylationData()) {
+    if (track.hasMethylationData()) {
       Label methylLabel = new Label("🧬 Methylation tags detected (MM/ML/XM)");
       methylLabel.setStyle("-fx-text-fill: #88ccff; -fx-font-size: 11; -fx-font-weight: bold;");
       methylBox.getChildren().add(methylLabel);
@@ -250,12 +246,16 @@ public class TrackInfo {
     }
 
     CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C→T / G→A)");
-    Boolean currentSetting = sample.isMethylationData();
-    suppressMethylCb.setSelected(currentSetting != null && currentSetting);
+    Boolean currentSetting = track.hasMethylationData();
+    suppressMethylCb.setSelected(currentSetting);
     suppressMethylCb.getStyleClass().add("dark-checkbox");
     suppressMethylCb.setStyle("-fx-font-size: 11;");
     suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
-      sample.setSuppressMethylMismatches(n);
+      // Apply to all BAM samples in this track
+      for (Sample s : track.getSamples()) {
+        SampleFile bamFile = s.getBamFile();
+        if (bamFile != null) bamFile.setSuppressMethylMismatches(n);
+      }
       redraw();
     });
 
@@ -266,7 +266,7 @@ public class TrackInfo {
     settingsMenu.getItems().add(new CustomMenuItem(methylBox, false));
 
     // Allele/haplotype settings (shown if HP tags detected)
-    if (sample.isHaplotypeData()) {
+    if (track.hasHaplotypeData()) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
 
       VBox hpBox = new VBox(4);
@@ -284,27 +284,28 @@ public class TrackInfo {
       settingsMenu.getItems().add(new CustomMenuItem(hpBox, false));
     }
 
-    // Read group split (shown if multiple read groups detected)
-    if (sample.getDetectedReadGroups().size() > 1) {
+    // Read group split (shown if any BAM has multiple read groups)
+    SampleFile primaryBam = track.getFirstBam();
+    if (primaryBam != null && primaryBam.getDetectedReadGroups().size() > 1) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
 
       VBox rgBox = new VBox(4);
       rgBox.setPadding(new Insets(4, 8, 4, 8));
 
-      Label rgLabel = new Label("📋 Read groups (" + sample.getDetectedReadGroups().size() + " detected)");
+      Label rgLabel = new Label("📋 Read groups (" + primaryBam.getDetectedReadGroups().size() + " detected)");
       rgLabel.setStyle("-fx-text-fill: #ccaa88; -fx-font-size: 11; -fx-font-weight: bold;");
 
       CheckBox rgSplitCb = new CheckBox("Split pileup by read group");
-      rgSplitCb.setSelected(sample.isSplitByReadGroup());
+      rgSplitCb.setSelected(primaryBam.isSplitByReadGroup());
       rgSplitCb.getStyleClass().add("dark-checkbox");
       rgSplitCb.setStyle("-fx-font-size: 11;");
       rgSplitCb.selectedProperty().addListener((obs, o, n) -> {
-        sample.setSplitByReadGroup(n);
+        primaryBam.setSplitByReadGroup(n);
         redraw();
       });
 
       StringBuilder rgList = new StringBuilder();
-      for (String rg : sample.getDetectedReadGroups()) {
+      for (String rg : primaryBam.getDetectedReadGroups()) {
         rgList.append("• ").append(rg).append("\n");
       }
       Label rgInfo = new Label(rgList.toString().trim());
@@ -318,13 +319,53 @@ public class TrackInfo {
   }
 
   /**
-   * Build a settings row for a single data file with visible, overlay, and remove controls.
-   * @param file        the SampleFile this row controls
-   * @param parent      null for the main track; the owning SampleFile for sub-tracks
-   * @param overlayIdx  index in parent.getOverlays(), or -1 for main track
-   * @param sampleIdx   index in SharedModel.bamFiles
+   * Show a menu to choose file type to add (BAM or BED) to an individual's track.
    */
-  private CustomMenuItem buildTrackRow(SampleFile file, SampleFile parent, int overlayIdx, int sampleIdx) {
+  private void showAddFileMenu(int sampleIdx, double screenX, double screenY) {
+    ContextMenu addMenu = new ContextMenu();
+    addMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+
+    MenuItem bamItem = new MenuItem("Add BAM/CRAM");
+    bamItem.setOnAction(e -> SampleDataManager.addBamToTrack(sampleIdx));
+
+    MenuItem bedItem = new MenuItem("Add BED");
+    bedItem.setOnAction(e -> SampleDataManager.addBedToTrack(sampleIdx));
+
+    addMenu.getItems().addAll(bamItem, bedItem);
+    addMenu.show(sidebar.sideCanvas, screenX, screenY);
+  }
+
+  /**
+   * Show a dialog to rename an individual's track.
+   */
+  private void showRenameDialog(SampleTrack track) {
+    javafx.scene.control.TextInputDialog dialog = new javafx.scene.control.TextInputDialog(track.getDisplayName());
+    dialog.setTitle("Rename Track");
+    dialog.setHeaderText("Enter new name for this individual:");
+    dialog.setContentText("Name:");
+
+    // Apply dark theme
+    dialog.getDialogPane().setStyle("-fx-background-color: #2b2b2b;");
+    dialog.getDialogPane().lookup(".content.label").setStyle("-fx-text-fill: #cccccc;");
+    dialog.getDialogPane().lookup(".header-panel").setStyle("-fx-background-color: #333333;");
+
+    dialog.showAndWait().ifPresent(newName -> {
+      if (!newName.trim().isEmpty()) {
+        track.setCustomName(newName.trim());
+        draw();
+        DrawFunctions.update.set(!DrawFunctions.update.get());
+      }
+    });
+  }
+
+  /**
+   * Build a settings row for a single data file with visible and remove controls.
+   * @param file        the Sample this row controls
+   * @param track       the owning SampleTrack
+   * @param fileIdx     index in track.getSamples()
+   * @param sampleIdx   index in SharedModel.sampleTracks
+   */
+  private CustomMenuItem buildTrackRow(Sample file, SampleTrack track, int fileIdx, int sampleIdx) {
     HBox row = new HBox(6);
     row.setStyle("-fx-padding: 2 4 2 4;");
 
@@ -337,37 +378,48 @@ public class TrackInfo {
       redraw();
     });
 
-    // Overlay checkbox
-    CheckBox ovrCb = new CheckBox("Overlay");
+    // Overlay (transparent) checkbox
+    CheckBox ovrCb = new CheckBox("Transparent");
     ovrCb.setSelected(file.overlay);
     ovrCb.getStyleClass().add("dark-checkbox");
-    ovrCb.setStyle("-fx-font-size: 11;");
+    ovrCb.setStyle("-fx-font-size: 10;");
     ovrCb.selectedProperty().addListener((obs, o, n) -> {
       file.overlay = n;
       redraw();
     });
 
-    // Name label
-    Label nameLabel = new Label(file.name);
-    nameLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 12;");
+    // Data type label
+    Label typeLabel = new Label("[" + file.getDataType().name() + "]");
+    typeLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+
+    // Name label (clickable to rename the individual)
+    Label nameLabel = new Label(file.getName());
+    nameLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 12; -fx-cursor: hand;");
     nameLabel.setMaxWidth(Double.MAX_VALUE);
     HBox.setHgrow(nameLabel, Priority.ALWAYS);
+    
+    // Click to rename the individual (track-level)
+    nameLabel.setOnMouseClicked(e -> {
+      if (e.getClickCount() == 1) {
+        showRenameDialog(track);
+      }
+    });
 
     // Remove button (✕)
     Label removeBtn = new Label("✕");
     removeBtn.setStyle("-fx-text-fill: #cc6666; -fx-cursor: hand; -fx-font-size: 11; -fx-padding: 0 2 0 4;");
     removeBtn.setOnMouseClicked(e -> {
-      if (parent == null) {
-        // Removing the main track removes the whole sample
+      if (track.getSampleCount() <= 1) {
+        // Removing the last file removes the whole individual
         SampleDataManager.removeSample(sampleIdx);
       } else {
-        parent.removeOverlay(overlayIdx);
+        track.removeSample(fileIdx);
         draw();
         DrawFunctions.update.set(!DrawFunctions.update.get());
       }
     });
 
-    row.getChildren().addAll(visCb, nameLabel, ovrCb, removeBtn);
+    row.getChildren().addAll(visCb, typeLabel, nameLabel, ovrCb, removeBtn);
 
     CustomMenuItem item = new CustomMenuItem(row, false);
     return item;
@@ -415,10 +467,11 @@ public class TrackInfo {
         if (value > 0 && value <= 10000) {
           Settings.get().setSampledCoveragePoints(value);
           // Clear cached sampled coverage for all sample files
-          for (SampleFile sample : SharedModel.bamFiles) {
-            sample.clearSampledCoverageCache();
-            for (SampleFile overlay : sample.getOverlays()) {
-              overlay.clearSampledCoverageCache();
+          for (SampleTrack strack : SharedModel.sampleTracks) {
+            for (Sample s : strack.getSamples()) {
+              if (s.getBamFile() != null) {
+                s.getBamFile().clearSampledCoverageCache();
+              }
             }
           }
           redraw();
@@ -468,8 +521,8 @@ public class TrackInfo {
     for (int i = SharedModel.firstVisibleSample; i <= SharedModel.lastVisibleSample && i < tracks.size(); i++) {
       double sampleY = SharedModel.masterTrackHeight + i * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
       boolean isHover = (i == hoverIndex);
-      boolean isBam = (i < SharedModel.bamFiles.size());
-      boolean isVisible = !isBam || SharedModel.bamFiles.get(i).visible;
+      boolean hasTrack = (i < SharedModel.sampleTracks.size());
+      boolean isVisible = !hasTrack || SharedModel.sampleTracks.get(i).isVisible();
 
       // Skip if completely above master track
       if (sampleY + SharedModel.sampleHeight < SharedModel.masterTrackHeight) continue;
@@ -494,25 +547,46 @@ public class TrackInfo {
       gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
       double textY = sampleY + gc.getFont().getSize() + 2;
       if (textY > SharedModel.masterTrackHeight) {
-        gc.fillText(tracks.get(i), 10, textY);
+        String displayName = hasTrack ? SharedModel.sampleTracks.get(i).getDisplayName() : tracks.get(i);
+        gc.fillText(displayName, 10, textY);
       }
 
-      // Overlay count indicator
-      if (isBam) {
-        SampleFile sample = SharedModel.bamFiles.get(i);
-        int overlayCount = sample.getOverlays().size();
-        if (overlayCount > 0) {
-          gc.setFont(Font.font("Segoe UI", 10));
-          gc.setFill(Color.web("#888888"));
-          double infoY = sampleY + gc.getFont().getSize() + 18;
-          if (infoY > SharedModel.masterTrackHeight) {
-            gc.fillText("+" + overlayCount + " overlay" + (overlayCount > 1 ? "s" : ""), 10, infoY);
+      // Show individual data files under the track name
+      if (hasTrack) {
+        SampleTrack strack = SharedModel.sampleTracks.get(i);
+        Font fileFont = Font.font("Segoe UI", 9);
+        gc.setFont(fileFont);
+        double fileY = textY + 4;
+        for (Sample sf : strack.getSamples()) {
+          fileY += 12;
+          if (fileY > sampleY + SharedModel.sampleHeight - 4) break; // don't overflow track
+          if (fileY <= SharedModel.masterTrackHeight) continue;
+          // Type tag color
+          String tag = sf.getDataType().name();
+          Color tagColor = switch (sf.getDataType()) {
+            case BAM -> Color.web("#6699cc");
+            case BED -> Color.web("#cc9966");
+            case VCF -> Color.web("#99cc66");
+          };
+          // Dim hidden files
+          double alpha = sf.visible ? 1.0 : 0.35;
+          gc.setFill(new Color(tagColor.getRed(), tagColor.getGreen(), tagColor.getBlue(), alpha));
+          gc.fillText("[" + tag + "]", 14, fileY);
+          // File name
+          Color nameColor = sf.visible ? Color.web("#aaaaaa") : Color.web("#555555");
+          if (sf.overlay) nameColor = new Color(nameColor.getRed(), nameColor.getGreen(), nameColor.getBlue(), 0.7);
+          gc.setFill(nameColor);
+          gc.fillText(sf.getName(), 44, fileY);
+          // Overlay indicator
+          if (sf.overlay) {
+            gc.setFill(new Color(0.6, 0.8, 0.6, alpha * 0.8));
+            gc.fillText("\u25CB", 6, fileY); // small circle = transparent
           }
         }
       }
 
       // Per-sample buttons (only shown on hover for BAM files)
-      if (isHover && isBam) {
+      if (isHover && hasTrack) {
         drawSampleButtons(sampleY, w, isVisible);
       }
     }
@@ -581,7 +655,7 @@ public class TrackInfo {
     gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
     gc.fillText("⚙", settingsX + 1, closeY + ICON_SIZE - 3);
 
-    // --- Overlay add button (+) bottom-left ---
+    // --- Add file button (+) bottom-left ---
     double overlayX = ICON_MARGIN;
     double overlayY = sampleY + SharedModel.sampleHeight - ICON_SIZE - ICON_MARGIN;
     gc.setFill(Color.web("#3c3c3c"));

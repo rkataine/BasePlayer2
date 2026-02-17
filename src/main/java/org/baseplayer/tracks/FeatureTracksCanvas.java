@@ -1,5 +1,6 @@
 package org.baseplayer.tracks;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -80,13 +81,15 @@ public class FeatureTracksCanvas extends DrawFunctions {
     notifyRegionChanged();
     
     // Draw all tracks (visible tracks get data drawn, invisible show placeholder)
+    // Heights are calculated dynamically based on available space and preferred height ratios
     double y = HEADER_HEIGHT;
     String chrom = drawStack.chromosome;
     double start = drawStack.start;  // Keep as double for smooth scrolling
     double end = drawStack.end;
     
     for (Track track : tracks) {
-      double trackHeight = track.getPreferredHeight();
+      // Calculate dynamic height based on available space
+      double trackHeight = calculateTrackHeight(track);
       
       if (!track.isVisible()) {
         // Draw dimmed placeholder for invisible tracks
@@ -261,10 +264,10 @@ public class FeatureTracksCanvas extends DrawFunctions {
           double clickRelativeY = e.getY() - trackY;
           double clickRelativeX = e.getX();
           
-          // Let the track handle the click
+          // Let the track handle the click (use dynamic height)
           boolean handled = clickedTrack.handleClick(
               clickRelativeX, clickRelativeY,
-              getWidth(), clickedTrack.getPreferredHeight(),
+              getWidth(), calculateTrackHeight(clickedTrack),
               drawStack.chromosome, drawStack.start, drawStack.end,
               getScene().getWindow(), e.getScreenX(), e.getScreenY()
           );
@@ -278,6 +281,31 @@ public class FeatureTracksCanvas extends DrawFunctions {
   }
   
   /**
+   * Calculate dynamic height for a track based on available space and preferred height ratios.
+   */
+  private double calculateTrackHeight(Track track) {
+    if (tracks.isEmpty()) return 0;
+    
+    double availableHeight = getHeight() - HEADER_HEIGHT;
+    double totalPadding = TRACK_PADDING * (tracks.size() - 1);
+    double trackAreaHeight = availableHeight - totalPadding;
+    
+    // Calculate total preferred height weight
+    double totalPreferredHeight = 0;
+    for (Track t : tracks) {
+      totalPreferredHeight += t.getPreferredHeight();
+    }
+    
+    // Calculate dynamic height based on track's preferred height ratio
+    if (totalPreferredHeight > 0) {
+      double heightRatio = track.getPreferredHeight() / totalPreferredHeight;
+      return trackAreaHeight * heightRatio;
+    } else {
+      return trackAreaHeight / tracks.size();
+    }
+  }
+  
+  /**
    * Get the track at the given Y coordinate.
    */
   private Track getTrackAtY(double y) {
@@ -285,7 +313,7 @@ public class FeatureTracksCanvas extends DrawFunctions {
     
     double trackY = HEADER_HEIGHT;
     for (Track track : tracks) {
-      double trackHeight = track.getPreferredHeight();
+      double trackHeight = calculateTrackHeight(track);
       if (y >= trackY && y < trackY + trackHeight) {
         return track;
       }
@@ -303,7 +331,7 @@ public class FeatureTracksCanvas extends DrawFunctions {
       if (t == track) {
         return y;
       }
-      y += t.getPreferredHeight() + TRACK_PADDING;
+      y += calculateTrackHeight(t) + TRACK_PADDING;
     }
     return y;
   }
@@ -337,17 +365,16 @@ public class FeatureTracksCanvas extends DrawFunctions {
       UserPreferences.setLastDirectory(fileType, file.getParentFile());
       try {
         Track track;
-        if (type.equals("BED")) {
-          track = new BedTrack(file.toPath());
-        } else if (type.equals("BigWig")) {
-          track = new BigWigTrack(file.toPath());
-        } else {
-          return;
-        }
+          switch (type) {
+              case "BED" -> track = new BedTrack(file.toPath());
+              case "BigWig" -> track = new BigWigTrack(file.toPath());
+              default -> {
+                  return;
+              }
+          }
         addTrack(track);
-      } catch (Exception ex) {
+      } catch (IOException ex) {
         System.err.println("Failed to load track file: " + ex.getMessage());
-        ex.printStackTrace();
       }
     }
   }

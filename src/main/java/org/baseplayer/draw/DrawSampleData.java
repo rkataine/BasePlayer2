@@ -6,6 +6,8 @@ import org.baseplayer.SharedModel;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.BAMRecord;
 import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.sample.Sample;
+import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.Variant;
 
@@ -84,9 +86,8 @@ public class DrawSampleData extends DrawFunctions {
    * Reads are packed into rows within that strip.
    */
   void drawBamReads() {
-    if (SharedModel.bamFiles.isEmpty()) return;
+    if (SharedModel.sampleTracks.isEmpty()) return;
     
-    double canvasHeight = getHeight();
     int numSamples = SharedModel.sampleList.size();
     if (numSamples == 0) return;
     
@@ -97,21 +98,28 @@ public class DrawSampleData extends DrawFunctions {
     if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) {
       // Only draw sampled coverage if the setting is enabled (useful to disable for exome data)
       if (!Settings.get().isEnableSampledCoverage()) {
+        // Show message to user that they need to zoom in to see data
+        for (int sampleIdx = 0; sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
+          if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
+          SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+          if (!track.isVisible()) continue;
+          double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+          drawZoomMessage(sampleY, sampleH, "Zoom in closer to view BAM/CRAM data");
+        }
         return; // Skip sampled coverage - no data at this zoom level
       }
       String chrom = drawStack.chromosome;
       int start = Math.max(0, (int) drawStack.start);
       int end = (int) drawStack.end;
       try {
-        for (int sampleIdx = 0; sampleIdx < SharedModel.bamFiles.size(); sampleIdx++) {
+        for (int sampleIdx = 0; sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
           if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
-          SampleFile sample = SharedModel.bamFiles.get(sampleIdx);
-          if (!sample.visible) continue;
+          SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+          if (!track.isVisible()) continue;
           double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
-          drawSampledCoverage(sample, chrom, start, end, sampleY, sampleH);
-          for (SampleFile sub : sample.getOverlays()) {
-            if (!sub.visible) continue;
-            drawSampledCoverage(sub, chrom, start, end, sampleY, sampleH);
+          for (Sample sample : track.getSamples()) {
+            if (!sample.visible) continue;
+            drawSampledCoverage(sample, chrom, start, end, sampleY, sampleH);
           }
         }
       } catch (Exception e) {
@@ -137,15 +145,14 @@ public class DrawSampleData extends DrawFunctions {
 
       // In read view mode, also draw reads below the coverage area
       if (!coverageOnly) {
-        for (int sampleIdx = 0; sampleIdx < SharedModel.bamFiles.size(); sampleIdx++) {
+        for (int sampleIdx = 0; sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
           if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
-          SampleFile sample = SharedModel.bamFiles.get(sampleIdx);
-          if (!sample.visible) continue;
+          SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+          if (!track.isVisible()) continue;
           double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
-          drawSampleFileReads(sample, chrom, start, end, sampleY, sampleH, canvasHeight, coverageFractionH);
-          for (SampleFile sub : sample.getOverlays()) {
-            if (!sub.visible) continue;
-            drawSampleFileReads(sub, chrom, start, end, sampleY, sampleH, canvasHeight, coverageFractionH);
+          for (Sample sample : track.getSamples()) {
+            if (!sample.visible) continue;
+            drawSampleFileReads(sample, chrom, start, end, sampleY, sampleH, coverageFractionH);
           }
         }
       }
@@ -162,18 +169,28 @@ public class DrawSampleData extends DrawFunctions {
    * Coverage and methylation are now handled by CoverageDrawer.
    * The strip is split: coverage area on top (already drawn), reads below.
    */
-  private void drawSampleFileReads(SampleFile sf, String chrom, int start, int end,
-                               double sampleY, double sampleH, double canvasHeight, double coverageH) {
+  private void drawSampleFileReads(Sample sample, String chrom, int start, int end,
+                               double sampleY, double sampleH, double coverageH) {
+    // Handle BED files differently
+    if (sample.getDataType() == Sample.DataType.BED) {
+      drawBedData(sample, chrom, start, end, sampleY, sampleH);
+      return;
+    }
+    
+    SampleFile bamFile = sample.getBamFile();
+    if (bamFile == null) return;
+    
+    // BAM/CRAM handling below
     // Show loading indicator if this file is currently fetching for this stack
     boolean isHoverStack = (drawStack == org.baseplayer.controllers.MainController.hoverStack);
-    boolean shouldShowLoading = sf.isLoading(drawStack) && (isHoverStack || !DrawFunctions.navigating);
+    boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !DrawFunctions.navigating);
     
     if (shouldShowLoading) {
       drawLoadingIndicator(sampleY, sampleH);
     }
     
     // Show status message in the track if available
-    String status = sf.getStatusMessage();
+    String status = sample.getStatusMessage();
     if (status != null && !status.isEmpty()) {
       gc.setFill(Color.rgb(200, 200, 200, 0.9));
       gc.setFont(javafx.scene.text.Font.font("System", javafx.scene.text.FontWeight.NORMAL, 11));
@@ -181,29 +198,34 @@ public class DrawSampleData extends DrawFunctions {
     }
 
     // Reads are already cached by CoverageDrawer.compute(); just get them
-    List<BAMRecord> reads = sf.getCachedReads(drawStack);
+    List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
     if (reads == null || reads.isEmpty()) {
+      // During navigation, skip fetches for main tracks to keep scroll snappy
+      // Only hover stacks can fetch during navigation
+      if (DrawFunctions.navigating && !isHoverStack) {
+        return;
+      }
       // Fallback: try getReads (might not be cached yet)
-      reads = sf.getReads(chrom, start, end, drawStack, isHoverStack);
+      reads = bamFile.getReads(chrom, start, end, drawStack, true); // always block during navigation
     }
     if (reads.isEmpty()) return;
 
     double readsY = sampleY + coverageH;
     double readsH = sampleH - coverageH;
-    boolean isMethyl = sf.isMethylationData();
+    boolean isMethyl = sample.isMethylationData();
 
     // Draw separator line between coverage and reads
     gc.setStroke(DrawColors.COVERAGE_SEPARATOR);
     gc.strokeLine(0, readsY, getWidth(), readsY);
 
-    int maxRow = sf.getMaxRow(drawStack) + 1;
+    int maxRow = bamFile.getMaxRow(drawStack) + 1;
     double gap = Settings.get().getReadGap();
-    int hp2Start = sf.getHP2StartRow(drawStack);
+    int hp2Start = bamFile.getHP2StartRow(drawStack);
     
     // Apply read scroll offset
-    double scrollOffset = sf.readScrollOffset;
+    double scrollOffset = bamFile.readScrollOffset;
     
-    if (hp2Start >= 0 && sf.isHaplotypeData()) {
+    if (hp2Start >= 0 && sample.isHaplotypeData()) {
       // ── Allele butterfly view: HP1 grows up from middle, HP2 grows down ──
       int hp1Rows = hp2Start;
       int hp2Rows = maxRow - hp2Start;
@@ -225,25 +247,25 @@ public class DrawSampleData extends DrawFunctions {
       gc.fillText("HP2", 4, middleY + 11);
 
       // Draw reads with allele-aware y positioning
-      if (sf.overlay) {
-        drawReadListAllele(reads, middleY, readHeight, gap, canvasHeight, hp2Start,
+      if (sample.overlay) {
+        drawReadListAllele(reads, middleY, readHeight, gap, hp2Start,
             DrawColors.OVERLAY_FORWARD, DrawColors.OVERLAY_REVERSE, DrawColors.OVERLAY_FORWARD_STROKE, DrawColors.OVERLAY_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
       } else {
-        drawReadListAllele(reads, middleY, readHeight, gap, canvasHeight, hp2Start,
+        drawReadListAllele(reads, middleY, readHeight, gap, hp2Start,
             DrawColors.READ_FORWARD, DrawColors.READ_REVERSE, DrawColors.READ_FORWARD_STROKE, DrawColors.READ_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
       }
     } else {
       // ── Normal view ──
       double readHeight = Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
     
-      if (sf.overlay) {
-        drawReadList(reads, readsY - scrollOffset, readHeight, gap, canvasHeight, DrawColors.OVERLAY_FORWARD, DrawColors.OVERLAY_REVERSE, DrawColors.OVERLAY_FORWARD_STROKE, DrawColors.OVERLAY_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
+      if (sample.overlay) {
+        drawReadList(reads, readsY - scrollOffset, readHeight, gap, DrawColors.OVERLAY_FORWARD, DrawColors.OVERLAY_REVERSE, DrawColors.OVERLAY_FORWARD_STROKE, DrawColors.OVERLAY_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
       } else {
-        drawReadList(reads, readsY - scrollOffset, readHeight, gap, canvasHeight, DrawColors.READ_FORWARD, DrawColors.READ_REVERSE, DrawColors.READ_FORWARD_STROKE, DrawColors.READ_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
+        drawReadList(reads, readsY - scrollOffset, readHeight, gap, DrawColors.READ_FORWARD, DrawColors.READ_REVERSE, DrawColors.READ_FORWARD_STROKE, DrawColors.READ_REVERSE_STROKE, isMethyl, sampleY + coverageH, sampleY + sampleH);
       }
     
       // Draw read group separator lines and labels
-      java.util.Map<String, Integer> rgStartRows = sf.getReadGroupStartRows(drawStack);
+      java.util.Map<String, Integer> rgStartRows = bamFile.getReadGroupStartRows(drawStack);
       if (rgStartRows.size() > 1) {
         boolean first = true;
         for (java.util.Map.Entry<String, Integer> entry : rgStartRows.entrySet()) {
@@ -277,13 +299,16 @@ public class DrawSampleData extends DrawFunctions {
    * Used when zoomed out beyond MAX_COVERAGE_VIEW_LENGTH (>2M).
    * Requests sparse sampling from SampleFile and draws the result as a coverage profile.
    */
-  private void drawSampledCoverage(SampleFile sf, String chrom, int start, int end,
+  private void drawSampledCoverage(Sample sample, String chrom, int start, int end,
                                     double sampleY, double sampleH) {
+    SampleFile bamFile = sample.getBamFile();
+    if (bamFile == null) return;
+
     double cw = getWidth();
     // Fixed sample points — configurable via Settings
     int numSamples = Settings.get().getSampledCoveragePoints();
 
-    SampleFile.SampledCoverage sampled = sf.requestSampledCoverage(chrom, start, end, numSamples, drawStack);
+    SampleFile.SampledCoverage sampled = bamFile.requestSampledCoverage(chrom, start, end, numSamples, drawStack);
     if (sampled == null) {
       // Show loading indicator while sampling hasn't started
       gc.setFill(Color.web("#888888"));
@@ -394,6 +419,58 @@ public class DrawSampleData extends DrawFunctions {
     gc.fillText(String.valueOf((int) maxDepth), 3, sampleY + 10);
   }
 
+  /** Height of BED feature thin bars in pixels. */
+  private static final double BED_BAR_HEIGHT = 10;
+
+  /**
+   * Draw BED file data in a sample track as thin bars (like feature tracks).
+   * The bars are drawn near the bottom of the track so they don't obscure reads.
+   * When sample.overlay is true, the bars are rendered with transparency.
+   */
+  private void drawBedData(Sample sample, String chrom, int start, int end,
+                           double sampleY, double sampleH) {
+    org.baseplayer.tracks.BedTrack bedTrack = sample.getBedTrack();
+    if (bedTrack == null) return;
+
+    List<org.baseplayer.tracks.BedTrack.BedFeature> features = bedTrack.getFeatures(chrom);
+    if (features == null || features.isEmpty()) return;
+
+    // Thin bars positioned near the bottom of the track
+    double barH = BED_BAR_HEIGHT;
+    double featureY = sampleY + sampleH - barH - 4;
+    double viewLength = end - start;
+    double canvasWidth = getWidth();
+    boolean transparent = sample.overlay;
+    double alpha = transparent ? 0.5 : 1.0;
+
+    for (org.baseplayer.tracks.BedTrack.BedFeature feature : features) {
+      // Skip if outside view (BED is 0-based, our view is 1-based)
+      if (feature.end() < start || feature.start() + 1 > end) continue;
+
+      double featureX1 = ((feature.start() + 1 - start) / viewLength) * canvasWidth;
+      double featureX2 = ((feature.end() - start) / viewLength) * canvasWidth;
+
+      // Clamp to view
+      featureX1 = Math.max(0, featureX1);
+      featureX2 = Math.min(canvasWidth, featureX2);
+
+      double featureWidth = Math.max(1, featureX2 - featureX1);
+
+      // Draw thin bar with optional transparency
+      Color c = feature.color();
+      Color featureColor = new Color(c.getRed(), c.getGreen(), c.getBlue(), alpha);
+      gc.setFill(featureColor);
+      gc.fillRect(featureX1, featureY, featureWidth, barH);
+
+      // Draw name if there's space
+      if (featureWidth > 30 && feature.name() != null && !feature.name().isEmpty()) {
+        gc.setFill(new Color(1, 1, 1, alpha));
+        gc.setFont(javafx.scene.text.Font.font("System", javafx.scene.text.FontWeight.NORMAL, 8));
+        gc.fillText(feature.name(), featureX1 + 2, featureY + barH / 2 + 3);
+      }
+    }
+  }
+
   /** Animated loading dots indicator */
   private long loadingFrame = 0;
 
@@ -407,11 +484,19 @@ public class DrawSampleData extends DrawFunctions {
   }
 
   /**
+   * Draw a message informing the user to zoom in to see data.
+   */
+  private void drawZoomMessage(double sampleY, double sampleH, String message) {
+    gc.setFill(Color.web("#888888"));
+    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
+    gc.fillText(message, 10, sampleY + sampleH / 2 + 4);
+  }
+
+  /**
    * Draw a list of BAM reads with the given colors.
    * clipTop/clipBottom define the visible region — reads outside are skipped.
    */
-  private void drawReadList(List<BAMRecord> reads, double sampleY, double readHeight, double gap,
-                            double canvasHeight, Color fwdFill, Color revFill, Color fwdStroke, Color revStroke,
+  private void drawReadList(List<BAMRecord> reads, double sampleY, double readHeight, double gap, Color fwdFill, Color revFill, Color fwdStroke, Color revStroke,
                             boolean isMethylData, double clipTop, double clipBottom) {
     double canvasWidth = getWidth();
     for (BAMRecord read : reads) {
@@ -489,7 +574,7 @@ public class DrawSampleData extends DrawFunctions {
    * HP2+unphased reads (row >= hp2StartRow) grow downward from middleY.
    */
   private void drawReadListAllele(List<BAMRecord> reads, double middleY, double readHeight, double gap,
-                                  double canvasHeight, int hp2StartRow,
+                                  int hp2StartRow,
                                   Color fwdFill, Color revFill, Color fwdStroke, Color revStroke,
                                   boolean isMethylData, double clipTop, double clipBottom) {
     double canvasWidth = getWidth();

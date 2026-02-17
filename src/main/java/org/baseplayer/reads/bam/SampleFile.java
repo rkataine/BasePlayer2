@@ -23,24 +23,19 @@ import org.baseplayer.io.Settings;
 import javafx.application.Platform;
 
 /**
- * Represents a loaded BAM sample file.
- * Wraps a BAMFileReader and caches reads per DrawStack viewport.
+ * Represents a loaded BAM/CRAM alignment file.
+ * Wraps an AlignmentReader and caches reads per DrawStack viewport.
  * Fetches are done asynchronously so navigation stays responsive.
+ * <p>
+ * Generic sample metadata (name, visibility, overlays) lives in
+ * {@link org.baseplayer.sample.Sample}; this class handles BAM-specific
+ * read fetching, caching, packing, and coverage sampling.
  */
 public class SampleFile implements Closeable {
 
   public final String name;
   public final Path path;
   private final AlignmentReader reader;
-  
-  // Visibility toggle
-  public boolean visible = true;
-  
-  // When true, renders with transparent overlay colors instead of opaque
-  public boolean overlay = false;
-  
-  // Additional data files drawn on the same track
-  private final List<SampleFile> overlays = new ArrayList<>();
 
   // Per-stack caching — each DrawStack has its own cached region and fetch state
   private final ConcurrentHashMap<DrawStack, StackCache> stackCaches = new ConcurrentHashMap<>();
@@ -133,6 +128,53 @@ public class SampleFile implements Closeable {
 
   /** Clear all cached sampled coverage (e.g., when sample points setting changes). */
   public void clearSampledCoverageCache() {
+    sampledCoverages.clear();
+  }
+  
+  /** Clear read cache for a specific DrawStack (frees memory when zoomed out or changed location). */
+  public void clearReadCache(DrawStack stack) {
+    StackCache sc = stackCaches.get(stack);
+    if (sc != null) {
+      // Cancel any pending fetch
+      Future<?> prev = sc.pendingFetch;
+      if (prev != null && !prev.isDone()) {
+        prev.cancel(true);
+      }
+      // Clear cached data
+      sc.cachedReads.set(Collections.emptyList());
+      sc.cachedChrom = "";
+      sc.cachedStart = -1;
+      sc.cachedEnd = -1;
+      sc.fetchingChrom = "";
+      sc.fetchingStart = -1;
+      sc.fetchingEnd = -1;
+      sc.loading = false;
+    }
+  }
+  
+  /** Clear coverage cache for a specific DrawStack. */
+  public void clearCoverageCache(DrawStack stack) {
+    coverageCaches.remove(stack);
+  }
+  
+  /** Clear all caches for a specific DrawStack (reads, coverage, sampled coverage). */
+  public void clearAllCaches(DrawStack stack) {
+    clearReadCache(stack);
+    clearCoverageCache(stack);
+    sampledCoverages.remove(stack);
+  }
+  
+  /** Clear all caches for all stacks (e.g., when file is closed or chromosome changes). */
+  public void clearAllCaches() {
+    // Cancel all pending fetches
+    for (StackCache sc : stackCaches.values()) {
+      Future<?> prev = sc.pendingFetch;
+      if (prev != null && !prev.isDone()) {
+        prev.cancel(true);
+      }
+    }
+    stackCaches.clear();
+    coverageCaches.clear();
     sampledCoverages.clear();
   }
   
@@ -339,9 +381,16 @@ public class SampleFile implements Closeable {
     return fileSize > 0 && fileSize < 100_000_000L;
   }
 
+  /** Get the sample name (from BAM header). */
+  public String getName() { return name; }
+
+  /**
+   * Create a SampleFile from a BAM/CRAM alignment file.
+   */
   public SampleFile(Path filePath) throws IOException {
     this.path = filePath;
     this.fileSize = Files.size(filePath);
+    
     String fileName = filePath.getFileName().toString().toLowerCase();
     if (fileName.endsWith(".cram")) {
       this.reader = new CRAMFileReader(filePath);
@@ -1002,30 +1051,9 @@ public class SampleFile implements Closeable {
 
   public AlignmentReader getReader() { return reader; }
 
-  /** Add an additional data file to this track. */
-  public void addOverlay(SampleFile file) {
-    file.overlay = true;
-    overlays.add(file);
-  }
-
-  /** Remove and close an overlay by index. */
-  public void removeOverlay(int index) {
-    if (index < 0 || index >= overlays.size()) return;
-    try {
-      overlays.get(index).close();
-    } catch (IOException e) {
-      System.err.println("Error closing overlay: " + e.getMessage());
-    }
-    overlays.remove(index);
-  }
-
-  /** Get all additional data files for this track. */
-  public List<SampleFile> getOverlays() {
-    return overlays;
-  }
-
   @Override
   public void close() throws IOException {
+    if (reader != null) {
       try (reader) {
           for (StackCache sc : stackCaches.values()) {
               Future<?> f = sc.pendingFetch;
@@ -1036,11 +1064,10 @@ public class SampleFile implements Closeable {
           stackCaches.clear();
           coverageCaches.clear();
           sampledCoverages.clear();
-          fetchPool.shutdownNow();
+          if (fetchPool != null) {
+            fetchPool.shutdownNow();
+          }
       }
-    for (SampleFile overlayFile : overlays) {
-      overlayFile.close();
     }
-    overlays.clear();
   }
 }

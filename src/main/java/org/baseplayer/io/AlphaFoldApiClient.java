@@ -522,14 +522,14 @@ public class AlphaFoldApiClient {
    * For efficiency, this fetches by UniProt ID and position.
    */
   public static CompletableFuture<List<MissensePrediction>> getMissensePredictions(
-      String geneName, int aminoAcidPosition, char referenceAA) {
+      String geneName, int aminoAcidPosition) {
     
     return getUniprotId(geneName)
         .thenCompose(uniprotId -> {
           if (uniprotId == null) {
             return CompletableFuture.completedFuture(List.of());
           }
-          return fetchMissensePredictions(uniprotId, aminoAcidPosition, referenceAA);
+          return fetchMissensePredictions(uniprotId, aminoAcidPosition);
         });
   }
   
@@ -538,12 +538,12 @@ public class AlphaFoldApiClient {
    * Caches the full protein's predictions and filters by position.
    */
   private static CompletableFuture<List<MissensePrediction>> fetchMissensePredictions(
-      String uniprotId, int position, char referenceAA) {
+      String uniprotId, int position) {
     
     // Check if we already know this protein has no AlphaMissense data
     if (alphaMissenseNotFoundCache.containsKey(uniprotId)) {
       System.out.println("AlphaMissense: Using cached 'not found' for " + uniprotId);
-      return CompletableFuture.completedFuture(fetchUniProtVariantsForPosition(uniprotId, position, referenceAA));
+      return CompletableFuture.completedFuture(fetchUniProtVariantsForPosition(uniprotId, position));
     }
     
     // Check if we have the full protein's data cached
@@ -562,7 +562,7 @@ public class AlphaFoldApiClient {
           .filter(p -> p.position() == position)
           .toList();
       if (filtered.isEmpty()) {
-        return CompletableFuture.completedFuture(fetchUniProtVariantsForPosition(uniprotId, position, referenceAA));
+        return CompletableFuture.completedFuture(fetchUniProtVariantsForPosition(uniprotId, position));
       }
       return CompletableFuture.completedFuture(filtered);
     }
@@ -585,12 +585,12 @@ public class AlphaFoldApiClient {
           if (response.statusCode() == 404) {
             System.out.println("AlphaMissense: No data for " + uniprotId + " (caching 404)");
             alphaMissenseNotFoundCache.put(uniprotId, true);
-            return fetchUniProtVariantsForPosition(uniprotId, position, referenceAA);
+            return fetchUniProtVariantsForPosition(uniprotId, position);
           }
           
           if (response.statusCode() != 200) {
             System.out.println("AlphaMissense: Response status: " + response.statusCode());
-            return fetchUniProtVariantsForPosition(uniprotId, position, referenceAA);
+            return fetchUniProtVariantsForPosition(uniprotId, position);
           }
           
           // Parse and cache ALL predictions from CSV
@@ -646,13 +646,13 @@ public class AlphaFoldApiClient {
           System.out.println("AlphaMissense: Found " + filtered.size() + " predictions for position " + position);
           
           if (filtered.isEmpty()) {
-            return fetchUniProtVariantsForPosition(uniprotId, position, referenceAA);
+            return fetchUniProtVariantsForPosition(uniprotId, position);
           }
           return filtered;
         })
         .exceptionally(e -> {
           System.err.println("AlphaMissense error: " + e.getMessage());
-          return fetchUniProtVariantsForPosition(uniprotId, position, referenceAA);
+          return fetchUniProtVariantsForPosition(uniprotId, position);
         });
   }
   
@@ -661,7 +661,7 @@ public class AlphaFoldApiClient {
    * Uses cached data if available.
    */
   private static List<MissensePrediction> fetchUniProtVariantsForPosition(
-      String uniprotId, int position, char referenceAA) {
+      String uniprotId, int position) {
     // Ensure we have the full variant data cached
     List<MissensePrediction> allVariants = uniprotVariantCache.get(uniprotId);
     if (allVariants == null) {

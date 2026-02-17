@@ -8,8 +8,13 @@ import java.util.List;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.SharedModel;
+import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawFunctions;
-import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.sample.Sample;
+import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.tracks.BedTrack;
+import org.baseplayer.tracks.BigWigTrack;
+import org.baseplayer.tracks.FeatureTracksCanvas;
 
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
@@ -49,11 +54,12 @@ public class SampleDataManager {
     List<String> addedSamples = new ArrayList<>();
     for (File file : files) {
       try {
-        SampleFile sampleFile = new SampleFile(file.toPath());
-        SharedModel.bamFiles.add(sampleFile);
-        SharedModel.sampleList.add(sampleFile.name);
-        addedSamples.add(sampleFile.name);
-        System.out.println("Loaded BAM: " + sampleFile.name + " (" + file.getName() + ")");
+        Sample sample = new Sample(file.toPath());
+        SampleTrack track = new SampleTrack(sample);
+        SharedModel.sampleTracks.add(track);
+        SharedModel.sampleList.add(sample.getName());
+        addedSamples.add(sample.getName());
+        System.out.println("Loaded BAM: " + sample.getName() + " (" + file.getName() + ")");
       } catch (IOException e) {
         System.err.println("Failed to open BAM file: " + file + " - " + e.getMessage());
       }
@@ -72,14 +78,14 @@ public class SampleDataManager {
    * Remove a sample by index and close its file handle.
    */
   public static void removeSample(int index) {
-    if (index < 0 || index >= SharedModel.bamFiles.size()) return;
+    if (index < 0 || index >= SharedModel.sampleTracks.size()) return;
     
     try {
-      SharedModel.bamFiles.get(index).close();
+      SharedModel.sampleTracks.get(index).close();
     } catch (IOException e) {
-      System.err.println("Error closing BAM: " + e.getMessage());
+      System.err.println("Error closing sample: " + e.getMessage());
     }
-    SharedModel.bamFiles.remove(index);
+    SharedModel.sampleTracks.remove(index);
     if (index < SharedModel.sampleList.size()) {
       SharedModel.sampleList.remove(index);
     }
@@ -98,20 +104,20 @@ public class SampleDataManager {
   }
 
   /**
-   * Add an overlay BAM to an existing sample track.
-   * Opens a file chooser and adds the BAM data overlaid on the same track.
+   * Add a BAM/CRAM file to an existing individual's track.
+   * Opens a file chooser and adds the BAM data under the same individual.
    */
-  public static void addOverlayBam(int sampleIndex) {
-    if (sampleIndex < 0 || sampleIndex >= SharedModel.bamFiles.size()) return;
+  public static void addBamToTrack(int sampleIndex) {
+    if (sampleIndex < 0 || sampleIndex >= SharedModel.sampleTracks.size()) return;
     
+    SampleTrack track = SharedModel.sampleTracks.get(sampleIndex);
     FileChooser fileChooser = new FileChooser();
-    fileChooser.setTitle("Add Overlay BAM to " + SharedModel.sampleList.get(sampleIndex));
+    fileChooser.setTitle("Add BAM/CRAM to " + track.getDisplayName());
     File lastDir = UserPreferences.getLastDirectory("BAM");
     if (lastDir != null) {
       try {
         fileChooser.setInitialDirectory(lastDir);
       } catch (IllegalArgumentException e) {
-        // Directory became inaccessible, FileChooser will use system default
         System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
       }
     }
@@ -126,12 +132,125 @@ public class SampleDataManager {
     UserPreferences.setLastDirectory("BAM", file.getParentFile());
     
     try {
-      SampleFile overlayFile = new SampleFile(file.toPath());
-      SharedModel.bamFiles.get(sampleIndex).addOverlay(overlayFile);
-      System.out.println("Added overlay BAM: " + overlayFile.name + " to " + SharedModel.sampleList.get(sampleIndex));
+      Sample newSample = new Sample(file.toPath());
+      track.addSample(newSample);
+      System.out.println("Added BAM: " + newSample.getName() + " to " + track.getDisplayName());
       DrawFunctions.update.set(!DrawFunctions.update.get());
     } catch (IOException e) {
-      System.err.println("Failed to open overlay BAM: " + file + " - " + e.getMessage());
+      System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
+    }
+  }
+
+  /**
+   * Add a BED file to an existing individual's track.
+   * Opens a file chooser and adds the BED data under the same individual.
+   */
+  public static void addBedToTrack(int sampleIndex) {
+    if (sampleIndex < 0 || sampleIndex >= SharedModel.sampleTracks.size()) return;
+    
+    SampleTrack track = SharedModel.sampleTracks.get(sampleIndex);
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Add BED to " + track.getDisplayName());
+    File lastDir = UserPreferences.getLastDirectory("BED");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+      new ExtensionFilter("BED files", "*.bed", "*.bed.gz"),
+      new ExtensionFilter("All files", "*.*")
+    );
+    
+    File file = fileChooser.showOpenDialog(MainApp.stage);
+    if (file == null) return;
+    
+    UserPreferences.setLastDirectory("BED", file.getParentFile());
+    
+    try {
+      BedTrack bedTrack = new BedTrack(file.toPath());
+      Sample newSample = new Sample(file.toPath(), bedTrack);
+      track.addSample(newSample);
+      System.out.println("Added BED: " + newSample.getName() + " to " + track.getDisplayName());
+      DrawFunctions.update.set(!DrawFunctions.update.get());
+    } catch (IOException e) {
+      System.err.println("Failed to open BED: " + file + " - " + e.getMessage());
+    }
+  }
+  
+  /**
+   * Add a BED file. Since BED files are region-based annotations,
+   * they are added to the feature tracks panel.
+   */
+  public static void addBedFile() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open BED File");
+    File lastDir = UserPreferences.getLastDirectory("BED");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+      new ExtensionFilter("BED files", "*.bed", "*.bed.gz"),
+      new ExtensionFilter("All files", "*.*")
+    );
+    
+    File file = fileChooser.showOpenDialog(MainApp.stage);
+    if (file != null) {
+      UserPreferences.setLastDirectory("BED", file.getParentFile());
+      FeatureTracksCanvas featureCanvas = MainController.getFeatureTracksCanvas();
+      if (featureCanvas != null) {
+        try {
+          BedTrack track = new BedTrack(file.toPath());
+          featureCanvas.addTrack(track);
+          featureCanvas.setCollapsed(false);
+          System.out.println("Loaded BED file: " + file.getName());
+        } catch (IOException e) {
+          System.err.println("Failed to load BED file: " + e.getMessage());
+        }
+      }
+    }
+  }
+  
+  /**
+   * Add a BigWig file. Since BigWig files are continuous coverage data,
+   * they are added to the feature tracks panel.
+   */
+  public static void addBigWigFile() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open BigWig File");
+    File lastDir = UserPreferences.getLastDirectory("BIGWIG");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+      new ExtensionFilter("BigWig files", "*.bw", "*.bigwig", "*.bigWig"),
+      new ExtensionFilter("All files", "*.*")
+    );
+    
+    File file = fileChooser.showOpenDialog(MainApp.stage);
+    if (file != null) {
+      UserPreferences.setLastDirectory("BIGWIG", file.getParentFile());
+      FeatureTracksCanvas featureCanvas = MainController.getFeatureTracksCanvas();
+      if (featureCanvas != null) {
+        try {
+          BigWigTrack track = new BigWigTrack(file.toPath());
+          featureCanvas.addTrack(track);
+          featureCanvas.setCollapsed(false);
+          System.out.println("Loaded BigWig file: " + file.getName());
+        } catch (IOException e) {
+          System.err.println("Failed to load BigWig file: " + e.getMessage());
+        }
+      }
     }
   }
 }

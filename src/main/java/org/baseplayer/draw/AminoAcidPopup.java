@@ -300,7 +300,7 @@ public class AminoAcidPopup {
     
     // Async fetch missense predictions
     if (geneName != null && !geneName.isEmpty()) {
-      AlphaFoldApiClient.getMissensePredictions(geneName, aminoAcidNumber, aminoAcidChar)
+      AlphaFoldApiClient.getMissensePredictions(geneName, aminoAcidNumber)
           .thenAccept(predictions -> {
             if (predictions != null && !predictions.isEmpty() 
                 && !predictions.stream().allMatch(p -> "unknown".equals(p.classification()))) {
