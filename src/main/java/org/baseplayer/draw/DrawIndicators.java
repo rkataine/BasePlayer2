@@ -1,6 +1,7 @@
 package org.baseplayer.draw;
 
-import org.baseplayer.SharedModel;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 
@@ -32,7 +33,8 @@ public class DrawIndicators {
     gc.setLineWidth(1);
     gc.setFont(AppFonts.getMonoFont(10));
     
-    boolean showingBases = drawStack.viewLength <= BASE_DISPLAY_THRESHOLD && SharedModel.referenceGenome != null;
+    ReferenceGenomeService refService = ServiceRegistry.getInstance().getReferenceGenomeService();
+    boolean showingBases = drawStack.viewLength <= BASE_DISPLAY_THRESHOLD && refService.hasGenome();
     int lineHeight = showingBases ? 20 : 4;
     
     // Draw indicator lines based on zoom level

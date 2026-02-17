@@ -17,7 +17,6 @@ import javafx.stage.Window;
 public class UcscGenericTrack extends AbstractUcscTrack {
   
   private final String trackName;  // UCSC internal track name
-  private final String genome;     // For future use with proper generic UCSC track fetcher
   
   // Click handling popup
   private final UcscTrackDataPopup popup = new UcscTrackDataPopup();
@@ -25,7 +24,6 @@ public class UcscGenericTrack extends AbstractUcscTrack {
   public UcscGenericTrack(String trackName, String displayName, String genome) {
     super(displayName, "UCSC: " + trackName);
     this.trackName = trackName;
-    this.genome = genome != null ? genome : "hg38";
     this.preferredHeight = 50;
   }
   

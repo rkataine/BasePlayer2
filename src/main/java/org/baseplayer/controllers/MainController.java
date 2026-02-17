@@ -1,16 +1,15 @@
 package org.baseplayer.controllers;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.stream.Stream;
+import java.util.List;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.draw.DrawFunctions;
-import org.baseplayer.draw.DrawSampleData;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.SideBarStack;
 import org.baseplayer.io.ReferenceGenome;
+import org.baseplayer.services.EventCoordinator;
+import org.baseplayer.services.InitializationService;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.tracks.FeatureTracksSidebar;
 import org.baseplayer.utils.BaseUtils;
 
@@ -60,14 +59,25 @@ public class MainController {
   
   public static boolean showOnlyCancerGenes = false;
   
+  // Services
+  private final InitializationService initializationService;
+  private final EventCoordinator eventCoordinator;
+  
   // Unified sidebar controller for all horizontal split panes
   private final SidebarController sidebarController = new SidebarController();
+  
+  public MainController() {
+    // Initialize services from registry
+    this.initializationService = new InitializationService();
+    this.eventCoordinator = new EventCoordinator(drawStacks);
+  }
   
   public void initialize() {
       chromSplitPane = chromCanvas;
       drawPane = drawCanvas;
       featureTracksContentPane = featureTracksContentSplit;
       sideBarStack = new SideBarStack(drawSideBarStackPane);
+      eventCoordinator.setSideBarStack(sideBarStack);
       
       // Setup unified sidebar controller for all horizontal split panes
       sidebarController.addPane(chromSplit);
@@ -82,7 +92,7 @@ public class MainController {
       loadAvailableGenomes(); // Then load genomes which will update stack sizes
       
       addMemUpdateListener();
-      addUpdateListener();
+      eventCoordinator.setupDrawUpdateListener(memoryUsage);
       setWindowSizeListener();
       
       // Lock sidebar and chrom pane sizes after window is shown
@@ -127,30 +137,8 @@ public class MainController {
   }
   
   private void loadAvailableGenomes() {
-    Path genomesDir = Path.of("genomes");
-    if (!Files.exists(genomesDir)) return;
-    
-    try (Stream<Path> dirs = Files.list(genomesDir)) {
-      dirs.filter(Files::isDirectory).forEach(dir -> {
-        try (Stream<Path> files = Files.list(dir)) {
-          files.filter(f -> f.toString().endsWith(".fa") || f.toString().endsWith(".fasta"))
-               .filter(f -> Files.exists(Path.of(f.toString() + ".fai")))
-               .findFirst()
-               .ifPresent(fastaPath -> {
-                 try {
-                   ReferenceGenome genome = new ReferenceGenome(fastaPath);
-                   referenceComboBox.getItems().add(genome);
-                 } catch (IOException e) {
-                   System.err.println("Failed to load genome: " + fastaPath + " - " + e.getMessage());
-                 }
-               });
-        } catch (IOException e) {
-          System.err.println("Error scanning genome directory: " + dir);
-        }
-      });
-    } catch (IOException e) {
-      System.err.println("Error scanning genomes folder: " + e.getMessage());
-    }
+    List<ReferenceGenome> genomes = initializationService.loadAvailableGenomes();
+    referenceComboBox.getItems().addAll(genomes);
     
     referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
     
@@ -164,43 +152,21 @@ public class MainController {
   }
   
   private void loadAvailableAnnotations() {
-    Path annotationDir = Path.of("genomes/GRCh38/annotation");
-    if (!Files.exists(annotationDir)) return;
-    
-    try (Stream<Path> files = Files.list(annotationDir)) {
-      files.filter(f -> f.toString().endsWith(".gff3.gz") || f.toString().endsWith(".gff3") || f.toString().endsWith(".gtf.gz"))
-           .forEach(gff3Path -> {
-             String filename = gff3Path.getFileName().toString();
-             annotationComboBox.getItems().add(filename);
-           });
-    } catch (IOException e) {
-      System.err.println("Error scanning annotations folder: " + e.getMessage());
-    }
+    List<String> annotations = initializationService.loadAvailableAnnotations("GRCh38");
+    annotationComboBox.getItems().addAll(annotations);
     
     // Select default annotation if available
     if (!annotationComboBox.getItems().isEmpty()) {
-      // Try to find the default Ensembl annotation
-      String defaultAnnotation = annotationComboBox.getItems().stream()
-          .filter(name -> name.contains("Homo_sapiens.GRCh38"))
-          .findFirst()
-          .orElse(annotationComboBox.getItems().get(0));
-      annotationComboBox.getSelectionModel().select(defaultAnnotation);
+      String defaultAnnotation = initializationService.findDefaultAnnotation(annotations);
+      if (defaultAnnotation != null) {
+        annotationComboBox.getSelectionModel().select(defaultAnnotation);
+      }
     }
   }
   
   private void onReferenceGenomeSelected() {
     ReferenceGenome genome = referenceComboBox.getValue();
-    if (genome == null) return;
-    
-    SharedModel.referenceGenome = genome;
-    
-    java.util.List<String> chromNames = genome.getStandardChromosomeNames();
-    MenuBarController.setChromosomes(chromNames);
-    
-    // Update all stacks with chromosome list
-    for (var stack : MainController.drawStacks) {
-      stack.setChromosomeList(chromNames);
-    }
+    initializationService.selectReferenceGenome(genome);
   }
   
   public static void zoomout() {
@@ -222,8 +188,9 @@ public class MainController {
       DrawStack drawStack = new DrawStack(chrom);
       
       // Set chromosome list if reference genome is loaded
-      if (SharedModel.referenceGenome != null) {
-        drawStack.setChromosomeList(SharedModel.referenceGenome.getStandardChromosomeNames());
+      ReferenceGenomeService refService = ServiceRegistry.getInstance().getReferenceGenomeService();
+      if (refService.hasGenome()) {
+        drawStack.setChromosomeList(refService.getCurrentGenome().getStandardChromosomeNames());
       }
       
       // Load simulated variants if generated
@@ -260,11 +227,6 @@ public class MainController {
     chromSplitPane.setDividerPositions(drawPositions);
   
   }
-
-  /**
-   * Add a new split panel and navigate it to a specific chromosome and position.
-   * Used for "go to mate" from the read info popup.
-   */
   public static void addStackAtPosition(String chrom, int position) {
     // Strip "chr" prefix if present to match internal naming
     if (chrom.startsWith("chr")) chrom = chrom.substring(3);
@@ -272,8 +234,9 @@ public class MainController {
 
     // Create the new stack at the target chromosome
     DrawStack drawStack = new DrawStack(finalChrom);
-    if (SharedModel.referenceGenome != null) {
-      drawStack.setChromosomeList(SharedModel.referenceGenome.getStandardChromosomeNames());
+    ReferenceGenomeService refService = ServiceRegistry.getInstance().getReferenceGenomeService();
+    if (refService.hasGenome()) {
+      drawStack.setChromosomeList(refService.getCurrentGenome().getStandardChromosomeNames());
     }
     drawStack.chromosomeDropdown.setValue(finalChrom);
     drawStack.loadSimulatedVariants();
@@ -329,31 +292,6 @@ public class MainController {
     featureTracksContentPane.setDividerPositions(drawPositions);
     chromSplitPane.setDividerPositions(drawPositions);
   }
-  void addUpdateListener() {
-    DrawSampleData.update.addListener((observable, oldValue, newValue) -> {
-       
-      // Always draw all stacks so that data updates (e.g. BAM fetch completion)
-      // are reflected everywhere, not just on the hover stack
-      for (DrawStack pane : drawStacks) {
-        pane.cytobandCanvas.draw();
-        pane.chromCanvas.draw();
-        pane.drawCanvas.draw();
-      }
-      
-      // Update feature tracks when region changes
-      for (DrawStack stack : drawStacks) {
-        if (stack.featureTracksCanvas != null) {
-          stack.featureTracksCanvas.draw();
-        }
-      }
-      if (featureTracksSidebar != null) {
-        featureTracksSidebar.draw();
-      }
-
-      sideBarStack.trackInfo.draw();
-      memoryUsage.set(BaseUtils.toMegabytes.apply(instance.totalMemory() - instance.freeMemory()));
-    });
-  }
   
   void setWindowSizeListener() {
     mainSplit.setOnMouseEntered((MouseEvent event) -> {
@@ -380,45 +318,10 @@ public class MainController {
     javafx.scene.control.SplitPane.setResizableWithParent(chromPane, false);
   }
   static void setDividerListeners() {
-    drawPane.getDividers().forEach(divider -> {
-      divider.positionProperty().addListener((obs, oldVal, newVal) -> {
-          int index = drawPane.getDividers().indexOf(divider);
-          if (index < chromSplitPane.getDividers().size()) {
-            chromSplitPane.getDividers().get(index).setPosition(newVal.doubleValue());
-          }
-          if (index < featureTracksContentPane.getDividers().size()) {
-            featureTracksContentPane.getDividers().get(index).setPosition(newVal.doubleValue());
-          }
-      });
-    });
-  
-    chromSplitPane.getDividers().forEach(divider -> {
-        divider.positionProperty().addListener((obs, oldVal, newVal) -> {
-            int index = chromSplitPane.getDividers().indexOf(divider);
-            if (index < drawPane.getDividers().size()) {
-              drawPane.getDividers().get(index).setPosition(newVal.doubleValue());
-            }
-            if (index < featureTracksContentPane.getDividers().size()) {
-              featureTracksContentPane.getDividers().get(index).setPosition(newVal.doubleValue());
-            }
-        });
-    });
-    
-    featureTracksContentPane.getDividers().forEach(divider -> {
-        divider.positionProperty().addListener((obs, oldVal, newVal) -> {
-            int index = featureTracksContentPane.getDividers().indexOf(divider);
-            if (index < drawPane.getDividers().size()) {
-              drawPane.getDividers().get(index).setPosition(newVal.doubleValue());
-            }
-            if (index < chromSplitPane.getDividers().size()) {
-              chromSplitPane.getDividers().get(index).setPosition(newVal.doubleValue());
-            }
-        });
-    });
+    EventCoordinator.synchronizeDividers(drawPane, chromSplitPane, featureTracksContentPane);
   }
   void takeSnapshot() {
-    for (DrawStack pane : drawStacks)
-      pane.drawCanvas.snapshot = pane.drawCanvas.snapshot(null, null);    
+    eventCoordinator.takeCanvasSnapshots();
   }
   
   @FXML

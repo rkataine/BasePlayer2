@@ -2,9 +2,10 @@ package org.baseplayer.draw;
 
 import java.util.function.Function;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.services.SampleRegistry;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
@@ -28,13 +29,17 @@ public class DrawFunctions extends Canvas {
   public DrawStack drawStack;
   public static int minZoom = 40;
   public static BooleanProperty update = new SimpleBooleanProperty(false);
+  
+  // Services
+  protected final SampleRegistry sampleRegistry;
  
   private final GraphicsContext gc;
   public GraphicsContext reactivegc;
 
   
   Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
-  Function<Double, Double> heightToScreen = height -> getHeight()/SharedModel.visibleSamples().getAsInt() * height;
+  // Note: heightToScreen currently unused, kept for potential future use
+  Function<Double, Double> heightToScreen = height -> height; // Placeholder
   Function<Double, Integer> screenPosToChromPos = screenPos -> (int)(drawStack.start + screenPos * drawStack.scale);
   private double mousePressedX;
   private final Canvas reactiveCanvas;
@@ -64,6 +69,7 @@ public class DrawFunctions extends Canvas {
   public DrawFunctions(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
     this.drawStack = drawStack;
+    this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     gc = getGraphicsContext2D();  
     gc.setFont(Font.font("Segoe UI Regular", 12));
     heightProperty().bind(parent.heightProperty());
@@ -186,12 +192,12 @@ public class DrawFunctions extends Canvas {
         double deltaY = event.getDeltaY();
         if (deltaY != 0) {
           double mouseY = event.getY();
-          double masterOffset = SharedModel.masterTrackHeight;
-          double sampleH = SharedModel.sampleHeight;
+          double masterOffset = sampleRegistry.getMasterTrackHeight();
+          double sampleH = sampleRegistry.getSampleHeight();
           if (sampleH > 0 && mouseY > masterOffset) {
-            int sampleIdx = (int)((mouseY - masterOffset + SharedModel.scrollBarPosition) / sampleH);
-            if (sampleIdx >= 0 && sampleIdx < SharedModel.sampleTracks.size()) {
-              org.baseplayer.sample.SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+            int sampleIdx = (int)((mouseY - masterOffset + sampleRegistry.getScrollBarPosition()) / sampleH);
+            if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
+              org.baseplayer.sample.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
               org.baseplayer.reads.bam.SampleFile sf = track.getFirstBam();
               if (sf != null) {
                 sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
@@ -341,7 +347,7 @@ public class DrawFunctions extends Canvas {
     if (overlapRatio < 0.3) {
       FetchManager.get().cancelAll();
       // Clear read/coverage caches for this stack to free memory
-      for (var track : org.baseplayer.SharedModel.sampleTracks) {
+      for (var track : sampleRegistry.getSampleTracks()) {
         for (var sample : track.getSamples()) {
           if (sample.getBamFile() != null) {
             sample.getBamFile().clearAllCaches(drawStack);
@@ -354,7 +360,7 @@ public class DrawFunctions extends Canvas {
     if (newViewLength > org.baseplayer.io.Settings.get().getMaxCoverageViewLength() && 
         oldViewLength <= org.baseplayer.io.Settings.get().getMaxCoverageViewLength()) {
       // Zoomed out past coverage limit - clear read cache to free memory
-      for (var track : org.baseplayer.SharedModel.sampleTracks) {
+      for (var track : sampleRegistry.getSampleTracks()) {
         for (var sample : track.getSamples()) {
           if (sample.getBamFile() != null) {
             sample.getBamFile().clearReadCache(drawStack);

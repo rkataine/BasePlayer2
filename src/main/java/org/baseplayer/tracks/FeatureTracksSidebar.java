@@ -4,9 +4,10 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.io.UserPreferences;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
 
@@ -64,9 +65,13 @@ public class FeatureTracksSidebar {
   private boolean plusButtonHovered = false;
   private boolean settingsButtonHovered = false;
   
+  // Services
+  private final ReferenceGenomeService referenceGenomeService;
+  
   public FeatureTracksSidebar(StackPane parent) {
     this.canvas = new Canvas();
     this.reactiveCanvas = new Canvas();
+    this.referenceGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
     
     canvas.heightProperty().bind(parent.heightProperty());
     canvas.widthProperty().bind(parent.widthProperty());
@@ -399,41 +404,13 @@ public class FeatureTracksSidebar {
     }
   }
   
-  private void addConservationTrack() {
-    if (featureTracksCanvas != null) {
-      // Check if conservation track already exists
-      for (Track track : featureTracksCanvas.getTracks()) {
-        if (track instanceof ConservationTrack) {
-          return; // Already exists
-        }
-      }
-      featureTracksCanvas.addTrack(new ConservationTrack());
-      featureTracksCanvas.setCollapsed(false);
-      draw();
-    }
-  }
-  
-  private void addGnomadTrack() {
-    if (featureTracksCanvas != null) {
-      // Check if gnomAD track already exists
-      for (Track track : featureTracksCanvas.getTracks()) {
-        if (track instanceof GnomadTrack) {
-          return; // Already exists
-        }
-      }
-      featureTracksCanvas.addTrack(new GnomadTrack());
-      featureTracksCanvas.setCollapsed(false);
-      draw();
-    }
-  }
-  
   private void showUcscTracksBrowser() {
     if (canvas.getScene() == null || canvas.getScene().getWindow() == null) return;
     
-    // Get current genome from SharedModel
+    // Get current genome from referenceGenomeService
     String genome = "hg38"; // Default
-    if (SharedModel.referenceGenome != null) {
-      String genomeName = SharedModel.referenceGenome.getName();
+    if (referenceGenomeService.hasGenome()) {
+      String genomeName = referenceGenomeService.getCurrentGenome().getName();
       // Map common genome names to UCSC assembly names
       genome = switch (genomeName.toLowerCase()) {
         case "grch38" -> "hg38";

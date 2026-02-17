@@ -2,13 +2,14 @@ package org.baseplayer.draw;
 
 import java.util.ArrayList;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.SampleFile;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.services.SampleRegistry;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.geometry.Insets;
@@ -32,6 +33,9 @@ public class TrackInfo {
   SideBarStack sidebar;
   GraphicsContext gc;
   ArrayList<String> tracks;
+  
+  // Services
+  private final SampleRegistry sampleRegistry;
 
   // Button sizes and layout constants
   private static final double ICON_SIZE = 14;
@@ -54,7 +58,8 @@ public class TrackInfo {
   public TrackInfo(SideBarStack sidebar) {
     this.sidebar = sidebar;
     this.gc = sidebar.sideCanvas.getGraphicsContext2D();
-    this.tracks = SharedModel.sampleList;
+    this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    this.tracks = new ArrayList<>(sampleRegistry.getSampleList());
 
     // Build the add-data context menu
     addDataMenu = createAddDataMenu();
@@ -62,7 +67,7 @@ public class TrackInfo {
     sidebar.sideCanvas.setOnMouseMoved((event) -> {
       double y = event.getY();
       // Change cursor when hovering over master track bottom edge
-      if (Math.abs(y - SharedModel.masterTrackHeight) < 4) {
+      if (Math.abs(y - sampleRegistry.getMasterTrackHeight()) < 4) {
         sidebar.sideCanvas.setCursor(javafx.scene.Cursor.V_RESIZE);
       } else {
         sidebar.sideCanvas.setCursor(javafx.scene.Cursor.DEFAULT);
@@ -73,7 +78,7 @@ public class TrackInfo {
         hoverIndex = idx;
         draw();
       }
-      SharedModel.hoverSample.set(idx);
+      sampleRegistry.hoverSampleProperty().set(idx);
     });
     sidebar.sideCanvas.setOnMouseExited((event) -> {
       hoverIndex = -1;
@@ -81,29 +86,30 @@ public class TrackInfo {
       draw();
     });
     sidebar.sideCanvas.setOnScroll((event) -> { 
-      SharedModel.scrollBarPosition -= event.getDeltaY();
+      sampleRegistry.setScrollBarPosition(sampleRegistry.getScrollBarPosition() - event.getDeltaY());
       
-      if (SharedModel.scrollBarPosition < 0) SharedModel.scrollBarPosition = 0;
-      if (SharedModel.scrollBarPosition > (SharedModel.sampleList.size() - 1) * SharedModel.sampleHeight) SharedModel.scrollBarPosition = (SharedModel.sampleList.size() - 1) * SharedModel.sampleHeight;
-      SharedModel.firstVisibleSample = Math.max(0, (int)(SharedModel.scrollBarPosition / SharedModel.sampleHeight));
-      SharedModel.lastVisibleSample = Math.min(tracks.size() - 1,
-        (int)((SharedModel.scrollBarPosition + sidebar.sideCanvas.getHeight() - SharedModel.masterTrackHeight) / SharedModel.sampleHeight));
+      if (sampleRegistry.getScrollBarPosition() < 0) sampleRegistry.setScrollBarPosition(0);
+      if (sampleRegistry.getScrollBarPosition() > (sampleRegistry.getSampleList().size() - 1) * sampleRegistry.getSampleHeight()) 
+        sampleRegistry.setScrollBarPosition((sampleRegistry.getSampleList().size() - 1) * sampleRegistry.getSampleHeight());
+      sampleRegistry.setFirstVisibleSample(Math.max(0, (int)(sampleRegistry.getScrollBarPosition() / sampleRegistry.getSampleHeight())));
+      sampleRegistry.setLastVisibleSample(Math.min(tracks.size() - 1,
+        (int)((sampleRegistry.getScrollBarPosition() + sidebar.sideCanvas.getHeight() - sampleRegistry.getMasterTrackHeight()) / sampleRegistry.getSampleHeight())));
       DrawFunctions.update.set(!DrawFunctions.update.get());
     });
     sidebar.sideCanvas.setOnMousePressed(event -> {
       double y = event.getY();
       // Check if pressing on master track bottom edge
-      if (Math.abs(y - SharedModel.masterTrackHeight) < 4) {
+      if (Math.abs(y - sampleRegistry.getMasterTrackHeight()) < 4) {
         isDraggingMasterEdge = true;
         dragStartY = y;
-        dragStartHeight = SharedModel.masterTrackHeight;
+        dragStartHeight = sampleRegistry.getMasterTrackHeight();
         event.consume();
       }
     });
     sidebar.sideCanvas.setOnMouseDragged(event -> {
       if (isDraggingMasterEdge) {
         double deltaY = event.getY() - dragStartY;
-        SharedModel.masterTrackHeight = Math.max(20, Math.min(200, dragStartHeight + deltaY));
+        sampleRegistry.setMasterTrackHeight(Math.max(20, Math.min(200, dragStartHeight + deltaY)));
         DrawFunctions.update.set(!DrawFunctions.update.get());
         event.consume();
       }
@@ -120,15 +126,15 @@ public class TrackInfo {
       double sideW = sidebar.sideCanvas.getWidth();
 
       // Click in master track area
-      if (y < SharedModel.masterTrackHeight) {
+      if (y < sampleRegistry.getMasterTrackHeight()) {
         handleMasterTrackClick(x, y, sideW);
         return;
       }
 
       int idx = sampleIndexAtY(y);
 
-      if (idx >= 0 && idx < SharedModel.sampleTracks.size()) {
-        double sampleY = SharedModel.masterTrackHeight + idx * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
+      if (idx >= 0 && idx < sampleRegistry.getSampleTracks().size()) {
+        double sampleY = sampleRegistry.getMasterTrackHeight() + idx * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
 
         // Check close button (✕) — top-right corner of sample strip
         double closeX = sideW - ICON_SIZE - ICON_MARGIN;
@@ -147,7 +153,7 @@ public class TrackInfo {
 
         // Check add-file button (+) — bottom-left of sample strip
         double overlayX = ICON_MARGIN;
-        double overlayY = sampleY + SharedModel.sampleHeight - ICON_SIZE - ICON_MARGIN;
+        double overlayY = sampleY + sampleRegistry.getSampleHeight() - ICON_SIZE - ICON_MARGIN;
         if (x >= overlayX && x <= overlayX + ICON_SIZE && y >= overlayY && y <= overlayY + ICON_SIZE) {
           showAddFileMenu(idx, event.getScreenX(), event.getScreenY());
           return;
@@ -156,20 +162,20 @@ public class TrackInfo {
 
       // Double-click zoom to sample
       if (event.getClickCount() == 2) {
-        if (SharedModel.firstVisibleSample == SharedModel.lastVisibleSample) {
-          SharedModel.firstVisibleSample = 0;
-          SharedModel.lastVisibleSample = tracks.size() - 1;
+        if (sampleRegistry.getFirstVisibleSample() == sampleRegistry.getLastVisibleSample()) {
+          sampleRegistry.setFirstVisibleSample(0);
+          sampleRegistry.setLastVisibleSample(tracks.size() - 1);
         } else {
-          SharedModel.firstVisibleSample = SharedModel.hoverSample.get();
-          SharedModel.lastVisibleSample = SharedModel.hoverSample.get();
+          sampleRegistry.setFirstVisibleSample(sampleRegistry.hoverSampleProperty().get());
+          sampleRegistry.setLastVisibleSample(sampleRegistry.hoverSampleProperty().get());
         }
-        SharedModel.sampleHeight = (sidebar.sideCanvas.getHeight() - SharedModel.masterTrackHeight)
-            / SharedModel.visibleSamples().getAsInt();
-        SharedModel.scrollBarPosition = SharedModel.firstVisibleSample * SharedModel.sampleHeight;
+        sampleRegistry.setSampleHeight((sidebar.sideCanvas.getHeight() - sampleRegistry.getMasterTrackHeight())
+            / sampleRegistry.getVisibleSampleCount());
+        sampleRegistry.setScrollBarPosition(sampleRegistry.getFirstVisibleSample() * sampleRegistry.getSampleHeight());
         DrawFunctions.update.set(!DrawFunctions.update.get());
       }
     });
-    SharedModel.hoverSample.addListener((obs, oldVal, newVal) -> { if (oldVal != newVal) draw(); });
+    sampleRegistry.hoverSampleProperty().addListener((obs, oldVal, newVal) -> { if (oldVal != newVal) draw(); });
   }
 
   private ContextMenu createAddDataMenu() {
@@ -219,7 +225,7 @@ public class TrackInfo {
    * Shows methylation/allele indicators and settings when auto-detected.
    */
   private void showSettingsPopup(int sampleIdx, double screenX, double screenY) {
-    SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
     ContextMenu settingsMenu = new ContextMenu();
     settingsMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
 
@@ -363,7 +369,7 @@ public class TrackInfo {
    * @param file        the Sample this row controls
    * @param track       the owning SampleTrack
    * @param fileIdx     index in track.getSamples()
-   * @param sampleIdx   index in SharedModel.sampleTracks
+   * @param sampleIdx   index in sampleRegistry.getSampleTracks()
    */
   private CustomMenuItem buildTrackRow(Sample file, SampleTrack track, int fileIdx, int sampleIdx) {
     HBox row = new HBox(6);
@@ -467,7 +473,7 @@ public class TrackInfo {
         if (value > 0 && value <= 10000) {
           Settings.get().setSampledCoveragePoints(value);
           // Clear cached sampled coverage for all sample files
-          for (SampleTrack strack : SharedModel.sampleTracks) {
+          for (SampleTrack strack : sampleRegistry.getSampleTracks()) {
             for (Sample s : strack.getSamples()) {
               if (s.getBamFile() != null) {
                 s.getBamFile().clearSampledCoverageCache();
@@ -497,9 +503,9 @@ public class TrackInfo {
   }
 
   private int sampleIndexAtY(double y) {
-    if (y < SharedModel.masterTrackHeight) return -1;
-    if (SharedModel.sampleHeight <= 0 || tracks.isEmpty()) return -1;
-    int idx = (int)((y - SharedModel.masterTrackHeight + SharedModel.scrollBarPosition) / SharedModel.sampleHeight);
+    if (y < sampleRegistry.getMasterTrackHeight()) return -1;
+    if (sampleRegistry.getSampleHeight() <= 0 || tracks.isEmpty()) return -1;
+    int idx = (int)((y - sampleRegistry.getMasterTrackHeight() + sampleRegistry.getScrollBarPosition()) / sampleRegistry.getSampleHeight());
     if (idx < 0 || idx >= tracks.size()) return -1;
     return idx;
   }
@@ -518,27 +524,27 @@ public class TrackInfo {
 
     if (tracks.isEmpty()) return;
 
-    for (int i = SharedModel.firstVisibleSample; i <= SharedModel.lastVisibleSample && i < tracks.size(); i++) {
-      double sampleY = SharedModel.masterTrackHeight + i * SharedModel.sampleHeight - SharedModel.scrollBarPosition;
+    for (int i = sampleRegistry.getFirstVisibleSample(); i <= sampleRegistry.getLastVisibleSample() && i < tracks.size(); i++) {
+      double sampleY = sampleRegistry.getMasterTrackHeight() + i * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
       boolean isHover = (i == hoverIndex);
-      boolean hasTrack = (i < SharedModel.sampleTracks.size());
-      boolean isVisible = !hasTrack || SharedModel.sampleTracks.get(i).isVisible();
+      boolean hasTrack = (i < sampleRegistry.getSampleTracks().size());
+      boolean isVisible = !hasTrack || sampleRegistry.getSampleTracks().get(i).isVisible();
 
       // Skip if completely above master track
-      if (sampleY + SharedModel.sampleHeight < SharedModel.masterTrackHeight) continue;
+      if (sampleY + sampleRegistry.getSampleHeight() < sampleRegistry.getMasterTrackHeight()) continue;
 
       // Hover highlight
       if (isHover) {
         gc.setFill(Color.web("#2a2d2e"));
-        gc.fillRect(0, Math.max(sampleY, SharedModel.masterTrackHeight), w, SharedModel.sampleHeight);
+        gc.fillRect(0, Math.max(sampleY, sampleRegistry.getMasterTrackHeight()), w, sampleRegistry.getSampleHeight());
       }
 
       // Divider line
-      if (sampleY >= SharedModel.masterTrackHeight) {
+      if (sampleY >= sampleRegistry.getMasterTrackHeight()) {
         gc.strokeLine(0, sampleY, w, sampleY);
       }
       for (DrawStack stack : MainController.drawStacks) {
-        stack.drawCanvas.getGraphicsContext2D().setStroke(SharedModel.hoverSample.get() == i ? Color.WHITE : DrawColors.BORDER);
+        stack.drawCanvas.getGraphicsContext2D().setStroke(sampleRegistry.hoverSampleProperty().get() == i ? Color.WHITE : DrawColors.BORDER);
         stack.drawCanvas.getGraphicsContext2D().strokeLine(0, sampleY, stack.drawCanvas.getWidth(), sampleY);
       }
 
@@ -546,21 +552,21 @@ public class TrackInfo {
       gc.setFont(NAME_FONT);
       gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
       double textY = sampleY + gc.getFont().getSize() + 2;
-      if (textY > SharedModel.masterTrackHeight) {
-        String displayName = hasTrack ? SharedModel.sampleTracks.get(i).getDisplayName() : tracks.get(i);
+      if (textY > sampleRegistry.getMasterTrackHeight()) {
+        String displayName = hasTrack ? sampleRegistry.getSampleTracks().get(i).getDisplayName() : tracks.get(i);
         gc.fillText(displayName, 10, textY);
       }
 
       // Show individual data files under the track name
       if (hasTrack) {
-        SampleTrack strack = SharedModel.sampleTracks.get(i);
+        SampleTrack strack = sampleRegistry.getSampleTracks().get(i);
         Font fileFont = Font.font("Segoe UI", 9);
         gc.setFont(fileFont);
         double fileY = textY + 4;
         for (Sample sf : strack.getSamples()) {
           fileY += 12;
-          if (fileY > sampleY + SharedModel.sampleHeight - 4) break; // don't overflow track
-          if (fileY <= SharedModel.masterTrackHeight) continue;
+          if (fileY > sampleY + sampleRegistry.getSampleHeight() - 4) break; // don't overflow track
+          if (fileY <= sampleRegistry.getMasterTrackHeight()) continue;
           // Type tag color
           String tag = sf.getDataType().name();
           Color tagColor = switch (sf.getDataType()) {
@@ -599,11 +605,11 @@ public class TrackInfo {
   private void drawMasterTrack(double sideW) {
     // Background — slightly different shade
     gc.setFill(Color.web("#2b2d30"));
-    gc.fillRect(0, 0, sideW, SharedModel.masterTrackHeight);
+    gc.fillRect(0, 0, sideW, sampleRegistry.getMasterTrackHeight());
 
     // Settings button (⚙) on left
     double settingsX = 4;
-    double settingsY = (SharedModel.masterTrackHeight - 18) / 2;
+    double settingsY = (sampleRegistry.getMasterTrackHeight() - 18) / 2;
     gc.setFill(Color.web("#3c3c3c"));
     gc.fillRoundRect(settingsX, settingsY, 18, 18, 4, 4);
     gc.setStroke(Color.web("#555555"));
@@ -616,11 +622,11 @@ public class TrackInfo {
     gc.setFont(MASTER_FONT);
     gc.setFill(Color.web("#999999"));
     String label = tracks.isEmpty() ? "Tracks" : "Tracks (" + tracks.size() + ")";
-    gc.fillText(label, 30, SharedModel.masterTrackHeight / 2 + 4);
+    gc.fillText(label, 30, sampleRegistry.getMasterTrackHeight() / 2 + 4);
 
     // "+" button on right
     double plusX = sideW - 22;
-    double plusY = (SharedModel.masterTrackHeight - 18) / 2;
+    double plusY = (sampleRegistry.getMasterTrackHeight() - 18) / 2;
     gc.setFill(Color.web("#3c3c3c"));
     gc.fillRoundRect(plusX, plusY, 18, 18, 4, 4);
     gc.setStroke(Color.web("#555555"));
@@ -631,7 +637,7 @@ public class TrackInfo {
 
     // Bottom border
     gc.setStroke(Color.web("#444444"));
-    gc.strokeLine(0, SharedModel.masterTrackHeight, sideW, SharedModel.masterTrackHeight);
+    gc.strokeLine(0, sampleRegistry.getMasterTrackHeight(), sideW, sampleRegistry.getMasterTrackHeight());
   }
 
   /**
@@ -657,7 +663,7 @@ public class TrackInfo {
 
     // --- Add file button (+) bottom-left ---
     double overlayX = ICON_MARGIN;
-    double overlayY = sampleY + SharedModel.sampleHeight - ICON_SIZE - ICON_MARGIN;
+    double overlayY = sampleY + sampleRegistry.getSampleHeight() - ICON_SIZE - ICON_MARGIN;
     gc.setFill(Color.web("#3c3c3c"));
     gc.fillRect(overlayX - 1, overlayY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
     gc.setFill(Color.web("#88bb88"));

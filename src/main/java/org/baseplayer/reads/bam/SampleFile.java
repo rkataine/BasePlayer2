@@ -47,8 +47,6 @@ public class SampleFile implements Closeable {
   private static final double FETCH_BUFFER_FRACTION = 0.3;
   /** Maximum view length for BAM queries — now read from Settings. */
   private static int getMaxBamViewLength() { return Settings.get().getMaxCoverageViewLength(); }
-  /** Minimum pixel gap between reads for packing (ensures consistent visual spacing at all zoom levels) */
-  private static final int MIN_PIXEL_GAP = 3;
 
   // Per-file fetch executor — each file gets its own thread so BAM and CRAM don't block each other
   private final ExecutorService fetchPool;
@@ -102,33 +100,17 @@ public class SampleFile implements Closeable {
   }
 
   // --- Chromosome-level sampled coverage ---
-  /** Sparse coverage sampled at regular intervals for chromosome-level view. */
-  public static class SampledCoverage {
-    public String chrom;
-    public int viewStart, viewEnd;
-    public int numSamples;
-    public int stride;
-    public int window;
-    public int[] positions;    // genomic position of each sample
-    public double[] depths;    // raw depth at each sample
-    public double[] smoothed;  // smoothed depths for rendering
-    public double maxDepth;
-    public volatile int samplesCompleted; // progress counter
-    public volatile boolean complete;
-    public volatile int chunksProcessed;  // for progress indication
-    public volatile int totalChunks;
-  }
-  private final ConcurrentHashMap<DrawStack, SampledCoverage> sampledCoverages = new ConcurrentHashMap<>();
-  private volatile Future<?> samplingFuture;
+  /** Handles chromosome-level coverage sampling. */
+  private final CoverageCalculator coverageCalculator;
 
   /** Get cached sampled coverage, or null if not yet computed. */
-  public SampledCoverage getSampledCoverage(DrawStack stack) {
-    return sampledCoverages.get(stack);
+  public CoverageCalculator.SampledCoverage getSampledCoverage(DrawStack stack) {
+    return coverageCalculator.getSampledCoverage(stack);
   }
 
   /** Clear all cached sampled coverage (e.g., when sample points setting changes). */
   public void clearSampledCoverageCache() {
-    sampledCoverages.clear();
+    coverageCalculator.clearSampledCoverageCache();
   }
   
   /** Clear read cache for a specific DrawStack (frees memory when zoomed out or changed location). */
@@ -161,7 +143,7 @@ public class SampleFile implements Closeable {
   public void clearAllCaches(DrawStack stack) {
     clearReadCache(stack);
     clearCoverageCache(stack);
-    sampledCoverages.remove(stack);
+    coverageCalculator.removeSampledCoverage(stack);
   }
   
   /** Clear all caches for all stacks (e.g., when file is closed or chromosome changes). */
@@ -175,7 +157,7 @@ public class SampleFile implements Closeable {
     }
     stackCaches.clear();
     coverageCaches.clear();
-    sampledCoverages.clear();
+    coverageCalculator.clearSampledCoverageCache();
   }
   
   /** Get current status message for display in the track. */
@@ -201,151 +183,11 @@ public class SampleFile implements Closeable {
 
   /**
    * Request chromosome-level sampled coverage for the given region.
-   * Samples coverage at regular intervals by doing many small targeted queries
-   * using the index file for fast random access. Returns cached result or
-   * triggers async sampling and returns partial/null.
+   * Delegates to CoverageCalculator.
    */
-  public SampledCoverage requestSampledCoverage(String chrom, int start, int end,
+  public CoverageCalculator.SampledCoverage requestSampledCoverage(String chrom, int start, int end,
                                                  int numSamples, DrawStack stack) {
-    SampledCoverage cached = sampledCoverages.get(stack);
-
-    // Check if cache is valid for this view (same chrom, covers the region, similar resolution)
-    if (cached != null && cached.complete && cached.chrom.equals(chrom)
-        && start >= cached.viewStart && end <= cached.viewEnd) {
-      // Re-sample if zoomed significantly closer (stride changed by >2x)
-      int newStride = Math.max(1, (end - start) / numSamples);
-      if (newStride >= cached.stride / 3) {
-        return cached; // resolution is close enough, reuse cache
-      }
-      // else: zoomed in enough that we need finer sampling — fall through to re-fetch
-    }
-
-    // Don't start new fetch during active navigation
-    if (DrawFunctions.navigating || DrawCytoband.isDragging || DrawFunctions.animationRunning) {
-      return cached; // return stale or null
-    }
-
-    // Check if we're already fetching for this exact region
-    if (cached != null && !cached.complete && cached.chrom.equals(chrom)
-        && cached.viewStart == start && cached.viewEnd == end) {
-      return cached; // still loading, return partial
-    }
-
-    // Cancel any running sampling task
-    Future<?> prev = samplingFuture;
-    if (prev != null && !prev.isDone()) {
-      prev.cancel(true);
-    }
-
-    // Set up new sampled coverage
-    int stride = Math.max(1, (end - start) / numSamples);
-    // Fixed 1000bp window — fast approximation, not representative of whole bin
-    int window = Math.min(1000, stride);
-
-    SampledCoverage sc = new SampledCoverage();
-    sc.chrom = chrom;
-    sc.viewStart = start;
-    sc.viewEnd = end;
-    sc.numSamples = numSamples;
-    sc.stride = stride;
-    sc.window = window;
-    sc.positions = new int[numSamples];
-    sc.depths = new double[numSamples];
-    sc.maxDepth = 0;
-    sc.samplesCompleted = 0;
-    sc.complete = false;
-    sampledCoverages.put(stack, sc);
-
-    System.out.println("Sampling coverage (" + name + "): " + chrom + ":" + start + "-" + end
-        + " stride=" + stride + " window=" + window + " samples=" + numSamples);
-
-    // Check FetchManager before submitting (memory only — SAMPLED_COVERAGE allows large regions)
-    final FetchManager fm = FetchManager.get();
-    if (!fm.canFetch(FetchManager.FetchType.SAMPLED_COVERAGE, end - start)) {
-      System.err.println("Sampled coverage fetch blocked by FetchManager for " + name);
-      return cached;
-    }
-
-    samplingFuture = fetchPool.submit(() -> {
-      FetchManager.FetchTicket ticket = fm.acquire(
-          FetchManager.FetchType.SAMPLED_COVERAGE, SampleFile.this, stack, chrom, start, end);
-      try {
-        // Build position array — sample from the CENTER of each bin
-        int halfStride = stride / 2;
-        int halfWindow = sc.window / 2;
-        for (int i = 0; i < numSamples; i++) {
-          sc.positions[i] = start + i * stride + halfStride; // bin center for rendering
-        }
-
-        int w = sc.window;
-        double maxDepth = 0;
-
-        // Query each position INDIVIDUALLY — avoids merging BAI chunks across
-        // all positions (which at chromosome level creates 100+ merged chunks
-        // covering most of the file, making it extremely slow).
-        // Each individual 1kb query hits only a few small index chunks → fast.
-        for (int i = 0; i < numSamples; i++) {
-          if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) return;
-
-          int queryPos = Math.max(0, sc.positions[i] - halfWindow);
-          int[] singlePos = { queryPos };
-          int[] singleCount = { 0 };
-          reader.querySampledCounts(chrom, singlePos, w, singleCount, null);
-
-          double depth = (double) singleCount[0] * 1000.0 / w;
-          sc.depths[i] = depth;
-          if (depth > maxDepth) maxDepth = depth;
-          sc.maxDepth = maxDepth;
-          sc.samplesCompleted = i + 1;
-
-          // Update UI after each sample so coverage appears progressively
-          Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
-        }
-
-        if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) return;
-
-        // Smooth the sampled depths (3-pass box blur) — optional via settings
-        if (Settings.get().isSmoothSmallFiles()) {
-          double[] smoothed = new double[numSamples];
-          System.arraycopy(sc.depths, 0, smoothed, 0, numSamples);
-          int radius = Math.max(1, Math.min(6, numSamples / 30));
-          double[] tmp = new double[numSamples];
-          for (int pass = 0; pass < 3; pass++) {
-            double sum = 0;
-            // Seed window: elements [0, radius) — one short of full window
-            for (int k = 0; k < radius && k < numSamples; k++) sum += smoothed[k];
-            for (int k = 0; k < numSamples; k++) {
-              int right = k + radius;
-              int left = k - radius - 1;
-              if (right < numSamples) sum += smoothed[right];
-              if (left >= 0) sum -= smoothed[left];
-              int cnt = Math.min(right, numSamples - 1) - Math.max(left + 1, 0) + 1;
-              tmp[k] = sum / cnt;
-            }
-            System.arraycopy(tmp, 0, smoothed, 0, numSamples);
-          }
-          double maxSmoothed = 0;
-          for (double v : smoothed) if (v > maxSmoothed) maxSmoothed = v;
-          sc.smoothed = smoothed;
-          sc.maxDepth = Math.max(maxSmoothed, maxDepth);
-        } else {
-          // No smoothing — use raw depths directly
-          sc.smoothed = null;
-          sc.maxDepth = maxDepth;
-        }
-        sc.complete = true;
-        System.out.println("Sampling complete (" + name + "): maxDepth=" + (int) sc.maxDepth);
-        Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
-      } catch (IOException e) {
-        if (!(e instanceof java.io.IOException && Thread.currentThread().isInterrupted())) {
-          System.err.println("Error sampling coverage (" + name + "): " + e.getMessage());
-        }
-      } finally {
-        fm.release(ticket);
-      }
-    });
-
-    return sc;
+    return coverageCalculator.requestSampledCoverage(chrom, start, end, numSamples, stack);
   }
 
   /** Per-stack cache state. */
@@ -401,6 +243,7 @@ public class SampleFile implements Closeable {
     this.fetchPool = Executors.newSingleThreadExecutor(
         r -> { Thread t = new Thread(r, "fetch-" + this.name); t.setDaemon(true); return t; }
     );
+    this.coverageCalculator = new CoverageCalculator(reader, name, fetchPool, this);
   }
 
   private StackCache getCache(DrawStack stack) {
@@ -533,10 +376,7 @@ public class SampleFile implements Closeable {
       }
 
       // Cancel any in-flight chromosome-level sampling (free the executor for read-level fetch)
-      Future<?> sf = samplingFuture;
-      if (sf != null && !sf.isDone()) {
-        sf.cancel(true);
-      }
+      coverageCalculator.cancelSampling();
 
       // Detect scroll direction and apply directional buffering
       int baseBuffer = Math.max(1000, (int)(viewLength * FETCH_BUFFER_FRACTION));
@@ -621,8 +461,8 @@ public class SampleFile implements Closeable {
           List<BAMRecord> reads = new ArrayList<>();
           List<Integer> rowEnds = new ArrayList<>();
           int[] maxRowLocal = {0};
-          // Pixel-based gap: MIN_PIXEL_GAP pixels converted to genomic coordinates
-          int gap = skipPacking ? 0 : Math.max(1, (int)(MIN_PIXEL_GAP * stack.scale));
+          // Pixel-based gap: 3 pixels converted to genomic coordinates (matches ReadPacker.MIN_PIXEL_GAP)
+          int gap = skipPacking ? 0 : Math.max(1, (int)(3 * stack.scale));
           long[] lastUpdate = {System.nanoTime()};
           boolean[] detectionDone = {methylationDetected || haplotypeDetected || !detectedReadGroups.isEmpty()};
 
@@ -892,152 +732,18 @@ public class SampleFile implements Closeable {
     if (sc == null || sc.cachedReads.get().isEmpty()) return;
 
     List<BAMRecord> reads = new ArrayList<>(sc.cachedReads.get());
-    int gap = Math.max(1, (int)(MIN_PIXEL_GAP * stack.scale));
-    int maxRowLocal = 0;
-
-    if (splitByReadGroup && detectedReadGroups.size() > 1) {
-      // ── Read group split mode ──
-      java.util.Map<String, List<BAMRecord>> rgGroups = new java.util.LinkedHashMap<>();
-      for (String rg : detectedReadGroups) rgGroups.put(rg, new ArrayList<>());
-      rgGroups.put("__none__", new ArrayList<>()); // for reads without RG
-      
-      for (BAMRecord record : reads) {
-        String rg = record.readGroup != null ? record.readGroup : "__none__";
-        List<BAMRecord> group = rgGroups.get(rg);
-        if (group == null) {
-          // RG not seen in initial detection — put in first group
-          group = rgGroups.values().iterator().next();
-        }
-        group.add(record);
-      }
-      
-      java.util.Map<String, Integer> rgStartRows = new java.util.LinkedHashMap<>();
-      int currentStartRow = 0;
-      
-      for (java.util.Map.Entry<String, List<BAMRecord>> entry : rgGroups.entrySet()) {
-        List<BAMRecord> rgReads = entry.getValue();
-        if (rgReads.isEmpty()) continue;
-        
-        rgStartRows.put(entry.getKey(), currentStartRow);
-        rgReads.sort(java.util.Comparator.comparingInt(r -> r.pos));
-        
-        List<Integer> rowEnds = new ArrayList<>();
-        for (BAMRecord record : rgReads) {
-          boolean placed = false;
-          for (int r = 0; r < rowEnds.size(); r++) {
-            if (record.pos >= rowEnds.get(r) + gap) {
-              record.row = currentStartRow + r;
-              rowEnds.set(r, record.end);
-              placed = true;
-              break;
-            }
-          }
-          if (!placed) {
-            record.row = currentStartRow + rowEnds.size();
-            rowEnds.add(record.end);
-          }
-          if (record.row > maxRowLocal) maxRowLocal = record.row;
-        }
-        
-        currentStartRow = maxRowLocal + 2; // leave 1 empty row as separator
-      }
-      
-      sc.readGroupStartRows = rgStartRows;
-      sc.discordantStartRow = -1;
-      sc.normalStartRow = -1;
-      sc.hp2StartRow = -1;
-      sc.maxRow = maxRowLocal;
-      sc.cachedReads.set(reads);
-
-    } else if (haplotypeDetected) {
-      // ── Allele-split mode: HP1 on top (rendered upward), HP2+unphased on bottom ──
-      List<BAMRecord> hp1Reads = new ArrayList<>();
-      List<BAMRecord> hp2Reads = new ArrayList<>();
-      for (BAMRecord record : reads) {
-        if (record.haplotype == 1) {
-          hp1Reads.add(record);
-        } else {
-          hp2Reads.add(record); // HP2 + unphased
-        }
-      }
-      hp1Reads.sort(java.util.Comparator.comparingInt(r -> r.pos));
-      hp2Reads.sort(java.util.Comparator.comparingInt(r -> r.pos));
-
-      // Pack HP1 reads: rows 0, 1, 2, ...
-      List<Integer> rowEnds = new ArrayList<>();
-      for (BAMRecord record : hp1Reads) {
-        boolean placed = false;
-        for (int r = 0; r < rowEnds.size(); r++) {
-          if (record.pos >= rowEnds.get(r) + gap) {
-            record.row = r;
-            rowEnds.set(r, record.end);
-            placed = true;
-            break;
-          }
-        }
-        if (!placed) {
-          record.row = rowEnds.size();
-          rowEnds.add(record.end);
-        }
-        if (record.row > maxRowLocal) maxRowLocal = record.row;
-      }
-
-      // HP2 starts on fresh rows after HP1
-      int hp2Start = rowEnds.isEmpty() ? 0 : rowEnds.size();
-      List<Integer> hp2RowEnds = new ArrayList<>();
-      for (BAMRecord record : hp2Reads) {
-        boolean placed = false;
-        for (int r = 0; r < hp2RowEnds.size(); r++) {
-          if (record.pos >= hp2RowEnds.get(r) + gap) {
-            record.row = hp2Start + r;
-            hp2RowEnds.set(r, record.end);
-            placed = true;
-            break;
-          }
-        }
-        if (!placed) {
-          record.row = hp2Start + hp2RowEnds.size();
-          hp2RowEnds.add(record.end);
-        }
-        if (record.row > maxRowLocal) maxRowLocal = record.row;
-      }
-
-      sc.hp2StartRow = hp2Start;
-      sc.discordantStartRow = -1;
-      sc.normalStartRow = -1;
-      sc.readGroupStartRows = new java.util.LinkedHashMap<>();
-      sc.maxRow = maxRowLocal;
-      sc.cachedReads.set(reads);
-
-    } else {
-      // ── Normal mode: pack all reads by position ──
-      reads.sort(java.util.Comparator.comparingInt(r -> r.pos));
-
-      List<Integer> rowEnds = new ArrayList<>();
-      for (BAMRecord record : reads) {
-        boolean placed = false;
-        for (int r = 0; r < rowEnds.size(); r++) {
-          if (record.pos >= rowEnds.get(r) + gap) {
-            record.row = r;
-            rowEnds.set(r, record.end);
-            placed = true;
-            break;
-          }
-        }
-        if (!placed) {
-          record.row = rowEnds.size();
-          rowEnds.add(record.end);
-        }
-        if (record.row > maxRowLocal) maxRowLocal = record.row;
-      }
-
-      sc.discordantStartRow = -1;
-      sc.normalStartRow = -1;
-      sc.hp2StartRow = -1;
-      sc.readGroupStartRows = new java.util.LinkedHashMap<>();
-      sc.maxRow = maxRowLocal;
-      sc.cachedReads.set(reads);
-    }
+    
+    // Use ReadPacker to assign rows
+    ReadPacker.PackingResult result = ReadPacker.packReads(
+        reads, stack, splitByReadGroup, haplotypeDetected, detectedReadGroups);
+    
+    // Update cache with packing results
+    sc.maxRow = result.maxRow;
+    sc.discordantStartRow = result.discordantStartRow;
+    sc.normalStartRow = result.normalStartRow;
+    sc.hp2StartRow = result.hp2StartRow;
+    sc.readGroupStartRows = result.readGroupStartRows;
+    sc.cachedReads.set(reads);
   }
 
   /**
@@ -1059,11 +765,10 @@ public class SampleFile implements Closeable {
               Future<?> f = sc.pendingFetch;
               if (f != null) f.cancel(true);
           }
-          Future<?> sf = samplingFuture;
-          if (sf != null) sf.cancel(true);
+          coverageCalculator.cancelSampling();
           stackCaches.clear();
           coverageCaches.clear();
-          sampledCoverages.clear();
+          coverageCalculator.clearSampledCoverageCache();
           if (fetchPool != null) {
             fetchPool.shutdownNow();
           }

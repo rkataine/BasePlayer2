@@ -4,3 +4,5 @@
 /genomes/
 *.cache
 /testdata/
+refactor*
+code_qual*

@@ -5,13 +5,14 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.gene.Gene;
 import org.baseplayer.gene.Transcript;
 import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseColors;
 import org.baseplayer.utils.DrawColors;
@@ -29,6 +30,7 @@ import javafx.stage.Window;
 
 public class DrawChromData extends DrawFunctions {
   private final GraphicsContext gc;
+  private final ReferenceGenomeService referenceGenomeService;
   
   private static final int BASE_DISPLAY_THRESHOLD = 100000;
   private static final int REFERENCE_BUFFER = 50000;
@@ -90,6 +92,7 @@ public class DrawChromData extends DrawFunctions {
     super(reactiveCanvas, parent, drawStack);
     gc = getGraphicsContext2D();
     gc.setFont(AppFonts.getUIFont());
+    this.referenceGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
     
     // Initialize gene stacker with label-aware visual extension
     geneStacker = StackingAlgorithm.createWithVisual(
@@ -601,7 +604,7 @@ public class DrawChromData extends DrawFunctions {
     
     // Draw amino acids if zoomed in close enough and this is a CDS region
     // When showing amino acids, skip the exon rectangle
-    if (showAminoAcids && gene != null && SharedModel.referenceGenome != null) {
+    if (showAminoAcids && gene != null && referenceGenomeService.hasGenome()) {
       drawAminoAcidsInRegion(regionStart, regionEnd, viewStart, viewLength, canvasWidth, 
                               rowY, gene, isReverse, cdsOffset);
     } else {
@@ -762,7 +765,7 @@ public class DrawChromData extends DrawFunctions {
   
   void drawReferenceBases() {
     if (drawStack.viewLength > BASE_DISPLAY_THRESHOLD) return;
-    if (SharedModel.referenceGenome == null) return;
+    if (!referenceGenomeService.hasGenome()) return;
     
     // Don't fetch reference sequence during zoom animation or cytoband dragging
     if (DrawFunctions.animationRunning || DrawCytoband.isDragging) return;
@@ -803,7 +806,7 @@ public class DrawChromData extends DrawFunctions {
         FetchManager.FetchTicket ticket = fm.acquire(
             FetchManager.FetchType.REFERENCE, this, drawStack, currentChrom, fetchStart, fetchEnd);
         CompletableFuture.runAsync(() -> {
-          String bases = SharedModel.referenceGenome.getBases(currentChrom, fetchStart, fetchEnd);
+          String bases = referenceGenomeService.getBases(currentChrom, fetchStart, fetchEnd);
           Platform.runLater(() -> {
             // Only update cache if this is still the latest request and not cancelled
             if (!ticket.isCancelled()

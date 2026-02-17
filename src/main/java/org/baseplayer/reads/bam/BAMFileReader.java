@@ -11,7 +11,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 
-import org.baseplayer.SharedModel;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.ServiceRegistry;
 
 /**
  * Custom BAM file reader.
@@ -30,10 +31,12 @@ public class BAMFileReader implements AlignmentReader {
   private final Map<String, Integer> refNameToId;
   private final String sampleName;
   private final Path bamPath;
+  private final ReferenceGenomeService referenceGenomeService;
 
   public BAMFileReader(Path bamPath) throws IOException {
     this.bamPath = bamPath;
     this.bgzf = new BGZFInputStream(bamPath);
+    this.referenceGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
     
     // Read BAM header
     bgzf.seek(0);
@@ -174,14 +177,14 @@ public class BAMFileReader implements AlignmentReader {
     // concurrent access issues. The buffer covers read overhangs beyond the query region.
     String refBases = null;
     int refStart = 0;
-    if (SharedModel.referenceGenome != null) {
+    if (referenceGenomeService.hasGenome()) {
       // Buffer size scales with query size (reads often overhang by ~500bp)
       // but use at least 10kb for small queries
       int queryLen = end - start;
       int buffer = Math.max(10000, Math.min(50000, queryLen / 10));
       refStart = Math.max(1, start - buffer);
       int refEnd = end + buffer;
-      refBases = SharedModel.referenceGenome.getBases(chrom, refStart, refEnd);
+      refBases = referenceGenomeService.getBases(chrom, refStart, refEnd);
     }
 
     synchronized (bgzf) {
@@ -818,7 +821,8 @@ public class BAMFileReader implements AlignmentReader {
    * Fetches the reference once for the query region, then compares each read in memory.
    */
   private static void resolveSeqMismatches(List<BAMRecord> records, String chrom) {
-    if (SharedModel.referenceGenome == null) return;
+    ReferenceGenomeService refService = ServiceRegistry.getInstance().getReferenceGenomeService();
+    if (!refService.hasGenome()) return;
 
     // Find the span of records that need reference comparison
     boolean needRef = false;
@@ -834,7 +838,7 @@ public class BAMFileReader implements AlignmentReader {
     if (!needRef) return;
 
     // Fetch reference bases (getBases uses 1-based coords; pos is now 1-based)
-    String refBases = SharedModel.referenceGenome.getBases(chrom, minPos, maxEnd);
+    String refBases = refService.getBases(chrom, minPos, maxEnd);
     if (refBases.isEmpty()) return;
 
     for (BAMRecord rec : records) {

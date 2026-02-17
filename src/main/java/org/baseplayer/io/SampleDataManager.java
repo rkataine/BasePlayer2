@@ -7,11 +7,12 @@ import java.util.Collections;
 import java.util.List;
 
 import org.baseplayer.MainApp;
-import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.services.SampleRegistry;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.tracks.BedTrack;
 import org.baseplayer.tracks.BigWigTrack;
 import org.baseplayer.tracks.FeatureTracksCanvas;
@@ -51,13 +52,15 @@ public class SampleDataManager {
 
     UserPreferences.setLastDirectory("BAM", files.get(0).getParentFile());
 
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    
     List<String> addedSamples = new ArrayList<>();
     for (File file : files) {
       try {
         Sample sample = new Sample(file.toPath());
         SampleTrack track = new SampleTrack(sample);
-        SharedModel.sampleTracks.add(track);
-        SharedModel.sampleList.add(sample.getName());
+        sampleRegistry.getSampleTracks().add(track);
+        sampleRegistry.getSampleList().add(sample.getName());
         addedSamples.add(sample.getName());
         System.out.println("Loaded BAM: " + sample.getName() + " (" + file.getName() + ")");
       } catch (IOException e) {
@@ -66,8 +69,8 @@ public class SampleDataManager {
     }
 
     if (!addedSamples.isEmpty()) {
-      SharedModel.lastVisibleSample = SharedModel.sampleList.size() - 1;
-      SharedModel.sampleHeight = 0; // Will be recalculated on draw
+      sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
+      sampleRegistry.setSampleHeight(0); // Will be recalculated on draw
       DrawFunctions.update.set(!DrawFunctions.update.get());
     }
 
@@ -78,26 +81,28 @@ public class SampleDataManager {
    * Remove a sample by index and close its file handle.
    */
   public static void removeSample(int index) {
-    if (index < 0 || index >= SharedModel.sampleTracks.size()) return;
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    
+    if (index < 0 || index >= sampleRegistry.getSampleTracks().size()) return;
     
     try {
-      SharedModel.sampleTracks.get(index).close();
+      sampleRegistry.getSampleTracks().get(index).close();
     } catch (IOException e) {
       System.err.println("Error closing sample: " + e.getMessage());
     }
-    SharedModel.sampleTracks.remove(index);
-    if (index < SharedModel.sampleList.size()) {
-      SharedModel.sampleList.remove(index);
+    sampleRegistry.getSampleTracks().remove(index);
+    if (index < sampleRegistry.getSampleList().size()) {
+      sampleRegistry.getSampleList().remove(index);
     }
     
     // Adjust visible range
-    if (SharedModel.sampleList.isEmpty()) {
-      SharedModel.firstVisibleSample = 0;
-      SharedModel.lastVisibleSample = 0;
-      SharedModel.scrollBarPosition = 0;
+    if (sampleRegistry.getSampleList().isEmpty()) {
+      sampleRegistry.setFirstVisibleSample(0);
+      sampleRegistry.setLastVisibleSample(0);
+      sampleRegistry.setScrollBarPosition(0);
     } else {
-      SharedModel.lastVisibleSample = Math.min(SharedModel.lastVisibleSample, SharedModel.sampleList.size() - 1);
-      SharedModel.firstVisibleSample = Math.min(SharedModel.firstVisibleSample, SharedModel.lastVisibleSample);
+      sampleRegistry.setLastVisibleSample(Math.min(sampleRegistry.getLastVisibleSample(), sampleRegistry.getSampleList().size() - 1));
+      sampleRegistry.setFirstVisibleSample(Math.min(sampleRegistry.getFirstVisibleSample(), sampleRegistry.getLastVisibleSample()));
     }
     
     DrawFunctions.update.set(!DrawFunctions.update.get());
@@ -108,9 +113,11 @@ public class SampleDataManager {
    * Opens a file chooser and adds the BAM data under the same individual.
    */
   public static void addBamToTrack(int sampleIndex) {
-    if (sampleIndex < 0 || sampleIndex >= SharedModel.sampleTracks.size()) return;
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     
-    SampleTrack track = SharedModel.sampleTracks.get(sampleIndex);
+    if (sampleIndex < 0 || sampleIndex >= sampleRegistry.getSampleTracks().size()) return;
+    
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
     FileChooser fileChooser = new FileChooser();
     fileChooser.setTitle("Add BAM/CRAM to " + track.getDisplayName());
     File lastDir = UserPreferences.getLastDirectory("BAM");
@@ -146,9 +153,11 @@ public class SampleDataManager {
    * Opens a file chooser and adds the BED data under the same individual.
    */
   public static void addBedToTrack(int sampleIndex) {
-    if (sampleIndex < 0 || sampleIndex >= SharedModel.sampleTracks.size()) return;
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     
-    SampleTrack track = SharedModel.sampleTracks.get(sampleIndex);
+    if (sampleIndex < 0 || sampleIndex >= sampleRegistry.getSampleTracks().size()) return;
+    
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
     FileChooser fileChooser = new FileChooser();
     fileChooser.setTitle("Add BED to " + track.getDisplayName());
     File lastDir = UserPreferences.getLastDirectory("BED");

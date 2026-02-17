@@ -11,6 +11,7 @@ import java.util.Optional;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonSyntaxException;
 
 /**
  * Manages file-based caching of API data in the user's home directory.
@@ -170,7 +171,7 @@ public class DataCacheManager {
       }
       
       return Optional.of(data);
-    } catch (Exception e) {
+    } catch (JsonSyntaxException | IOException e) {
       System.err.println("Failed to load cache file: " + e.getMessage());
       return Optional.empty();
     }
@@ -197,7 +198,7 @@ public class DataCacheManager {
       return Files.list(typeDir)
           .filter(p -> p.getFileName().toString().startsWith(chr + "_"))
           .filter(p -> p.getFileName().toString().endsWith(".json"))
-          .map(p -> parseCacheFilename(p, chr))
+          .map(p -> parseCacheFilename(p))
           .filter(Optional::isPresent)
           .map(Optional::get)
           .filter(cr -> cr.start <= start && cr.end >= end)
@@ -212,7 +213,7 @@ public class DataCacheManager {
   /**
    * Parse a cache filename to extract region coordinates.
    */
-  private static Optional<RegionBounds> parseCacheFilename(Path file, String chrom) {
+  private static Optional<RegionBounds> parseCacheFilename(Path file) {
     try {
       String name = file.getFileName().toString();
       // Remove .json extension
@@ -224,7 +225,7 @@ public class DataCacheManager {
         long end = Long.parseLong(parts[2]);
         return Optional.of(new RegionBounds(start, end));
       }
-    } catch (Exception ignored) {}
+    } catch (NumberFormatException ignored) {}
     return Optional.empty();
   }
   

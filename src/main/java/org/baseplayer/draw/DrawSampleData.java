@@ -2,10 +2,10 @@ package org.baseplayer.draw;
 
 import java.util.List;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.BAMRecord;
+import org.baseplayer.reads.bam.CoverageCalculator;
 import org.baseplayer.reads.bam.SampleFile;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
@@ -87,7 +87,7 @@ public class DrawSampleData extends DrawFunctions {
       }
     });
   }
-  void drawSnapShot() { if (snapshot != null) gc.drawImage(snapshot, 0, 0, getWidth(), getHeight()); }
+  
   @Override
   public void draw() {
     gc.setFill(DrawColors.BACKGROUND);
@@ -95,9 +95,9 @@ public class DrawSampleData extends DrawFunctions {
     
     // Always calculate sampleHeight before drawing variants (needed for correct Y positioning)
     double canvasHeight = getHeight();
-    double masterOffset = SharedModel.masterTrackHeight;
+    double masterOffset = sampleRegistry.getMasterTrackHeight();
     double availableHeight = canvasHeight - masterOffset;
-    SharedModel.sampleHeight = availableHeight / Math.max(1, SharedModel.visibleSamples().getAsInt());
+    sampleRegistry.setSampleHeight(availableHeight / Math.max(1, sampleRegistry.getVisibleSampleCount()));
     
     // Draw BAM reads/coverage first, then variants on top so they're visible
     drawBamReads();
@@ -113,11 +113,11 @@ public class DrawSampleData extends DrawFunctions {
     }
   }
   void drawLine(Variant variant, Color color, GraphicsContext gc) {
-    if (variant.index < SharedModel.firstVisibleSample || variant.index > SharedModel.lastVisibleSample + 1) return;
+    if (variant.index < sampleRegistry.getFirstVisibleSample() || variant.index > sampleRegistry.getLastVisibleSample() + 1) return;
    
     gc.setFill(color);
     double screenPos = chromPosToScreenPos.apply(variant.line.getStartX());
-    double ypos = SharedModel.masterTrackHeight + SharedModel.sampleHeight * variant.index - SharedModel.scrollBarPosition;
+    double ypos = sampleRegistry.getMasterTrackHeight() + sampleRegistry.getSampleHeight() * variant.index - sampleRegistry.getScrollBarPosition();
     double height = heightToScreen.apply(variant.line.getEndY());
     
     // Always use fillRect — strokeLine at sub-pixel positions gets anti-aliased
@@ -132,24 +132,24 @@ public class DrawSampleData extends DrawFunctions {
    * Reads are packed into rows within that strip.
    */
   void drawBamReads() {
-    if (SharedModel.sampleTracks.isEmpty()) return;
+    if (sampleRegistry.getSampleTracks().isEmpty()) return;
     
-    int numSamples = SharedModel.sampleList.size();
+    int numSamples = sampleRegistry.getSampleList().size();
     if (numSamples == 0) return;
     
-    double masterOffset = SharedModel.masterTrackHeight;
-    double sampleH = SharedModel.sampleHeight; // Use the value already calculated in draw()
+    double masterOffset = sampleRegistry.getMasterTrackHeight();
+    double sampleH = sampleRegistry.getSampleHeight(); // Use the value already calculated in draw()
     
     // Don't query when zoomed out beyond coverage range — use sampled coverage (if enabled)
     if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) {
       // Only draw sampled coverage if the setting is enabled (useful to disable for exome data)
       if (!Settings.get().isEnableSampledCoverage()) {
         // Show message to user that they need to zoom in to see data
-        for (int sampleIdx = 0; sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
-          if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
-          SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+        for (int sampleIdx = 0; sampleIdx < sampleRegistry.getSampleTracks().size(); sampleIdx++) {
+          if (sampleIdx < sampleRegistry.getFirstVisibleSample() || sampleIdx > sampleRegistry.getLastVisibleSample()) continue;
+          SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
           if (!track.isVisible()) continue;
-          double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+          double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
           drawZoomMessage(sampleY, sampleH, "Zoom in closer to view BAM/CRAM data");
         }
         return; // Skip sampled coverage - no data at this zoom level
@@ -158,11 +158,11 @@ public class DrawSampleData extends DrawFunctions {
       int start = Math.max(0, (int) drawStack.start);
       int end = (int) drawStack.end;
       try {
-        for (int sampleIdx = 0; sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
-          if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
-          SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+        for (int sampleIdx = 0; sampleIdx < sampleRegistry.getSampleTracks().size(); sampleIdx++) {
+          if (sampleIdx < sampleRegistry.getFirstVisibleSample() || sampleIdx > sampleRegistry.getLastVisibleSample()) continue;
+          SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
           if (!track.isVisible()) continue;
-          double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+          double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
           for (Sample sample : track.getSamples()) {
             if (!sample.visible) continue;
             drawSampledCoverage(sample, chrom, start, end, sampleY, sampleH);
@@ -186,16 +186,16 @@ public class DrawSampleData extends DrawFunctions {
 
       // Coverage-only mode: CoverageDrawer renders everything (coverage + methylation + master track)
       double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
-      coverageDrawer.render(gc, getWidth(), masterOffset, sampleH, SharedModel.scrollBarPosition,
+      coverageDrawer.render(gc, getWidth(), masterOffset, sampleH, sampleRegistry.getScrollBarPosition(),
           coverageOnly, coverageFractionH);
 
       // In read view mode, also draw reads below the coverage area
       if (!coverageOnly) {
-        for (int sampleIdx = 0; sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
-          if (sampleIdx < SharedModel.firstVisibleSample || sampleIdx > SharedModel.lastVisibleSample) continue;
-          SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+        for (int sampleIdx = 0; sampleIdx < sampleRegistry.getSampleTracks().size(); sampleIdx++) {
+          if (sampleIdx < sampleRegistry.getFirstVisibleSample() || sampleIdx > sampleRegistry.getLastVisibleSample()) continue;
+          SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
           if (!track.isVisible()) continue;
-          double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+          double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
           for (Sample sample : track.getSamples()) {
             if (!sample.visible) continue;
             drawSampleFileReads(sample, chrom, start, end, sampleY, sampleH, coverageFractionH);
@@ -354,7 +354,7 @@ public class DrawSampleData extends DrawFunctions {
     // Fixed sample points — configurable via Settings
     int numSamples = Settings.get().getSampledCoveragePoints();
 
-    SampleFile.SampledCoverage sampled = bamFile.requestSampledCoverage(chrom, start, end, numSamples, drawStack);
+    CoverageCalculator.SampledCoverage sampled = bamFile.requestSampledCoverage(chrom, start, end, numSamples, drawStack);
     if (sampled == null) {
       // Show loading indicator while sampling hasn't started
       gc.setFill(Color.web("#888888"));
@@ -682,7 +682,7 @@ public class DrawSampleData extends DrawFunctions {
     // If same chromosome, just return current
     if (read.mateRefID == read.refID) return drawStack.chromosome;
     // Look up from any available BAM reader
-    for (SampleTrack track : SharedModel.sampleTracks) {
+    for (SampleTrack track : sampleRegistry.getSampleTracks()) {
       for (Sample sample : track.getSamples()) {
         if (sample.getBamFile() == null) continue;
         String[] refNames = sample.getBamFile().getReader().getRefNames();
@@ -702,17 +702,17 @@ public class DrawSampleData extends DrawFunctions {
    * Replicates the same y-positioning logic used in drawing.
    */
   private BAMRecord findReadAt(double mx, double my) {
-    if (SharedModel.sampleTracks.isEmpty()) return null;
+    if (sampleRegistry.getSampleTracks().isEmpty()) return null;
     if (drawStack.viewLength > Settings.get().getMaxReadViewLength()) return null;
 
-    double masterOffset = SharedModel.masterTrackHeight;
-    double sampleH = SharedModel.sampleHeight;
+    double masterOffset = sampleRegistry.getMasterTrackHeight();
+    double sampleH = sampleRegistry.getSampleHeight();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    for (int sampleIdx = SharedModel.firstVisibleSample; sampleIdx <= SharedModel.lastVisibleSample && sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
-      SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+    for (int sampleIdx = sampleRegistry.getFirstVisibleSample(); sampleIdx <= sampleRegistry.getLastVisibleSample() && sampleIdx < sampleRegistry.getSampleTracks().size(); sampleIdx++) {
+      SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+      double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
@@ -775,14 +775,14 @@ public class DrawSampleData extends DrawFunctions {
     if (hoveredRead == null) return;
     if (drawStack.viewLength > Settings.get().getMaxReadViewLength()) return;
 
-    double masterOffset = SharedModel.masterTrackHeight;
-    double sampleH = SharedModel.sampleHeight;
+    double masterOffset = sampleRegistry.getMasterTrackHeight();
+    double sampleH = sampleRegistry.getSampleHeight();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT, Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    for (int sampleIdx = SharedModel.firstVisibleSample; sampleIdx <= SharedModel.lastVisibleSample && sampleIdx < SharedModel.sampleTracks.size(); sampleIdx++) {
-      SampleTrack track = SharedModel.sampleTracks.get(sampleIdx);
+    for (int sampleIdx = sampleRegistry.getFirstVisibleSample(); sampleIdx <= sampleRegistry.getLastVisibleSample() && sampleIdx < sampleRegistry.getSampleTracks().size(); sampleIdx++) {
+      SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + sampleIdx * sampleH - SharedModel.scrollBarPosition;
+      double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;

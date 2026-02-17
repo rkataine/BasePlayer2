@@ -3,14 +3,19 @@ package org.baseplayer.controllers;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.MainApp;
-import org.baseplayer.SharedModel;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.GeneLocation;
+import org.baseplayer.controllers.commands.FileCommands;
+import org.baseplayer.controllers.commands.NavigationCommands;
+import org.baseplayer.controllers.commands.SearchCommands;
+import org.baseplayer.controllers.commands.ViewCommands;
 import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.draw.DrawSampleData;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.services.SampleRegistry;
+import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.ViewportState;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
@@ -33,9 +38,6 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
-import javafx.stage.Stage;
-import javafx.stage.StageStyle;
-import javafx.stage.Window;
 import javafx.util.Duration;
 
 public class MenuBarController {
@@ -69,9 +71,18 @@ public class MenuBarController {
   private int selectedSuggestionIndex = -1;
   private Rectangle memoryFill;
   private Tooltip memoryTooltip;
+  
+  // Services
+  private SampleRegistry sampleRegistry;
+  private ViewportState viewportState;
 
   public void initialize() {
     instance = this;
+    
+    // Initialize services
+    ServiceRegistry services = ServiceRegistry.getInstance();
+    this.sampleRegistry = services.getSampleRegistry();
+    this.viewportState = services.getViewportState();
     
     setupMemoryBar();
     setupGeneSearch();
@@ -152,33 +163,7 @@ public class MenuBarController {
     // Setup position field for editing
     positionField.setOnAction(e -> {
       String text = positionField.getText();
-      if (text != null && !text.isEmpty()) {
-        try {
-          text = text.trim().replace(",", "");
-          if (text.contains("-")) {
-            // Range format: start-end
-            String[] parts = text.split("-");
-            if (parts.length == 2) {
-              int start = Integer.parseInt(parts[0].trim());
-              int end = Integer.parseInt(parts[1].trim());
-              
-              if (MainController.hoverStack != null) {
-                MainController.hoverStack.drawCanvas.zoomAnimation(start, end);
-              }
-            }
-          } else {
-            // Single position: center on it with minZoom flanks
-            int pos = Integer.parseInt(text);
-            int flank = DrawFunctions.minZoom / 2;
-            
-            if (MainController.hoverStack != null) {
-              MainController.hoverStack.drawCanvas.zoomAnimation(pos - flank, pos + flank);
-            }
-          }
-        } catch (NumberFormatException ex) {
-          // Invalid format, ignore
-        }
-      }
+      SearchCommands.navigateToPositionString(text);
     });
   }
   
@@ -250,7 +235,7 @@ public class MenuBarController {
     FetchManager.get().cancelAll();
     
     // Clear all cached read and coverage data when changing chromosomes
-    for (var track : SharedModel.sampleTracks) {
+    for (var track : sampleRegistry.getSampleTracks()) {
       for (var sample : track.getSamples()) {
         if (sample.getBamFile() != null) {
           sample.getBamFile().clearAllCaches();
@@ -258,20 +243,10 @@ public class MenuBarController {
       }
     }
     
-    SharedModel.currentChromosome = chromosome;
-    Long chromLength = DrawStack.CHROMOSOME_SIZES.get(chromosome);
-    if (chromLength == null) return;
+    viewportState.setCurrentChromosome(chromosome);
     
-    // Update ALL stacks to same chromosome (global chromosome change)
-    for (var stack : MainController.drawStacks) {
-      stack.chromosome = chromosome;
-      stack.chromSize = chromLength;
-      stack.chromosomeDropdown.setValue(chromosome);
-      stack.loadSimulatedVariants();
-      // Properly set coordinates and derived values (pixelSize, scale)
-      stack.drawCanvas.setStartEnd(1.0, chromLength + 1);
-      stack.chromCanvas.setStartEnd(1.0, chromLength + 1);
-    }
+    // Delegate to NavigationCommands for global chromosome switch
+    NavigationCommands.switchChromosome(chromosome);
   }
   
   private void updateViewLengthLabel() {
@@ -348,7 +323,7 @@ public class MenuBarController {
                         
                         String selectedGene = currentSuggestions.get(selectedSuggestionIndex);
                         GeneLocation loc = AnnotationData.getGeneLocation(selectedGene);
-                        if (loc != null && loc.chrom().equals(SharedModel.currentChromosome)) {
+                        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
                             AnnotationData.setHighlightedGene(loc);
                         }
                     }
@@ -370,7 +345,7 @@ public class MenuBarController {
                         
                         String selectedGene = currentSuggestions.get(selectedSuggestionIndex);
                         GeneLocation loc = AnnotationData.getGeneLocation(selectedGene);
-                        if (loc != null && loc.chrom().equals(SharedModel.currentChromosome)) {
+                        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
                             AnnotationData.setHighlightedGene(loc);
                         }
                     }
@@ -419,7 +394,7 @@ public class MenuBarController {
           .orElse(null);
       if (exactMatch != null) {
         GeneLocation loc = AnnotationData.getGeneLocation(exactMatch);
-        if (loc != null && loc.chrom().equals(SharedModel.currentChromosome)) {
+        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
           AnnotationData.setHighlightedGene(loc);
         }
       } else {
@@ -454,7 +429,7 @@ public class MenuBarController {
         
         // Show gene location highlight on hover
         container.setOnMouseEntered(e -> {
-          if (loc != null && loc.chrom().equals(SharedModel.currentChromosome)) {
+          if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
             AnnotationData.setHighlightedGene(loc);
           }
         });
@@ -463,7 +438,7 @@ public class MenuBarController {
           String currentText = geneSearchField.getText();
           if (currentText != null) {
             GeneLocation exactLoc = AnnotationData.getGeneLocation(currentText);
-            if (exactLoc != null && exactLoc.chrom().equals(SharedModel.currentChromosome)) {
+            if (exactLoc != null && exactLoc.chrom().equals(viewportState.getCurrentChromosome())) {
               AnnotationData.setHighlightedGene(exactLoc);
               return;
             }
@@ -517,36 +492,12 @@ public class MenuBarController {
   
   private void navigateToGene(String geneName) {
     geneAutoComplete.hide();
+    SearchCommands.clearGeneHighlight();
     
-    GeneLocation loc = AnnotationData.getGeneLocation(geneName);
-    if (loc == null) return;
+    // Delegate to NavigationCommands for the actual navigation
+    NavigationCommands.navigateToGene(geneName);
     
-    // Only navigate the active/hover stack
-    if (MainController.hoverStack != null) {
-      DrawStack stack = MainController.hoverStack;
-      
-      // Switch chromosome if needed (only for this stack)
-      if (!loc.chrom().equals(stack.chromosome)) {
-        Long chromLength = DrawStack.CHROMOSOME_SIZES.get(loc.chrom());
-        if (chromLength != null) {
-          stack.chromosome = loc.chrom();
-          stack.chromSize = chromLength;
-          stack.chromosomeDropdown.setValue(loc.chrom());
-          stack.loadSimulatedVariants();
-          stack.drawCanvas.setStartEnd(1.0, chromLength + 1);
-          stack.chromCanvas.setStartEnd(1.0, chromLength + 1);
-        }
-      }
-      
-      // Navigate to gene location with some padding
-      long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
-      double newStart = loc.start() - padding;
-      double newEnd = loc.end() + padding;
-      stack.drawCanvas.zoomAnimation(newStart, newEnd);
-    }
-    
-    geneAutoComplete.hide();
-    AnnotationData.clearHighlightedGene();
+    // UI updates
     geneSearchField.setText(geneName);
     geneSearchField.selectAll();
     geneSearchField.getParent().requestFocus();
@@ -561,38 +512,18 @@ public class MenuBarController {
       String[] types = menuItem.getId().split("_");
       String filtertype = types[1];
 
-      if (filtertype.equals("VCF")) {
-        int samples = 5;
-        int variantsPerChrom = 100_000;
-        
-        // Generate simulated variants for all chromosomes
-        DrawStack.generateSimulatedVariants(samples, variantsPerChrom);
-        
-        // Update sample height
-        SharedModel.sampleHeight = MainController.drawPane.getHeight() / SharedModel.visibleSamples().getAsInt();
-        
-        // Load variants for each stack based on its chromosome
-        for (var stack : MainController.drawStacks) {
-          stack.loadSimulatedVariants();
-        }
-        
-        DrawFunctions.update.set(!DrawFunctions.update.get());
-      } 
+      FileCommands.openFile(filtertype);
       //boolean multiSelect = !filtertype.equals("SES"); // TODO myöhemmin kun avataan bam tai vcf trackille, refactoroi toimimaan myös sille
       //new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
   }
-  public void addStack(ActionEvent event) { MainController.addStack(true); }
-  public void removeStack(ActionEvent event) { MainController.addStack(false); }
-  public void setDarkMode(ActionEvent event) { MainApp.setDarkMode(); }
-  public void cleanMemory(ActionEvent event) { System.gc(); }
+  public void addStack(ActionEvent event) { ViewCommands.addStack(); }
+  public void removeStack(ActionEvent event) { ViewCommands.removeStack(); }
+  public void setDarkMode(ActionEvent event) { ViewCommands.toggleDarkMode(); }
+  public void cleanMemory(ActionEvent event) { ViewCommands.cleanMemory(); }
 
   @FXML
   public void openSettings(ActionEvent event) {
-    try {
-      new SettingsDialog().show();
-    } catch (Exception e) {
-      System.err.println("Error opening settings: " + e.getMessage());
-    }
+    ViewCommands.openSettings();
   }
   
   private long lastZoomInClick = 0;
@@ -600,115 +531,38 @@ public class MenuBarController {
   
   @FXML
   public void zoomIn(ActionEvent event) {
-    if (MainController.hoverStack == null) return;
-    
     long now = System.currentTimeMillis();
     boolean isDoubleClick = (now - lastZoomInClick) < 300;
     lastZoomInClick = now;
     
-    var stack = MainController.hoverStack;
-    double middle = stack.middlePos();
-    
-    if (isDoubleClick) {
-      // Double click: zoom all the way in (minZoom)
-      int flank = DrawFunctions.minZoom / 2;
-      stack.drawCanvas.zoomAnimation(middle - flank, middle + flank);
-    } else {
-      // Single click: zoom in by 75% (show 25% of current view)
-      double newViewLength = stack.viewLength * 0.25;
-      double newStart = middle - newViewLength / 2;
-      double newEnd = middle + newViewLength / 2;
-      stack.drawCanvas.zoomAnimation(newStart, newEnd);
-    }
+    NavigationCommands.zoomIn(isDoubleClick);
   }
   
   @FXML
   public void zoomOut(ActionEvent event) {
-    if (MainController.hoverStack == null) return;
-    
-    var stack = MainController.hoverStack;
-    
-    // Prevent zoom out if already showing 99% or more of the chromosome
-    if (stack.viewLength >= stack.chromSize * 0.99) {
-      return;
-    }
-    
     long now = System.currentTimeMillis();
     boolean isDoubleClick = (now - lastZoomOutClick) < 300;
     lastZoomOutClick = now;
     
-    if (isDoubleClick) {
-      // Double click: zoom all the way out to full chromosome
-      stack.drawCanvas.zoomAnimation(1, stack.chromSize + 1);
-    } else {
-      // Single click: zoom out by 300% (triple the view)
-      double middle = stack.middlePos();
-      double newViewLength = Math.min(stack.viewLength * 3, stack.chromSize);
-      
-      // Don't zoom out if new view would be essentially the same (within 1% of full)
-      if (newViewLength >= stack.chromSize * 0.99) {
-        stack.drawCanvas.zoomAnimation(1, stack.chromSize + 1);
-        return;
-      }
-      
-      double newStart = middle - newViewLength / 2;
-      double newEnd = middle + newViewLength / 2;
-      
-      // Clamp to chromosome bounds
-      if (newStart < 1) {
-        newStart = 1;
-        newEnd = newStart + newViewLength;
-      }
-      if (newEnd > stack.chromSize + 1) {
-        newEnd = stack.chromSize + 1;
-        newStart = newEnd - newViewLength;
-      }
-      
-      stack.drawCanvas.zoomAnimation(newStart, newEnd);
-    }
+    NavigationCommands.zoomOut(isDoubleClick);
   }
 
   @FXML
   @SuppressWarnings("unused")
   private void minimizeWindow() {
-    Window window = MainApp.stage.getScene().getWindow();
-    if (window instanceof Stage stage) {
-          stage.setIconified(true);
-    }
+    ViewCommands.minimizeWindow();
   }
 
   @FXML
   @SuppressWarnings("unused")
   private void maximizeWindow() {
-    Window window = MainApp.stage.getScene().getWindow();
-    if (window instanceof Stage stage) {
-      if (stage.isMaximized()) {
-        Stage newStage = new Stage(StageStyle.DECORATED);
-        newStage.setScene(MainApp.stage.getScene());
-        newStage.getIcons().add(MainApp.icon);
-        newStage.setTitle("BasePlayer 2");
-        MainApp.stage.close();
-        MainApp.stage = newStage;
-        MainApp.stage.show();
-        MainApp.stage.setMaximized(false);
-      } else {
-        Stage newStage = new Stage(StageStyle.UNDECORATED);
-        newStage.setScene(MainApp.stage.getScene());
-        MainApp.stage.close();
-        MainApp.stage = newStage;
-        MainApp.stage.show();
-        MainApp.stage.setMaximized(true);
-      }
-    }
+    ViewCommands.maximizeWindow();
   }
 
   @FXML
   @SuppressWarnings("unused")
   private void closeWindow() {
-    Window window = MainApp.stage.getScene().getWindow();
-    if (window instanceof Stage stage) {
-          stage.close();
-    }
+    ViewCommands.closeWindow();
   }
   
   private static Integer tryParseInt(String s) {

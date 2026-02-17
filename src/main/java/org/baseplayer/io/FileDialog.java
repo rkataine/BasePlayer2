@@ -1,11 +1,10 @@
 package org.baseplayer.io;
 import java.io.File;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 
 import org.baseplayer.MainApp;
-
-import java.util.Collections;
 
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
@@ -16,9 +15,9 @@ public class FileDialog {
   private final String header;
   private final String filtertype;
   private final boolean multiSelect;
-  private static HashMap<String, String> filefilters = new HashMap<String, String>();
-  public static HashMap<String, File> defaultPaths = new HashMap<String, File>();
-  public static HashMap<String, String> savePaths = new HashMap<String, String>();
+  private static final HashMap<String, String> filefilters = new HashMap<>();
+  public static final HashMap<String, File> defaultPaths = new HashMap<>();
+  public static final HashMap<String, String> savePaths = new HashMap<>();
 
   public FileDialog(String header, String filtertype, String dialogType /*FileDialog.LOAD / SAVE*/, boolean multiSelect) {
     this.dialogType = dialogType;
@@ -50,7 +49,7 @@ public class FileDialog {
       }
       ExtensionFilter extFilter = new ExtensionFilter(filtertype, filefilters.get(filtertype));
       fileChooser.getExtensionFilters().add(extFilter);
-      List<File> files = null;
+      List<File> files;
       
       if (multiSelect) {
         files = fileChooser.showOpenMultipleDialog(MainApp.stage);

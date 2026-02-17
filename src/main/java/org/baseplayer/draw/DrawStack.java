@@ -5,9 +5,11 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.SampleRegistry;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.tracks.ConservationTrack;
 import org.baseplayer.tracks.FeatureTracksCanvas;
 import org.baseplayer.tracks.GnomadTrack;
@@ -32,6 +34,10 @@ public class DrawStack {
   public double viewLength;
   public double pixelSize = 0;
   public double scale = 0;
+  
+  // Services
+  private final ReferenceGenomeService referenceGenomeService;
+  
   public VBox chromContainer = new VBox();  // Container for cytoband + chrom stack
   public StackPane chromStack = new StackPane(); 
   public StackPane drawStack = new StackPane();
@@ -86,6 +92,10 @@ public class DrawStack {
   
   public DrawStack(String chrom) {
     this.chromosome = chrom;
+    
+    // Initialize services
+    ServiceRegistry services = ServiceRegistry.getInstance();
+    this.referenceGenomeService = services.getReferenceGenomeService();
     
     // Initialize chromosome size first, before creating any canvas objects
     updateChromosomeSize();
@@ -196,8 +206,8 @@ public class DrawStack {
   
   private void updateChromosomeSize() {
     // Use reference genome size if available, otherwise use default
-    if (SharedModel.referenceGenome != null) {
-      chromSize = SharedModel.referenceGenome.getChromosomeLength(chromosome);
+    if (referenceGenomeService.hasGenome()) {
+      chromSize = referenceGenomeService.getCurrentGenome().getChromosomeLength(chromosome);
     } else {
       chromSize = CHROMOSOME_SIZES.getOrDefault(chromosome, CHROMOSOME_SIZES.get("1"));
     }
@@ -219,11 +229,12 @@ public class DrawStack {
     if (variantsGenerated) return;
     
     // Initialize samples
-    SharedModel.sampleList.clear();
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    registry.getSampleList().clear();
     for (int i = 1; i <= samples; i++) {
-      SharedModel.sampleList.add("Sample " + i);
+      registry.getSampleList().add("Sample " + i);
     }
-    SharedModel.lastVisibleSample = samples - 1;
+    registry.setLastVisibleSample(samples - 1);
     
     // Generate variants for each chromosome
     for (Map.Entry<String, Long> entry : CHROMOSOME_SIZES.entrySet()) {

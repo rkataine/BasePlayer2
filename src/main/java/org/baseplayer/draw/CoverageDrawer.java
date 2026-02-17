@@ -3,12 +3,14 @@ package org.baseplayer.draw;
 import java.util.List;
 import java.util.function.Function;
 
-import org.baseplayer.SharedModel;
 import org.baseplayer.io.Settings;
 import org.baseplayer.reads.bam.BAMRecord;
 import org.baseplayer.reads.bam.SampleFile;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.services.SampleRegistry;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -69,6 +71,16 @@ public class CoverageDrawer {
   // ── Context for coordinate mapping ──
   private DrawStack drawStack;
   private Function<Double, Double> chromPosToScreenPos;
+  
+  // ── Services ──
+  private final SampleRegistry sampleRegistry;
+  private final ReferenceGenomeService referenceGenomeService;
+  
+  public CoverageDrawer() {
+    ServiceRegistry services = ServiceRegistry.getInstance();
+    this.sampleRegistry = services.getSampleRegistry();
+    this.referenceGenomeService = services.getReferenceGenomeService();
+  }
 
   /**
    * Populate the coverage matrix from reads.
@@ -84,7 +96,7 @@ public class CoverageDrawer {
     this.chromPosToScreenPos = chromPosToScreenPos;
     this.numColumns = Math.max(1, screenWidth);
 
-    if (SharedModel.sampleTracks.isEmpty()) { rows = new SampleRow[0]; return; }
+    if (sampleRegistry.getSampleTracks().isEmpty()) { rows = new SampleRow[0]; return; }
 
     String chrom = drawStack.chromosome;
     int start = Math.max(0, (int) drawStack.start);
@@ -98,9 +110,9 @@ public class CoverageDrawer {
     // Build one SampleRow per visible BAM file
     java.util.List<SampleRow> rowList = new java.util.ArrayList<>();
     java.util.Set<Sample> processedFiles = new java.util.HashSet<>();
-    for (int sIdx = 0; sIdx < SharedModel.sampleTracks.size(); sIdx++) {
-      if (sIdx < SharedModel.firstVisibleSample || sIdx > SharedModel.lastVisibleSample) continue;
-      SampleTrack track = SharedModel.sampleTracks.get(sIdx);
+    for (int sIdx = 0; sIdx < sampleRegistry.getSampleTracks().size(); sIdx++) {
+      if (sIdx < sampleRegistry.getFirstVisibleSample() || sIdx > sampleRegistry.getLastVisibleSample()) continue;
+      SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
 
       for (Sample sf : track.getSamples()) {
         if (!sf.visible) continue;
@@ -117,9 +129,9 @@ public class CoverageDrawer {
     }
 
     // Also build rows for non-visible methylation samples (master track only)
-    for (int sIdx = 0; sIdx < SharedModel.sampleTracks.size(); sIdx++) {
-      if (sIdx >= SharedModel.firstVisibleSample && sIdx <= SharedModel.lastVisibleSample) continue;
-      SampleTrack track = SharedModel.sampleTracks.get(sIdx);
+    for (int sIdx = 0; sIdx < sampleRegistry.getSampleTracks().size(); sIdx++) {
+      if (sIdx >= sampleRegistry.getFirstVisibleSample() && sIdx <= sampleRegistry.getLastVisibleSample()) continue;
+      SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
 
       for (Sample sf : track.getSamples()) {
         if (!sf.visible || !sf.isMethylationData() || processedFiles.contains(sf)) continue;
@@ -240,8 +252,8 @@ public class CoverageDrawer {
     // ── Methylation: per-position ratios binned to pixels ──
     if (isMethyl) {
       String refBases = null;
-      if (SharedModel.referenceGenome != null) {
-        refBases = SharedModel.referenceGenome.getBases(chrom, Math.max(1, start), start + regionLen - 1);
+      if (referenceGenomeService.hasGenome()) {
+        refBases = referenceGenomeService.getBases(chrom, Math.max(1, start), start + regionLen - 1);
         if (refBases != null && refBases.isEmpty()) refBases = null;
       }
 
@@ -451,8 +463,8 @@ public class CoverageDrawer {
     if (isMethyl) {
       // Fetch reference for the visible region to count C/G sites per bin
       String covRefBases = null;
-      if (SharedModel.referenceGenome != null) {
-        covRefBases = SharedModel.referenceGenome.getBases(chrom, Math.max(1, start), end);
+      if (referenceGenomeService.hasGenome()) {
+        covRefBases = referenceGenomeService.getBases(chrom, Math.max(1, start), end);
         if (covRefBases != null && covRefBases.isEmpty()) covRefBases = null;
       }
 
