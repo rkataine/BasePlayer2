@@ -6,9 +6,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UcscApiClient.ConservationData;
-import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.application.Platform;
@@ -82,7 +82,7 @@ public abstract class AbstractUcscTrack extends AbstractTrack {
     if (!visible) return;
     
     // Block during zoom animation
-    if (DrawFunctions.animationRunning) return;
+    if (GenomicCanvas.animationRunning) return;
     
     // Too large to fetch
     if (end - start > MAX_REGION_SIZE) {

@@ -1,4 +1,4 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.alignment;
 
 import java.util.ArrayList;
 import java.util.Comparator;

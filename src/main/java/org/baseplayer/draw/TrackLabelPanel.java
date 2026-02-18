@@ -3,7 +3,7 @@ package org.baseplayer.draw;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
-import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
@@ -27,8 +27,8 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 
-public class TrackInfo {
-  SideBarStack sidebar;
+public class TrackLabelPanel {
+  SidebarPanel sidebar;
   GraphicsContext gc;
   
   // Services
@@ -52,7 +52,7 @@ public class TrackInfo {
   // Context menu for adding data types (lives in master track)
   private final ContextMenu addDataMenu;
 
-  public TrackInfo(SideBarStack sidebar) {
+  public TrackLabelPanel(SidebarPanel sidebar) {
     this.sidebar = sidebar;
     this.gc = sidebar.sideCanvas.getGraphicsContext2D();
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
@@ -90,7 +90,7 @@ public class TrackInfo {
       sampleRegistry.setFirstVisibleSample(Math.max(0, (int)(sampleRegistry.getScrollBarPosition() / sampleRegistry.getSampleHeight())));
       sampleRegistry.setLastVisibleSample(Math.min(sampleRegistry.getSampleTracks().size() - 1,
         (int)((sampleRegistry.getScrollBarPosition() + sidebar.sideCanvas.getHeight() - sampleRegistry.getMasterTrackHeight()) / sampleRegistry.getSampleHeight())));
-      DrawFunctions.update.set(!DrawFunctions.update.get());
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
     });
     sidebar.sideCanvas.setOnMousePressed(event -> {
       double y = event.getY();
@@ -106,7 +106,7 @@ public class TrackInfo {
       if (isDraggingMasterEdge) {
         double deltaY = event.getY() - dragStartY;
         sampleRegistry.setMasterTrackHeight(Math.max(20, Math.min(200, dragStartHeight + deltaY)));
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
         event.consume();
       }
     });
@@ -168,7 +168,7 @@ public class TrackInfo {
         sampleRegistry.setSampleHeight((sidebar.sideCanvas.getHeight() - sampleRegistry.getMasterTrackHeight())
             / sampleRegistry.getVisibleSampleCount());
         sampleRegistry.setScrollBarPosition(sampleRegistry.getFirstVisibleSample() * sampleRegistry.getSampleHeight());
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     });
     sampleRegistry.hoverSampleProperty().addListener((obs, oldVal, newVal) -> { if (oldVal != newVal) draw(); });
@@ -255,7 +255,7 @@ public class TrackInfo {
     suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
       // Apply to all BAM samples in this track
       for (Sample s : track.getSamples()) {
-        SampleFile bamFile = s.getBamFile();
+        AlignmentFile bamFile = s.getBamFile();
         if (bamFile != null) bamFile.setSuppressMethylMismatches(n);
       }
       redraw();
@@ -287,7 +287,7 @@ public class TrackInfo {
     }
 
     // Read group split (shown if any BAM has multiple read groups)
-    SampleFile primaryBam = track.getFirstBam();
+    AlignmentFile primaryBam = track.getFirstBam();
     if (primaryBam != null && primaryBam.getDetectedReadGroups().size() > 1) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
 
@@ -355,7 +355,7 @@ public class TrackInfo {
       if (!newName.trim().isEmpty()) {
         track.setCustomName(newName.trim());
         draw();
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     });
   }
@@ -417,7 +417,7 @@ public class TrackInfo {
       } else {
         track.removeSample(fileIdx);
         draw();
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     });
 
@@ -495,7 +495,7 @@ public class TrackInfo {
 
   private void redraw() {
     draw();
-    DrawFunctions.update.set(!DrawFunctions.update.get());
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
   private int sampleIndexAtY(double y) {
@@ -540,8 +540,8 @@ public class TrackInfo {
         gc.strokeLine(0, sampleY, w, sampleY);
       }
       for (DrawStack stack : MainController.drawStacks) {
-        stack.drawCanvas.getGraphicsContext2D().setStroke(sampleRegistry.hoverSampleProperty().get() == i ? Color.WHITE : DrawColors.BORDER);
-        stack.drawCanvas.getGraphicsContext2D().strokeLine(0, sampleY, stack.drawCanvas.getWidth(), sampleY);
+        stack.alignmentCanvas.getGraphicsContext2D().setStroke(sampleRegistry.hoverSampleProperty().get() == i ? Color.WHITE : DrawColors.BORDER);
+        stack.alignmentCanvas.getGraphicsContext2D().strokeLine(0, sampleY, stack.alignmentCanvas.getWidth(), sampleY);
       }
 
       // Sample name

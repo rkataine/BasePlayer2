@@ -1,6 +1,6 @@
 package org.baseplayer.draw;
 
-import org.baseplayer.reads.bam.BAMRecord;
+import org.baseplayer.alignment.BAMRecord;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.geometry.Insets;

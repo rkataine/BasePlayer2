@@ -1,4 +1,6 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.io.readers;
+
+import org.baseplayer.alignment.BAMRecord;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -13,6 +15,7 @@ import java.util.function.Predicate;
 
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.io.readers.BGZFInputStream;
 
 /**
  * Custom BAM file reader.

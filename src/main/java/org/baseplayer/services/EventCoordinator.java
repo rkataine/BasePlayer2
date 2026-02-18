@@ -2,10 +2,10 @@ package org.baseplayer.services;
 
 import java.util.List;
 
-import org.baseplayer.draw.DrawFunctions;
-import org.baseplayer.draw.DrawSampleData;
+import org.baseplayer.draw.AlignmentCanvas;
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.draw.SideBarStack;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.draw.SidebarPanel;
 import org.baseplayer.tracks.FeatureTracksSidebar;
 import org.baseplayer.utils.BaseUtils;
 
@@ -21,7 +21,7 @@ public class EventCoordinator {
   private final Runtime runtime = Runtime.getRuntime();
   private final List<DrawStack> drawStacks;
   private FeatureTracksSidebar featureTracksSidebar;
-  private SideBarStack sideBarStack;
+  private SidebarPanel sidebarPanel;
   
   public EventCoordinator(List<DrawStack> drawStacks) {
     this.drawStacks = drawStacks;
@@ -31,21 +31,21 @@ public class EventCoordinator {
     this.featureTracksSidebar = sidebar;
   }
   
-  public void setSideBarStack(SideBarStack sideBarStack) {
-    this.sideBarStack = sideBarStack;
+  public void setSidebarPanel(SidebarPanel sidebarPanel) {
+    this.sidebarPanel = sidebarPanel;
   }
   
   /**
    * Setup draw update listener that triggers redraws across all components.
    */
   public void setupDrawUpdateListener(IntegerProperty memoryUsage) {
-    DrawSampleData.update.addListener((observable, oldValue, newValue) -> {
+    AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
       // Always draw all stacks so that data updates (e.g. BAM fetch completion)
       // are reflected everywhere, not just on the hover stack
       for (DrawStack pane : drawStacks) {
         pane.cytobandCanvas.draw();
-        pane.chromCanvas.draw();
-        pane.drawCanvas.draw();
+        pane.chromosomeCanvas.draw();
+        pane.alignmentCanvas.draw();
       }
       
       // Update feature tracks when region changes
@@ -60,8 +60,8 @@ public class EventCoordinator {
       }
       
       // Update track info sidebar
-      if (sideBarStack != null && sideBarStack.trackInfo != null) {
-        sideBarStack.trackInfo.draw();
+      if (sidebarPanel != null && sidebarPanel.trackInfo != null) {
+        sidebarPanel.trackInfo.draw();
       }
       
       // Update memory usage
@@ -119,7 +119,7 @@ public class EventCoordinator {
    */
   public void takeCanvasSnapshots() {
     for (DrawStack pane : drawStacks) {
-      pane.drawCanvas.snapshot = pane.drawCanvas.snapshot(null, null);
+      pane.alignmentCanvas.snapshot = pane.alignmentCanvas.snapshot(null, null);
     }
   }
   
@@ -127,6 +127,6 @@ public class EventCoordinator {
    * Trigger a full redraw update.
    */
   public static void triggerUpdate() {
-    DrawFunctions.update.set(!DrawFunctions.update.get());
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 }

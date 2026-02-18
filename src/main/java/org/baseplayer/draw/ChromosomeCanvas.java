@@ -10,7 +10,7 @@ import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.gene.Gene;
 import org.baseplayer.gene.Transcript;
-import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
@@ -28,7 +28,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 import javafx.stage.Window;
 
-public class DrawChromData extends DrawFunctions {
+public class ChromosomeCanvas extends GenomicCanvas {
   private final GraphicsContext gc;
   private final ReferenceGenomeService referenceGenomeService;
   
@@ -88,7 +88,7 @@ public class DrawChromData extends DrawFunctions {
     }
   }
 
-  public DrawChromData(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
+  public ChromosomeCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
     gc = getGraphicsContext2D();
     gc.setFont(AppFonts.getUIFont());
@@ -126,7 +126,7 @@ public class DrawChromData extends DrawFunctions {
         double newStart = genomicPos - newViewLength / 2;
         double newEnd = genomicPos + newViewLength / 2;
         
-        drawStack.drawCanvas.zoomAnimation(newStart, newEnd);
+        drawStack.alignmentCanvas.zoomAnimation(newStart, newEnd);
       } else if (event.getClickCount() == 1) {
         double mouseX = event.getX();
         double mouseY = event.getY();
@@ -768,7 +768,7 @@ public class DrawChromData extends DrawFunctions {
     if (!referenceGenomeService.hasGenome()) return;
     
     // Don't fetch reference sequence during zoom animation or cytoband dragging
-    if (DrawFunctions.animationRunning || DrawCytoband.isDragging) return;
+    if (GenomicCanvas.animationRunning || CytobandCanvas.isDragging) return;
     
     int viewStart = (int) drawStack.start;
     int viewEnd = (int)drawStack.end;
@@ -879,6 +879,6 @@ public class DrawChromData extends DrawFunctions {
 	}
 
   void drawIndicators() {
-    DrawIndicators.draw(gc, drawStack, getWidth(), getHeight());
+    PositionIndicator.draw(gc, drawStack, getWidth(), getHeight());
   }
 }

@@ -2,9 +2,9 @@ package org.baseplayer.controllers;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.draw.DrawFunctions;
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.draw.SideBarStack;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.draw.SidebarPanel;
 import org.baseplayer.io.ReferenceGenome;
 import org.baseplayer.services.EventCoordinator;
 import org.baseplayer.services.InitializationService;
@@ -26,8 +26,8 @@ import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.StackPane;
 
 public class MainController {
-  @FXML private SplitPane drawCanvas;
-  @FXML private SplitPane chromCanvas;
+  @FXML private SplitPane alignmentSplitPane;
+  @FXML private SplitPane chromosomeSplitPane;
   @FXML private SplitPane chromSplit;
   @FXML private SplitPane drawSplit;
   @FXML private StackPane drawSideBarStackPane;
@@ -55,7 +55,7 @@ public class MainController {
   IntegerProperty memoryUsage = new SimpleIntegerProperty(0);
   public static DrawStack hoverStack;
   public static ArrayList<DrawStack> drawStacks = new ArrayList<>();
-  SideBarStack sideBarStack;
+  SidebarPanel sidebarPanel;
   
   public static boolean showOnlyCancerGenes = false;
   
@@ -73,11 +73,11 @@ public class MainController {
   }
   
   public void initialize() {
-      chromSplitPane = chromCanvas;
-      drawPane = drawCanvas;
+      chromSplitPane = chromosomeSplitPane;
+      drawPane = alignmentSplitPane;
       featureTracksContentPane = featureTracksContentSplit;
-      sideBarStack = new SideBarStack(drawSideBarStackPane);
-      eventCoordinator.setSideBarStack(sideBarStack);
+      sidebarPanel = new SidebarPanel(drawSideBarStackPane);
+      eventCoordinator.setSidebarPanel(sidebarPanel);
       
       // Setup unified sidebar controller for all horizontal split panes
       sidebarController.addPane(chromSplit);
@@ -172,7 +172,7 @@ public class MainController {
   }
   
   public static void zoomout() {
-    hoverStack.drawCanvas.zoomAnimation(1, hoverStack.chromSize);
+    hoverStack.alignmentCanvas.zoomAnimation(1, hoverStack.chromSize);
   }
   
   void addMemUpdateListener() {
@@ -265,7 +265,7 @@ public class MainController {
       double viewSize = 1000; // ~1kb window around mate
       double start = Math.max(1, position - viewSize / 2);
       double end = start + viewSize;
-      drawStack.drawCanvas.zoomAnimation(start, end);
+      drawStack.alignmentCanvas.zoomAnimation(start, end);
     });
   }
   
@@ -298,16 +298,16 @@ public class MainController {
   void setWindowSizeListener() {
     mainSplit.setOnMouseEntered((MouseEvent event) -> {
         isActive = true;
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
     });
     mainSplit.setOnMouseExited((MouseEvent event) -> {  
         isActive = false;
     });
-    drawCanvas.setOnMouseExited((MouseEvent event) -> {  
+    alignmentSplitPane.setOnMouseExited((MouseEvent event) -> {  
         takeSnapshot();
     });
-    drawCanvas.setOnMouseEntered((MouseEvent event) -> {  
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+    alignmentSplitPane.setOnMouseEntered((MouseEvent event) -> {  
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
     });
   }
   
@@ -351,8 +351,8 @@ public class MainController {
     
     // MANE transcripts checkbox
     javafx.scene.control.CheckBox maneCheckBox = new javafx.scene.control.CheckBox("Show only MANE transcripts");
-    if (!drawStacks.isEmpty() && drawStacks.get(0).chromCanvas != null) {
-      maneCheckBox.setSelected(drawStacks.get(0).chromCanvas.isShowManeOnly());
+    if (!drawStacks.isEmpty() && drawStacks.get(0).chromosomeCanvas != null) {
+      maneCheckBox.setSelected(drawStacks.get(0).chromosomeCanvas.isShowManeOnly());
     }
     maneCheckBox.setStyle("-fx-text-fill: white;");
     
@@ -374,11 +374,11 @@ public class MainController {
       showOnlyCancerGenes = cancerGenesCheckBox.isSelected();
       boolean maneOnly = maneCheckBox.isSelected();
       for (DrawStack stack : drawStacks) {
-        if (stack.chromCanvas != null) {
-          stack.chromCanvas.setShowManeOnly(maneOnly);
+        if (stack.chromosomeCanvas != null) {
+          stack.chromosomeCanvas.setShowManeOnly(maneOnly);
         }
       }
-      org.baseplayer.draw.DrawFunctions.update.set(!org.baseplayer.draw.DrawFunctions.update.get());
+      org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
       dialog.close();
     });
     

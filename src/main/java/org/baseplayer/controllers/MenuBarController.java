@@ -9,10 +9,10 @@ import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.controllers.commands.ViewCommands;
-import org.baseplayer.draw.DrawFunctions;
-import org.baseplayer.draw.DrawSampleData;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.draw.AlignmentCanvas;
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ViewportState;
@@ -89,7 +89,7 @@ public class MenuBarController {
     setupPositionField();
     setupZoomButtons();
     
-    DrawSampleData.update.addListener((observable, oldValue, newValue) -> {
+    AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
       if(MainController.hoverStack == null) return;
       String chrom = MainController.hoverStack.chromosome != null ? MainController.hoverStack.chromosome : "1";
       chromosomeLabel.setText("chr" + chrom + ":");
@@ -188,7 +188,7 @@ public class MenuBarController {
     var stack = MainController.hoverStack;
     
     // Check if can zoom in (not already at minimum zoom)
-    boolean canZoomIn = stack.viewLength > DrawFunctions.minZoom * 1.1;
+    boolean canZoomIn = stack.viewLength > GenomicCanvas.minZoom * 1.1;
     zoomInIcon.setIconColor(canZoomIn ? ZOOM_IN_ACTIVE : ZOOM_DISABLED);
     zoomInButton.setDisable(!canZoomIn);
     

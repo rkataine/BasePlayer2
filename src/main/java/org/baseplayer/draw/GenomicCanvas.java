@@ -3,7 +3,7 @@ package org.baseplayer.draw;
 import java.util.function.Function;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
@@ -24,7 +24,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 
-public class DrawFunctions extends Canvas {
+public class GenomicCanvas extends Canvas {
   //private Pane parent;
   public DrawStack drawStack;
   public static int minZoom = 40;
@@ -66,7 +66,7 @@ public class DrawFunctions extends Canvas {
   private static final double MAX_VELOCITY = 50000.0; // Cap maximum scroll velocity
   private static final long SCROLL_IDLE_THRESHOLD = 50_000_000; // 50ms in nanoseconds
 
-  public DrawFunctions(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
+  public GenomicCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
     this.drawStack = drawStack;
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
@@ -198,7 +198,7 @@ public class DrawFunctions extends Canvas {
             int sampleIdx = (int)((mouseY - masterOffset + sampleRegistry.getScrollBarPosition()) / sampleH);
             if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
               org.baseplayer.sample.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
-              org.baseplayer.reads.bam.SampleFile sf = track.getFirstBam();
+              org.baseplayer.alignment.AlignmentFile sf = track.getFirstBam();
               if (sf != null) {
                 sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
               }

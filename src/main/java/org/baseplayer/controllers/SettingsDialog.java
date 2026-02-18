@@ -1,7 +1,7 @@
 package org.baseplayer.controllers;
 
 import org.baseplayer.MainApp;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
 
 import javafx.geometry.Insets;
@@ -165,7 +165,7 @@ public class SettingsDialog {
     settings.setMismatchMinCount(mismatchMinCountSpinner.getValue());
 
     // Trigger redraw so changes are visible immediately
-    DrawFunctions.update.set(!DrawFunctions.update.get());
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
     dialog.close();
   }
 

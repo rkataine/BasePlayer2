@@ -3,7 +3,7 @@ package org.baseplayer.controllers.commands;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.GeneLocation;
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.draw.DrawStack;
 
 /**
@@ -28,14 +28,14 @@ public class NavigationCommands {
     
     if (maxZoom) {
       // Zoom all the way in (minZoom)
-      int flank = DrawFunctions.minZoom / 2;
-      stack.drawCanvas.zoomAnimation(middle - flank, middle + flank);
+      int flank = GenomicCanvas.minZoom / 2;
+      stack.alignmentCanvas.zoomAnimation(middle - flank, middle + flank);
     } else {
       // Zoom in by 75% (show 25% of current view)
       double newViewLength = stack.viewLength * 0.25;
       double newStart = middle - newViewLength / 2;
       double newEnd = middle + newViewLength / 2;
-      stack.drawCanvas.zoomAnimation(newStart, newEnd);
+      stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
     }
   }
   
@@ -60,7 +60,7 @@ public class NavigationCommands {
     
     if (fullChrom) {
       // Zoom all the way out to full chromosome
-      stack.drawCanvas.zoomAnimation(1, stack.chromSize + 1);
+      stack.alignmentCanvas.zoomAnimation(1, stack.chromSize + 1);
     } else {
       // Zoom out by 300% (triple the view)
       double middle = stack.middlePos();
@@ -68,7 +68,7 @@ public class NavigationCommands {
       
       // Don't zoom out if new view would be essentially the same (within 1% of full)
       if (newViewLength >= stack.chromSize * 0.99) {
-        stack.drawCanvas.zoomAnimation(1, stack.chromSize + 1);
+        stack.alignmentCanvas.zoomAnimation(1, stack.chromSize + 1);
         return;
       }
       
@@ -85,7 +85,7 @@ public class NavigationCommands {
         newStart = newEnd - newViewLength;
       }
       
-      stack.drawCanvas.zoomAnimation(newStart, newEnd);
+      stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
     }
   }
   
@@ -97,7 +97,7 @@ public class NavigationCommands {
    */
   public static void navigateToPosition(int start, int end) {
     if (MainController.hoverStack != null) {
-      MainController.hoverStack.drawCanvas.zoomAnimation(start, end);
+      MainController.hoverStack.alignmentCanvas.zoomAnimation(start, end);
     }
   }
   
@@ -107,7 +107,7 @@ public class NavigationCommands {
    * @param position Position to center on (1-based)
    */
   public static void navigateToPosition(int position) {
-    int flank = DrawFunctions.minZoom / 2;
+    int flank = GenomicCanvas.minZoom / 2;
     navigateToPosition(position - flank, position + flank);
   }
   
@@ -133,8 +133,8 @@ public class NavigationCommands {
           stack.chromSize = chromLength;
           stack.chromosomeDropdown.setValue(loc.chrom());
           stack.loadSimulatedVariants();
-          stack.drawCanvas.setStartEnd(1.0, chromLength + 1);
-          stack.chromCanvas.setStartEnd(1.0, chromLength + 1);
+          stack.alignmentCanvas.setStartEnd(1.0, chromLength + 1);
+          stack.chromosomeCanvas.setStartEnd(1.0, chromLength + 1);
         }
       }
       
@@ -142,7 +142,7 @@ public class NavigationCommands {
       long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
       double newStart = loc.start() - padding;
       double newEnd = loc.end() + padding;
-      stack.drawCanvas.zoomAnimation(newStart, newEnd);
+      stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
     }
     
     AnnotationData.clearHighlightedGene();
@@ -164,8 +164,8 @@ public class NavigationCommands {
       stack.chromosomeDropdown.setValue(chromosome);
       stack.loadSimulatedVariants();
       // Properly set coordinates and derived values (pixelSize, scale)
-      stack.drawCanvas.setStartEnd(1.0, chromLength + 1);
-      stack.chromCanvas.setStartEnd(1.0, chromLength + 1);
+      stack.alignmentCanvas.setStartEnd(1.0, chromLength + 1);
+      stack.chromosomeCanvas.setStartEnd(1.0, chromLength + 1);
     }
   }
 }

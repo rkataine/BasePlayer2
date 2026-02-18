@@ -129,7 +129,7 @@ public class ReferenceGenome {
             
             // Synchronize on fastaFile to prevent concurrent seek+read races.
             // Multiple threads call getBases() concurrently (BAM/CRAM fetch threads,
-            // async reference display fetch in DrawChromData, etc.). Without this lock,
+            // async reference display fetch in ChromosomeCanvas, etc.). Without this lock,
             // one thread's seek() can be overwritten by another thread's seek() before
             // the first thread reads, returning wrong bases and corrupting mismatch data.
             synchronized (fastaFile) {

@@ -12,7 +12,7 @@ import javafx.scene.paint.Color;
  * Utility class for drawing position indicators.
  * Can be called from any canvas that needs to display genomic position markers.
  */
-public class DrawIndicators {
+public class PositionIndicator {
   
   private static final int BASE_DISPLAY_THRESHOLD = 100000;
   

@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.alignment.AlignmentFile;
 
 /**
  * Represents an individual (person/sample) in the sample tracks panel.
@@ -81,7 +81,7 @@ public class SampleTrack implements Closeable {
    * Find the first BAM/CRAM sample in this track, or null if none.
    * Useful for BAM-specific operations like scroll offset, coverage cache, etc.
    */
-  public SampleFile getFirstBam() {
+  public AlignmentFile getFirstBam() {
     for (Sample s : samples) {
       if (s.getBamFile() != null) return s.getBamFile();
     }

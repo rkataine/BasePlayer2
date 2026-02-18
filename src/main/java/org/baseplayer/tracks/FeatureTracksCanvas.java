@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.utils.AppFonts;
@@ -20,9 +20,9 @@ import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 
 /**
- * Canvas for drawing feature tracks, extends DrawFunctions for navigation.
+ * Canvas for drawing feature tracks, extends GenomicCanvas for navigation.
  */
-public class FeatureTracksCanvas extends DrawFunctions {
+public class FeatureTracksCanvas extends GenomicCanvas {
   
   private static final double HEADER_HEIGHT = 18;
   private static final double TRACK_PADDING = 2;

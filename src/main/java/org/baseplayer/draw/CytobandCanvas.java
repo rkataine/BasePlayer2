@@ -22,7 +22,7 @@ import javafx.util.Duration;
  * Canvas component for drawing chromosome cytobands with interactive navigation.
  * Supports dragging the view indicator and selection to zoom.
  */
-public class DrawCytoband extends Canvas {
+public class CytobandCanvas extends Canvas {
   
   public static final double CYTO_PADDING_X = 5;
   public static final double CYTO_PADDING_Y = 5;
@@ -50,7 +50,7 @@ public class DrawCytoband extends Canvas {
   private double indicatorDragStartX = 0;
   private double indicatorViewStartPos = 0;
   
-  public DrawCytoband(DrawStack drawStack) {
+  public CytobandCanvas(DrawStack drawStack) {
     this.drawStack = drawStack;
     this.gc = getGraphicsContext2D();
     
@@ -63,7 +63,7 @@ public class DrawCytoband extends Canvas {
     setupInteraction();
     
     // Redraw when update flag changes
-    DrawFunctions.update.addListener((obs, oldVal, newVal) -> draw());
+    GenomicCanvas.update.addListener((obs, oldVal, newVal) -> draw());
     
     // Redraw on width change
     widthProperty().addListener((obs, oldVal, newVal) -> draw());
@@ -91,7 +91,7 @@ public class DrawCytoband extends Canvas {
         double dragDelta = event.getX() - indicatorDragStartX;
         double genomeDelta = (dragDelta / cytoWidth) * drawStack.chromSize;
         double newStart = indicatorViewStartPos + genomeDelta;
-        drawStack.drawCanvas.setStart(newStart);
+        drawStack.alignmentCanvas.setStart(newStart);
         event.consume();
       } else if (selectDragging) {
         selectEndX = event.getX();
@@ -104,7 +104,7 @@ public class DrawCytoband extends Canvas {
       if (indicatorDragging) {
         isDragging = false;
         indicatorDragging = false;
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
         event.consume();
       } else if (selectDragging) {
         double cytoWidth = getWidth() - 2 * CYTO_PADDING_X;
@@ -123,7 +123,7 @@ public class DrawCytoband extends Canvas {
           newEnd = center + 50;
         }
         
-        drawStack.drawCanvas.zoomAnimation(newStart, newEnd);
+        drawStack.alignmentCanvas.zoomAnimation(newStart, newEnd);
         
         selectDragging = false;
         draw();

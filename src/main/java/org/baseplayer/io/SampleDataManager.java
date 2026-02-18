@@ -8,7 +8,7 @@ import java.util.List;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
@@ -74,7 +74,7 @@ public class SampleDataManager {
           sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
           sampleRegistry.setSampleHeight(0); // Will be recalculated on draw
           System.out.println("Loaded BAM: " + sample.getName() + " (" + file.getName() + ")");
-          DrawFunctions.update.set(!DrawFunctions.update.get());
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
         }
       }, javafx.application.Platform::runLater);
       
@@ -82,7 +82,7 @@ public class SampleDataManager {
     }
 
     if (!addedSamples.isEmpty()) {
-      DrawFunctions.update.set(!DrawFunctions.update.get());
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
 
     return addedSamples;
@@ -116,7 +116,7 @@ public class SampleDataManager {
       sampleRegistry.setFirstVisibleSample(Math.min(sampleRegistry.getFirstVisibleSample(), sampleRegistry.getLastVisibleSample()));
     }
     
-    DrawFunctions.update.set(!DrawFunctions.update.get());
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
   /**
@@ -161,7 +161,7 @@ public class SampleDataManager {
       if (newSample != null) {
         track.addSample(newSample);
         System.out.println("Added BAM: " + newSample.getName() + " to " + track.getDisplayName());
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     }, javafx.application.Platform::runLater);
   }
@@ -209,7 +209,7 @@ public class SampleDataManager {
       if (newSample != null) {
         track.addSample(newSample);
         System.out.println("Added BED: " + newSample.getName() + " to " + track.getDisplayName());
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     }, javafx.application.Platform::runLater);
   }

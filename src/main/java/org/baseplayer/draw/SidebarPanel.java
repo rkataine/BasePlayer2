@@ -3,18 +3,18 @@ package org.baseplayer.draw;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.layout.StackPane;
 
-public class SideBarStack {
+public class SidebarPanel {
   public Canvas sideCanvas;
   public Canvas reactiveCanvas;
-  public TrackInfo trackInfo;
+  public TrackLabelPanel trackInfo;
 
-  public SideBarStack(StackPane drawSideBarStackPane) {
+  public SidebarPanel(StackPane drawSideBarStackPane) {
     sideCanvas = new Canvas();
     reactiveCanvas = new Canvas();
     sideCanvas.heightProperty().bind(drawSideBarStackPane.heightProperty());
     sideCanvas.widthProperty().bind(drawSideBarStackPane.widthProperty());
     reactiveCanvas.setMouseTransparent(true); // Allow clicks to pass through
     drawSideBarStackPane.getChildren().addAll(sideCanvas, reactiveCanvas);
-    trackInfo = new TrackInfo(this);
+    trackInfo = new TrackLabelPanel(this);
   }
 }

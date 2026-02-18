@@ -1,7 +1,7 @@
 package org.baseplayer.controllers.commands;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -31,7 +31,7 @@ public class FileCommands {
       stack.loadSimulatedVariants();
     }
     
-    DrawFunctions.update.set(!DrawFunctions.update.get());
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
   
   /**

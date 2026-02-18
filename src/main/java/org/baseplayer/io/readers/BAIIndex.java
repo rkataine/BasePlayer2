@@ -1,4 +1,4 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.io.readers;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;

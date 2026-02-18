@@ -4,7 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
@@ -236,7 +236,7 @@ public class FeatureTracksSidebar {
               region.track().setVisible(!region.track().isVisible());
               if (featureTracksCanvas != null) {
                 featureTracksCanvas.notifyRegionChanged();
-                DrawFunctions.update.set(!DrawFunctions.update.get());
+                GenomicCanvas.update.set(!GenomicCanvas.update.get());
               }
               draw();
             } else if ("settings".equals(region.iconType())) {
@@ -277,7 +277,7 @@ public class FeatureTracksSidebar {
       toggleVisibility.setOnAction(e -> {
         track.setVisible(!track.isVisible());
         if (featureTracksCanvas != null) {
-          DrawFunctions.update.set(!DrawFunctions.update.get());
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
         }
         draw();
       });
@@ -687,7 +687,7 @@ public class FeatureTracksSidebar {
         }
       }
       if (featureTracksCanvas != null) {
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
       settingsPopup.hide();
     });

@@ -1,14 +1,15 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.alignment;
 
 import java.io.IOException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
-import org.baseplayer.draw.DrawCytoband;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.CytobandCanvas;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
+import org.baseplayer.io.readers.AlignmentReader;
 
 import javafx.application.Platform;
 
@@ -17,7 +18,7 @@ import javafx.application.Platform;
  * Samples coverage at regular intervals using indexed random access
  * for fast chromosome-wide visualization.
  * 
- * Extracted from SampleFile to separate coverage calculation concerns.
+ * Extracted from AlignmentFile to separate coverage calculation concerns.
  */
 public class CoverageCalculator {
 
@@ -43,10 +44,10 @@ public class CoverageCalculator {
   private final ExecutorService fetchPool;
   private final AlignmentReader reader;
   private final String sampleName;
-  private final SampleFile sampleFile; // for FetchManager registration
+  private final AlignmentFile sampleFile; // for FetchManager registration
 
   public CoverageCalculator(AlignmentReader reader, String sampleName, 
-                           ExecutorService fetchPool, SampleFile sampleFile) {
+                           ExecutorService fetchPool, AlignmentFile sampleFile) {
     this.reader = reader;
     this.sampleName = sampleName;
     this.fetchPool = fetchPool;
@@ -90,7 +91,7 @@ public class CoverageCalculator {
     }
 
     // Don't start new fetch during active navigation
-    if (DrawFunctions.navigating || DrawCytoband.isDragging || DrawFunctions.animationRunning) {
+    if (GenomicCanvas.navigating || CytobandCanvas.isDragging || GenomicCanvas.animationRunning) {
       return cached; // return stale or null
     }
 
@@ -168,7 +169,7 @@ public class CoverageCalculator {
           sc.samplesCompleted = i + 1;
 
           // Update UI after each sample so coverage appears progressively
-          Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
+          Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
         }
 
         if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) return;
@@ -204,7 +205,7 @@ public class CoverageCalculator {
         }
         sc.complete = true;
         System.out.println("Sampling complete (" + sampleName + "): maxDepth=" + (int) sc.maxDepth);
-        Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
+        Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
       } catch (IOException e) {
         if (!(e instanceof java.io.IOException && Thread.currentThread().isInterrupted())) {
           System.err.println("Error sampling coverage (" + sampleName + "): " + e.getMessage());

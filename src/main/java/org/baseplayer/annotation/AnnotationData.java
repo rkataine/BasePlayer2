@@ -148,16 +148,16 @@ public final class AnnotationData {
   
   public static void setHighlightedGene(GeneLocation loc) {
     highlightedGeneLocation = loc;
-    org.baseplayer.draw.DrawFunctions.resizing = true;
-    org.baseplayer.draw.DrawFunctions.update.set(!org.baseplayer.draw.DrawFunctions.update.get());
-    org.baseplayer.draw.DrawFunctions.resizing = false;
+    org.baseplayer.draw.GenomicCanvas.resizing = true;
+    org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
+    org.baseplayer.draw.GenomicCanvas.resizing = false;
   }
   
   public static void clearHighlightedGene() {
     highlightedGeneLocation = null;
-    org.baseplayer.draw.DrawFunctions.resizing = true;
-    org.baseplayer.draw.DrawFunctions.update.set(!org.baseplayer.draw.DrawFunctions.update.get());
-    org.baseplayer.draw.DrawFunctions.resizing = false;
+    org.baseplayer.draw.GenomicCanvas.resizing = true;
+    org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
+    org.baseplayer.draw.GenomicCanvas.resizing = false;
   }
   
   /**

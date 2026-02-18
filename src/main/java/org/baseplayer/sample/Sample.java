@@ -4,13 +4,13 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Path;
 
-import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.tracks.BedTrack;
 
 /**
  * Represents a single loaded data file (BAM, BED, VCF, etc.) under an individual.
  * This is the generic wrapper — data-type-specific logic lives in
- * {@link SampleFile} (BAM/CRAM) or {@link BedTrack} (BED).
+ * {@link AlignmentFile} (BAM/CRAM) or {@link BedTrack} (BED).
  * <p>
  * All data files under a {@link SampleTrack} are treated equally — there is
  * no "primary" vs "overlay" distinction.
@@ -35,7 +35,7 @@ public class Sample implements Closeable {
   public boolean overlay = false;
 
   /** BAM/CRAM file handle (non-null for BAM type). */
-  private final SampleFile bamFile;
+  private final AlignmentFile bamFile;
 
   /** BED track data (non-null for BED type). */
   private final BedTrack bedTrack;
@@ -47,7 +47,7 @@ public class Sample implements Closeable {
     this.path = filePath;
     this.dataType = DataType.BAM;
     this.bedTrack = null;
-    this.bamFile = new SampleFile(filePath);
+    this.bamFile = new AlignmentFile(filePath);
     this.name = bamFile.getName();
   }
 
@@ -71,8 +71,8 @@ public class Sample implements Closeable {
 
   // ── BAM delegation ──
 
-  /** Get the underlying SampleFile (BAM/CRAM). Null for non-BAM types. */
-  public SampleFile getBamFile() { return bamFile; }
+  /** Get the underlying AlignmentFile (BAM/CRAM). Null for non-BAM types. */
+  public AlignmentFile getBamFile() { return bamFile; }
 
   /** Whether this file contains methylation data. */
   public boolean isMethylationData() {

@@ -7,11 +7,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.GnomadApiClient;
 import org.baseplayer.io.GnomadApiClient.Variant;
 import org.baseplayer.io.GnomadApiClient.VariantData;
-import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.application.Platform;
@@ -77,7 +77,7 @@ public class GnomadTrack extends AbstractTrack {
     if (!visible) return;
     
     // Block during zoom animation
-    if (DrawFunctions.animationRunning) return;
+    if (GenomicCanvas.animationRunning) return;
     
     // Too large to fetch
     if (end - start > MAX_REGION_SIZE) {

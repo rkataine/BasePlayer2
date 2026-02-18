@@ -61,18 +61,18 @@ public final class AnnotationLoader {
    */
   public static void loadGenesBackground() {
     AnnotationData.setGenesLoading(true);
-    org.baseplayer.draw.DrawFunctions.resizing = true;
-    org.baseplayer.draw.DrawFunctions.update.set(!org.baseplayer.draw.DrawFunctions.update.get());
-    org.baseplayer.draw.DrawFunctions.resizing = false;
+    org.baseplayer.draw.GenomicCanvas.resizing = true;
+    org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
+    org.baseplayer.draw.GenomicCanvas.resizing = false;
     
     Thread loadThread = new Thread(() -> {
       // Load genes first (priority - enables immediate display)
       loadGenes();
       
       javafx.application.Platform.runLater(() -> {
-        org.baseplayer.draw.DrawFunctions.resizing = true;
-        org.baseplayer.draw.DrawFunctions.update.set(!org.baseplayer.draw.DrawFunctions.update.get());
-        org.baseplayer.draw.DrawFunctions.resizing = false;
+        org.baseplayer.draw.GenomicCanvas.resizing = true;
+        org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
+        org.baseplayer.draw.GenomicCanvas.resizing = false;
       });
       
       // Then load additional data in background

@@ -280,13 +280,13 @@ public class GeneInfoPopup {
   }
   
   private void navigateToGene(Gene gene) {
-    if (drawStack != null && drawStack.drawCanvas != null) {
+    if (drawStack != null && drawStack.alignmentCanvas != null) {
       // Add 10% padding around the gene
       long geneLength = gene.end() - gene.start();
       long padding = geneLength / 10;
       long start = Math.max(1, gene.start() - padding);
       long end = Math.min((long)drawStack.chromSize, gene.end() + padding);
-      drawStack.drawCanvas.zoomAnimation(start, end);
+      drawStack.alignmentCanvas.zoomAnimation(start, end);
     }
   }
   

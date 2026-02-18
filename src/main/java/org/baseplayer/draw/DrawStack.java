@@ -6,7 +6,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.reads.bam.FetchManager;
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -42,9 +42,9 @@ public class DrawStack {
   public StackPane chromStack = new StackPane(); 
   public StackPane drawStack = new StackPane();
   public StackPane featureTracksStack = new StackPane();  // Container for feature tracks
-  public DrawCytoband cytobandCanvas;
-  public DrawChromData chromCanvas;
-  public DrawSampleData drawCanvas;
+  public CytobandCanvas cytobandCanvas;
+  public ChromosomeCanvas chromosomeCanvas;
+  public AlignmentCanvas alignmentCanvas;
   public FeatureTracksCanvas featureTracksCanvas;
   public ComboBox<String> chromosomeDropdown;
   public Label closeButton;
@@ -125,24 +125,24 @@ public class DrawStack {
     StackPane.setMargin(closeButton, new Insets(3, 5, 0, 0));
 
     // Create cytoband canvas (fixed height at top, wrapped in Pane for sizing)
-    cytobandCanvas = new DrawCytoband(this);
+    cytobandCanvas = new CytobandCanvas(this);
     Pane cytoWrapper = new Pane(cytobandCanvas);
-    cytoWrapper.setMinHeight(DrawCytoband.PREFERRED_HEIGHT);
-    cytoWrapper.setMaxHeight(DrawCytoband.PREFERRED_HEIGHT);
-    cytoWrapper.setPrefHeight(DrawCytoband.PREFERRED_HEIGHT);
+    cytoWrapper.setMinHeight(CytobandCanvas.PREFERRED_HEIGHT);
+    cytoWrapper.setMaxHeight(CytobandCanvas.PREFERRED_HEIGHT);
+    cytoWrapper.setPrefHeight(CytobandCanvas.PREFERRED_HEIGHT);
     cytobandCanvas.widthProperty().bind(cytoWrapper.widthProperty());
-    cytobandCanvas.setHeight(DrawCytoband.PREFERRED_HEIGHT);
+    cytobandCanvas.setHeight(CytobandCanvas.PREFERRED_HEIGHT);
     
     // Create gene/reference canvas (fills remaining space)
-    chromCanvas = new DrawChromData(new Canvas(), chromStack, this);
-    chromStack.getChildren().addAll(chromCanvas, chromCanvas.getReactiveCanvas(), chromosomeDropdown, closeButton);
+    chromosomeCanvas = new ChromosomeCanvas(new Canvas(), chromStack, this);
+    chromStack.getChildren().addAll(chromosomeCanvas, chromosomeCanvas.getReactiveCanvas(), chromosomeDropdown, closeButton);
     VBox.setVgrow(chromStack, Priority.ALWAYS);
     
     // Assemble the container: cytoband at top, chromStack below
     chromContainer.getChildren().addAll(cytoWrapper, chromStack);
     
-    drawCanvas = new DrawSampleData(new Canvas(), drawStack, this);
-    drawStack.getChildren().addAll(drawCanvas, drawCanvas.getReactiveCanvas());
+    alignmentCanvas = new AlignmentCanvas(new Canvas(), drawStack, this);
+    drawStack.getChildren().addAll(alignmentCanvas, alignmentCanvas.getReactiveCanvas());
     
     // Create feature tracks canvas with default conservation and gnomAD tracks
     featureTracksStack.setMinSize(0, 0);
@@ -200,8 +200,8 @@ public class DrawStack {
     }
     
     // Properly update coordinates and derived values
-    drawCanvas.setStartEnd(1.0, chromSize + 1);
-    chromCanvas.setStartEnd(1.0, chromSize + 1);
+    alignmentCanvas.setStartEnd(1.0, chromSize + 1);
+    chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
   }
   
   private void updateChromosomeSize() {

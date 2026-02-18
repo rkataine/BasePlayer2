@@ -3,7 +3,7 @@ package org.baseplayer;
 import java.io.IOException;
 import java.net.URL;
 
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.Animation;
@@ -103,7 +103,7 @@ public class MainApp extends Application {
         else scene.getStylesheets().add(getResource("darkmode.css").toExternalForm());
         DrawColors.lineColor = darkMode ? DrawColors.lineColor = new Color(0.3, 0.6, 0.6, 0.5) : new Color(0.5, 0.8, 0.8, 0.5);
         darkMode = !darkMode;
-        DrawFunctions.update.set(!DrawFunctions.update.get());
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
     public static URL getResource(String string) {
         URL url = MainApp.class.getResource(string);

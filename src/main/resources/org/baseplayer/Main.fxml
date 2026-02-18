@@ -35,7 +35,7 @@
                     <Label text="Reference genome" styleClass="sidebar-label" AnchorPane.bottomAnchor="32" AnchorPane.leftAnchor="5" />
                     <ComboBox fx:id="referenceComboBox" layoutX="5.0" prefHeight="22.0" prefWidth="150.0" styleClass="minimal-combo-box" promptText="Homo Sapiens GRCh38" AnchorPane.bottomAnchor="5" AnchorPane.leftAnchor="5" />
                   </AnchorPane>
-                  <SplitPane fx:id="chromCanvas" minHeight="0.0" minWidth="0.0"
+                  <SplitPane fx:id="chromosomeSplitPane" minHeight="0.0" minWidth="0.0"
                         AnchorPane.topAnchor="0" AnchorPane.rightAnchor="0" AnchorPane.bottomAnchor="0" AnchorPane.leftAnchor="0" />
                 </items>
               </SplitPane>
@@ -61,7 +61,7 @@
                       <StackPane fx:id="drawSideBarStackPane" minWidth="0" minHeight="0" />
                     </items>
                   </SplitPane>        
-                  <SplitPane fx:id="drawCanvas" minHeight="0.0" minWidth="0" AnchorPane.topAnchor="0" AnchorPane.rightAnchor="0" AnchorPane.bottomAnchor="0" AnchorPane.leftAnchor="0" />
+                  <SplitPane fx:id="alignmentSplitPane" minHeight="0.0" minWidth="0" AnchorPane.topAnchor="0" AnchorPane.rightAnchor="0" AnchorPane.bottomAnchor="0" AnchorPane.leftAnchor="0" />
                 </items>
               </SplitPane>
               <Pane fx:id="drawScroll" minHeight="10" minWidth="10" maxWidth="10" AnchorPane.topAnchor="0" AnchorPane.rightAnchor="0" AnchorPane.bottomAnchor="0" />

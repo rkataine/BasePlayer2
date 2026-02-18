@@ -1,4 +1,4 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.alignment;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -15,10 +15,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.baseplayer.draw.DrawCytoband;
-import org.baseplayer.draw.DrawFunctions;
+import org.baseplayer.draw.CytobandCanvas;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
+import org.baseplayer.io.readers.AlignmentReader;
+import org.baseplayer.io.readers.BAMFileReader;
+import org.baseplayer.io.readers.CRAMFileReader;
 
 import javafx.application.Platform;
 
@@ -31,7 +34,7 @@ import javafx.application.Platform;
  * {@link org.baseplayer.sample.Sample}; this class handles BAM-specific
  * read fetching, caching, packing, and coverage sampling.
  */
-public class SampleFile implements Closeable {
+public class AlignmentFile implements Closeable {
 
   public final String name;
   public final Path path;
@@ -227,9 +230,9 @@ public class SampleFile implements Closeable {
   public String getName() { return name; }
 
   /**
-   * Create a SampleFile from a BAM/CRAM alignment file.
+   * Create a AlignmentFile from a BAM/CRAM alignment file.
    */
-  public SampleFile(Path filePath) throws IOException {
+  public AlignmentFile(Path filePath) throws IOException {
     this.path = filePath;
     this.fileSize = Files.size(filePath);
     
@@ -277,7 +280,7 @@ public class SampleFile implements Closeable {
     int viewLength = end - start;
     
     // Block all fetches during line zoom - just return cached data
-    if (org.baseplayer.draw.DrawFunctions.lineZoomerActive) {
+    if (org.baseplayer.draw.GenomicCanvas.lineZoomerActive) {
       return sc.cachedReads.get();
     }
     
@@ -345,13 +348,13 @@ public class SampleFile implements Closeable {
     }
 
     // Block all new fetches during zoom animation or cytoband dragging
-    if (DrawFunctions.animationRunning || DrawCytoband.isDragging) {
+    if (GenomicCanvas.animationRunning || CytobandCanvas.isDragging) {
       return sc.cachedReads.get(); // return stale or empty, no new fetches
     }
     
     // During regular scroll/pan navigation, allow fetches to proceed with directional buffering
     // This keeps UI responsive during scroll momentum
-    if (blockDuringNavigation && DrawFunctions.navigating) {
+    if (blockDuringNavigation && GenomicCanvas.navigating) {
       // If we have cached data, return it (but continue below to potentially start prefetch)
       if (hasOverlap) {
         // Check if there's already a fetch in progress that will cover us
@@ -456,7 +459,7 @@ public class SampleFile implements Closeable {
 
       final boolean skipPacking = coverageOnly;
       sc.pendingFetch = fetchPool.submit(() -> {
-        FetchManager.FetchTicket ticket = fm.acquire(FetchManager.FetchType.READS, SampleFile.this, stack, chrom, fetchStart, fetchEnd);
+        FetchManager.FetchTicket ticket = fm.acquire(FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd);
         try {
           List<BAMRecord> reads = new ArrayList<>();
           List<Integer> rowEnds = new ArrayList<>();
@@ -506,7 +509,7 @@ public class SampleFile implements Closeable {
             if (now - lastUpdate[0] > 100_000_000L && (detectionDone[0] || reads.size() > 200)) {
               sc.maxRow = maxRowLocal[0];
               sc.cachedReads.set(new ArrayList<>(reads));
-              Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
+              Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
               lastUpdate[0] = now;
             }
 
@@ -548,7 +551,7 @@ public class SampleFile implements Closeable {
               @Override
               public void run() {
                 statusMessage = null;
-                Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
+                Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
               }
             }, 5000);
             
@@ -571,7 +574,7 @@ public class SampleFile implements Closeable {
         } finally {
           fm.release(ticket);
           sc.loading = false;
-          Platform.runLater(() -> DrawFunctions.update.set(!DrawFunctions.update.get()));
+          Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
         }
       });
     }

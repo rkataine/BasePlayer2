@@ -4,8 +4,8 @@ import java.util.List;
 import java.util.function.Function;
 
 import org.baseplayer.io.Settings;
-import org.baseplayer.reads.bam.BAMRecord;
-import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.alignment.BAMRecord;
+import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.services.ReferenceGenomeService;
@@ -172,7 +172,7 @@ public class CoverageDrawer {
    */
   private SampleRow buildRowFromReads(Sample sample, int sampleIndex, String chrom,
                                       int start, int end, boolean isMethyl, boolean isHoverStack) {
-    SampleFile bamFile = sample.getBamFile();
+    AlignmentFile bamFile = sample.getBamFile();
     if (bamFile == null) return null;
     List<BAMRecord> reads = bamFile.getReads(chrom, start, end, drawStack, isHoverStack);
     if (reads.isEmpty()) return null;
@@ -317,7 +317,7 @@ public class CoverageDrawer {
    */
   private SampleRow buildRowCoverageOnly(Sample sample, int sampleIndex, String chrom,
                                          int start, int end, boolean isMethyl, boolean isHoverStack) {
-    SampleFile bamFile = sample.getBamFile();
+    AlignmentFile bamFile = sample.getBamFile();
     if (bamFile == null) return null;
 
     double cw = numColumns;
@@ -329,7 +329,7 @@ public class CoverageDrawer {
     if (reads.isEmpty()) return null;
 
     // Check if cached data is still valid
-    SampleFile.CoverageCache cache = bamFile.getCoverageCache(drawStack);
+    AlignmentFile.CoverageCache cache = bamFile.getCoverageCache(drawStack);
     int cacheGenomicEnd = cache != null ? (int)(cache.genomicStart + cache.numBins * cache.binSize) : 0;
     boolean cacheValid = cache != null
         && cache.sourceReads == reads
@@ -410,7 +410,7 @@ public class CoverageDrawer {
    * at bin level using the reference genome and per-bin bisulfite counts, avoiding
    * the previous regionLen-sized intermediate arrays (up to 48 MB).
    */
-  private SampleFile.CoverageCache computeCoverageCache(List<BAMRecord> reads,
+  private AlignmentFile.CoverageCache computeCoverageCache(List<BAMRecord> reads,
       int start, int end, int viewLen, double binSize, boolean isMethyl, String chrom) {
 
     int buffer = viewLen / 2;
@@ -505,7 +505,7 @@ public class CoverageDrawer {
       smoothMethylRatio(smoothedMethylRatio);
     }
 
-    SampleFile.CoverageCache cache = new SampleFile.CoverageCache();
+    AlignmentFile.CoverageCache cache = new AlignmentFile.CoverageCache();
     cache.smoothedCov = binCov;
     cache.rawMmA = mmA;
     cache.rawMmC = mmC;

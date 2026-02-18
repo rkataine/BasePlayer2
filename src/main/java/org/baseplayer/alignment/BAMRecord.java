@@ -1,4 +1,4 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.alignment;
 
 /**
  * Lightweight BAM alignment record.

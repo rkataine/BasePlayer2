@@ -1,4 +1,4 @@
-package org.baseplayer.reads.bam;
+package org.baseplayer.alignment;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -137,7 +137,7 @@ public final class FetchManager {
    * The ticket must be {@link #release released} when the fetch completes or is cancelled.
    *
    * @param type  the category of fetch
-   * @param owner the object performing the fetch (SampleFile, Track, DrawChromData, etc.)
+   * @param owner the object performing the fetch (AlignmentFile, Track, ChromosomeCanvas, etc.)
    * @param stack the DrawStack this fetch belongs to (may be null for stack-independent fetches)
    * @param chrom chromosome name
    * @param start fetch start position (bp)

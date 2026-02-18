@@ -2,13 +2,15 @@ package org.baseplayer.draw;
 
 import java.util.List;
 
+import org.baseplayer.alignment.BAMRecord;
+import org.baseplayer.alignment.CoverageCalculator;
+import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.Settings;
-import org.baseplayer.reads.bam.BAMRecord;
-import org.baseplayer.reads.bam.CoverageCalculator;
-import org.baseplayer.reads.bam.SampleFile;
+import org.baseplayer.io.readers.BedFileReader.BedFeature;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.tracks.BedTrack;
 import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.Variant;
 
@@ -21,7 +23,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.stage.Window;
 
-public class DrawSampleData extends DrawFunctions {
+public class AlignmentCanvas extends GenomicCanvas {
   
   public Image snapshot;
   private final GraphicsContext gc;
@@ -37,7 +39,7 @@ public class DrawSampleData extends DrawFunctions {
   private BAMRecord hoveredRead = null;
   private final ReadInfoPopup readInfoPopup = new ReadInfoPopup();
 
-  public DrawSampleData(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
+  public AlignmentCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
     widthProperty().addListener((obs, oldVal, newVal) -> { resizing = true; setStartEnd(drawStack.start, drawStack.end); resizing = false; });
     gc = getGraphicsContext2D();
@@ -198,7 +200,7 @@ public class DrawSampleData extends DrawFunctions {
           double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
           for (Sample sample : track.getSamples()) {
             if (!sample.visible) continue;
-            drawSampleFileReads(sample, chrom, start, end, sampleY, sampleH, coverageFractionH);
+            drawAlignmentFileReads(sample, chrom, start, end, sampleY, sampleH, coverageFractionH);
           }
         }
       }
@@ -211,11 +213,11 @@ public class DrawSampleData extends DrawFunctions {
   // Vertical spacing between read rows
 
   /**
-   * Draw one SampleFile's reads (without coverage) in the given track strip.
+   * Draw one AlignmentFile's reads (without coverage) in the given track strip.
    * Coverage and methylation are now handled by CoverageDrawer.
    * The strip is split: coverage area on top (already drawn), reads below.
    */
-  private void drawSampleFileReads(Sample sample, String chrom, int start, int end,
+  private void drawAlignmentFileReads(Sample sample, String chrom, int start, int end,
                                double sampleY, double sampleH, double coverageH) {
     // Handle BED files differently
     if (sample.getDataType() == Sample.DataType.BED) {
@@ -223,13 +225,13 @@ public class DrawSampleData extends DrawFunctions {
       return;
     }
     
-    SampleFile bamFile = sample.getBamFile();
+    AlignmentFile bamFile = sample.getBamFile();
     if (bamFile == null) return;
     
     // BAM/CRAM handling below
     // Show loading indicator if this file is currently fetching for this stack
     boolean isHoverStack = (drawStack == org.baseplayer.controllers.MainController.hoverStack);
-    boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !DrawFunctions.navigating);
+    boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !GenomicCanvas.navigating);
     
     if (shouldShowLoading) {
       drawLoadingIndicator(sampleY, sampleH);
@@ -248,7 +250,7 @@ public class DrawSampleData extends DrawFunctions {
     if (reads == null || reads.isEmpty()) {
       // During navigation, skip fetches for main tracks to keep scroll snappy
       // Only hover stacks can fetch during navigation
-      if (DrawFunctions.navigating && !isHoverStack) {
+      if (GenomicCanvas.navigating && !isHoverStack) {
         return;
       }
       // Fallback: try getReads (might not be cached yet)
@@ -343,11 +345,11 @@ public class DrawSampleData extends DrawFunctions {
   /**
    * Draw chromosome-level sampled coverage for a sample file.
    * Used when zoomed out beyond MAX_COVERAGE_VIEW_LENGTH (>2M).
-   * Requests sparse sampling from SampleFile and draws the result as a coverage profile.
+   * Requests sparse sampling from AlignmentFile and draws the result as a coverage profile.
    */
   private void drawSampledCoverage(Sample sample, String chrom, int start, int end,
                                     double sampleY, double sampleH) {
-    SampleFile bamFile = sample.getBamFile();
+    AlignmentFile bamFile = sample.getBamFile();
     if (bamFile == null) return;
 
     double cw = getWidth();
@@ -475,10 +477,10 @@ public class DrawSampleData extends DrawFunctions {
    */
   private void drawBedData(Sample sample, String chrom, int start, int end,
                            double sampleY, double sampleH) {
-    org.baseplayer.tracks.BedTrack bedTrack = sample.getBedTrack();
+    BedTrack bedTrack = sample.getBedTrack();
     if (bedTrack == null) return;
 
-    List<org.baseplayer.tracks.BedTrack.BedFeature> features = bedTrack.getFeatures(chrom);
+    List<BedFeature> features = bedTrack.getFeatures(chrom);
     if (features == null || features.isEmpty()) return;
 
     // Thin bars positioned near the bottom of the track
@@ -489,7 +491,7 @@ public class DrawSampleData extends DrawFunctions {
     boolean transparent = sample.overlay;
     double alpha = transparent ? 0.5 : 1.0;
 
-    for (org.baseplayer.tracks.BedTrack.BedFeature feature : features) {
+    for (BedFeature feature : features) {
       // Skip if outside view (BED is 0-based, our view is 1-based)
       if (feature.end() < start || feature.start() + 1 > end) continue;
 
@@ -716,7 +718,7 @@ public class DrawSampleData extends DrawFunctions {
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
-        SampleFile bamFile = sample.getBamFile();
+        AlignmentFile bamFile = sample.getBamFile();
         if (bamFile == null) continue;
 
         List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
@@ -786,7 +788,7 @@ public class DrawSampleData extends DrawFunctions {
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
-        SampleFile bamFile = sample.getBamFile();
+        AlignmentFile bamFile = sample.getBamFile();
         if (bamFile == null) continue;
 
         List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
