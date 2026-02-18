@@ -8,7 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import org.baseplayer.MainApp;
-import org.baseplayer.io.UcscApiClient;
+import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.UcscTrackInfo;
 
 import javafx.application.Platform;

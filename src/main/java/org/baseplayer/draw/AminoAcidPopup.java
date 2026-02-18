@@ -3,8 +3,8 @@ package org.baseplayer.draw;
 import java.util.List;
 import java.util.Map;
 
-import org.baseplayer.io.AlphaFoldApiClient;
-import org.baseplayer.io.AlphaFoldApiClient.MissensePrediction;
+import org.baseplayer.io.APIs.AlphaFoldApiClient;
+import org.baseplayer.io.APIs.AlphaFoldApiClient.MissensePrediction;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.GeneColors;
 

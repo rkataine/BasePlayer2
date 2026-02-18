@@ -2,8 +2,8 @@ package org.baseplayer.tracks;
 
 import java.util.concurrent.CompletableFuture;
 
-import org.baseplayer.io.UcscApiClient;
-import org.baseplayer.io.UcscApiClient.ConservationData;
+import org.baseplayer.io.APIs.UcscApiClient;
+import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.scene.canvas.GraphicsContext;

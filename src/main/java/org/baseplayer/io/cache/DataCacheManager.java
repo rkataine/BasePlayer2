@@ -1,4 +1,4 @@
-package org.baseplayer.io;
+package org.baseplayer.io.cache;
 
 import java.io.IOException;
 import java.nio.file.Files;

@@ -9,7 +9,7 @@ import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.gene.Gene;
 import org.baseplayer.gene.Transcript;
-import org.baseplayer.io.AlphaFoldApiClient;
+import org.baseplayer.io.APIs.AlphaFoldApiClient;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;

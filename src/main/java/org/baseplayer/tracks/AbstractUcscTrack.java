@@ -6,9 +6,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.io.UcscApiClient.ConservationData;
 import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.application.Platform;

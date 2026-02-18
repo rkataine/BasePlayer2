@@ -1,6 +1,6 @@
 package org.baseplayer.tracks;
 
-import org.baseplayer.io.GnomadApiClient.Variant;
+import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;

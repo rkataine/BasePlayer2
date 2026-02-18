@@ -7,11 +7,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.io.GnomadApiClient;
-import org.baseplayer.io.GnomadApiClient.Variant;
-import org.baseplayer.io.GnomadApiClient.VariantData;
 import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.io.APIs.GnomadApiClient;
+import org.baseplayer.io.APIs.GnomadApiClient.Variant;
+import org.baseplayer.io.APIs.GnomadApiClient.VariantData;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.application.Platform;
