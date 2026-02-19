@@ -1,4 +1,6 @@
-package org.baseplayer.draw;
+package org.baseplayer.gene.draw;
+
+import org.baseplayer.draw.DrawStack;
 
 import java.util.ArrayList;
 import java.util.List;

@@ -1,9 +1,10 @@
-package org.baseplayer.tracks;
+package org.baseplayer.features;
 
 import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 import org.baseplayer.ui.InfoPopup;
 import org.baseplayer.ui.PopupContent;
 import org.baseplayer.ui.PopupContent.Badge;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.paint.Color;
 
@@ -13,10 +14,7 @@ import javafx.scene.paint.Color;
  */
 public final class GnomadVariantPopup {
 
-  private static final Color LOF_COLOR       = Color.rgb(200, 50, 50);
-  private static final Color MISSENSE_COLOR  = Color.rgb(220, 140, 40);
-  private static final Color SYNONYMOUS_COLOR = Color.rgb(80, 140, 200);
-  private static final Color OTHER_COLOR     = Color.rgb(120, 120, 120);
+  // Colors defined in DrawColors.GNOMAD_*
 
   private GnomadVariantPopup() {} // utility class
 
@@ -58,7 +56,7 @@ public final class GnomadVariantPopup {
 
     if (variant.isLoF()) {
       c.separator();
-      c.badges(new Badge("Loss of Function", LOF_COLOR, Color.WHITE));
+      c.badges(new Badge("Loss of Function", DrawColors.GNOMAD_LOF, Color.WHITE));
     }
 
     c.separator();
@@ -75,10 +73,10 @@ public final class GnomadVariantPopup {
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private static Color getImpactColor(Variant v) {
-    if (v.isLoF()) return LOF_COLOR;
-    if (v.isMissense()) return MISSENSE_COLOR;
-    if (v.isSynonymous()) return SYNONYMOUS_COLOR;
-    return OTHER_COLOR;
+    if (v.isLoF()) return DrawColors.GNOMAD_LOF;
+    if (v.isMissense()) return DrawColors.GNOMAD_MISSENSE;
+    if (v.isSynonymous()) return DrawColors.GNOMAD_SYNONYMOUS;
+    return DrawColors.GNOMAD_OTHER;
   }
 
   private static String formatAlleleFrequency(double af) {

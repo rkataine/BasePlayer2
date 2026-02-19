@@ -1,4 +1,4 @@
-package org.baseplayer.tracks;
+package org.baseplayer.features;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -24,8 +24,10 @@ import javafx.stage.FileChooser;
  */
 public class FeatureTracksCanvas extends GenomicCanvas {
   
-  private static final double HEADER_HEIGHT = 18;
-  private static final double TRACK_PADDING = 2;
+  /** Panel header height in pixels — shared with {@link FeatureTracksSidebar}. */
+  static final double HEADER_HEIGHT = 18;
+  /** Padding between tracks in pixels — shared with {@link FeatureTracksSidebar}. */
+  static final double TRACK_PADDING = 2;
   
   private final GraphicsContext gc;
   private final List<Track> tracks = new ArrayList<>();

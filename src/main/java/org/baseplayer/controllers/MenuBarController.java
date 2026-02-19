@@ -10,7 +10,7 @@ import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.controllers.commands.ViewCommands;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.draw.AlignmentCanvas;
+import org.baseplayer.alignment.draw.AlignmentCanvas;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.services.SampleRegistry;

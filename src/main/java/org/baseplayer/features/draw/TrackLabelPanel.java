@@ -1,4 +1,7 @@
-package org.baseplayer.draw;
+package org.baseplayer.features.draw;
+
+import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
 
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;

@@ -5,14 +5,17 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.baseplayer.controllers.MainController;
 import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.alignment.draw.AlignmentCanvas;
+import org.baseplayer.chromosome.draw.CytobandCanvas;
+import org.baseplayer.controllers.MainController;
+import org.baseplayer.features.ConservationTrack;
+import org.baseplayer.features.FeatureTracksCanvas;
+import org.baseplayer.features.GnomadTrack;
+import org.baseplayer.gene.draw.ChromosomeCanvas;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
-import org.baseplayer.tracks.ConservationTrack;
-import org.baseplayer.tracks.FeatureTracksCanvas;
-import org.baseplayer.tracks.GnomadTrack;
 import org.baseplayer.variant.Variant;
 
 import javafx.geometry.Insets;

@@ -1,12 +1,12 @@
-package org.baseplayer.draw;
+package org.baseplayer.gene.draw;
 
 import java.util.List;
-import java.util.Map;
 
 import org.baseplayer.io.APIs.AlphaFoldApiClient;
 import org.baseplayer.io.APIs.AlphaFoldApiClient.MissensePrediction;
 import org.baseplayer.ui.InfoPopup;
 import org.baseplayer.ui.PopupContent;
+import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.GeneColors;
 
@@ -41,70 +41,6 @@ public class AminoAcidPopup {
   private String geneName;
   private boolean isReverse;
 
-  // ── Static data tables ─────────────────────────────────────────────────────
-
-  private static final Map<Character, String> AMINO_ACID_NAMES = Map.ofEntries(
-      Map.entry('A', "Alanine"),      Map.entry('C', "Cysteine"),
-      Map.entry('D', "Aspartic Acid"),Map.entry('E', "Glutamic Acid"),
-      Map.entry('F', "Phenylalanine"),Map.entry('G', "Glycine"),
-      Map.entry('H', "Histidine"),    Map.entry('I', "Isoleucine"),
-      Map.entry('K', "Lysine"),       Map.entry('L', "Leucine"),
-      Map.entry('M', "Methionine"),   Map.entry('N', "Asparagine"),
-      Map.entry('P', "Proline"),      Map.entry('Q', "Glutamine"),
-      Map.entry('R', "Arginine"),     Map.entry('S', "Serine"),
-      Map.entry('T', "Threonine"),    Map.entry('V', "Valine"),
-      Map.entry('W', "Tryptophan"),   Map.entry('Y', "Tyrosine"),
-      Map.entry('*', "Stop Codon")
-  );
-
-  private static final Map<Character, String> AMINO_ACID_PROPERTIES = Map.ofEntries(
-      Map.entry('A', "Hydrophobic, small"),
-      Map.entry('C', "Polar, sulfur-containing"),
-      Map.entry('D', "Charged negative (acidic)"),
-      Map.entry('E', "Charged negative (acidic)"),
-      Map.entry('F', "Hydrophobic, aromatic"),
-      Map.entry('G', "Hydrophobic, smallest"),
-      Map.entry('H', "Charged positive (basic), aromatic"),
-      Map.entry('I', "Hydrophobic, branched-chain"),
-      Map.entry('K', "Charged positive (basic)"),
-      Map.entry('L', "Hydrophobic, branched-chain"),
-      Map.entry('M', "Hydrophobic, sulfur-containing, start codon"),
-      Map.entry('N', "Polar, amide"),
-      Map.entry('P', "Hydrophobic, rigid (imino acid)"),
-      Map.entry('Q', "Polar, amide"),
-      Map.entry('R', "Charged positive (basic)"),
-      Map.entry('S', "Polar, hydroxyl"),
-      Map.entry('T', "Polar, hydroxyl"),
-      Map.entry('V', "Hydrophobic, branched-chain"),
-      Map.entry('W', "Hydrophobic, aromatic, largest"),
-      Map.entry('Y', "Polar, aromatic"),
-      Map.entry('*', "Translation termination")
-  );
-
-  private static final Map<Character, String[]> SYNONYMOUS_CODONS = Map.ofEntries(
-      Map.entry('A', new String[]{"GCT", "GCC", "GCA", "GCG"}),
-      Map.entry('C', new String[]{"TGT", "TGC"}),
-      Map.entry('D', new String[]{"GAT", "GAC"}),
-      Map.entry('E', new String[]{"GAA", "GAG"}),
-      Map.entry('F', new String[]{"TTT", "TTC"}),
-      Map.entry('G', new String[]{"GGT", "GGC", "GGA", "GGG"}),
-      Map.entry('H', new String[]{"CAT", "CAC"}),
-      Map.entry('I', new String[]{"ATT", "ATC", "ATA"}),
-      Map.entry('K', new String[]{"AAA", "AAG"}),
-      Map.entry('L', new String[]{"TTA", "TTG", "CTT", "CTC", "CTA", "CTG"}),
-      Map.entry('M', new String[]{"ATG"}),
-      Map.entry('N', new String[]{"AAT", "AAC"}),
-      Map.entry('P', new String[]{"CCT", "CCC", "CCA", "CCG"}),
-      Map.entry('Q', new String[]{"CAA", "CAG"}),
-      Map.entry('R', new String[]{"CGT", "CGC", "CGA", "CGG", "AGA", "AGG"}),
-      Map.entry('S', new String[]{"TCT", "TCC", "TCA", "TCG", "AGT", "AGC"}),
-      Map.entry('T', new String[]{"ACT", "ACC", "ACA", "ACG"}),
-      Map.entry('V', new String[]{"GTT", "GTC", "GTA", "GTG"}),
-      Map.entry('W', new String[]{"TGG"}),
-      Map.entry('Y', new String[]{"TAT", "TAC"}),
-      Map.entry('*', new String[]{"TAA", "TAG", "TGA"})
-  );
-
   // ── Public API ─────────────────────────────────────────────────────────────
 
   public void setData(char aminoAcid, String codon, int aminoAcidNumber,
@@ -131,9 +67,9 @@ public class AminoAcidPopup {
 
   private PopupContent buildContent() {
     PopupContent c = new PopupContent();
-    Color aaColor = GeneColors.getAminoAcidColor(aminoAcidChar);
-    String threeLetterCode = GeneColors.getAminoAcidThreeLetter(aminoAcidChar);
-    String fullName = AMINO_ACID_NAMES.getOrDefault(aminoAcidChar, "Unknown");
+    Color aaColor = AminoAcids.getColor(aminoAcidChar);
+    String threeLetterCode = AminoAcids.getThreeLetter(aminoAcidChar);
+    String fullName = AminoAcids.getName(aminoAcidChar);
 
     // Header: amino acid badge + name (custom node for badge styling)
     HBox header = new HBox(10);
@@ -177,15 +113,14 @@ public class AminoAcidPopup {
 
     c.separator();
     c.section("Properties");
-    String props = AMINO_ACID_PROPERTIES.getOrDefault(aminoAcidChar, "Unknown");
-    c.text(props);
+    c.text(AminoAcids.getProperties(aminoAcidChar));
 
     c.separator();
     c.section("Synonymous Codons");
 
     // Codon badges (custom FlowPane node)
-    String[] synonymousCodons = SYNONYMOUS_CODONS.get(aminoAcidChar);
-    if (synonymousCodons != null) {
+    String[] synonymousCodons = AminoAcids.getSynonymousCodons(aminoAcidChar);
+    if (synonymousCodons.length > 0) {
       FlowPane codonBox = new FlowPane(6, 4);
       codonBox.setAlignment(Pos.CENTER_LEFT);
       codonBox.setPrefWrapLength(MAX_WIDTH - 24);
@@ -304,9 +239,9 @@ public class AminoAcidPopup {
           "-fx-background-color: %s; -fx-padding: 1 4; -fx-background-radius: 2;", hex)));
 
       String tooltip = String.format("p.%s%d%s (score: %.3f)",
-          GeneColors.getAminoAcidThreeLetter(pred.referenceAA()),
+          AminoAcids.getThreeLetter(pred.referenceAA()),
           pred.position(),
-          GeneColors.getAminoAcidThreeLetter(pred.alternateAA()),
+          AminoAcids.getThreeLetter(pred.alternateAA()),
           pred.pathogenicity());
       Tooltip.install(badge, new Tooltip(tooltip));
 

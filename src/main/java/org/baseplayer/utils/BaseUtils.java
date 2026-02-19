@@ -27,4 +27,20 @@ public class BaseUtils {
 	public static String formatNumber(long number) {
 		return NumberFormat.getNumberInstance(Locale.US).format(number);
 	}
+
+  /** Returns the reverse complement of a DNA sequence (A↔T, G↔C, 5′→3′). */
+  public static String reverseComplement(String sequence) {
+    StringBuilder sb = new StringBuilder(sequence.length());
+    for (int i = sequence.length() - 1; i >= 0; i--) {
+      char base = sequence.charAt(i);
+      sb.append(switch (Character.toUpperCase(base)) {
+        case 'A' -> 'T';
+        case 'T' -> 'A';
+        case 'G' -> 'C';
+        case 'C' -> 'G';
+        default  -> 'N';
+      });
+    }
+    return sb.toString();
+  }
 }

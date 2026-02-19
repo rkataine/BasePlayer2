@@ -2,11 +2,11 @@ package org.baseplayer.services;
 
 import java.util.List;
 
-import org.baseplayer.draw.AlignmentCanvas;
+import org.baseplayer.alignment.draw.AlignmentCanvas;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.draw.SidebarPanel;
-import org.baseplayer.tracks.FeatureTracksSidebar;
+import org.baseplayer.features.draw.SidebarPanel;
+import org.baseplayer.features.FeatureTracksSidebar;
 import org.baseplayer.utils.BaseUtils;
 
 import javafx.beans.property.IntegerProperty;

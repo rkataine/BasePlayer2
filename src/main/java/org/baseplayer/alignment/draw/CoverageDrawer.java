@@ -1,11 +1,13 @@
-package org.baseplayer.draw;
+package org.baseplayer.alignment.draw;
 
 import java.util.List;
 import java.util.function.Function;
 
-import org.baseplayer.io.Settings;
-import org.baseplayer.alignment.BAMRecord;
 import org.baseplayer.alignment.AlignmentFile;
+import org.baseplayer.alignment.BAMRecord;
+import org.baseplayer.alignment.CoverageCalculator;
+import org.baseplayer.draw.DrawStack;
+import org.baseplayer.io.Settings;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.services.ReferenceGenomeService;
@@ -733,6 +735,106 @@ public class CoverageDrawer {
   }
 
   /** In-place smoothing for methylation ratio arrays, handling -1 (no data) gaps. */
+  /**
+   * Draws chromosome-level sampled coverage for one sample.
+   * Used when zoomed out beyond the full-coverage view length.
+   * Requests sparse sampling from {@link AlignmentFile} and draws the result
+   * as a smooth filled coverage profile.
+   */
+  public void drawSampled(GraphicsContext gc, Sample sample,
+                           String chrom, int start, int end,
+                           double sampleY, double sampleH, double canvasWidth,
+                           Function<Double, Double> chromPosToScreenPos,
+                           DrawStack drawStack) {
+    AlignmentFile bamFile = sample.getBamFile();
+    if (bamFile == null) return;
+
+    int numPoints = Settings.get().getSampledCoveragePoints();
+    CoverageCalculator.SampledCoverage sampled =
+        bamFile.requestSampledCoverage(chrom, start, end, numPoints, drawStack);
+
+    if (sampled == null) {
+      gc.setFill(Color.web("#888888"));
+      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
+      gc.fillText("Sampling coverage...", 10, sampleY + sampleH / 2 + 4);
+      return;
+    }
+    if (sampled.samplesCompleted == 0) {
+      gc.setFill(Color.web("#888888"));
+      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
+      String msg = sampled.chunksProcessed > 0
+          ? "Sampling coverage... (" + sampled.chunksProcessed + " chunks processed)"
+          : "Sampling coverage...";
+      gc.fillText(msg, 10, sampleY + sampleH / 2 + 4);
+      return;
+    }
+
+    int    count    = sampled.samplesCompleted;
+    double maxDepth = sampled.maxDepth;
+    if (maxDepth <= 0) return;
+
+    double[] vals = sampled.smoothed != null ? sampled.smoothed : sampled.depths;
+    double yBottom        = sampleY + sampleH - 1;
+    double scale          = (sampleH - 14) / maxDepth;
+    double minVisibleH    = Math.max(4, (sampleH - 14) * 0.08);
+
+    // Merge: restore peaks that smoothing suppressed
+    double[] merged = new double[count];
+    for (int i = 0; i < count; i++) {
+      merged[i] = vals[i];
+      if (sampled.depths[i] > 0 && merged[i] < sampled.depths[i] * 0.1)
+        merged[i] = sampled.depths[i];
+    }
+
+    double[] sx = new double[count];
+    double[] sy = new double[count];
+    for (int i = 0; i < count; i++) {
+      sx[i] = chromPosToScreenPos.apply((double) sampled.positions[i]);
+      double h = merged[i] * scale;
+      if (sampled.depths[i] > 0 && h < minVisibleH) h = minVisibleH;
+      sy[i] = h;
+    }
+    double strideX = count >= 2 ? sx[1] - sx[0] : canvasWidth / count;
+
+    gc.setFill(DrawColors.COVERAGE_FILL);
+    // First pass: guarantee a 1-px column for every non-zero sample
+    for (int i = 0; i < count; i++) {
+      if (sampled.depths[i] > 0 && sy[i] >= 0.5) {
+        double px = Math.floor(sx[i]);
+        if (px >= 0 && px < canvasWidth)
+          gc.fillRect(px, yBottom - sy[i], 1, sy[i]);
+      }
+    }
+    // Second pass: smooth interpolation between samples
+    double drawStart = Math.max(0, sx[0] - strideX * 0.5);
+    double drawEnd   = Math.min(canvasWidth, sx[count - 1] + strideX * 0.5);
+    if (drawEnd > drawStart) {
+      int seg = 0;
+      for (double px = drawStart; px < drawEnd; px += 1.0) {
+        while (seg < count - 2 && sx[seg + 1] < px) seg++;
+        double h;
+        if      (px < sx[0])    { h = sy[0]; }
+        else if (seg >= count-1) { h = sy[count - 1]; }
+        else {
+          double segW = sx[seg + 1] - sx[seg];
+          h = segW < 0.001 ? sy[seg]
+              : sy[seg] + (px - sx[seg]) / segW * (sy[seg + 1] - sy[seg]);
+        }
+        if (h >= 0.5) gc.fillRect(px, yBottom - h, 1, h);
+      }
+    }
+
+    if (!sampled.complete) {
+      int pct = (int)(100.0 * count / sampled.numSamples);
+      gc.setFill(Color.web("#888888"));
+      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
+      gc.fillText("Sampling " + pct + "%", 3, sampleY + sampleH - 4);
+    }
+    gc.setFill(Color.web("#aaaaaa"));
+    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
+    gc.fillText(String.valueOf((int) maxDepth), 3, sampleY + 10);
+  }
+
   static void smoothMethylRatio(double[] ratios) {
     int n = ratios.length;
     if (n < 5) return;

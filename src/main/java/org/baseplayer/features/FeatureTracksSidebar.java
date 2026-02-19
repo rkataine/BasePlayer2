@@ -1,4 +1,4 @@
-package org.baseplayer.tracks;
+package org.baseplayer.features;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -8,6 +8,8 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
+import static org.baseplayer.features.FeatureTracksCanvas.HEADER_HEIGHT;
+import static org.baseplayer.features.FeatureTracksCanvas.TRACK_PADDING;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
 
@@ -38,8 +40,7 @@ import javafx.stage.Popup;
  */
 public class FeatureTracksSidebar {
   
-  private static final double HEADER_HEIGHT = 18;
-  private static final double TRACK_PADDING = 2;
+  // HEADER_HEIGHT and TRACK_PADDING are defined in FeatureTracksCanvas (shared source of truth)
   private static final double ICON_SIZE = 14;
   private static final double ICON_PADDING = 4;
   

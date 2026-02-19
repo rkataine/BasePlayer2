@@ -37,10 +37,10 @@ public class GenomicCanvas extends Canvas {
   public GraphicsContext reactivegc;
 
   
-  Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
+  protected Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
   // Note: heightToScreen currently unused, kept for potential future use
-  Function<Double, Double> heightToScreen = height -> height; // Placeholder
-  Function<Double, Integer> screenPosToChromPos = screenPos -> (int)(drawStack.start + screenPos * drawStack.scale);
+  protected Function<Double, Double> heightToScreen = height -> height; // Placeholder
+  protected Function<Double, Integer> screenPosToChromPos = screenPos -> (int)(drawStack.start + screenPos * drawStack.scale);
   private double mousePressedX;
   private final Canvas reactiveCanvas;
   private double mouseDraggedX;
@@ -318,7 +318,7 @@ public class GenomicCanvas extends Canvas {
       update.set(!update.get());
     }
   }
-  void clearReactive() { reactivegc.clearRect(0, 0, getWidth(), getHeight()); }
+  protected void clearReactive() { reactivegc.clearRect(0, 0, getWidth(), getHeight()); }
 
   /**
    * Returns true while the user is dragging (or just released a drag).
@@ -345,7 +345,7 @@ public class GenomicCanvas extends Canvas {
     }
     scrollIdleTimer.playFromStart();
   }
-  void setStart(double start) {
+  public void setStart(double start) {
     if (start < 1) start = 1;
     if (start + drawStack.viewLength > drawStack.chromSize + 1) return;
     setStartEnd(start, start+drawStack.viewLength);

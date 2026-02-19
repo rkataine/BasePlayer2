@@ -4,13 +4,13 @@ import java.util.List;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.draw.SidebarPanel;
+import org.baseplayer.features.FeatureTracksSidebar;
+import org.baseplayer.features.draw.SidebarPanel;
 import org.baseplayer.io.ReferenceGenome;
 import org.baseplayer.services.EventCoordinator;
 import org.baseplayer.services.InitializationService;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
-import org.baseplayer.tracks.FeatureTracksSidebar;
 import org.baseplayer.utils.BaseUtils;
 
 import javafx.application.Platform;
@@ -399,7 +399,7 @@ public class MainController {
    * Get the feature tracks canvas (from the first draw stack).
    * Used by SampleDataManager to add BED/BigWig tracks.
    */
-  public static org.baseplayer.tracks.FeatureTracksCanvas getFeatureTracksCanvas() {
+  public static org.baseplayer.features.FeatureTracksCanvas getFeatureTracksCanvas() {
     if (drawStacks.isEmpty()) return null;
     return drawStacks.get(0).featureTracksCanvas;
   }

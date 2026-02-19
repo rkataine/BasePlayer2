@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 import org.baseplayer.alignment.AlignmentFile;
-import org.baseplayer.tracks.BedTrack;
+import org.baseplayer.features.BedTrack;
 
 /**
  * Represents a single loaded data file (BAM, BED, VCF, etc.) under an individual.

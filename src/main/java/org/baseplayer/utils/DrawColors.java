@@ -105,4 +105,10 @@ public final class DrawColors {
   public static final Color MISMATCH_G = Color.rgb(210, 180, 60);
   public static final Color MISMATCH_T = Color.rgb(220, 80, 80);
   public static final Color MISMATCH_OTHER = Color.rgb(150, 150, 150);
+
+  // ── gnomAD variant consequence colors ──
+  public static final Color GNOMAD_LOF        = Color.rgb(200, 50, 50);   // Red   - loss of function
+  public static final Color GNOMAD_MISSENSE   = Color.rgb(220, 140, 40);  // Orange - missense
+  public static final Color GNOMAD_SYNONYMOUS = Color.rgb(80, 140, 200);  // Blue  - synonymous
+  public static final Color GNOMAD_OTHER      = Color.rgb(120, 120, 120); // Gray  - other
 }

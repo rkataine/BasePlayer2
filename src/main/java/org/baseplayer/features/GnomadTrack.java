@@ -1,4 +1,4 @@
-package org.baseplayer.tracks;
+package org.baseplayer.features;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -14,6 +14,7 @@ import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 import org.baseplayer.io.APIs.GnomadApiClient.VariantData;
 import org.baseplayer.ui.InfoPopup;
 import org.baseplayer.utils.AppFonts;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
@@ -36,11 +37,7 @@ public class GnomadTrack extends AbstractTrack {
   private static final int MAX_REGION_SIZE = 50_000;
   private static final int FETCH_DELAY_MS = 1500;  // Wait before fetching
   
-  // Colors for different variant types
-  private static final Color LOF_COLOR = Color.rgb(200, 50, 50);      // Red - loss of function
-  private static final Color MISSENSE_COLOR = Color.rgb(220, 140, 40); // Orange - missense
-  private static final Color SYNONYMOUS_COLOR = Color.rgb(80, 140, 200); // Blue - synonymous
-  private static final Color OTHER_COLOR = Color.rgb(120, 120, 120);   // Gray - other
+  // Colors for different variant types — defined in DrawColors.GNOMAD_*
   
   private VariantData currentData = null;
   private String cachedChromosome = null;
@@ -302,13 +299,13 @@ public class GnomadTrack extends AbstractTrack {
   
   private Color getVariantColor(Variant v) {
     if (v.isLoF()) {
-      return LOF_COLOR;
+      return DrawColors.GNOMAD_LOF;
     } else if (v.isMissense()) {
-      return MISSENSE_COLOR;
+      return DrawColors.GNOMAD_MISSENSE;
     } else if (v.isSynonymous()) {
-      return SYNONYMOUS_COLOR;
+      return DrawColors.GNOMAD_SYNONYMOUS;
     }
-    return OTHER_COLOR;
+    return DrawColors.GNOMAD_OTHER;
   }
   
   private void drawLegend(GraphicsContext gc, double x, double y) {
@@ -318,25 +315,25 @@ public class GnomadTrack extends AbstractTrack {
     double spacing = 40;
     
     // LoF
-    gc.setFill(LOF_COLOR);
+    gc.setFill(DrawColors.GNOMAD_LOF);
     gc.fillRect(x, y + 2, boxSize, boxSize);
     gc.setFill(Color.rgb(150, 150, 150));
     gc.fillText("LoF", x + boxSize + 2, y + 8);
     
     // Missense
-    gc.setFill(MISSENSE_COLOR);
+    gc.setFill(DrawColors.GNOMAD_MISSENSE);
     gc.fillRect(x + spacing, y + 2, boxSize, boxSize);
     gc.setFill(Color.rgb(150, 150, 150));
     gc.fillText("Mis", x + spacing + boxSize + 2, y + 8);
     
     // Synonymous
-    gc.setFill(SYNONYMOUS_COLOR);
+    gc.setFill(DrawColors.GNOMAD_SYNONYMOUS);
     gc.fillRect(x + spacing * 2, y + 2, boxSize, boxSize);
     gc.setFill(Color.rgb(150, 150, 150));
     gc.fillText("Syn", x + spacing * 2 + boxSize + 2, y + 8);
     
     // Other
-    gc.setFill(OTHER_COLOR);
+    gc.setFill(DrawColors.GNOMAD_OTHER);
     gc.fillRect(x + spacing * 3, y + 2, boxSize, boxSize);
     gc.setFill(Color.rgb(150, 150, 150));
     gc.fillText("Oth", x + spacing * 3 + boxSize + 2, y + 8);

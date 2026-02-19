@@ -13,9 +13,9 @@ import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
-import org.baseplayer.tracks.BedTrack;
-import org.baseplayer.tracks.BigWigTrack;
-import org.baseplayer.tracks.FeatureTracksCanvas;
+import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.features.FeatureTracksCanvas;
 
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;

@@ -1,4 +1,4 @@
-package org.baseplayer.draw;
+package org.baseplayer.features.draw;
 
 import javafx.scene.canvas.Canvas;
 import javafx.scene.layout.StackPane;

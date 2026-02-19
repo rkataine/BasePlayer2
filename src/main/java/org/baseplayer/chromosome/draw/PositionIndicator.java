@@ -1,4 +1,6 @@
-package org.baseplayer.draw;
+package org.baseplayer.chromosome.draw;
+
+import org.baseplayer.draw.DrawStack;
 
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;

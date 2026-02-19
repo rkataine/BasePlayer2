@@ -1,5 +1,7 @@
-package org.baseplayer.draw;
+package org.baseplayer.chromosome.draw;
 
+import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.Cytoband;

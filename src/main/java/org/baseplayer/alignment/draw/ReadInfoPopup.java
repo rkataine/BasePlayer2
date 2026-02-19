@@ -1,4 +1,4 @@
-package org.baseplayer.draw;
+package org.baseplayer.alignment.draw;
 
 import java.util.ArrayList;
 import java.util.List;
