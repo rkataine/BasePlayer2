@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture;
 
 import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
+import org.baseplayer.ui.InfoPopup;
 
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
@@ -19,7 +20,7 @@ public class UcscGenericTrack extends AbstractUcscTrack {
   private final String trackName;  // UCSC internal track name
   
   // Click handling popup
-  private final UcscTrackDataPopup popup = new UcscTrackDataPopup();
+  private final InfoPopup popup = new InfoPopup();
   
   public UcscGenericTrack(String trackName, String displayName, String genome) {
     super(displayName, "UCSC: " + trackName);
@@ -176,16 +177,18 @@ public class UcscGenericTrack extends AbstractUcscTrack {
     
     // Show popup with the data
     Platform.runLater(() -> {
-      popup.setData(
-          getName(),              // Track display name
-          trackName,              // UCSC track name
-          chromosome,
-          clickedPosition,
-          scoreValue,
-          minVal,
-          maxVal
+      popup.show(
+          UcscTrackDataPopup.buildContent(
+              getName(),              // Track display name
+              trackName,              // UCSC track name
+              chromosome,
+              clickedPosition,
+              scoreValue,
+              minVal,
+              maxVal
+          ),
+          owner, screenX, screenY
       );
-      popup.show(owner, screenX, screenY);
     });
     
     return true;

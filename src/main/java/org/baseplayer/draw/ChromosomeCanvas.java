@@ -5,12 +5,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.gene.Gene;
 import org.baseplayer.gene.Transcript;
-import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
@@ -113,9 +113,12 @@ public class ChromosomeCanvas extends GenomicCanvas {
     if (!AnnotationData.isGenesLoaded() && !AnnotationData.isGenesLoading()) {
       AnnotationLoader.loadGenesBackground();
     }
-    
+
     // Double-click to zoom in, single click to show gene/amino acid info
     reactiveCanvas.setOnMouseClicked(event -> {
+      // Skip if this click is the tail-end of a drag gesture anywhere (local or global)
+      if (isDragging()) return;
+
       if (event.getClickCount() == 2) {
         genePopup.hide();
         aminoAcidPopup.hide();
@@ -168,6 +171,12 @@ public class ChromosomeCanvas extends GenomicCanvas {
     
     // Mouse move for hover effect
     reactiveCanvas.setOnMouseMoved(event -> {
+      // Suppress all hover while any drag (local or global) is active
+      if (isDragging()) {
+        clearHover();
+        return;
+      }
+
       double mouseX = event.getX();
       double mouseY = event.getY();
 
@@ -201,16 +210,24 @@ public class ChromosomeCanvas extends GenomicCanvas {
     });
     
     // Clear hover when mouse exits
-    reactiveCanvas.setOnMouseExited(event -> {
-      if (hoveredGene != null || hoveredAminoAcid != null) {
-        hoveredGene = null;
-        hoveredAminoAcid = null;
-        reactiveCanvas.setCursor(Cursor.DEFAULT);
-        drawReactive();
-      }
-    });
+    reactiveCanvas.setOnMouseExited(event -> clearHover());
   }
   
+  /** Clears hover state and resets the cursor, triggering a redraw if needed. */
+  private void clearHover() {
+    if (hoveredGene != null || hoveredAminoAcid != null) {
+      hoveredGene = null;
+      hoveredAminoAcid = null;
+      getReactiveCanvas().setCursor(javafx.scene.Cursor.DEFAULT);
+      drawReactive();
+    }
+  }
+
+  @Override
+  protected void onDragActive() {
+    clearHover();
+  }
+
   private Gene findGeneAt(double x, double y) {
     for (GeneHitBox hitBox : visibleGeneHitBoxes) {
       if (hitBox.contains(x, y)) {

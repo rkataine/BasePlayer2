@@ -12,6 +12,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.APIs.GnomadApiClient;
 import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 import org.baseplayer.io.APIs.GnomadApiClient.VariantData;
+import org.baseplayer.ui.InfoPopup;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.application.Platform;
@@ -50,7 +51,7 @@ public class GnomadTrack extends AbstractTrack {
   private Runnable onDataLoaded;
   
   // Click handling
-  private final GnomadVariantPopup popup = new GnomadVariantPopup();
+  private final InfoPopup popup = new InfoPopup();
   
   private static final ScheduledExecutorService scheduler = 
       Executors.newSingleThreadScheduledExecutor(r -> {
@@ -361,8 +362,7 @@ public class GnomadTrack extends AbstractTrack {
     Variant clicked = findVariantAtPosition(clickX, trackWidth, viewStart, viewEnd);
     
     if (clicked != null) {
-      popup.setVariant(clicked);
-      popup.show(owner, screenX, screenY);
+      popup.show(GnomadVariantPopup.buildContent(clicked), owner, screenX, screenY);
       return true;
     }
     

@@ -2,8 +2,8 @@ package org.baseplayer.draw;
 
 import java.util.function.Function;
 
-import org.baseplayer.controllers.MainController;
 import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.controllers.MainController;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
@@ -49,6 +49,8 @@ public class GenomicCanvas extends Canvas {
   private boolean lineZoomer = false;
   public static volatile boolean lineZoomerActive = false; // Global flag to block fetches during line zoom
   private boolean zoomDrag;
+  /** True while the mouse is being dragged in this canvas; cleared shortly after release. */
+  protected volatile boolean mouseDragged = false;
   public static double zoomFactor = 10;
   public int zoomY = - 1;
   public static boolean resizing = false;
@@ -174,10 +176,18 @@ public class GenomicCanvas extends Canvas {
       mousePressedX = event.getX(); 
       mousePressedY = event.getY();
       mouseDraggedX = 0; // Reset for delta calculation
+      mouseDragged = false;
     });
-    reactiveCanvas.setOnMouseDragged(event -> { navigating = true; handleDrag(event); });
+    reactiveCanvas.setOnMouseDragged(event -> { mouseDragged = true; navigating = true; handleDrag(event); onDragActive(); });
     reactiveCanvas.setOnScroll(event -> { navigating = true; handleScroll(event); } );
-    reactiveCanvas.setOnMouseReleased(event -> { handleMouseRelease(event); });
+    reactiveCanvas.setOnMouseReleased(event -> {
+      handleMouseRelease(event);
+      // Clear the drag flag shortly after release so the click event (which fires
+      // after release) can still observe it, then normal interaction resumes.
+      PauseTransition pt = new PauseTransition(javafx.util.Duration.millis(50));
+      pt.setOnFinished(e -> mouseDragged = false);
+      pt.play();
+    });
   }
   void handleScroll(ScrollEvent event) {
     event.consume();
@@ -309,6 +319,20 @@ public class GenomicCanvas extends Canvas {
     }
   }
   void clearReactive() { reactivegc.clearRect(0, 0, getWidth(), getHeight()); }
+
+  /**
+   * Returns true while the user is dragging (or just released a drag).
+   * Subclasses should use this to suppress hover effects and click handling.
+   */
+  protected boolean isDragging() {
+    return mouseDragged || lineZoomerActive || navigating;
+  }
+
+  /**
+   * Called on every drag event. Subclasses can override to react while dragging
+   * (e.g. clearing hover highlights).
+   */
+  protected void onDragActive() {}
 
   /** Start or restart a short timer that clears navigating after scroll events stop. */
   private void resetScrollIdleTimer() {

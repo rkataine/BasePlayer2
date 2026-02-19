@@ -2,9 +2,9 @@ package org.baseplayer.draw;
 
 import java.util.List;
 
+import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.alignment.BAMRecord;
 import org.baseplayer.alignment.CoverageCalculator;
-import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.Settings;
 import org.baseplayer.io.readers.BedFileReader.BedFeature;
@@ -50,7 +50,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private void setupReadMouseHandlers(Canvas reactiveCanvas) {
     reactiveCanvas.setOnMouseMoved(event -> {
-      if (navigating || animationRunning) return;
+      if (isDragging() || animationRunning) return;
       double mx = event.getX();
       double my = event.getY();
       BAMRecord hit = findReadAt(mx, my);

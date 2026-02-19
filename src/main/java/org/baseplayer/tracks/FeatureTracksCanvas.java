@@ -5,8 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.utils.AppFonts;
 
@@ -245,7 +245,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   
   private void setupMouseHandlers() {
     getReactiveCanvas().setOnMouseClicked(e -> {
-      if (e.isConsumed()) return;
+      if (e.isConsumed() || isDragging()) return;
       
       // Handle header click (toggle collapse)
       if (e.getY() < HEADER_HEIGHT && e.getClickCount() == 1) {
