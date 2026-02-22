@@ -1,7 +1,5 @@
 package org.baseplayer.io.readers;
 
-import org.baseplayer.alignment.BAMRecord;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -19,6 +17,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.zip.GZIPInputStream;
 
+import org.baseplayer.alignment.BAMRecord;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 
@@ -57,8 +56,8 @@ public class CRAMFileReader implements AlignmentReader {
     raf.skipBytes(20); // file-id
 
     // 2) SAM header container
-    ContainerHeader ch = readContainerHeader();
-    byte[] containerData = new byte[ch.length];
+    int containerLength = readContainerLength();
+    byte[] containerData = new byte[containerLength];
     raf.readFully(containerData);
 
     // The first block in the header container is the FILE_HEADER block
@@ -122,6 +121,7 @@ public class CRAMFileReader implements AlignmentReader {
 
     // CRAI uses 1-based coordinates
     List<CRAIIndex.Entry> entries = index.getEntries(refId, start + 1, end + 1);
+
     if (entries.isEmpty()) return;
 
     Set<Long> seenOffsets = new HashSet<>();
@@ -130,8 +130,8 @@ public class CRAMFileReader implements AlignmentReader {
         if (!seenOffsets.add(entry.containerOffset)) continue;
 
         raf.seek(entry.containerOffset);
-        ContainerHeader ch = readContainerHeader();
-        byte[] containerData = new byte[ch.length];
+        int containerLength = readContainerLength();
+        byte[] containerData = new byte[containerLength];
         raf.readFully(containerData);
 
         List<BAMRecord> containerRecords = decoder.decodeContainer(containerData, chrom);
@@ -172,8 +172,8 @@ public class CRAMFileReader implements AlignmentReader {
         if (!seenOffsets.add(entry.containerOffset)) continue;
 
         raf.seek(entry.containerOffset);
-        ContainerHeader ch = readContainerHeader();
-        byte[] containerData = new byte[ch.length];
+        int containerLength = readContainerLength();
+        byte[] containerData = new byte[containerLength];
         raf.readFully(containerData);
 
         // Decode with full span of our sample windows
@@ -198,22 +198,23 @@ public class CRAMFileReader implements AlignmentReader {
 
   // ── Container / Block parsing ──────────────────────────────────
 
-  private static class ContainerHeader {
-    int length;       // size of remaining container data
-    int[] landmarks;
-  }
-
-  private ContainerHeader readContainerHeader() throws IOException {
-    ContainerHeader h = new ContainerHeader();
+  /** Reads the container header, skips all metadata, and returns the container data length. */
+  private int readContainerLength() throws IOException {
     byte[] buf4 = new byte[4];
     raf.readFully(buf4);
-    h.length = ByteBuffer.wrap(buf4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+    int length = ByteBuffer.wrap(buf4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+    // Skip: refSeqId, startPos, alignSpan, nRecords
+    readITF8FromRAF(); readITF8FromRAF(); readITF8FromRAF(); readITF8FromRAF();
+    // Skip: recordCounter, bases
+    readLTF8FromRAF(); readLTF8FromRAF();
+    // Skip: nBlocks
+    readITF8FromRAF();
+    // Skip landmarks array
     int numLandmarks = readITF8FromRAF();
-    h.landmarks = new int[numLandmarks];
-    for (int i = 0; i < numLandmarks; i++) h.landmarks[i] = readITF8FromRAF();
-    // CRC32 (4 bytes) — skip
+    for (int i = 0; i < numLandmarks; i++) readITF8FromRAF();
+    // Skip CRC32
     raf.skipBytes(4);
-    return h;
+    return length;
   }
 
   // Helper methods for reading SAM header block
@@ -262,6 +263,23 @@ public class CRAMFileReader implements AlignmentReader {
     if ((b & 0xE0) == 0xC0) return ((b & 0x1F) << 16) | (raf.read() << 8) | raf.read();
     if ((b & 0xF0) == 0xE0) return ((b & 0x0F) << 24) | (raf.read() << 16) | (raf.read() << 8) | raf.read();
     return ((b & 0x0F) << 28) | (raf.read() << 20) | (raf.read() << 12) | (raf.read() << 4) | (raf.read() & 0x0F);
+  }
+
+  /**
+   * Read LTF8-encoded long from RandomAccessFile.
+   * LTF8 is the long variant of ITF8, supporting 64-bit values.
+   */
+  private long readLTF8FromRAF() throws IOException {
+    int b = raf.read();
+    if ((b & 0x80) == 0) return b;
+    if ((b & 0xC0) == 0x80) return ((long)(b & 0x3F) << 8) | raf.read();
+    if ((b & 0xE0) == 0xC0) return ((long)(b & 0x1F) << 16) | ((long)raf.read() << 8) | raf.read();
+    if ((b & 0xF0) == 0xE0) return ((long)(b & 0x0F) << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
+    if ((b & 0xF8) == 0xF0) return ((long)(b & 0x07) << 32) | ((long)raf.read() << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
+    if ((b & 0xFC) == 0xF8) return ((long)(b & 0x03) << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
+    if ((b & 0xFE) == 0xFC) return ((long)(b & 0x01) << 48) | ((long)raf.read() << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
+    if ((b & 0xFF) == 0xFE) return ((long)raf.read() << 48) | ((long)raf.read() << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
+    return ((long)raf.read() << 56) | ((long)raf.read() << 48) | ((long)raf.read() << 40) | ((long)raf.read() << 32) | ((long)raf.read() << 24) | ((long)raf.read() << 16) | ((long)raf.read() << 8) | raf.read();
   }
 
 

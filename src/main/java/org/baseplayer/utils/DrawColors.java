@@ -86,6 +86,11 @@ public final class DrawColors {
   public static final Color COVERAGE_FILL = Color.rgb(100, 140, 180, 0.50);
   public static final Color COVERAGE_SEPARATOR = Color.rgb(80, 80, 80, 0.60);
 
+  // ── Sashimi plot (splice junction arches) ──
+  public static final Color SASHIMI_ARC = Color.rgb(200, 100, 50, 0.75);
+  public static final Color SASHIMI_ARC_STROKE = Color.rgb(180, 80, 40, 0.9);
+  public static final Color SASHIMI_LABEL = Color.rgb(230, 180, 140, 0.95);
+
   // ── Methylation ──
   public static final Color METHYL_LINE = Color.rgb(0, 180, 180, 0.9);
   public static final Color[] SAMPLE_METHYL_COLORS = {

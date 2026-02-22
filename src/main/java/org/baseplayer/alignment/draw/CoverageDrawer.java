@@ -77,6 +77,9 @@ public class CoverageDrawer {
   // ── Services ──
   private final SampleRegistry sampleRegistry;
   private final ReferenceGenomeService referenceGenomeService;
+
+  // ── Sub-drawers ──
+  private final SashimiDrawer sashimiDrawer = new SashimiDrawer();
   
   public CoverageDrawer() {
     ServiceRegistry services = ServiceRegistry.getInstance();
@@ -647,6 +650,9 @@ public class CoverageDrawer {
       gc.setFill(Color.web("#aaaaaa"));
       gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
       gc.fillText(String.valueOf((int) row.maxCoverage), 3, sampleY + 10);
+
+      // Sashimi arches (splice junction arches) for RNAseq data
+      sashimiDrawer.draw(gc, row.sample, sampleY, covH, canvasWidth, drawStack, chromPosToScreenPos);
     }
 
     // ── Master track methylation lines (same data, just different y-mapping) ──

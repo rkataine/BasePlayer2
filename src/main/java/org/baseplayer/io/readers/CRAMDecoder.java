@@ -1,7 +1,5 @@
 package org.baseplayer.io.readers;
 
-import org.baseplayer.alignment.BAMRecord;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -11,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
+import org.baseplayer.alignment.BAMRecord;
 import org.baseplayer.services.ReferenceGenomeService;
 
 /**
@@ -74,9 +73,6 @@ public class CRAMDecoder {
     bh.contentId = bs.readITF8();
     bh.compressedSize = bs.readITF8();
     bh.uncompressedSize = bs.readITF8();
-    System.err.println("Block: method=" + bh.method + " type=" + bh.contentType
-                     + " id=" + bh.contentId + " comp=" + bh.compressedSize
-                     + " uncomp=" + bh.uncompressedSize);
     return bh;
   }
 
@@ -133,51 +129,63 @@ public class CRAMDecoder {
     ByteStream bs = new ByteStream(data);
     CompressionHeader ch = new CompressionHeader();
 
-    // Preservation map
-    int pmCount = bs.readITF8();
+    // Preservation map — first ITF8 is byte count; second ITF8 inside is entry count
     ch.readNamesIncluded = true;
     ch.apDelta = true;
     ch.substitutionMatrix = new byte[5];
-
-    for (int i = 0; i < pmCount; i++) {
-      int k1 = bs.readByte();
-      int k2 = bs.readByte();
-      String key = "" + (char) k1 + (char) k2;
-      switch (key) {
-        case "RN" -> ch.readNamesIncluded = bs.readByte() != 0;
-        case "AP" -> ch.apDelta = bs.readByte() != 0;
-        case "RR" -> bs.readByte(); // reference required—skip
-        case "SM" -> {
-          for (int j = 0; j < 5; j++) ch.substitutionMatrix[j] = (byte) bs.readByte();
-          ch.subLookup = buildSubstitutionLookup(ch.substitutionMatrix);
-        }
-        case "TD" -> {
-          int tdSize = bs.readITF8();
-          byte[] td = bs.readBytes(tdSize);
-          ch.tagDictionary = parseTagDictionary(td);
-        }
-        default -> {
-          // Unknown preservation key—skip
+    {
+      int pmSizeBytes = bs.readITF8();
+      ByteStream pmBs = new ByteStream(bs.readBytes(pmSizeBytes));
+      int pmCount = pmBs.readITF8(); // entry count
+      for (int i = 0; i < pmCount; i++) {
+        int k1 = pmBs.readByte();
+        int k2 = pmBs.readByte();
+        String key = "" + (char) k1 + (char) k2;
+        switch (key) {
+          case "RN" -> ch.readNamesIncluded = pmBs.readByte() != 0;
+          case "AP" -> ch.apDelta = pmBs.readByte() != 0;
+          case "RR" -> pmBs.readByte(); // reference required—skip
+          case "SM" -> {
+            for (int j = 0; j < 5; j++) ch.substitutionMatrix[j] = (byte) pmBs.readByte();
+            ch.subLookup = buildSubstitutionLookup(ch.substitutionMatrix);
+          }
+          case "TD" -> {
+            int tdSize = pmBs.readITF8();
+            byte[] td = pmBs.readBytes(tdSize);
+            ch.tagDictionary = parseTagDictionary(td);
+          }
+          default -> {
+            // Unknown key — no safe way to skip, stop parsing
+            break;
+          }
         }
       }
     }
 
-    // Data series encoding map
-    int dsCount = bs.readITF8();
-    for (int i = 0; i < dsCount; i++) {
-      int c1 = bs.readByte();
-      int c2 = bs.readByte();
-      String key = "" + (char) c1 + (char) c2;
-      EncodingDescriptor ed = readEncodingDescriptor(bs);
-      ch.dataSeriesEncodings.put(key, ed);
+    // Data series encoding map — byte count + entry count
+    {
+      int dsSizeBytes = bs.readITF8();
+      ByteStream dsBs = new ByteStream(bs.readBytes(dsSizeBytes));
+      int dsCount = dsBs.readITF8(); // entry count
+      for (int i = 0; i < dsCount; i++) {
+        int c1 = dsBs.readByte();
+        int c2 = dsBs.readByte();
+        String key = "" + (char) c1 + (char) c2;
+        EncodingDescriptor ed = readEncodingDescriptor(dsBs);
+        ch.dataSeriesEncodings.put(key, ed);
+      }
     }
 
-    // Tag encoding map
-    int teCount = bs.readITF8();
-    for (int i = 0; i < teCount; i++) {
-      int tagKey = bs.readITF8();
-      EncodingDescriptor ed = readEncodingDescriptor(bs);
-      ch.tagEncodings.put(tagKey, ed);
+    // Tag encoding map — byte count + entry count
+    {
+      int teSizeBytes = bs.readITF8();
+      ByteStream teBs = new ByteStream(bs.readBytes(teSizeBytes));
+      int teCount = teBs.readITF8(); // entry count
+      for (int i = 0; i < teCount; i++) {
+        int tagKey = teBs.readITF8();
+        EncodingDescriptor ed = readEncodingDescriptor(teBs);
+        ch.tagEncodings.put(tagKey, ed);
+      }
     }
 
     return ch;
@@ -251,8 +259,12 @@ public class CRAMDecoder {
     int sliceAlignStart = shBs.readITF8(); // 1-based
     int sliceAlignSpan = shBs.readITF8();
     int sliceNumRecords = shBs.readITF8();
+    shBs.readLTF8();  // record counter (CRAM 3.0 LTF8 field) — skip
     int sliceNumBlocks = shBs.readITF8();
-    shBs.skip(16); // reference MD5
+    // Block content IDs: one ITF8 per block
+    for (int b = 0; b < sliceNumBlocks; b++) shBs.readITF8();
+    shBs.readITF8();  // embedded reference bases block content ID — skip
+    shBs.skip(16);    // reference MD5
 
     // Read core data block and external blocks
     byte[] coreData = null;
@@ -289,12 +301,14 @@ public class CRAMDecoder {
       extStreams.put(entry.getKey(), new ByteStream(entry.getValue()));
     }
 
+
     // Build decoders for each data series
     IntDecoder bfDec = buildIntDecoder(ch.dataSeriesEncodings.get("BF"), coreBits, extStreams);
     IntDecoder cfDec = buildIntDecoder(ch.dataSeriesEncodings.get("CF"), coreBits, extStreams);
     IntDecoder riDec = multiRef ? buildIntDecoder(ch.dataSeriesEncodings.get("RI"), coreBits, extStreams) : null;
     IntDecoder rlDec = buildIntDecoder(ch.dataSeriesEncodings.get("RL"), coreBits, extStreams);
     IntDecoder apDec = buildIntDecoder(ch.dataSeriesEncodings.get("AP"), coreBits, extStreams);
+    IntDecoder rgDec = buildIntDecoder(ch.dataSeriesEncodings.get("RG"), coreBits, extStreams);
     IntDecoder mqDec = buildIntDecoder(ch.dataSeriesEncodings.get("MQ"), coreBits, extStreams);
     IntDecoder fnDec = buildIntDecoder(ch.dataSeriesEncodings.get("FN"), coreBits, extStreams);
     IntDecoder fpDec = buildIntDecoder(ch.dataSeriesEncodings.get("FP"), coreBits, extStreams);
@@ -355,6 +369,7 @@ public class CRAMDecoder {
       } else {
         alignStart = ap;
       }
+      if (rgDec != null) rgDec.decode(); // read group
 
       // Read name
       String readName = null;
@@ -421,10 +436,12 @@ public class CRAMDecoder {
         }
       }
 
-      // Read features → compute reference span and collect mismatches
+      // Read features → compute reference span, collect mismatches, and build CIGAR
       boolean unmappedSeq = (cramFlags & 0x08) != 0;
       int refSpan = readLen;
       List<int[]> mmList = null; // collected as [genomicPos, readBase, refBase]
+      // CIGAR reconstruction: collect events as [readPos (1-based), cigarOp, length]
+      List<int[]> cigarEvents = null;
 
       if (!unmappedSeq && fnDec != null) {
         int numFeatures = fnDec.decode();
@@ -440,9 +457,7 @@ public class CRAMDecoder {
             case 'B' -> { // read base (explicit mismatch)
               int base = baDec != null ? baDec.decode() : 'N';
               if (qsDec != null) qsDec.decode();
-              // featurePos is 1-based in read; genomic pos = alignStart + featurePos-1 + refOffset (1-based)
               int genomicPos = alignStart + (featurePos - 1) + refOffset;
-              // Look up reference base if available
               int refBaseChar = 0;
               if (refBases != null) {
                 int refIdx = genomicPos - refBasesStart;
@@ -455,8 +470,7 @@ public class CRAMDecoder {
             }
             case 'X' -> { // substitution
               int bsCode = bsDec != null ? bsDec.decode() : 0;
-              // Resolve read base from substitution matrix + reference
-              int genomicPos = alignStart + (featurePos - 1) + refOffset; // 1-based
+              int genomicPos = alignStart + (featurePos - 1) + refOffset;
               char readBase = '?';
               int refBaseX = 0;
               if (ch.subLookup != null && refBases != null) {
@@ -475,29 +489,51 @@ public class CRAMDecoder {
             }
             case 'I' -> { // insertion
               byte[] ins = inDec != null ? inDec.decode() : null;
-              if (ins != null) { refSpan -= ins.length; refOffset -= ins.length; }
+              if (ins != null) {
+                refSpan -= ins.length; refOffset -= ins.length;
+                if (cigarEvents == null) cigarEvents = new ArrayList<>();
+                cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_I, ins.length});
+              }
             }
             case 'i' -> { // single base insertion
               if (baDec != null) baDec.decode();
               refSpan -= 1;
               refOffset -= 1;
+              if (cigarEvents == null) cigarEvents = new ArrayList<>();
+              cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_I, 1});
             }
             case 'D' -> { // deletion
               int dl = dlDec != null ? dlDec.decode() : 0;
               refSpan += dl;
               refOffset += dl;
+              if (dl > 0) {
+                if (cigarEvents == null) cigarEvents = new ArrayList<>();
+                cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_D, dl});
+              }
             }
-            case 'N' -> { // ref skip
+            case 'N' -> { // ref skip (splice junction)
               int rs = rsDec != null ? rsDec.decode() : 0;
               refSpan += rs;
               refOffset += rs;
+              if (rs > 0) {
+                if (cigarEvents == null) cigarEvents = new ArrayList<>();
+                cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_N, rs});
+              }
             }
             case 'S' -> { // soft clip
               byte[] sc = scDec != null ? scDec.decode() : null;
-              if (sc != null) { refSpan -= sc.length; refOffset -= sc.length; }
+              if (sc != null) {
+                refSpan -= sc.length; refOffset -= sc.length;
+                if (cigarEvents == null) cigarEvents = new ArrayList<>();
+                cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_S, sc.length});
+              }
             }
             case 'H' -> { // hard clip
-              if (hcDec != null) hcDec.decode();
+              int hcLen = hcDec != null ? hcDec.decode() : 0;
+              if (hcLen > 0) {
+                if (cigarEvents == null) cigarEvents = new ArrayList<>();
+                cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_H, hcLen});
+              }
             }
             case 'P' -> { // padding
               if (pdDec != null) pdDec.decode();
@@ -536,7 +572,42 @@ public class CRAMDecoder {
       rec.mapq = mapq;
       rec.readLength = readLen;
       rec.readName = readName;
-      rec.cigarOps = null; // Not needed for drawing
+      
+      // Build cigarOps from collected CIGAR events for splice junction rendering
+      if (cigarEvents != null && !cigarEvents.isEmpty()) {
+        // Sort by read position, then build CIGAR ops
+        cigarEvents.sort((a, b) -> Integer.compare(a[0], b[0]));
+        List<int[]> cigarList = new ArrayList<>();
+        int lastEnd = 1; // 1-based read position
+        for (int[] evt : cigarEvents) {
+          int readPos = evt[0];
+          int op = evt[1];
+          int len = evt[2];
+          // Add M op for the gap before this event
+          if (readPos > lastEnd) {
+            cigarList.add(new int[]{(readPos - lastEnd) << 4});
+          }
+          cigarList.add(new int[]{len << 4 | op});
+            // Advance lastEnd based on op type
+            lastEnd = switch (op) {
+                case BAMRecord.CIGAR_I, BAMRecord.CIGAR_S -> readPos + len;
+                case BAMRecord.CIGAR_D, BAMRecord.CIGAR_N -> readPos;
+                case BAMRecord.CIGAR_H -> readPos;
+                default -> readPos + len;
+            }; // consumes read bases
+            // doesn't consume read bases
+            // hard clip doesn't consume read bases
+        }
+        // Trailing M for remaining read bases
+        if (lastEnd <= readLen) {
+          cigarList.add(new int[]{(readLen - lastEnd + 1) << 4});
+        }
+        rec.cigarOps = new int[cigarList.size()];
+        for (int c = 0; c < cigarList.size(); c++) rec.cigarOps[c] = cigarList.get(c)[0];
+      } else if (!unmappedSeq) {
+        // Simple M-only alignment
+        rec.cigarOps = new int[]{readLen << 4};
+      }
       
       // Set mate information
       rec.mateRefID = mateRefIDCRAM;
@@ -796,9 +867,21 @@ public class CRAMDecoder {
     ByteStream(byte[] data) { this.data = data; this.pos = 0; }
 
     int remaining() { return data.length - pos; }
-
     int readByte() {
       return pos < data.length ? data[pos++] & 0xFF : 0;
+    }
+
+    long readLTF8() {
+      int b = readByte();
+      if ((b & 0x80) == 0) return b;
+      if ((b & 0xC0) == 0x80) return ((long)(b & 0x3F) << 8) | readByte();
+      if ((b & 0xE0) == 0xC0) return ((long)(b & 0x1F) << 16) | ((long)readByte() << 8) | readByte();
+      if ((b & 0xF0) == 0xE0) return ((long)(b & 0x0F) << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
+      if ((b & 0xF8) == 0xF0) return ((long)(b & 0x07) << 32) | ((long)readByte() << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
+      if ((b & 0xFC) == 0xF8) return ((long)(b & 0x03) << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
+      if ((b & 0xFE) == 0xFC) return ((long)(b & 0x01) << 48) | ((long)readByte() << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
+      if ((b & 0xFF) == 0xFE) return ((long)readByte() << 48) | ((long)readByte() << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
+      return ((long)readByte() << 56) | ((long)readByte() << 48) | ((long)readByte() << 40) | ((long)readByte() << 32) | ((long)readByte() << 24) | ((long)readByte() << 16) | ((long)readByte() << 8) | readByte();
     }
 
     byte[] readBytes(int n) {

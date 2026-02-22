@@ -97,11 +97,93 @@ class DrawReads {
       Color[] colors = pickColors(read, fwdFill, revFill, fwdStroke, revStroke);
       gc.setFill(colors[0]);
       gc.setStroke(colors[1]);
-      gc.fillRect(x1, y, width, h);
-      if (readHeight >= 3) gc.strokeRect(x1, y, width, h);
+
+      // Check if read has splice junctions (CIGAR N ops)
+      if (hasSpliceJunctions(read)) {
+        drawSplicedRead(gc, read, y, h, colors[0], colors[1], readHeight, canvasWidth);
+      } else {
+        gc.fillRect(x1, y, width, h);
+        if (readHeight >= 3) gc.strokeRect(x1, y, width, h);
+      }
 
       MismatchRenderer.drawMismatches(gc, read.mismatches, y, h, canvasWidth,
           chromPosToScreenPos, isMethylData, read.isReverseStrand());
+    }
+  }
+
+  /**
+   * Check if a read has splice junctions (CIGAR N operations).
+   */
+  private static boolean hasSpliceJunctions(BAMRecord read) {
+    if (read.cigarOps == null) return false;
+    for (int cigarOp : read.cigarOps) {
+      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Draw a read with splice junctions: exonic segments as filled rectangles,
+   * intronic gaps as a thin connecting line at the middle of the read height.
+   */
+  private void drawSplicedRead(GraphicsContext gc, BAMRecord read,
+                                double y, double h,
+                                Color fill, Color stroke,
+                                double readHeight, double canvasWidth) {
+    int refPos = read.pos;
+    double midY = y + h / 2;
+
+    for (int cigarOp : read.cigarOps) {
+      int op = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X -> {
+          // Draw exon segment as filled rectangle
+          double sx1 = chromPosToScreenPos.apply((double) refPos);
+          double sx2 = chromPosToScreenPos.apply((double) (refPos + len));
+          double sw = Math.max(1, sx2 - sx1);
+          if (sx1 + sw >= 0 && sx1 <= canvasWidth) {
+            gc.setFill(fill);
+            gc.fillRect(sx1, y, sw, h);
+            if (readHeight >= 3) {
+              gc.setStroke(stroke);
+              gc.strokeRect(sx1, y, sw, h);
+            }
+          }
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_N -> {
+          // Draw intron as a thin connecting line
+          double gapX1 = chromPosToScreenPos.apply((double) refPos);
+          double gapX2 = chromPosToScreenPos.apply((double) (refPos + len));
+          if (gapX1 <= canvasWidth && gapX2 >= 0) {
+            gc.setStroke(Color.rgb(140, 140, 140, 0.7));
+            gc.setLineWidth(1.0);
+            gc.strokeLine(gapX1, midY, gapX2, midY);
+          }
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_D -> {
+          // Deletion: thin line at read level
+          double dx1 = chromPosToScreenPos.apply((double) refPos);
+          double dx2 = chromPosToScreenPos.apply((double) (refPos + len));
+          if (dx1 + (dx2 - dx1) >= 0 && dx1 <= canvasWidth) {
+            gc.setFill(fill);
+            gc.fillRect(dx1, y, Math.max(1, dx2 - dx1), h);
+          }
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_I, BAMRecord.CIGAR_S -> {
+          // Insertion/soft clip: does not consume reference
+        }
+        case BAMRecord.CIGAR_H, BAMRecord.CIGAR_P -> {
+          // Hard clip/padding: no effect on display
+        }
+        default -> {
+          // Unknown op: advance ref by len if it consumes reference
+        }
+      }
     }
   }
 
