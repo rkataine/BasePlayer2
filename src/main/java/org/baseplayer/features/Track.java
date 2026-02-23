@@ -1,5 +1,7 @@
 package org.baseplayer.features;
 
+import org.baseplayer.draw.DrawStack;
+
 import javafx.scene.canvas.GraphicsContext;
 import javafx.stage.Window;
 
@@ -53,7 +55,7 @@ public interface Track {
    * Called when the view region changes.
    * Used to trigger async data loading.
    */
-  void onRegionChanged(String chromosome, long start, long end);
+  void onRegionChanged(String chromosome, long start, long end, DrawStack drawStack);
   
   /**
    * Clean up resources when track is removed.

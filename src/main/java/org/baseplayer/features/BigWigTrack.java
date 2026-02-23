@@ -7,6 +7,7 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 
+import org.baseplayer.draw.DrawStack;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -81,7 +82,7 @@ public class BigWigTrack extends AbstractTrack {
   }
   
   @Override
-  public void onRegionChanged(String chromosome, long start, long end) {
+  public void onRegionChanged(String chromosome, long start, long end, DrawStack drawStack) {
     // For now, clear cache when region changes significantly
     if (!chromosome.equals(cachedChrom) || 
         start < cachedStart - (cachedEnd - cachedStart) ||

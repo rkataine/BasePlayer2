@@ -280,7 +280,7 @@ public class AlignmentFile implements Closeable {
     int viewLength = end - start;
     
     // Block all fetches during line zoom - just return cached data
-    if (org.baseplayer.draw.GenomicCanvas.lineZoomerActive) {
+    if (stack.nav.lineZoomerActive) {
       return sc.cachedReads.get();
     }
     
@@ -348,13 +348,13 @@ public class AlignmentFile implements Closeable {
     }
 
     // Block all new fetches during zoom animation or cytoband dragging
-    if (GenomicCanvas.animationRunning || CytobandCanvas.isDragging) {
+    if (stack.nav.animationRunning || CytobandCanvas.isDragging) {
       return sc.cachedReads.get(); // return stale or empty, no new fetches
     }
     
     // During regular scroll/pan navigation, allow fetches to proceed with directional buffering
     // This keeps UI responsive during scroll momentum
-    if (blockDuringNavigation && GenomicCanvas.navigating) {
+    if (blockDuringNavigation && stack.nav.navigating) {
       // If we have cached data, return it (but continue below to potentially start prefetch)
       if (hasOverlap) {
         // Check if there's already a fetch in progress that will cover us

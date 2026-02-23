@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.gene.Gene;
 import org.baseplayer.gene.Transcript;
 
@@ -148,16 +149,12 @@ public final class AnnotationData {
   
   public static void setHighlightedGene(GeneLocation loc) {
     highlightedGeneLocation = loc;
-    org.baseplayer.draw.GenomicCanvas.resizing = true;
-    org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
-    org.baseplayer.draw.GenomicCanvas.resizing = false;
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
   
   public static void clearHighlightedGene() {
     highlightedGeneLocation = null;
-    org.baseplayer.draw.GenomicCanvas.resizing = true;
-    org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
-    org.baseplayer.draw.GenomicCanvas.resizing = false;
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
   
   /**

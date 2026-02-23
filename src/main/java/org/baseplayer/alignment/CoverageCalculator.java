@@ -91,7 +91,7 @@ public class CoverageCalculator {
     }
 
     // Don't start new fetch during active navigation
-    if (GenomicCanvas.navigating || CytobandCanvas.isDragging || GenomicCanvas.animationRunning) {
+    if (stack.nav.navigating || CytobandCanvas.isDragging || stack.nav.animationRunning) {
       return cached; // return stale or null
     }
 

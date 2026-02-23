@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.readers.BedFileReader;
 import org.baseplayer.io.readers.BedFileReader.BedFeature;
 import org.baseplayer.utils.AppFonts;
@@ -26,7 +27,7 @@ public class BedTrack extends AbstractTrack {
   }
 
   @Override
-  public void onRegionChanged(String chromosome, long start, long end) {
+  public void onRegionChanged(String chromosome, long start, long end, DrawStack drawStack) {
   }
   
   @Override

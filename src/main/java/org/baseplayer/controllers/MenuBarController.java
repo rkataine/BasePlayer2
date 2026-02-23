@@ -1,12 +1,7 @@
 package org.baseplayer.controllers;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import org.baseplayer.alignment.FetchManager;
 import org.baseplayer.alignment.draw.AlignmentCanvas;
-import org.baseplayer.annotation.AnnotationData;
-import org.baseplayer.annotation.GeneLocation;
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
@@ -18,7 +13,6 @@ import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ViewportState;
 import org.baseplayer.utils.BaseUtils;
-import org.baseplayer.utils.GeneColors;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
@@ -27,16 +21,12 @@ import javafx.fxml.FXML;
 import javafx.geometry.Side;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
-import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
-import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import javafx.util.Duration;
@@ -66,11 +56,7 @@ public class MenuBarController {
   
   private static MenuBarController instance;
   private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-  private ContextMenu geneAutoComplete;
   private ContextMenu chromosomeLabelMenu;
-  private List<String> currentSuggestions = new ArrayList<>();
-  private final List<HBox> suggestionContainers = new ArrayList<>();
-  private int selectedSuggestionIndex = -1;
   private Rectangle memoryFill;
   private Tooltip memoryTooltip;
   
@@ -87,7 +73,7 @@ public class MenuBarController {
     this.viewportState = services.getViewportState();
     
     setupMemoryBar();
-    setupGeneSearch();
+    new GeneSearchComponent(geneSearchField, viewportState);
     setupPositionField();
     setupZoomButtons();
     
@@ -269,244 +255,6 @@ public class MenuBarController {
     }
   }
   
-  private void setupGeneSearch() {
-    geneAutoComplete = new ContextMenu();
-    geneAutoComplete.setAutoHide(true);
-    
-    // Add event filter directly on ContextMenu to catch Enter before it's consumed
-    geneAutoComplete.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, ke -> {
-      if (null != ke.getCode()) switch (ke.getCode()) {
-            case ENTER -> {
-                if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < currentSuggestions.size()) {
-                    System.out.println("ContextMenu: Navigating to highlighted: " + currentSuggestions.get(selectedSuggestionIndex));
-                    String geneToNavigate = currentSuggestions.get(selectedSuggestionIndex);
-                    geneAutoComplete.hide();
-                    selectedSuggestionIndex = -1;
-                    navigateToGene(geneToNavigate);
-                    ke.consume();
-                } else {
-                    // No selection, use text field value
-                    String text = geneSearchField.getText();
-                    if (text != null && !text.isEmpty()) {
-                        geneAutoComplete.hide();
-                        List<String> suggestions = AnnotationData.searchGenes(text);
-                        if (!suggestions.isEmpty()) {
-                            String exactMatch = suggestions.stream()
-                                    .filter(s -> s.equalsIgnoreCase(text))
-                                    .findFirst()
-                                    .orElse(suggestions.get(0));
-                            navigateToGene(exactMatch);
-                        } else {
-                            navigateToGene(text);
-                        }
-                    }
-                    ke.consume();
-                }
-          }
-            case DOWN, TAB -> {
-                if (!currentSuggestions.isEmpty()) {
-                    if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < suggestionContainers.size()) {
-                        suggestionContainers.get(selectedSuggestionIndex).setStyle("-fx-background-color: transparent;");
-                    }
-                    
-                    if (ke.getCode() == javafx.scene.input.KeyCode.TAB && ke.isShiftDown()) {
-                        selectedSuggestionIndex--;
-                        if (selectedSuggestionIndex < 0) {
-                            selectedSuggestionIndex = currentSuggestions.size() - 1;
-                        }
-                    } else {
-                        selectedSuggestionIndex++;
-                        if (selectedSuggestionIndex >= currentSuggestions.size()) {
-                            selectedSuggestionIndex = 0;
-                        }
-                    }
-                    
-                    if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < suggestionContainers.size()) {
-                        suggestionContainers.get(selectedSuggestionIndex).setStyle("-fx-background-color: #444444;");
-                        
-                        String selectedGene = currentSuggestions.get(selectedSuggestionIndex);
-                        GeneLocation loc = AnnotationData.getGeneLocation(selectedGene);
-                        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
-                            AnnotationData.setHighlightedGene(loc);
-                        }
-                    }
-                }       ke.consume();
-          }
-            case UP -> {
-                if (!currentSuggestions.isEmpty()) {
-                    if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < suggestionContainers.size()) {
-                        suggestionContainers.get(selectedSuggestionIndex).setStyle("-fx-background-color: transparent;");
-                    }
-                    
-                    selectedSuggestionIndex--;
-                    if (selectedSuggestionIndex < 0) {
-                        selectedSuggestionIndex = currentSuggestions.size() - 1;
-                    }
-                    
-                    if (selectedSuggestionIndex >= 0 && selectedSuggestionIndex < suggestionContainers.size()) {
-                        suggestionContainers.get(selectedSuggestionIndex).setStyle("-fx-background-color: #444444;");
-                        
-                        String selectedGene = currentSuggestions.get(selectedSuggestionIndex);
-                        GeneLocation loc = AnnotationData.getGeneLocation(selectedGene);
-                        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
-                            AnnotationData.setHighlightedGene(loc);
-                        }
-                    }
-                }       ke.consume();
-          }
-            case ESCAPE -> {
-                geneAutoComplete.hide();
-                AnnotationData.clearHighlightedGene();
-                selectedSuggestionIndex = -1;
-                geneSearchField.requestFocus();
-                ke.consume();
-          }
-            default -> {
-          }
-        }
-    });
-    
-    geneSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
-      if (newVal == null || newVal.length() < 2) {
-        geneAutoComplete.hide();
-        AnnotationData.clearHighlightedGene();
-        currentSuggestions.clear();
-        suggestionContainers.clear();
-        selectedSuggestionIndex = -1;
-        return;
-      }
-      
-      List<String> suggestions = AnnotationData.searchGenes(newVal);
-      if (suggestions.isEmpty()) {
-        geneAutoComplete.hide();
-        AnnotationData.clearHighlightedGene();
-        currentSuggestions.clear();
-        suggestionContainers.clear();
-        selectedSuggestionIndex = -1;
-        return;
-      }
-      
-      currentSuggestions = new ArrayList<>(suggestions);
-      suggestionContainers.clear();
-      selectedSuggestionIndex = -1;
-      
-      // Check if typed text matches a gene exactly (case insensitive) and highlight it
-      String exactMatch = suggestions.stream()
-          .filter(s -> s.equalsIgnoreCase(newVal))
-          .findFirst()
-          .orElse(null);
-      if (exactMatch != null) {
-        GeneLocation loc = AnnotationData.getGeneLocation(exactMatch);
-        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
-          AnnotationData.setHighlightedGene(loc);
-        }
-      } else {
-        AnnotationData.clearHighlightedGene();
-      }
-      
-      geneAutoComplete.getItems().clear();
-      for (String geneName : suggestions) {
-        GeneLocation loc = AnnotationData.getGeneLocation(geneName);
-        
-        Label nameLabel = new Label(geneName);
-        // Color gene name based on COSMIC status and biotype (use setStyle to override CSS)
-        Color geneColor = GeneColors.getGeneColor(geneName, AnnotationData.getGeneBiotype(geneName));
-        nameLabel.setStyle("-fx-text-fill: " + GeneColors.toHexString(geneColor) + ";");
-        HBox container = new HBox(5);
-        container.setCursor(javafx.scene.Cursor.HAND);
-        container.setPrefWidth(300);
-        container.setStyle("-fx-background-color: transparent;");
-        suggestionContainers.add(container);        
-        if (loc != null) {
-          String locText = String.format("%s:%,d-%,d", loc.chrom(), loc.start(), loc.end());
-          Label locLabel = new Label(locText);
-          locLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #666666;");
-          
-          Region spacer = new Region();
-          HBox.setHgrow(spacer, Priority.ALWAYS);
-          
-          container.getChildren().addAll(nameLabel, spacer, locLabel);
-        } else {
-          container.getChildren().add(nameLabel);
-        }
-        
-        // Show gene location highlight on hover
-        container.setOnMouseEntered(e -> {
-          if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
-            AnnotationData.setHighlightedGene(loc);
-          }
-        });
-        container.setOnMouseExited(e -> {
-          // Restore exact match highlight if exists
-          String currentText = geneSearchField.getText();
-          if (currentText != null) {
-            GeneLocation exactLoc = AnnotationData.getGeneLocation(currentText);
-            if (exactLoc != null && exactLoc.chrom().equals(viewportState.getCurrentChromosome())) {
-              AnnotationData.setHighlightedGene(exactLoc);
-              return;
-            }
-          }
-          AnnotationData.clearHighlightedGene();
-        });
-        
-        CustomMenuItem item = new CustomMenuItem(container);
-        item.setHideOnClick(true);
-        item.setOnAction(e -> navigateToGene(geneName));
-        
-        geneAutoComplete.getItems().add(item);
-      }
-      
-      if (!geneAutoComplete.isShowing()) {
-        geneAutoComplete.show(geneSearchField, Side.BOTTOM, 0, 0);
-      }
-    });
-    
-    // Hide autocomplete and clear highlight when focus is lost
-    geneSearchField.focusedProperty().addListener((obs, wasFocused, isFocused) -> {
-      if (!isFocused) {
-        geneAutoComplete.hide();
-        AnnotationData.clearHighlightedGene();
-        selectedSuggestionIndex = -1;
-      } else {
-        // Reset selection when focus is gained
-        selectedSuggestionIndex = -1;
-      }
-    });
-    
-    // Enter key is handled by the scene event filter when autocomplete is showing
-    // When autocomplete is NOT showing, use setOnAction for direct navigation
-    geneSearchField.setOnAction(e -> {
-      // Only navigate if autocomplete is NOT showing (handled by event filter otherwise)
-      if (!geneAutoComplete.isShowing()) {
-        String text = geneSearchField.getText();
-        if (text != null && text.length() >= 2) {
-          List<String> suggestions = AnnotationData.searchGenes(text);
-          if (!suggestions.isEmpty()) {
-            String exactMatch = suggestions.stream()
-                .filter(s -> s.equalsIgnoreCase(text))
-                .findFirst()
-                .orElse(suggestions.get(0));
-            navigateToGene(exactMatch);
-          }
-        }
-      }
-    });
-  }
-  
-  private void navigateToGene(String geneName) {
-    geneAutoComplete.hide();
-    SearchCommands.clearGeneHighlight();
-    
-    // Delegate to NavigationCommands for the actual navigation
-    NavigationCommands.navigateToGene(geneName);
-    
-    // UI updates
-    geneSearchField.setText(geneName);
-    geneSearchField.selectAll();
-    geneSearchField.getParent().requestFocus();
-  }
-  
-
   public void openFileMenu(ActionEvent event) {
       MenuItem menuItem = (MenuItem) event.getSource();
       String[] types = menuItem.getId().split("_");

@@ -14,6 +14,7 @@ import org.baseplayer.features.FeatureTracksCanvas;
 import org.baseplayer.features.GnomadTrack;
 import org.baseplayer.gene.draw.ChromosomeCanvas;
 import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.NavigationState;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -38,6 +39,9 @@ public class DrawStack {
   public double viewLength;
   public double pixelSize = 0;
   public double scale = 0;
+
+  /** Per-stack navigation/rendering state. Mutated only by the owning canvas. */
+  public final NavigationState nav = new NavigationState();
   
   // Services
   private final ReferenceGenomeService referenceGenomeService;

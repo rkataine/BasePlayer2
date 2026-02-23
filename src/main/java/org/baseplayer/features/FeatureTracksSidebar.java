@@ -5,35 +5,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.draw.GenomicCanvas;
+import static org.baseplayer.features.FeatureTracksCanvas.HEADER_HEIGHT;
+import static org.baseplayer.features.FeatureTracksCanvas.TRACK_PADDING;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
-import static org.baseplayer.features.FeatureTracksCanvas.HEADER_HEIGHT;
-import static org.baseplayer.features.FeatureTracksCanvas.TRACK_PADDING;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
 
-import javafx.geometry.Insets;
-import javafx.geometry.Pos;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ContextMenu;
-import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
-import javafx.scene.control.TextField;
 import javafx.scene.input.MouseButton;
-import javafx.scene.layout.GridPane;
-import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
-import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
-import javafx.scene.shape.SVGPath;
 import javafx.stage.FileChooser;
-import javafx.stage.Popup;
+
 
 /**
  * Sidebar for feature tracks displaying track names and options.
@@ -62,7 +52,7 @@ public class FeatureTracksSidebar {
   private ContextMenu contextMenu;
   private ContextMenu addTracksMenu;
   private ContextMenu masterSettingsMenu;
-  private Popup settingsPopup;
+  private final TrackSettingsPopup settingsPopup = new TrackSettingsPopup();
   private boolean plusButtonHovered = false;
   private boolean settingsButtonHovered = false;
   
@@ -579,130 +569,12 @@ public class FeatureTracksSidebar {
    * Show settings popup for a track.
    */
   private void showSettingsPopup(Track track, double screenX, double screenY) {
-    if (settingsPopup != null) {
-      settingsPopup.hide();
-    }
-    
-    settingsPopup = new Popup();
-    settingsPopup.setAutoHide(true);
-    
-    VBox content = new VBox(8);
-    content.setPadding(new Insets(12));
-    content.setStyle("-fx-background-color: #2a2a2e; -fx-border-color: #555; -fx-border-radius: 4; -fx-background-radius: 4;");
-    
-    // Title
-    Label title = new Label(track.getName() + " Settings");
-    title.setStyle("-fx-text-fill: #ddd; -fx-font-weight: bold;");
-    content.getChildren().add(title);
-    
-    // Auto-scale checkbox with visible green checkmark
-    CheckBox autoScale = new CheckBox("Auto-scale");
-    autoScale.setSelected(track.isAutoScale());
-    autoScale.setStyle("-fx-text-fill: #ccc;");
-    
-    // Create a custom checkmark graphic that replaces the native one
-    StackPane customBox = new StackPane();
-    customBox.setPrefSize(16, 16);
-    customBox.setStyle("-fx-border-color: #66cc66; -fx-border-width: 1.5; -fx-background-color: #333;");
-    
-    SVGPath checkMark = new SVGPath();
-    checkMark.setContent("M 2 8 L 6 12 L 14 2");
-    checkMark.setStroke(Color.web("#66cc66"));
-    checkMark.setStrokeWidth(2.5);
-    checkMark.setFill(null);
-    checkMark.visibleProperty().bind(autoScale.selectedProperty());
-    
-    customBox.getChildren().add(checkMark);
-    
-    // Create HBox with custom checkbox and label
-    HBox autoRow = new HBox(6);
-    autoRow.setAlignment(Pos.CENTER_LEFT);
-    
-    // Make customBox clickable to toggle checkbox
-    customBox.setOnMouseClicked(e -> autoScale.setSelected(!autoScale.isSelected()));
-    
-    Label autoLabel = new Label("Auto-scale");
-    autoLabel.setStyle("-fx-text-fill: #ccc;");
-    autoLabel.setOnMouseClicked(e -> autoScale.setSelected(!autoScale.isSelected()));
-    
-    autoRow.getChildren().addAll(customBox, autoLabel);
-    
-    // Min/Max value fields
-    GridPane grid = new GridPane();
-    grid.setHgap(8);
-    grid.setVgap(6);
-    
-    Label minLabel = new Label("Min:");
-    minLabel.setStyle("-fx-text-fill: #aaa;");
-    TextField minField = new TextField();
-    minField.setPrefWidth(80);
-    minField.setStyle("-fx-background-color: #333; -fx-text-fill: #ddd; -fx-border-color: #555;");
-    if (track.getMinValue() != null) {
-      minField.setText(String.format("%.2f", track.getMinValue()));
-    }
-    
-    Label maxLabel = new Label("Max:");
-    maxLabel.setStyle("-fx-text-fill: #aaa;");
-    TextField maxField = new TextField();
-    maxField.setPrefWidth(80);
-    maxField.setStyle("-fx-background-color: #333; -fx-text-fill: #ddd; -fx-border-color: #555;");
-    if (track.getMaxValue() != null) {
-      maxField.setText(String.format("%.2f", track.getMaxValue()));
-    }
-    
-    grid.add(minLabel, 0, 0);
-    grid.add(minField, 1, 0);
-    grid.add(maxLabel, 0, 1);
-    grid.add(maxField, 1, 1);
-    
-    // Enable/disable fields based on auto-scale
-    minField.setDisable(autoScale.isSelected());
-    maxField.setDisable(autoScale.isSelected());
-    autoScale.selectedProperty().addListener((obs, old, newVal) -> {
-      minField.setDisable(newVal);
-      maxField.setDisable(newVal);
-      if (newVal) {
-        minField.clear();
-        maxField.clear();
-      }
-    });
-    
-    // Buttons
-    HBox buttons = new HBox(8);
-    buttons.setAlignment(Pos.CENTER_RIGHT);
-    
-    Button applyBtn = new Button("Apply");
-    applyBtn.setStyle("-fx-background-color: #3a6ea5; -fx-text-fill: white;");
-    applyBtn.setOnAction(e -> {
-      if (autoScale.isSelected()) {
-        track.setMinValue(null);
-        track.setMaxValue(null);
-      } else {
-        try {
-          String minText = minField.getText().trim();
-          String maxText = maxField.getText().trim();
-          track.setMinValue(minText.isEmpty() ? null : Double.valueOf(minText));
-          track.setMaxValue(maxText.isEmpty() ? null : Double.valueOf(maxText));
-        } catch (NumberFormatException ex) {
-          // Ignore invalid input
-        }
-      }
+    if (settingsPopup.isShowing()) settingsPopup.hide();
+    settingsPopup.show(track, () -> {
       if (featureTracksCanvas != null) {
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
-      settingsPopup.hide();
-    });
-    
-    Button cancelBtn = new Button("Cancel");
-    cancelBtn.setStyle("-fx-background-color: #555; -fx-text-fill: #ccc;");
-    cancelBtn.setOnAction(e -> settingsPopup.hide());
-    
-    buttons.getChildren().addAll(cancelBtn, applyBtn);
-    
-    content.getChildren().addAll(autoRow, grid, buttons);
-    
-    settingsPopup.getContent().add(content);
-    settingsPopup.show(canvas.getScene().getWindow(), screenX, screenY);
+    }, canvas.getScene().getWindow(), screenX, screenY);
   }
   
   /**

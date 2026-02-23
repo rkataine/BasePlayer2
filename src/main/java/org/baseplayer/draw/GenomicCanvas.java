@@ -48,16 +48,11 @@ public class GenomicCanvas extends Canvas {
 	private double mouseDragDeltaX = 0;
   private double mousePressedY;
   private boolean lineZoomer = false;
-  public static volatile boolean lineZoomerActive = false; // Global flag to block fetches during line zoom
   private boolean zoomDrag;
   /** True while the mouse is being dragged in this canvas; cleared shortly after release. */
   protected volatile boolean mouseDragged = false;
   public static double zoomFactor = 10;
   public int zoomY = - 1;
-  public static boolean resizing = false;
-  public static boolean animationRunning = false;
-  /** True while the user is actively dragging, scrolling, or zoom-animating. BAM fetches are deferred. */
-  public static volatile boolean navigating = false;
   /** Timer to clear navigating after scroll wheel stops */
   private PauseTransition scrollIdleTimer;
   
@@ -79,12 +74,10 @@ public class GenomicCanvas extends Canvas {
     widthProperty().bind(parent.widthProperty());
     reactiveCanvas.heightProperty().bind(parent.heightProperty());
     reactiveCanvas.widthProperty().bind(parent.widthProperty());
-    parent.widthProperty().addListener((obs, oldVal, newVal) -> { 
-      resizing = true; update.set(!update.get()); resizing = false;
-    });
+    parent.widthProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
     reactiveCanvas.setOnMouseEntered(event -> { stackManager.setHoverStack(drawStack); update.set(!update.get()); });
 
-    parent.heightProperty().addListener((obs, oldVal, newVal) -> { resizing = true; update.set(!update.get()); resizing = false; });
+    parent.heightProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
    
     initializeMomentumTimer();
     setupReactiveCanvas();
@@ -146,7 +139,7 @@ public class GenomicCanvas extends Canvas {
           scrollVelocity = 0;
           lastFrameTime = 0;
           momentumTimerRunning = false;
-          navigating = false;
+          drawStack.nav.navigating = false;
           update.set(!update.get());
           stop();
         }
@@ -179,8 +172,8 @@ public class GenomicCanvas extends Canvas {
       mouseDraggedX = 0; // Reset for delta calculation
       mouseDragged = false;
     });
-    reactiveCanvas.setOnMouseDragged(event -> { mouseDragged = true; navigating = true; handleDrag(event); onDragActive(); });
-    reactiveCanvas.setOnScroll(event -> { navigating = true; handleScroll(event); } );
+    reactiveCanvas.setOnMouseDragged(event -> { mouseDragged = true; drawStack.nav.navigating = true; handleDrag(event); onDragActive(); });
+    reactiveCanvas.setOnScroll(event -> { drawStack.nav.navigating = true; handleScroll(event); } );
     reactiveCanvas.setOnMouseReleased(event -> {
       handleMouseRelease(event);
       // Clear the drag flag shortly after release so the click event (which fires
@@ -287,7 +280,7 @@ public class GenomicCanvas extends Canvas {
     } else {
       zoomDrag = false;
       lineZoomer = true;
-      lineZoomerActive = true; // Block all fetches during line zoom
+      drawStack.nav.lineZoomerActive = true; // Block all fetches during line zoom
 			clearReactive();
 			reactiveGc.strokeLine(mousePressedX, mousePressedY, mouseDraggedX, dragY);
       zoom(mouseDragDeltaX, mousePressedX);
@@ -298,13 +291,13 @@ public class GenomicCanvas extends Canvas {
    
     if (lineZoomer) { 
       lineZoomer = false;
-      lineZoomerActive = false; // Re-enable fetches
-      navigating = false; // Allow fetches now that lineZoomer is done
+      drawStack.nav.lineZoomerActive = false; // Re-enable fetches
+      drawStack.nav.navigating = false; // Allow fetches now that lineZoomer is done
       update.set(!update.get()); 
       return; 
     }
     
-    navigating = false; // Normal case - drag/scroll ended
+    drawStack.nav.navigating = false; // Normal case - drag/scroll ended
     
     if (zoomDrag) {
       zoomDrag = false;
@@ -326,7 +319,7 @@ public class GenomicCanvas extends Canvas {
    * Subclasses should use this to suppress hover effects and click handling.
    */
   protected boolean isDragging() {
-    return mouseDragged || lineZoomerActive || navigating;
+    return mouseDragged || drawStack.nav.lineZoomerActive || drawStack.nav.navigating;
   }
 
   /**
@@ -340,7 +333,7 @@ public class GenomicCanvas extends Canvas {
     if (scrollIdleTimer == null) {
       scrollIdleTimer = new PauseTransition(javafx.util.Duration.millis(200));
       scrollIdleTimer.setOnFinished(e -> {
-        navigating = false;
+        drawStack.nav.navigating = false;
         update.set(!update.get());
       });
     }
@@ -429,8 +422,8 @@ public class GenomicCanvas extends Canvas {
     }
     
     new Thread(() -> {
-      animationRunning = true;
-      navigating = true;
+      drawStack.nav.animationRunning = true;
+      drawStack.nav.navigating = true;
       final DoubleProperty currentStart = new SimpleDoubleProperty(drawStack.start);
       final DoubleProperty currentEnd = new SimpleDoubleProperty(drawStack.end);
       double startStep = (start - drawStack.start)/10;
@@ -457,8 +450,8 @@ public class GenomicCanvas extends Canvas {
       Platform.runLater(() -> {
         // Set final position (either target or current depending on early termination)
         setStartEnd(ended[0] ? start : drawStack.start, end);
-        animationRunning = false;
-        navigating = false;
+        drawStack.nav.animationRunning = false;
+        drawStack.nav.navigating = false;
         update.set(!update.get());
       });
     }).start();

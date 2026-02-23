@@ -46,9 +46,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     // Set up mouse entered listener to set hover stack
     reactiveCanvas.setOnMouseEntered(event -> {
       stackManager.setHoverStack(drawStack);
-      resizing = true;
       update.set(!update.get());
-      resizing = false;
     });
     
     setupContextMenu();
@@ -147,7 +145,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     
     for (Track track : tracks) {
       if (track.isVisible()) {
-        track.onRegionChanged(chrom, start, end);
+        track.onRegionChanged(chrom, start, end, drawStack);
       }
     }
   }

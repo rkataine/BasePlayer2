@@ -332,70 +332,7 @@ public class MainController {
   @FXML
   @SuppressWarnings("unused")
   private void showAnnotationOptions() {
-    javafx.stage.Stage dialog = new javafx.stage.Stage();
-    dialog.initModality(javafx.stage.Modality.APPLICATION_MODAL);
-    dialog.initOwner(annotationOptionsButton.getScene().getWindow());
-    dialog.setTitle("Gene Display Options");
-    dialog.setResizable(false);
-    
-    // Create content
-    javafx.scene.layout.VBox content = new javafx.scene.layout.VBox(15);
-    content.setPadding(new javafx.geometry.Insets(20));
-    content.setStyle("-fx-background-color: #2b2b2b;");
-    
-    // Title
-    javafx.scene.control.Label title = new javafx.scene.control.Label("Gene Display Settings");
-    title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: white;");
-    
-    // Cancer genes checkbox
-    javafx.scene.control.CheckBox cancerGenesCheckBox = new javafx.scene.control.CheckBox("Show only cancer genes (COSMIC)");
-    cancerGenesCheckBox.setSelected(showOnlyCancerGenes);
-    cancerGenesCheckBox.setStyle("-fx-text-fill: white;");
-    
-    // MANE transcripts checkbox
-    javafx.scene.control.CheckBox maneCheckBox = new javafx.scene.control.CheckBox("Show only MANE transcripts");
-    if (!drawStacks.isEmpty() && drawStacks.get(0).chromosomeCanvas != null) {
-      maneCheckBox.setSelected(drawStacks.get(0).chromosomeCanvas.isShowManeOnly());
-    }
-    maneCheckBox.setStyle("-fx-text-fill: white;");
-    
-    // Info label
-    javafx.scene.control.Label infoLabel = new javafx.scene.control.Label(
-      """
-      Cancer genes are from the COSMIC Cancer Gene Census.
-      MANE transcripts are the authoritative reference transcripts.""");
-    infoLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #999999; -fx-wrap-text: true;");
-    infoLabel.setMaxWidth(300);
-    
-    // Buttons
-    javafx.scene.layout.HBox buttonBox = new javafx.scene.layout.HBox(10);
-    buttonBox.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
-    
-    javafx.scene.control.Button applyButton = new javafx.scene.control.Button("Apply");
-    applyButton.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-cursor: hand;");
-    applyButton.setOnAction(e -> {
-      showOnlyCancerGenes = cancerGenesCheckBox.isSelected();
-      boolean maneOnly = maneCheckBox.isSelected();
-      for (DrawStack stack : drawStacks) {
-        if (stack.chromosomeCanvas != null) {
-          stack.chromosomeCanvas.setShowManeOnly(maneOnly);
-        }
-      }
-      org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
-      dialog.close();
-    });
-    
-    javafx.scene.control.Button cancelButton = new javafx.scene.control.Button("Cancel");
-    cancelButton.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: white; -fx-cursor: hand;");
-    cancelButton.setOnAction(e -> dialog.close());
-    
-    buttonBox.getChildren().addAll(cancelButton, applyButton);
-    
-    content.getChildren().addAll(title, cancerGenesCheckBox, maneCheckBox, infoLabel, buttonBox);
-    
-    javafx.scene.Scene scene = new javafx.scene.Scene(content);
-    dialog.setScene(scene);
-    dialog.show();
+    AnnotationOptionsDialog.show(annotationOptionsButton.getScene().getWindow());
   }
   
   /**

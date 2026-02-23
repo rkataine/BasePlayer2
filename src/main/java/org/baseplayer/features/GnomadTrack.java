@@ -8,7 +8,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.baseplayer.alignment.FetchManager;
-import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.APIs.GnomadApiClient;
 import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 import org.baseplayer.io.APIs.GnomadApiClient.VariantData;
@@ -71,11 +71,11 @@ public class GnomadTrack extends AbstractTrack {
   }
   
   @Override
-  public void onRegionChanged(String chromosome, long start, long end) {
+  public void onRegionChanged(String chromosome, long start, long end, DrawStack drawStack) {
     if (!visible) return;
     
     // Block during zoom animation
-    if (GenomicCanvas.animationRunning) return;
+    if (drawStack.nav.animationRunning) return;
     
     // Too large to fetch
     if (end - start > MAX_REGION_SIZE) {

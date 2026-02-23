@@ -4,17 +4,23 @@ import java.util.List;
 
 import org.baseplayer.utils.AppFonts;
 
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.StringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Button;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.SVGPath;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.Popup;
@@ -188,6 +194,15 @@ public class InfoPopup {
             case PopupContent.BadgeRowItem b ->
                 renderBadgeRow(b.badges());
 
+            case PopupContent.CheckboxItem cb ->
+                renderCheckbox(cb.label(), cb.selected());
+
+            case PopupContent.InputRowItem ir ->
+                renderInputRow(ir.label(), ir.value(), ir.disabled());
+
+            case PopupContent.ActionButtonsItem ab ->
+                renderActionButtons(ab.buttons());
+
             case PopupContent.CustomNodeItem n ->
                 content.getChildren().add(n.node());
 
@@ -316,6 +331,81 @@ public class InfoPopup {
         sp.setStyle(SCROLL_STYLE);
 
         content.getChildren().add(sp);
+    }
+
+    // ── Popup control ────────────────────────────────────────────────────────
+
+    /**
+     * Render a labelled checkbox with a custom green SVG checkmark.
+     * The {@link BooleanProperty} reflects and drives the checked state.
+     */
+    /**
+     * Render a labelled text-input row with dark theme styling.
+     * The field is bound bidirectionally to {@code value}; if {@code disabled}
+     * is non-{@code null} the field's disable state tracks that property.
+     */
+    private void renderInputRow(String label, StringProperty value, BooleanProperty disabled) {
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_LEFT);
+
+        Label lbl = new Label(label + ":");
+        lbl.setFont(AppFonts.getUIFont());
+        lbl.setTextFill(Color.GRAY);
+        lbl.setMinWidth(LABEL_MIN_WIDTH);
+
+        TextField field = new TextField();
+        field.setPrefWidth(80);
+        field.setStyle("-fx-background-color: #333; -fx-text-fill: #ddd; -fx-border-color: #555;");
+        field.textProperty().bindBidirectional(value);
+        if (disabled != null) field.disableProperty().bind(disabled);
+
+        row.getChildren().addAll(lbl, field);
+        content.getChildren().add(row);
+    }
+
+    private void renderCheckbox(String label, BooleanProperty selected) {
+        StackPane box = new StackPane();
+        box.setPrefSize(16, 16);
+        box.setStyle("-fx-border-color: #66cc66; -fx-border-width: 1.5; -fx-background-color: #333;");
+
+        SVGPath check = new SVGPath();
+        check.setContent("M 2 8 L 6 12 L 14 2");
+        check.setStroke(Color.web("#66cc66"));
+        check.setStrokeWidth(2.5);
+        check.setFill(null);
+        check.visibleProperty().bind(selected);
+        box.getChildren().add(check);
+
+        Label lbl = new Label(label);
+        lbl.setFont(AppFonts.getUIFont());
+        lbl.setTextFill(Color.LIGHTGRAY);
+
+        HBox row = new HBox(6);
+        row.setAlignment(Pos.CENTER_LEFT);
+        box.setOnMouseClicked(e -> selected.set(!selected.get()));
+        lbl.setOnMouseClicked(e -> selected.set(!selected.get()));
+        row.getChildren().addAll(box, lbl);
+        content.getChildren().add(row);
+    }
+
+    /**
+     * Render a right-aligned row of action buttons.
+     * Every button hides the popup after its action runs.
+     */
+    private void renderActionButtons(List<PopupContent.ActionButton> buttons) {
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_RIGHT);
+        for (PopupContent.ActionButton ab : buttons) {
+            Button btn = new Button(ab.label());
+            if (ab.primary()) {
+                btn.setStyle("-fx-background-color: #3a6ea5; -fx-text-fill: white;");
+            } else {
+                btn.setStyle("-fx-background-color: #555; -fx-text-fill: #ccc;");
+            }
+            btn.setOnAction(e -> { ab.action().run(); hide(); });
+            row.getChildren().add(btn);
+        }
+        content.getChildren().add(row);
     }
 
     // ── Popup control ────────────────────────────────────────────────────────

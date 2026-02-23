@@ -251,7 +251,7 @@ class DrawExon {
     if (drawStack.viewLength > BASE_DISPLAY_THRESHOLD) return;
     if (!referenceGenomeService.hasGenome()) return;
 
-    if (GenomicCanvas.animationRunning || CytobandCanvas.isDragging) return;
+    if (drawStack.nav.animationRunning || CytobandCanvas.isDragging) return;
 
     int    viewStart    = (int) drawStack.start;
     int    viewEnd      = (int) drawStack.end;
@@ -298,9 +298,7 @@ class DrawExon {
             }
             isLoadingBases.set(false);
             fm.release(ticket);
-            GenomicCanvas.resizing = true;
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
-            GenomicCanvas.resizing = false;
           });
         });
       }

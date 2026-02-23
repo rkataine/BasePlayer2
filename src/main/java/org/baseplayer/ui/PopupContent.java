@@ -4,6 +4,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
 import javafx.scene.Node;
 import javafx.scene.paint.Color;
 
@@ -44,6 +48,7 @@ public class PopupContent {
             TextItem, SectionTitleItem,
             InfoRowItem, ClickableRowItem,
             BadgeRowItem,
+            CheckboxItem, InputRowItem, ActionButtonsItem,
             CustomNodeItem, ScrollListItem {}
 
     /** A large, coloured title label. */
@@ -96,6 +101,36 @@ public class PopupContent {
 
     /** A horizontal row of one or more {@link Badge} elements. */
     public record BadgeRowItem(List<Badge> badges) implements Item {}
+
+    /**
+     * A toggle checkbox row with a custom green checkmark.
+     * The returned {@link BooleanProperty} reflects the current state and can
+     * be used to bind other items (e.g. enabling/disabling input fields).
+     */
+    public record CheckboxItem(String label, BooleanProperty selected) implements Item {}
+
+    /**
+     * A single button inside an {@link ActionButtonsItem} row.
+     *
+     * @param label   button text
+     * @param primary {@code true} for the blue/primary style, {@code false} for secondary
+     * @param action  callback invoked on click; the popup is closed automatically afterwards
+     */
+    public record ActionButton(String label, boolean primary, Runnable action) {}
+
+    /** A right-aligned row of action buttons (e.g. Cancel + Apply). */
+    public record ActionButtonsItem(List<ActionButton> buttons) implements Item {}
+
+    /**
+     * A labelled text-input row whose enabled/disabled state is driven by a
+     * {@link BooleanProperty}. Pass {@code null} for {@code disabled} if the
+     * field is always enabled.
+     *
+     * <p>The returned {@link StringProperty} reflects the current field value
+     * and can be read in an {@link ActionButton} action callback.
+     */
+    public record InputRowItem(String label, StringProperty value,
+                               BooleanProperty disabled) implements Item {}
 
     /**
      * An arbitrary JavaFX {@link Node} inserted directly into the layout.
@@ -220,6 +255,48 @@ public class PopupContent {
      */
     public PopupContent badges(List<Badge> badgeList) {
         items.add(new BadgeRowItem(List.copyOf(badgeList)));
+        return this;
+    }
+
+    /**
+     * Add a checkbox toggle row with the standard green checkmark style.
+     *
+     * <p>The returned {@link BooleanProperty} reflects the current state so
+     * callers can bind dependent controls (e.g. disabling text fields when
+     * auto-scale is active).
+     *
+     * @param label   descriptive label shown next to the checkbox
+     * @param initial whether the checkbox starts checked
+     * @return a live property that tracks the checkbox state
+     */
+    public BooleanProperty checkbox(String label, boolean initial) {
+        BooleanProperty prop = new SimpleBooleanProperty(initial);
+        items.add(new CheckboxItem(label, prop));
+        return prop;
+    }
+
+    /**
+     * Add a labelled text-input row.
+     *
+     * @param label    field label
+     * @param initial  initial text value (may be {@code null} or empty)
+     * @param disabled property that disables the field when {@code true};
+     *                 pass {@code null} to leave the field always enabled
+     * @return a live property tracking the current field text
+     */
+    public StringProperty input(String label, String initial, BooleanProperty disabled) {
+        StringProperty prop = new SimpleStringProperty(initial != null ? initial : "");
+        items.add(new InputRowItem(label, prop, disabled));
+        return prop;
+    }
+
+    /**
+     * Add a right-aligned row of action buttons.
+     *
+     * @param buttons one or more {@link ActionButton} descriptors
+     */
+    public PopupContent actions(ActionButton... buttons) {
+        items.add(new ActionButtonsItem(List.of(buttons)));
         return this;
     }
 

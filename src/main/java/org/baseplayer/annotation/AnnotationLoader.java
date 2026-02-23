@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.gene.Gene;
 import org.baseplayer.gene.Transcript;
 
@@ -61,18 +62,14 @@ public final class AnnotationLoader {
    */
   public static void loadGenesBackground() {
     AnnotationData.setGenesLoading(true);
-    org.baseplayer.draw.GenomicCanvas.resizing = true;
-    org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
-    org.baseplayer.draw.GenomicCanvas.resizing = false;
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
     
     Thread loadThread = new Thread(() -> {
       // Load genes first (priority - enables immediate display)
       loadGenes();
       
       javafx.application.Platform.runLater(() -> {
-        org.baseplayer.draw.GenomicCanvas.resizing = true;
-        org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
-        org.baseplayer.draw.GenomicCanvas.resizing = false;
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
       
       // Then load additional data in background

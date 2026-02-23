@@ -8,11 +8,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.baseplayer.io.cache.DataCacheManager;
+import org.baseplayer.io.cache.ThreeLayerCache;
 import org.baseplayer.utils.JsonUtils;
 
 import com.google.gson.JsonArray;
@@ -42,9 +42,8 @@ public class GnomadApiClient {
       .connectTimeout(Duration.ofSeconds(15))
       .build();
   
-  // In-memory cache for variant data by region key (fast access)
-  private static final Map<String, VariantData> memoryCache = new ConcurrentHashMap<>();
-  private static final int MAX_MEMORY_CACHE_ENTRIES = 50;
+  // Three-layer cache (memory → file → network)
+  private static final ThreeLayerCache<VariantData> cache = new ThreeLayerCache<>(CACHE_TYPE, 50);
   
   // Track failed regions to limit retries (max 2 attempts)
   private static final Map<String, Integer> failedRegions = new ConcurrentHashMap<>();
@@ -188,20 +187,16 @@ public class GnomadApiClient {
     }
     
     // 1. Check memory cache first (fastest)
-    VariantData memCached = memoryCache.get(cacheKey);
+    VariantData memCached = cache.getFromMemory(cacheKey);
     if (memCached != null) {
       return CompletableFuture.completedFuture(memCached);
     }
     
     // 2. Check file cache (persistent across sessions)
-    Optional<JsonObject> fileCached = DataCacheManager.loadFromCache(CACHE_TYPE, cacheKey);
-    if (fileCached.isPresent()) {
-      VariantData data = parseVariantDataFromCache(fileCached.get(), start, end);
-      if (data != null && !data.hasError()) {
-        memoryCache.put(cacheKey, data);
-        System.out.println("gnomAD: Loaded from file cache: " + cacheKey);
-        return CompletableFuture.completedFuture(data);
-      }
+    VariantData fileCached = cache.getFromFile(cacheKey, json -> parseVariantDataFromCache(json, start, end));
+    if (fileCached != null && !fileCached.hasError()) {
+      System.out.println("gnomAD: Loaded from file cache: " + cacheKey);
+      return CompletableFuture.completedFuture(fileCached);
     }
     
     // 3. Fetch from API
@@ -238,15 +233,11 @@ public class GnomadApiClient {
           try {
             VariantData data = parseVariantResponse(response.body(), start, end);
             
-            // Cache in memory
-            if (memoryCache.size() >= MAX_MEMORY_CACHE_ENTRIES) {
-              memoryCache.keySet().stream().findFirst().ifPresent(memoryCache::remove);
-            }
-            memoryCache.put(finalCacheKey, data);
-            
-            // Cache to file (only if no error and has data)
+            // Cache in memory (and file if no error)
             if (!data.hasError()) {
-              saveToFileCache(finalCacheKey, data);
+              cache.put(finalCacheKey, data, GnomadApiClient::serialize);
+            } else {
+              cache.putInMemory(finalCacheKey, data);
             }
             
             return data;
@@ -271,9 +262,9 @@ public class GnomadApiClient {
   }
   
   /**
-   * Save variant data to file cache.
+   * Serialise variant data to a JsonObject for file caching.
    */
-  private static void saveToFileCache(String cacheKey, VariantData data) {
+  private static JsonObject serialize(VariantData data) {
     JsonObject cacheJson = new JsonObject();
     cacheJson.addProperty("start", data.start());
     cacheJson.addProperty("end", data.end());
@@ -296,8 +287,7 @@ public class GnomadApiClient {
       variantsArray.add(vJson);
     }
     cacheJson.add("variants", variantsArray);
-    
-    DataCacheManager.saveToCache(CACHE_TYPE, cacheKey, cacheJson);
+    return cacheJson;
   }
   
   /**
@@ -519,14 +509,13 @@ public class GnomadApiClient {
    * Clear the variant cache (both memory and file cache).
    */
   public static void clearCache() {
-    memoryCache.clear();
-    DataCacheManager.clearCache(CACHE_TYPE);
+    cache.clearAll();
   }
   
   /**
    * Clear only the in-memory cache.
    */
   public static void clearMemoryCache() {
-    memoryCache.clear();
+    cache.clearMemory();
   }
 }

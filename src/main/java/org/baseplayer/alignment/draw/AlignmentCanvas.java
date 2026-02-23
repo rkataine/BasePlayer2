@@ -77,7 +77,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   public AlignmentCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
-    widthProperty().addListener((obs, o, n) -> { resizing = true; setStartEnd(drawStack.start, drawStack.end); resizing = false; });
+    widthProperty().addListener((obs, o, n) -> setStartEnd(drawStack.start, drawStack.end));
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
     drawReads = new DrawReads(gc, chromPosToScreenPos);
@@ -89,7 +89,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private void setupReadMouseHandlers(Canvas reactiveCanvas) {
     reactiveCanvas.setOnMouseMoved(event -> {
-      if (isDragging() || animationRunning) return;
+      if (isDragging() || drawStack.nav.animationRunning) return;
       BAMRecord hit = findReadAt(event.getX(), event.getY());
       if (hit != hoveredRead) {
         hoveredRead = hit;
@@ -228,7 +228,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     if (bamFile == null) return;
 
     boolean isHoverStack      = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
-    boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !GenomicCanvas.navigating);
+    boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !drawStack.nav.navigating);
     if (shouldShowLoading) drawReads.drawLoadingIndicator(sampleY, sampleH);
 
     String status = sample.getStatusMessage();
@@ -240,7 +240,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
     if (reads == null || reads.isEmpty()) {
-      if (GenomicCanvas.navigating && !isHoverStack) return;
+      if (drawStack.nav.navigating && !isHoverStack) return;
       reads = bamFile.getReads(chrom, start, end, drawStack, true);
     }
     if (reads == null || reads.isEmpty()) return;
