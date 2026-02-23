@@ -28,6 +28,17 @@ public class BaseUtils {
 		return NumberFormat.getNumberInstance(Locale.US).format(number);
 	}
 
+  /**
+   * Try to parse a string as an integer, returning {@code null} on failure.
+   */
+  public static Integer tryParseInt(String s) {
+    try {
+      return Integer.valueOf(s);
+    } catch (NumberFormatException e) {
+      return null;
+    }
+  }
+
   /** Returns the reverse complement of a DNA sequence (A↔T, G↔C, 5′→3′). */
   public static String reverseComplement(String sequence) {
     StringBuilder sb = new StringBuilder(sequence.length());

@@ -3,16 +3,17 @@ package org.baseplayer.controllers;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.alignment.draw.AlignmentCanvas;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.GeneLocation;
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.controllers.commands.ViewCommands;
-import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.alignment.draw.AlignmentCanvas;
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ViewportState;
@@ -64,6 +65,7 @@ public class MenuBarController {
   private static final Color ZOOM_DISABLED = Color.web("#555555");   // Gray
   
   private static MenuBarController instance;
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
   private ContextMenu geneAutoComplete;
   private ContextMenu chromosomeLabelMenu;
   private List<String> currentSuggestions = new ArrayList<>();
@@ -90,10 +92,11 @@ public class MenuBarController {
     setupZoomButtons();
     
     AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
-      if(MainController.hoverStack == null) return;
-      String chrom = MainController.hoverStack.chromosome != null ? MainController.hoverStack.chromosome : "1";
+      DrawStack hoverStack = stackManager.getHoverStack();
+      if(hoverStack == null) return;
+      String chrom = hoverStack.chromosome != null ? hoverStack.chromosome : "1";
       chromosomeLabel.setText("chr" + chrom + ":");
-      positionField.setText((int)MainController.hoverStack.start + "-" + (int)(MainController.hoverStack.end - 1));
+      positionField.setText((int)hoverStack.start + "-" + (int)(hoverStack.end - 1));
       updateViewLengthLabel();
       updateZoomButtonStates();
     });
@@ -137,8 +140,8 @@ public class MenuBarController {
       // Sort chromosomes properly (1-22, X, Y, MT)
       java.util.List<String> chroms = new java.util.ArrayList<>(DrawStack.CHROMOSOME_SIZES.keySet());
       chroms.sort((c1, c2) -> {
-        Integer n1 = tryParseInt(c1);
-        Integer n2 = tryParseInt(c2);
+        Integer n1 = BaseUtils.tryParseInt(c1);
+        Integer n2 = BaseUtils.tryParseInt(c2);
         if (n1 != null && n2 != null) return n1.compareTo(n2);
         if (n1 != null) return -1;
         if (n2 != null) return 1;
@@ -183,9 +186,9 @@ public class MenuBarController {
   }
   
   private void updateZoomButtonStates() {
-    if (MainController.hoverStack == null || zoomInIcon == null || zoomOutIcon == null) return;
+    if (stackManager.getHoverStack() == null || zoomInIcon == null || zoomOutIcon == null) return;
     
-    var stack = MainController.hoverStack;
+    var stack = stackManager.getHoverStack();
     
     // Check if can zoom in (not already at minimum zoom)
     boolean canZoomIn = stack.viewLength > GenomicCanvas.minZoom * 1.1;
@@ -250,9 +253,9 @@ public class MenuBarController {
   }
   
   private void updateViewLengthLabel() {
-    if (MainController.hoverStack == null || viewLengthLabel == null) return;
+    if (stackManager.getHoverStack() == null || viewLengthLabel == null) return;
     
-    long viewLength = (long) MainController.hoverStack.viewLength;
+    long viewLength = (long) stackManager.getHoverStack().viewLength;
     viewLengthLabel.setText(formatViewLength(viewLength));
   }
   
@@ -503,17 +506,14 @@ public class MenuBarController {
     geneSearchField.getParent().requestFocus();
   }
   
-  public static void setChromosomes(java.util.List<String> chromosomes) {
-    // Chromosome selection is now handled via the position field chromosome label dropdown
-    // No longer needed with the removed chromosomeDropdown ComboBox
-  }
+
   public void openFileMenu(ActionEvent event) {
       MenuItem menuItem = (MenuItem) event.getSource();
       String[] types = menuItem.getId().split("_");
       String filtertype = types[1];
 
       FileCommands.openFile(filtertype);
-      //boolean multiSelect = !filtertype.equals("SES"); // TODO myöhemmin kun avataan bam tai vcf trackille, refactoroi toimimaan myös sille
+      //boolean multiSelect = !filtertype.equals("SES"); // TODO later: when opening bam or vcf for a track, refactor to work for that too
       //new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
   }
   public void addStack(ActionEvent event) { ViewCommands.addStack(); }
@@ -565,13 +565,7 @@ public class MenuBarController {
     ViewCommands.closeWindow();
   }
   
-  private static Integer tryParseInt(String s) {
-    try {
-      return Integer.valueOf(s);
-    } catch (NumberFormatException e) {
-      return null;
-    }
-  }
+
   
   private static int getChromOrder(String name) {
     return switch (name) {

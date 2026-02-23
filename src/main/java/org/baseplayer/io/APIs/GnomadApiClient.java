@@ -13,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.baseplayer.io.cache.DataCacheManager;
+import org.baseplayer.utils.JsonUtils;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -313,16 +314,16 @@ public class GnomadApiClient {
           JsonObject v = elem.getAsJsonObject();
           variants.add(new Variant(
               v.get("position").getAsLong(),
-              getStringOrNull(v, "ref"),
-              getStringOrNull(v, "alt"),
-              getDoubleOrZero(v, "alleleFrequency"),
-              getIntOrZero(v, "alleleCount"),
-              getIntOrZero(v, "alleleNumber"),
-              getStringOrNull(v, "consequence"),
-              getStringOrNull(v, "impact"),
-              getStringOrNull(v, "geneSymbol"),
-              getStringOrNull(v, "hgvsc"),
-              getStringOrNull(v, "hgvsp")
+              JsonUtils.getStringOrNull(v, "ref"),
+              JsonUtils.getStringOrNull(v, "alt"),
+              JsonUtils.getDoubleOrZero(v, "alleleFrequency"),
+              JsonUtils.getIntOrZero(v, "alleleCount"),
+              JsonUtils.getIntOrZero(v, "alleleNumber"),
+              JsonUtils.getStringOrNull(v, "consequence"),
+              JsonUtils.getStringOrNull(v, "impact"),
+              JsonUtils.getStringOrNull(v, "geneSymbol"),
+              JsonUtils.getStringOrNull(v, "hgvsc"),
+              JsonUtils.getStringOrNull(v, "hgvsp")
           ));
         }
       }
@@ -430,8 +431,8 @@ public class GnomadApiClient {
       JsonObject v = elem.getAsJsonObject();
       
       long pos = v.get("pos").getAsLong();
-      String ref = getStringOrNull(v, "ref");
-      String alt = getStringOrNull(v, "alt");
+      String ref = JsonUtils.getStringOrNull(v, "ref");
+      String alt = JsonUtils.getStringOrNull(v, "alt");
       
       // Get allele frequency - prefer exome data, fallback to genome
       double af = 0;
@@ -440,15 +441,15 @@ public class GnomadApiClient {
       
       if (v.has("exome") && !v.get("exome").isJsonNull()) {
         JsonObject exome = v.getAsJsonObject("exome");
-        af = getDoubleOrZero(exome, "af");
-        ac = getIntOrZero(exome, "ac");
-        an = getIntOrZero(exome, "an");
+        af = JsonUtils.getDoubleOrZero(exome, "af");
+        ac = JsonUtils.getIntOrZero(exome, "ac");
+        an = JsonUtils.getIntOrZero(exome, "an");
       }
       if (af == 0 && v.has("genome") && !v.get("genome").isJsonNull()) {
         JsonObject genome = v.getAsJsonObject("genome");
-        af = getDoubleOrZero(genome, "af");
-        ac = getIntOrZero(genome, "ac");
-        an = getIntOrZero(genome, "an");
+        af = JsonUtils.getDoubleOrZero(genome, "af");
+        ac = JsonUtils.getIntOrZero(genome, "ac");
+        an = JsonUtils.getIntOrZero(genome, "an");
       }
       
       // Get consequence from transcript_consequence (singular in gnomAD API)
@@ -460,12 +461,12 @@ public class GnomadApiClient {
       
       if (v.has("transcript_consequence") && !v.get("transcript_consequence").isJsonNull()) {
         JsonObject tc = v.getAsJsonObject("transcript_consequence");
-        consequence = getStringOrNull(tc, "major_consequence");
-        geneSymbol = getStringOrNull(tc, "gene_symbol");
-        hgvsc = getStringOrNull(tc, "hgvsc");
-        hgvsp = getStringOrNull(tc, "hgvsp");
+        consequence = JsonUtils.getStringOrNull(tc, "major_consequence");
+        geneSymbol = JsonUtils.getStringOrNull(tc, "gene_symbol");
+        hgvsc = JsonUtils.getStringOrNull(tc, "hgvsc");
+        hgvsp = JsonUtils.getStringOrNull(tc, "hgvsp");
         
-        String lof = getStringOrNull(tc, "lof");
+        String lof = JsonUtils.getStringOrNull(tc, "lof");
         if ("HC".equals(lof) || "LC".equals(lof)) {
           impact = "HIGH";
         } else if (consequence != null) {
@@ -512,27 +513,6 @@ public class GnomadApiClient {
     }
     
     return "MODIFIER";
-  }
-  
-  private static String getStringOrNull(JsonObject obj, String key) {
-    if (obj.has(key) && !obj.get(key).isJsonNull()) {
-      return obj.get(key).getAsString();
-    }
-    return null;
-  }
-  
-  private static double getDoubleOrZero(JsonObject obj, String key) {
-    if (obj.has(key) && !obj.get(key).isJsonNull()) {
-      return obj.get(key).getAsDouble();
-    }
-    return 0;
-  }
-  
-  private static int getIntOrZero(JsonObject obj, String key) {
-    if (obj.has(key) && !obj.get(key).isJsonNull()) {
-      return obj.get(key).getAsInt();
-    }
-    return 0;
   }
   
   /**

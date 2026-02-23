@@ -13,6 +13,7 @@ import org.baseplayer.features.ConservationTrack;
 import org.baseplayer.features.FeatureTracksCanvas;
 import org.baseplayer.features.GnomadTrack;
 import org.baseplayer.gene.draw.ChromosomeCanvas;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.ReferenceGenomeService;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -40,6 +41,7 @@ public class DrawStack {
   
   // Services
   private final ReferenceGenomeService referenceGenomeService;
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
   
   public VBox chromContainer = new VBox();  // Container for cytoband + chrom stack
   public StackPane chromStack = new StackPane(); 
@@ -171,7 +173,7 @@ public class DrawStack {
   }
   
   public void updateControlsVisibility() {
-    boolean hasMultipleStacks = MainController.drawStacks.size() > 1;
+    boolean hasMultipleStacks = stackManager.getStacks().size() > 1;
     chromosomeDropdown.setVisible(hasMultipleStacks);
     closeButton.setVisible(hasMultipleStacks);
   }

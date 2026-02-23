@@ -7,8 +7,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
-import org.baseplayer.controllers.MainController;
-import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.io.ReferenceGenome;
 
 /**
@@ -101,10 +99,9 @@ public class InitializationService {
     referenceGenomeService.setCurrentGenome(genome);
     
     List<String> chromNames = genome.getStandardChromosomeNames();
-    MenuBarController.setChromosomes(chromNames);
     
     // Update all stacks with chromosome list
-    for (var stack : MainController.drawStacks) {
+    for (var stack : ServiceRegistry.getInstance().getDrawStackManager().getStacks()) {
       stack.setChromosomeList(chromNames);
     }
   }

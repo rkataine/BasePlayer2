@@ -1,5 +1,4 @@
 package org.baseplayer.controllers;
-import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.draw.DrawStack;
@@ -50,11 +49,8 @@ public class MainController {
  
   public static boolean dividerHovered;
   public static boolean isActive = false;
-  public static AnchorPane staticDraw;
   Runtime instance = Runtime.getRuntime();
   IntegerProperty memoryUsage = new SimpleIntegerProperty(0);
-  public static DrawStack hoverStack;
-  public static ArrayList<DrawStack> drawStacks = new ArrayList<>();
   SidebarPanel sidebarPanel;
   
   public static boolean showOnlyCancerGenes = false;
@@ -62,6 +58,11 @@ public class MainController {
   // Services
   private final InitializationService initializationService;
   private final EventCoordinator eventCoordinator;
+  private static final org.baseplayer.services.DrawStackManager stackManager =
+      ServiceRegistry.getInstance().getDrawStackManager();
+  
+  // Internal list alias — external callers use DrawStackManager
+  private static final List<DrawStack> drawStacks = stackManager.getStacksMutable();
   
   // Unified sidebar controller for all horizontal split panes
   private final SidebarController sidebarController = new SidebarController();
@@ -172,7 +173,9 @@ public class MainController {
   }
   
   public static void zoomout() {
-    hoverStack.alignmentCanvas.zoomAnimation(1, hoverStack.chromSize);
+    DrawStack hover = stackManager.getHoverStack();
+    if (hover == null) return;
+    hover.alignmentCanvas.zoomAnimation(1, hover.chromSize);
   }
   
   void addMemUpdateListener() {

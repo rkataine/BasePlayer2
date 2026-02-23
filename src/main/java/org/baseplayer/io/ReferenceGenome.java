@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.baseplayer.utils.BaseUtils;
+
 public class ReferenceGenome {
     private final Path fastaPath;
     private final Map<String, ChromosomeIndex> chromosomes = new LinkedHashMap<>();
@@ -60,8 +62,8 @@ public class ReferenceGenome {
         String name2 = chr2.startsWith("chr") ? chr2.substring(3) : chr2;
         
         // Parse numeric chromosomes
-        Integer num1 = tryParseInt(name1);
-        Integer num2 = tryParseInt(name2);
+        Integer num1 = BaseUtils.tryParseInt(name1);
+        Integer num2 = BaseUtils.tryParseInt(name2);
         
         // Both numeric: compare numerically
         if (num1 != null && num2 != null) {
@@ -87,13 +89,7 @@ public class ReferenceGenome {
         };
     }
     
-    private Integer tryParseInt(String s) {
-        try {
-            return Integer.valueOf(s);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
+
     
     private boolean isStandardChromosome(String name) {
         // Match chromosomes with or without "chr" prefix: 1-22, X, Y, MT/M

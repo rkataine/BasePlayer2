@@ -1,14 +1,13 @@
 package org.baseplayer.features.draw;
 
+import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
-
-import org.baseplayer.controllers.MainController;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
-import org.baseplayer.alignment.AlignmentFile;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
@@ -36,6 +35,7 @@ public class TrackLabelPanel {
   
   // Services
   private final SampleRegistry sampleRegistry;
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
 
   // Button sizes and layout constants
   private static final double ICON_SIZE = 14;
@@ -542,7 +542,7 @@ public class TrackLabelPanel {
       if (sampleY >= sampleRegistry.getMasterTrackHeight()) {
         gc.strokeLine(0, sampleY, w, sampleY);
       }
-      for (DrawStack stack : MainController.drawStacks) {
+      for (DrawStack stack : stackManager.getStacks()) {
         stack.alignmentCanvas.getGraphicsContext2D().setStroke(sampleRegistry.hoverSampleProperty().get() == i ? Color.WHITE : DrawColors.BORDER);
         stack.alignmentCanvas.getGraphicsContext2D().strokeLine(0, sampleY, stack.alignmentCanvas.getWidth(), sampleY);
       }

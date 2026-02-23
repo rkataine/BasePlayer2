@@ -4,10 +4,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
+import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.scene.canvas.Canvas;
@@ -29,6 +30,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   /** Padding between tracks in pixels — shared with {@link FeatureTracksSidebar}. */
   static final double TRACK_PADDING = 2;
   
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
   private final GraphicsContext gc;
   private final List<Track> tracks = new ArrayList<>();
   private boolean collapsed = false;
@@ -43,7 +45,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     
     // Set up mouse entered listener to set hover stack
     reactiveCanvas.setOnMouseEntered(event -> {
-      MainController.hoverStack = drawStack;
+      stackManager.setHoverStack(drawStack);
       resizing = true;
       update.set(!update.get());
       resizing = false;

@@ -1,0 +1,469 @@
+# Cancer type name mappings: variation<TAB>standard_name
+# 467 entries
+CRC	colorectal cancer
+crc	colorectal cancer
+colon	colorectal cancer
+colon cancer	colorectal cancer
+colon carcinoma	colorectal cancer
+colon adenocarcinoma	colorectal cancer
+colorectal	colorectal cancer
+colorectal adenocarcinoma	colorectal cancer
+colorectal carcinoma	colorectal cancer
+colorectal cancer susceptibility	colorectal cancer
+large intestine	colorectal cancer
+large intestine carcinoma	colorectal cancer
+colorectal cancer	colorectal cancer
+NSCLC	non-small cell lung cancer
+nsclc	non-small cell lung cancer
+lung adenocarcinoma	non-small cell lung cancer
+lung adenocarcinoma (mucinous)	non-small cell lung cancer
+non-small cell lung cancer	non-small cell lung cancer
+SCLC	small cell lung cancer
+sclc	small cell lung cancer
+small cell lung carcinoma	small cell lung cancer
+small cell lung cancer	small cell lung cancer
+lung	lung cancer
+lung carcinoma	lung cancer
+lung SCC	lung cancer
+Lung SCC	lung cancer
+lung cancer	lung cancer
+breast	breast cancer
+breast carcinoma	breast cancer
+lobular breast	breast cancer
+luminal A breast	breast cancer
+secretory breast	breast cancer
+triple-negative breast cancer	breast cancer
+fibroadenoma	breast cancer
+breast cancer	breast cancer
+AML	acute myeloid leukaemia
+aml	acute myeloid leukaemia
+AML*	acute myeloid leukaemia
+de novo AML	acute myeloid leukaemia
+paediatric AML	acute myeloid leukaemia
+sAML	acute myeloid leukaemia
+acute megakaryocytic leukaemia	acute myeloid leukaemia
+promyelocytic leukaemia	acute myeloid leukaemia
+megakaryoblastic leukaemia of Downs syndrome	acute myeloid leukaemia
+acute myeloid leukaemia	acute myeloid leukaemia
+ALL	acute lymphoblastic leukaemia
+all	acute lymphoblastic leukaemia
+pre B-ALL	acute lymphoblastic leukaemia
+pre-B ALL	acute lymphoblastic leukaemia
+B-ALL	acute lymphoblastic leukaemia
+T-ALL	acute lymphoblastic leukaemia
+ETP ALL	acute lymphoblastic leukaemia
+Downs associated ALL	acute lymphoblastic leukaemia
+Down syndrome associated ALL	acute lymphoblastic leukaemia
+relapse ALL	acute lymphoblastic leukaemia
+lymphoblastic leukaemia/biphasic	acute lymphoblastic leukaemia
+acute lymphoblastic leukaemia	acute lymphoblastic leukaemia
+APL	acute promyelocytic leukaemia
+apl	acute promyelocytic leukaemia
+APL (translocation)	acute promyelocytic leukaemia
+acute promyelocytic leukaemia	acute promyelocytic leukaemia
+CML	chronic myeloid leukaemia
+cml	chronic myeloid leukaemia
+aCML	chronic myeloid leukaemia
+AML (CML blast transformation)	chronic myeloid leukaemia
+chronic myeloid leukaemia	chronic myeloid leukaemia
+CLL	chronic lymphocytic leukaemia
+cll	chronic lymphocytic leukaemia
+B-CLL	chronic lymphocytic leukaemia
+T-CLL	chronic lymphocytic leukaemia
+chemorefractory CLL	chronic lymphocytic leukaemia
+large granular lymphocytic leukaemia	chronic lymphocytic leukaemia
+T-cell large granular lymphocytic leukaemia	chronic lymphocytic leukaemia
+paediatric large granular lymphocytic leukaemia	chronic lymphocytic leukaemia
+monoclonal B lymphocytosis	chronic lymphocytic leukaemia
+chronic lymphocytic leukaemia	chronic lymphocytic leukaemia
+CMML	chronic myelomonocytic leukaemia
+cmml	chronic myelomonocytic leukaemia
+chronic myelomonocytic leukaemia	chronic myelomonocytic leukaemia
+AEL	acute eosinophilic leukaemia
+ael	acute eosinophilic leukaemia
+acute eosinophilic leukaemia	acute eosinophilic leukaemia
+JMML	juvenile myelomonocytic leukaemia
+jmml	juvenile myelomonocytic leukaemia
+juvenile myelomonocytic leukaemia	juvenile myelomonocytic leukaemia
+T-PLL	T-cell prolymphocytic leukaemia
+t-pll	T-cell prolymphocytic leukaemia
+T cell prolymphocytic leukaemia	T-cell prolymphocytic leukaemia
+T-cell prolymphocytic leukaemia	T-cell prolymphocytic leukaemia
+adult T-cell lymphoma-leukaemia	adult T-cell leukaemia/lymphoma
+adult T-cell leukaemia/lymphoma	adult T-cell leukaemia/lymphoma
+L	leukaemia
+various leukaemia	leukaemia
+T-cell leukaemia	leukaemia
+leukaemia  (FANCB	leukaemia
+FANCD1)	leukaemia
+leukaemia lymphoma and MDS associated with severe congenital neutropenia	leukaemia
+leukaemia	leukaemia
+DLBCL	diffuse large B-cell lymphoma
+dlbcl	diffuse large B-cell lymphoma
+ABC-DLBCL	diffuse large B-cell lymphoma
+diffuse large B-cell lymphoma	diffuse large B-cell lymphoma
+paediatric Burkitt lymphoma	Burkitt lymphoma
+Burkitt lymphoma	Burkitt lymphoma
+follicular lymphoma	follicular lymphoma
+Nodular lymphocyte predominant Hodgkin lymphoma	Hodgkin lymphoma
+Hodgkin lymphoma	Hodgkin lymphoma
+MCL	mantle cell lymphoma
+mcl	mantle cell lymphoma
+mantle cell lymphoma	mantle cell lymphoma
+marginal zone B-cell lymphomas	marginal zone lymphoma
+SMZL	marginal zone lymphoma
+smzl	marginal zone lymphoma
+splenic marginal zone lymphoma	marginal zone lymphoma
+marginal zone lymphoma	marginal zone lymphoma
+MALT	MALT lymphoma
+malt	MALT lymphoma
+MALT lymphoma	MALT lymphoma
+PMBL	primary mediastinal B-cell lymphoma
+pmbl	primary mediastinal B-cell lymphoma
+primary mediastinal B-cell lymphoma	primary mediastinal B-cell lymphoma
+NHL	non-Hodgkin lymphoma
+nhl	non-Hodgkin lymphoma
+B-NHL	non-Hodgkin lymphoma
+BNHL	non-Hodgkin lymphoma
+non-Hodgkin lymphoma	non-Hodgkin lymphoma
+ALCL	anaplastic large cell lymphoma
+alcl	anaplastic large cell lymphoma
+anaplastic large cell lymphoma	anaplastic large cell lymphoma
+T-cell lymphoma	peripheral T-cell lymphoma
+T cell lymphomas	peripheral T-cell lymphoma
+peripheral T-cell lymphoma	peripheral T-cell lymphoma
+primary central nervous system lymphoma	primary CNS lymphoma
+primary CNS lymphoma	primary CNS lymphoma
+nasal NK/T lymphoma	nasal NK/T lymphoma
+intestinal T-cell lymphoma	intestinal T-cell lymphoma
+Langerhans cell histiocytosis	Langerhans cell histiocytosis
+lymphomas	lymphoma
+lethal midline carcinoma	lymphoma
+lethal midline carcinoma of young people	lymphoma
+MLCLS	lymphoma
+multiple different leukaemia and lymphoma tumour types including ALL	lymphoma
+lymphoma	lymphoma
+MDS	myelodysplastic syndrome
+mds	myelodysplastic syndrome
+MDS and related	myelodysplastic syndrome
+MDS/MPN-U	myelodysplastic syndrome
+myelodysplastic syndrome	myelodysplastic syndrome
+myelodysplastic syndrome	myelodysplastic syndrome
+MPN	myeloproliferative neoplasm
+mpn	myeloproliferative neoplasm
+myeloid neoplasms	myeloproliferative neoplasm
+myeloproliferative neoplasm	myeloproliferative neoplasm
+CNL	chronic neutrophilic leukaemia
+cnl	chronic neutrophilic leukaemia
+chronic neutrophilic leukaemia	chronic neutrophilic leukaemia
+mastocytosis	mastocytosis
+HES	hypereosinophilic syndrome
+hes	hypereosinophilic syndrome
+idiopathic hypereosinophilic syndrome	hypereosinophilic syndrome
+SM-AHD	hypereosinophilic syndrome
+hypereosinophilic syndrome	hypereosinophilic syndrome
+MM	multiple myeloma
+mm	multiple myeloma
+myeloma	multiple myeloma
+multiple myeloma	multiple myeloma
+WM	Waldenstrom macroglobulinemia
+wm	Waldenstrom macroglobulinemia
+Waldenstrom macroglobulinemia	Waldenstrom macroglobulinemia
+CCRCC	clear cell renal cell carcinoma
+ccrcc	clear cell renal cell carcinoma
+clear cell renal carcinoma	clear cell renal cell carcinoma
+clear cell renal cell carcinoma	clear cell renal cell carcinoma
+RCC	renal cell carcinoma
+rcc	renal cell carcinoma
+papillary renal	renal cell carcinoma
+renal cell carcinoma (childhood epithelioid)	renal cell carcinoma
+renal cell carcinoma	renal cell carcinoma
+renal	kidney cancer
+kidney cancer	kidney cancer
+renal angiomyolipoma	renal angiomyolipoma
+ovarian	ovarian cancer
+ovarian carcinoma	ovarian cancer
+ovary	ovarian cancer
+epithelial ovarian	ovarian cancer
+epithelial ovarian cancer	ovarian cancer
+borderline ovarian	ovarian cancer
+serous ovarian	ovarian cancer
+low grade serous ovarian cancer	ovarian cancer
+endometrioid cancer	ovarian cancer
+endometrioid carcinoma	ovarian cancer
+clear cell ovarian carcinoma	ovarian cancer
+tubo-ovarian carcinoma	ovarian cancer
+ovarian cancer	ovarian cancer
+ovarian mixed germ cell tumour	ovarian germ cell tumour
+ovarian germ cell tumour	ovarian germ cell tumour
+granulosa-cell tumour of the ovary	granulosa cell tumour
+sex cord-stromal tumour	granulosa cell tumour
+granulosa cell tumour	granulosa cell tumour
+endometrial	endometrial cancer
+endometrial carcinoma	endometrial cancer
+endometrium	endometrial cancer
+endometrioid adenocarcinoma	endometrial cancer
+uterine serous carcinoma	endometrial cancer
+endometrial cancer	endometrial cancer
+endometrial stromal sarcoma	endometrial stromal tumour
+endometrial stromal tumour	endometrial stromal tumour
+uterine carcinosarcoma	uterine carcinosarcoma
+leiomyoma	uterine leiomyoma
+cutaneous leiomyoma	uterine leiomyoma
+uterine leiomyoma	uterine leiomyoma
+gastric	gastric cancer
+gastric adenocarcinoma	gastric cancer
+gastric carcinoma	gastric cancer
+diffuse gastric	gastric cancer
+stomach carcinoma	gastric cancer
+gastric cancer	gastric cancer
+oesophagus	oesophageal cancer
+oesophagus cancer	oesophageal cancer
+oesophageal SCC	oesophageal cancer
+oesophageal squamous cell carcinoma	oesophageal cancer
+oesophageal cancer	oesophageal cancer
+pancreas	pancreatic cancer
+pancreatic	pancreatic cancer
+pancreatic carcinoma	pancreatic cancer
+pancreatic ductal adenocarcinoma	pancreatic cancer
+pancreas acinar carcinoma	pancreatic cancer
+pancreatic acinar cell carcinoma	pancreatic cancer
+pancreatic cancer	pancreatic cancer
+pancreatic neuroendocrine tumours	pancreatic neuroendocrine tumour
+pancreatic islet cell	pancreatic neuroendocrine tumour
+pancreatic intraductal papillary mucinous neoplasm	pancreatic neuroendocrine tumour
+pancreatic neuroendocrine tumour	pancreatic neuroendocrine tumour
+hepatocellular	hepatocellular carcinoma
+liver	hepatocellular carcinoma
+fibrolamellar hepatocellular carcinoma	hepatocellular carcinoma
+hepatocellular carcinoma	hepatocellular carcinoma
+hepatoblastoma	hepatoblastoma
+hepatic adenoma	hepatic adenoma
+cholangiocarcinoma	cholangiocarcinoma
+biliary tract	biliary tract cancer
+biliary tract carcinoma	biliary tract cancer
+biliary tract cancer	biliary tract cancer
+gallbladder carcinoma	gallbladder carcinoma
+prostate	prostate cancer
+prostate carcinoma	prostate cancer
+prostae adenocarcinoma	prostate cancer
+prostate cancer	prostate cancer
+bladder	bladder cancer
+bladder carcinoma	bladder cancer
+urothelial cancer	bladder cancer
+urothelial cell carcinoma	bladder cancer
+bladder cancer	bladder cancer
+testicular	testicular germ cell tumour
+TGCT	testicular germ cell tumour
+tgct	testicular germ cell tumour
+testicular germ cell tumours and other tumour types	testicular germ cell tumour
+testicular germ cell tumour	testicular germ cell tumour
+cervical SCC	cervical carcinoma
+cervical carcinoma	cervical carcinoma
+thyroid	thyroid cancer
+thyroid gland follicular carcinoma	thyroid cancer
+thyroid cancer (PDTC and ATC)	thyroid cancer
+thyroid cancer	thyroid cancer
+papillary thyroid	papillary thyroid cancer
+papillary thyroid cancer	papillary thyroid cancer
+follicular thyroid	follicular thyroid cancer
+follicular thyroid adenoma	follicular thyroid cancer
+microfollicular thyroid adenoma	follicular thyroid cancer
+follicular thyroid cancer	follicular thyroid cancer
+medullary thyroid	medullary thyroid cancer
+medullary thyroid cancer	medullary thyroid cancer
+anaplastic thyroid	anaplastic thyroid cancer
+anaplastic thyroid cancer	anaplastic thyroid cancer
+toxic thyroid adenoma	toxic thyroid adenoma
+head and neck	head and neck cancer
+head and neck SCC	head and neck cancer
+HNSCC	head and neck cancer
+hnscc	head and neck cancer
+head-neck squamous cell	head and neck cancer
+head and neck cancer	head and neck cancer
+oral SCC	oral squamous cell carcinoma
+oral squamous cell	oral squamous cell carcinoma
+oral squamous cell carcinoma	oral squamous cell carcinoma
+oropharyngeal	oropharyngeal cancer
+oropharyngeal cancer	oropharyngeal cancer
+malignant melanoma	melanoma
+cutaneous melanoma	melanoma
+skin and uveal melanoma	melanoma
+desmoplastic melanoma	melanoma
+mucosal melanoma	melanoma
+malignant melanoma of soft parts	melanoma
+melanoma	melanoma
+uveal melanoma	uveal melanoma
+skin basal cell	basal cell carcinoma
+skin basal cell carcinoma	basal cell carcinoma
+basal cell carcinoma	basal cell carcinoma
+SCC	squamous cell carcinoma
+scc	squamous cell carcinoma
+skin SCC	squamous cell carcinoma
+skin sqamous cell	squamous cell carcinoma
+skin squamous cell	squamous cell carcinoma
+skin squamous cell carcinoma-burn scar related	squamous cell carcinoma
+squamous cell carcinoma	squamous cell carcinoma
+skin	skin cancer
+skin cancer	skin cancer
+eyelid sebaceous carcinoma	eyelid sebaceous carcinoma
+melanocytic nevus	melanocytic nevus
+Spitzoid tumour	Spitzoid tumour
+GBM	glioblastoma
+gbm	glioblastoma
+paediatric GBM	glioblastoma
+paediatric glioblastoma	glioblastoma
+glioblastoma	glioblastoma
+glioma	glioma
+sporadic medulloblastoma	medulloblastoma
+medulloblastoma	medulloblastoma
+oligodendroglioma	oligodendroglioma
+pilocytic astrocytoma	pilocytic astrocytoma
+DIPG	diffuse intrinsic pontine glioma
+dipg	diffuse intrinsic pontine glioma
+diffuse intrinsic pontine glioma	diffuse intrinsic pontine glioma
+supratentorial ependymoma	ependymoma
+ependymoma	ependymoma
+ganglioglioma	ganglioglioma
+angiocentric glioma	angiocentric glioma
+CNS	CNS tumour
+cns	CNS tumour
+CNS tumours	CNS tumour
+central nervous system tumours	CNS tumour
+other CNS	CNS tumour
+CNS tumour	CNS tumour
+clear cell meningioma	meningioma
+meningeal haemangiopericytoma	meningioma
+meningioma	meningioma
+central nervous system hemangioblastomas	hemangioblastoma
+hemangioblastoma	hemangioblastoma
+acoustic neuroma	schwannoma
+schwannoma	schwannoma
+intracranial germ cell tumour	intracranial germ cell tumour
+neuroepithelial tumours	neuroepithelial tumour
+neuroepithelial tumour	neuroepithelial tumour
+primary central nervous system melanocytic neoplasms	primary CNS melanocytic neoplasm
+primary CNS melanocytic neoplasm	primary CNS melanocytic neoplasm
+osteosarcoma	osteosarcoma
+Ewing's sarcoma	Ewing sarcoma
+Ewing sarcoma	Ewing sarcoma
+alveolar rhabdomyosarcoma	rhabdomyosarcoma
+embryonal rhabdomyosarcoma	rhabdomyosarcoma
+rhabdomyosarcoma	rhabdomyosarcoma
+synovial sarcoma	synovial sarcoma
+liposarcoma	liposarcoma
+myxoid chondrosarcoma	chondrosarcoma
+extraskeletal myxoid chondrosarcoma	chondrosarcoma
+mesenchymal chondrosarcoma	chondrosarcoma
+chondrosarcoma	chondrosarcoma
+clear cell sarcoma of soft parts	clear cell sarcoma
+clear cell sarcoma	clear cell sarcoma
+myxofibrosarcoma	myxofibrosarcoma
+fibromyxoid sarcoma	fibromyxoid sarcoma
+angiosarcoma	angiosarcoma
+leiomyosarcoma	leiomyosarcoma
+malignant peripheral nerve sheath tumours	malignant peripheral nerve sheath tumour
+malignant peripheral nerve sheath tumour	malignant peripheral nerve sheath tumour
+DFSP	dermatofibrosarcoma protuberans
+dfsp	dermatofibrosarcoma protuberans
+dermatofibrosarcoma protuberans	dermatofibrosarcoma protuberans
+desmoplastic small round cell tumour	desmoplastic small round cell tumour
+alveolar soft part sarcoma	alveolar soft part sarcoma
+epithelioid haemangioendothelioma	epithelioid haemangioendothelioma
+inflammatory myofibroblastic tumour	inflammatory myofibroblastic tumour
+solitary fibrous tumour	solitary fibrous tumour
+soft-tissue sarcoma	soft tissue sarcoma
+sarcoma	soft tissue sarcoma
+infrequent sarcomas	soft tissue sarcoma
+soft tissue sarcoma	soft tissue sarcoma
+chondroblastoma	chondroblastoma
+enchondroma	enchondroma
+aneurysmal bone cyst	aneurysmal bone cyst
+fibrous dysplasia	fibrous dysplasia
+multiple ossifying jaw fibroma	multiple ossifying jaw fibroma
+exostoses	exostoses
+GIST	gastrointestinal stromal tumour
+gist	gastrointestinal stromal tumour
+gastrointestinal stromal tumour	gastrointestinal stromal tumour
+ganglioneuroblastoma	neuroblastoma
+neuroblastoma	neuroblastoma
+Wilms tumour	Wilms tumour
+retinoblastoma	retinoblastoma
+mesothelioma	malignant mesothelioma
+malignant mesothelioma	malignant mesothelioma
+thymoma	thymoma
+pheochromocytoma	pheochromocytoma and paraganglioma
+paraganglioma	pheochromocytoma and paraganglioma
+pheochromocytoma and paraganglioma	pheochromocytoma and paraganglioma
+adrenocortical	adrenocortical carcinoma
+adrenocortical carcinoma	adrenocortical carcinoma
+adrenal aldosterone producing adenoma	adrenal adenoma
+cortisol secreting adrenal adenoma	adrenal adenoma
+adrenal adenoma	adrenal adenoma
+pituitary	pituitary adenoma
+corticotroph adenoma	pituitary adenoma
+pituitary adenoma	pituitary adenoma
+pituitary blastoma	pituitary blastoma
+parathyroid	parathyroid tumour
+parathyroid adenoma	parathyroid tumour
+parathyroid tumours	parathyroid tumour
+parathyroid tumour	parathyroid tumour
+salivary gland mucoepidermoid	salivary gland mucoepidermoid carcinoma
+salivary gland mucoepidermoid carcinoma	salivary gland mucoepidermoid carcinoma
+adenoid cystic carcinoma	adenoid cystic carcinoma
+salivary adenoma	pleomorphic salivary gland adenoma
+pleomorphic salivary gland adenoma	pleomorphic salivary gland adenoma
+polymorphous adenocarcinoma of the minor salivary glands	polymorphous adenocarcinoma
+polymorphous adenocarcinoma	polymorphous adenocarcinoma
+cribriform adenocarcinoma of the minor salivary glands	cribriform adenocarcinoma
+cribriform adenocarcinoma	cribriform adenocarcinoma
+myoepithelioma	myoepithelioma
+small intestine	small intestine neuroendocrine tumour
+small intestine neuroendocrine tumours	small intestine neuroendocrine tumour
+carcinoid	small intestine neuroendocrine tumour
+small intestine neuroendocrine tumour	small intestine neuroendocrine tumour
+endocrine	endocrine tumour
+endocrine tumour	endocrine tumour
+malignant rhabdoid	malignant rhabdoid tumour
+malignant rhabdoid tumour	malignant rhabdoid tumour
+pleuropulmonary blastoma	pleuropulmonary blastoma
+SCCOHT	small cell carcinoma of ovary, hypercalcaemic type
+sccoht	small cell carcinoma of ovary, hypercalcaemic type
+small cell carcinoma of ovary, hypercalcaemic type	small cell carcinoma of ovary, hypercalcaemic type
+phyllodes tumour of the breast	phyllodes tumour
+phyllodes tumour	phyllodes tumour
+desmoid	desmoid tumour
+desmoid tumour	desmoid tumour
+congenital fibrosarcoma	congenital fibrosarcoma
+lipoblastoma	lipoblastoma
+neurofibroma	neurofibroma
+harmartoma	hamartoma
+jejunal hamartoma	hamartoma
+tuberous sclerosis tuber	hamartoma
+hamartoma	hamartoma
+haemangioma	haemangioma
+lipoma	lipoma
+myxoma	myxoma
+gastrointestinal polyps	gastrointestinal polyp
+gastrointestinal polyp	gastrointestinal polyp
+fibrofolliculomas	fibrofolliculoma
+trichodiscomas	fibrofolliculoma
+fibrofolliculoma	fibrofolliculoma
+cylindroma	cylindroma
+epithelioma	epithelioma
+erythrocytosis	erythrocytosis
+peritoneal carcinomatosis	peritoneal carcinomatosis
+pulmonary lymphangioleiomyomatosis	pulmonary lymphangioleiomyomatosis
+carcinoma	carcinoma
+others	other tumours
+other tumour types	other tumours
+multiple other tumour types	other tumours
+rare other tumour types	other tumours
+various benign mesenchymal tumours	other tumours
+other tumours	other tumours
+E	tissue type E
+tissue type E	tissue type E
+M	tissue type M
+tissue type M	tissue type M
+O	tissue type O
+tissue type O	tissue type O

@@ -17,6 +17,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.baseplayer.io.cache.DataCacheManager;
+import org.baseplayer.utils.JsonUtils;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -78,15 +79,15 @@ public class AlphaFoldApiClient {
       var opt = DataCacheManager.loadFromCache("alphafold", uniprotId);
       if (opt.isPresent()) {
         JsonObject obj = opt.get();
-        String uid = getStringOrNull(obj, "uniprotId");
+        String uid = JsonUtils.getStringOrNull(obj, "uniprotId");
         if (uid != null && uid.equalsIgnoreCase(uniprotId)) {
-          String desc = getStringOrNull(obj, "uniprotDescription");
-          String gene = getStringOrNull(obj, "gene");
+          String desc = JsonUtils.getStringOrNull(obj, "uniprotDescription");
+          String gene = JsonUtils.getStringOrNull(obj, "gene");
           int seqLen = obj.has("sequenceLength") ? obj.get("sequenceLength").getAsInt() : 0;
-          String pdb = getStringOrNull(obj, "pdbUrl");
-          String cif = getStringOrNull(obj, "cifUrl");
-          String pae = getStringOrNull(obj, "paeImageUrl");
-          String model = getStringOrNull(obj, "modelUrl");
+          String pdb = JsonUtils.getStringOrNull(obj, "pdbUrl");
+          String cif = JsonUtils.getStringOrNull(obj, "cifUrl");
+          String pae = JsonUtils.getStringOrNull(obj, "paeImageUrl");
+          String model = JsonUtils.getStringOrNull(obj, "modelUrl");
           double gm = obj.has("globalMetricValue") ? obj.get("globalMetricValue").getAsDouble() : 0.0;
           return new AlphaFoldEntry(uid, desc, gene, seqLen, pdb, cif, pae, model, gm);
         }
@@ -101,17 +102,17 @@ public class AlphaFoldApiClient {
             try {
               String s = Files.readString(file, StandardCharsets.UTF_8);
               JsonObject obj = JsonParser.parseString(s).getAsJsonObject();
-              String uid = getStringOrNull(obj, "uniprotId");
+              String uid = JsonUtils.getStringOrNull(obj, "uniprotId");
               if (uid != null && uid.equalsIgnoreCase(uniprotId)) {
                 // Migrate into DataCacheManager for future
                 DataCacheManager.saveToCache("alphafold", uniprotId, obj);
-                String desc = getStringOrNull(obj, "uniprotDescription");
-                String gene = getStringOrNull(obj, "gene");
+                String desc = JsonUtils.getStringOrNull(obj, "uniprotDescription");
+                String gene = JsonUtils.getStringOrNull(obj, "gene");
                 int seqLen = obj.has("sequenceLength") ? obj.get("sequenceLength").getAsInt() : 0;
-                String pdb = getStringOrNull(obj, "pdbUrl");
-                String cif = getStringOrNull(obj, "cifUrl");
-                String pae = getStringOrNull(obj, "paeImageUrl");
-                String model = getStringOrNull(obj, "modelUrl");
+                String pdb = JsonUtils.getStringOrNull(obj, "pdbUrl");
+                String cif = JsonUtils.getStringOrNull(obj, "cifUrl");
+                String pae = JsonUtils.getStringOrNull(obj, "paeImageUrl");
+                String model = JsonUtils.getStringOrNull(obj, "modelUrl");
                 double gm = obj.has("globalMetricValue") ? obj.get("globalMetricValue").getAsDouble() : 0.0;
                 return new AlphaFoldEntry(uid, desc, gene, seqLen, pdb, cif, pae, model, gm);
               }
@@ -184,7 +185,7 @@ public class AlphaFoldApiClient {
         char alt = o.has("alternateAA") && o.get("alternateAA").getAsString().length() > 0
             ? o.get("alternateAA").getAsString().charAt(0) : 'X';
         double ps = o.has("pathogenicity") ? o.get("pathogenicity").getAsDouble() : 0.0;
-        String cls = getStringOrNull(o, "classification");
+        String cls = JsonUtils.getStringOrNull(o, "classification");
         out.add(new MissensePrediction(pos, ref, alt, ps, cls == null ? "ambiguous" : cls));
       }
       return out;
@@ -249,7 +250,7 @@ public class AlphaFoldApiClient {
         char alt = o.has("alternateAA") && o.get("alternateAA").getAsString().length() > 0
             ? o.get("alternateAA").getAsString().charAt(0) : 'X';
         double ps = o.has("pathogenicity") ? o.get("pathogenicity").getAsDouble() : 0.0;
-        String cls = getStringOrNull(o, "classification");
+        String cls = JsonUtils.getStringOrNull(o, "classification");
         out.add(new MissensePrediction(pos, ref, alt, ps, cls == null ? "ambiguous" : cls));
       }
       return out;
@@ -719,18 +720,18 @@ public class AlphaFoldApiClient {
           JsonArray features = json.getAsJsonArray("features");
           for (JsonElement elem : features) {
             JsonObject feature = elem.getAsJsonObject();
-            if (!"VARIANT".equals(getStringOrNull(feature, "type"))) continue;
+            if (!"VARIANT".equals(JsonUtils.getStringOrNull(feature, "type"))) continue;
             
             int pos = feature.has("begin") ? feature.get("begin").getAsInt() : 0;
             if (pos <= 0) continue;
             
-            String altSeq = getStringOrNull(feature, "alternativeSequence");
+            String altSeq = JsonUtils.getStringOrNull(feature, "alternativeSequence");
             if (altSeq == null || altSeq.length() != 1) continue;
             
             char altAA = altSeq.charAt(0);
             
             // Get reference AA
-            String wildType = getStringOrNull(feature, "wildType");
+            String wildType = JsonUtils.getStringOrNull(feature, "wildType");
             char refAA = (wildType != null && wildType.length() == 1) ? wildType.charAt(0) : 'X';
             
             // Check for clinical significance
@@ -772,11 +773,6 @@ public class AlphaFoldApiClient {
     }
     
     return predictions;
-  }
-  
-  private static String getStringOrNull(JsonObject obj, String key) {
-    return obj.has(key) && !obj.get(key).isJsonNull() 
-        ? obj.get(key).getAsString() : null;
   }
   
   /**

@@ -107,7 +107,7 @@ public class CoverageDrawer {
     int start = Math.max(0, (int) drawStack.start);
     int end = (int) drawStack.end;
     boolean coverageOnly = drawStack.viewLength > Settings.get().getMaxReadViewLength();
-    boolean isHoverStack = (drawStack == org.baseplayer.controllers.MainController.hoverStack);
+    boolean isHoverStack = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
 
     // Count visible methylation samples for color assignment
     int methylColorIdx = 0;

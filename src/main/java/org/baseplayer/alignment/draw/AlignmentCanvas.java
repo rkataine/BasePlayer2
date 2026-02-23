@@ -11,6 +11,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
 import org.baseplayer.sample.Sample;
 import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.Variant;
 
@@ -36,6 +37,40 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private static final double MIN_COVERAGE_HEIGHT = 30;
   private static final double MAX_COVERAGE_HEIGHT = 60;
+
+  /**
+   * Pre-computed per-sample layout geometry used by rendering, hit-testing,
+   * and hover highlighting.  Avoids the previous 3× duplication.
+   */
+  record ReadLayout(double readsY, double readsH, double readHeight,
+                    double gap, int maxRow, int hp2Start, double scrollOffset,
+                    boolean butterfly, boolean methylation) {
+
+    static ReadLayout compute(double sampleY, double sampleH, double coverageH,
+                              AlignmentFile bamFile, Sample sample, DrawStack drawStack) {
+      double readsY     = sampleY + coverageH;
+      double readsH     = sampleH - coverageH;
+      double gap        = Settings.get().getReadGap();
+      int    maxRow     = bamFile.getMaxRow(drawStack) + 1;
+      int    hp2Start   = bamFile.getHP2StartRow(drawStack);
+      double scrollOff  = bamFile.readScrollOffset;
+      boolean butterfly = hp2Start >= 0 && sample.isHaplotypeData();
+      boolean methyl    = sample.isMethylationData();
+
+      double readHeight;
+      if (butterfly) {
+        int maxPerHalf = Math.max(hp2Start, maxRow - hp2Start);
+        readHeight = Math.max(Settings.get().getMinReadHeight(),
+            Math.min(8, (readsH / 2 - 4) / Math.max(1, maxPerHalf)));
+      } else {
+        readHeight = Math.max(Settings.get().getMinReadHeight(),
+            Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
+      }
+
+      return new ReadLayout(readsY, readsH, readHeight, gap, maxRow,
+                            hp2Start, scrollOff, butterfly, methyl);
+    }
+  }
 
   private BAMRecord hoveredRead = null;
   private final ReadInfoPopup readInfoPopup = new ReadInfoPopup();
@@ -112,11 +147,11 @@ public class AlignmentCanvas extends GenomicCanvas {
     for (Variant variant : drawStack.variants) {
       if (variant.line.getEndX() < drawStack.start - 1) continue;
       if (variant.line.getStartX() > drawStack.end) break;
-      drawLine(variant, DrawColors.lineColor, gc);
+      drawVariantLine(variant, DrawColors.lineColor, gc);
     }
   }
 
-  void drawLine(Variant variant, Color color, GraphicsContext gc) {
+  void drawVariantLine(Variant variant, Color color, GraphicsContext gc) {
     if (variant.index < sampleRegistry.getFirstVisibleSample()
         || variant.index > sampleRegistry.getLastVisibleSample() + 1) return;
     gc.setFill(color);
@@ -192,7 +227,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     AlignmentFile bamFile = sample.getBamFile();
     if (bamFile == null) return;
 
-    boolean isHoverStack      = (drawStack == MainController.hoverStack);
+    boolean isHoverStack      = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
     boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !GenomicCanvas.navigating);
     if (shouldShowLoading) drawReads.drawLoadingIndicator(sampleY, sampleH);
 
@@ -210,25 +245,13 @@ public class AlignmentCanvas extends GenomicCanvas {
     }
     if (reads == null || reads.isEmpty()) return;
 
-    double  readsY      = sampleY + coverageH;
-    double  readsH      = sampleH - coverageH;
-    double  gap         = Settings.get().getReadGap();
-    int     maxRow      = bamFile.getMaxRow(drawStack) + 1;
-    int     hp2Start    = bamFile.getHP2StartRow(drawStack);
-    double  scrollOff   = bamFile.readScrollOffset;
-    boolean butterfly   = hp2Start >= 0 && sample.isHaplotypeData();
-    boolean isMethyl    = sample.isMethylationData();
+    ReadLayout layout = ReadLayout.compute(sampleY, sampleH, coverageH, bamFile, sample, drawStack);
 
     gc.setStroke(DrawColors.COVERAGE_SEPARATOR);
-    gc.strokeLine(0, readsY, getWidth(), readsY);
+    gc.strokeLine(0, layout.readsY(), getWidth(), layout.readsY());
 
-    double readHeight;
-    if (butterfly) {
-      int maxPerHalf = Math.max(hp2Start, maxRow - hp2Start);
-      readHeight = Math.max(Settings.get().getMinReadHeight(),
-          Math.min(8, (readsH / 2 - 4) / Math.max(1, maxPerHalf)));
-
-      double middleY = readsY + readsH / 2;
+    if (layout.butterfly()) {
+      double middleY = layout.readsY() + layout.readsH() / 2;
       gc.setStroke(DrawColors.ALLELE_SEPARATOR);
       gc.setLineWidth(1.5);
       gc.strokeLine(0, middleY, getWidth(), middleY);
@@ -238,9 +261,6 @@ public class AlignmentCanvas extends GenomicCanvas {
       gc.fillText("HP1", 4, middleY - 4);
       gc.setFill(DrawColors.ALLELE_HP2_LABEL);
       gc.fillText("HP2", 4, middleY + 11);
-    } else {
-      readHeight = Math.max(Settings.get().getMinReadHeight(),
-          Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
     }
 
     Color fwdFill, revFill, fwdStroke, revStroke;
@@ -252,13 +272,15 @@ public class AlignmentCanvas extends GenomicCanvas {
       fwdStroke = DrawColors.READ_FORWARD_STROKE;    revStroke = DrawColors.READ_REVERSE_STROKE;
     }
 
-    drawReads.draw(reads, readsY, readsH, readHeight, gap, butterfly, hp2Start, scrollOff,
-        fwdFill, revFill, fwdStroke, revStroke, isMethyl,
+    drawReads.draw(reads, layout.readsY(), layout.readsH(), layout.readHeight(),
+        layout.gap(), layout.butterfly(), layout.hp2Start(), layout.scrollOffset(),
+        fwdFill, revFill, fwdStroke, revStroke, layout.methylation(),
         sampleY + coverageH, sampleY + sampleH, getWidth());
 
-    if (!butterfly) {
+    if (!layout.butterfly()) {
       Map<String, Integer> rgs = bamFile.getReadGroupStartRows(drawStack);
-      if (rgs.size() > 1) drawReadGroupSeparators(rgs, readsY, readHeight, gap, sampleY, sampleH);
+      if (rgs.size() > 1) drawReadGroupSeparators(rgs, layout.readsY(), layout.readHeight(),
+                                                    layout.gap(), sampleY, sampleH);
     }
   }
 
@@ -312,21 +334,10 @@ public class AlignmentCanvas extends GenomicCanvas {
         List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
         if (reads == null || reads.isEmpty()) continue;
 
-        double  readsY    = sampleY + coverageFractionH;
-        double  readsH    = sampleH - coverageFractionH;
-        int     maxRow    = bamFile.getMaxRow(drawStack) + 1;
-        double  gap       = Settings.get().getReadGap();
-        int     hp2Start  = bamFile.getHP2StartRow(drawStack);
-        double  scrollOff = bamFile.readScrollOffset;
-        boolean butterfly = hp2Start >= 0 && sample.isHaplotypeData();
+        ReadLayout layout = ReadLayout.compute(sampleY, sampleH, coverageFractionH, bamFile, sample, drawStack);
 
-        double readHeight = butterfly
-            ? Math.max(Settings.get().getMinReadHeight(),
-                Math.min(8, (readsH / 2 - 4) / Math.max(1, Math.max(hp2Start, maxRow - hp2Start))))
-            : Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
-
-        BAMRecord hit = drawReads.findAt(reads, mx, my, readsY, readsH, readHeight, gap,
-            butterfly, hp2Start, scrollOff);
+        BAMRecord hit = drawReads.findAt(reads, mx, my, layout.readsY(), layout.readsH(),
+            layout.readHeight(), layout.gap(), layout.butterfly(), layout.hp2Start(), layout.scrollOffset());
         if (hit != null) return hit;
       }
     }
@@ -356,21 +367,10 @@ public class AlignmentCanvas extends GenomicCanvas {
         List<BAMRecord> reads = bamFile.getCachedReads(drawStack);
         if (reads == null || !reads.contains(hoveredRead)) continue;
 
-        double  readsY    = sampleY + coverageFractionH;
-        double  readsH    = sampleH - coverageFractionH;
-        int     maxRow    = bamFile.getMaxRow(drawStack) + 1;
-        double  gap       = Settings.get().getReadGap();
-        int     hp2Start  = bamFile.getHP2StartRow(drawStack);
-        double  scrollOff = bamFile.readScrollOffset;
-        boolean butterfly = hp2Start >= 0 && sample.isHaplotypeData();
+        ReadLayout layout = ReadLayout.compute(sampleY, sampleH, coverageFractionH, bamFile, sample, drawStack);
 
-        double readHeight = butterfly
-            ? Math.max(Settings.get().getMinReadHeight(),
-                Math.min(8, (readsH / 2 - 4) / Math.max(1, Math.max(hp2Start, maxRow - hp2Start))))
-            : Math.max(Settings.get().getMinReadHeight(), Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
-
-        drawReads.drawHighlight(reactivegc, hoveredRead, readsY, readsH, readHeight, gap,
-            butterfly, hp2Start, scrollOff);
+        drawReads.drawHighlight(reactiveGc, hoveredRead, layout.readsY(), layout.readsH(),
+            layout.readHeight(), layout.gap(), layout.butterfly(), layout.hp2Start(), layout.scrollOffset());
         return;
       }
     }

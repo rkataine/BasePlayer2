@@ -3,7 +3,7 @@ package org.baseplayer.draw;
 import java.util.function.Function;
 
 import org.baseplayer.alignment.FetchManager;
-import org.baseplayer.controllers.MainController;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
@@ -32,9 +32,10 @@ public class GenomicCanvas extends Canvas {
   
   // Services
   protected final SampleRegistry sampleRegistry;
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
  
   private final GraphicsContext gc;
-  public GraphicsContext reactivegc;
+  public GraphicsContext reactiveGc;
 
   
   protected Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
@@ -81,7 +82,7 @@ public class GenomicCanvas extends Canvas {
     parent.widthProperty().addListener((obs, oldVal, newVal) -> { 
       resizing = true; update.set(!update.get()); resizing = false;
     });
-    reactiveCanvas.setOnMouseEntered(event -> { MainController.hoverStack = drawStack; update.set(!update.get()); });
+    reactiveCanvas.setOnMouseEntered(event -> { stackManager.setHoverStack(drawStack); update.set(!update.get()); });
 
     parent.heightProperty().addListener((obs, oldVal, newVal) -> { resizing = true; update.set(!update.get()); resizing = false; });
    
@@ -91,7 +92,7 @@ public class GenomicCanvas extends Canvas {
 
   protected void draw() {
     
-    if (MainController.drawStacks.size() > 1 && drawStack.equals(MainController.hoverStack)) {
+    if (stackManager.getStacks().size() > 1 && drawStack.equals(stackManager.getHoverStack())) {
       gc.setStroke(Color.WHITESMOKE);
       gc.strokeRect(1, -1, getWidth()-2, getHeight()+2);
     }
@@ -169,7 +170,7 @@ public class GenomicCanvas extends Canvas {
   
   private void setupReactiveCanvas() {
     
-    reactivegc = reactiveCanvas.getGraphicsContext2D();
+    reactiveGc = reactiveCanvas.getGraphicsContext2D();
    
     reactiveCanvas.setOnMouseClicked(event -> { });
     reactiveCanvas.setOnMousePressed(event -> { 
@@ -274,21 +275,21 @@ public class GenomicCanvas extends Canvas {
       return;
     }
     
-    reactivegc.setFill(DrawColors.ZOOM_GRADIENT);
-    reactivegc.setStroke(Color.DODGERBLUE);
+    reactiveGc.setFill(DrawColors.ZOOM_GRADIENT);
+    reactiveGc.setStroke(Color.DODGERBLUE);
     zoomDrag = true;
 		mouseDragDeltaX = dragX - mouseDraggedX;
     mouseDraggedX = dragX;
     if (!lineZoomer && mouseDraggedX >= mousePressedX) {
       clearReactive();
-      reactivegc.fillRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight());
-      reactivegc.strokeRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight() + 2);
+      reactiveGc.fillRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight());
+      reactiveGc.strokeRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight() + 2);
     } else {
       zoomDrag = false;
       lineZoomer = true;
       lineZoomerActive = true; // Block all fetches during line zoom
 			clearReactive();
-			reactivegc.strokeLine(mousePressedX, mousePressedY, mouseDraggedX, dragY);
+			reactiveGc.strokeLine(mousePressedX, mousePressedY, mouseDraggedX, dragY);
       zoom(mouseDragDeltaX, mousePressedX);
     }
   }
@@ -318,7 +319,7 @@ public class GenomicCanvas extends Canvas {
       update.set(!update.get());
     }
   }
-  protected void clearReactive() { reactivegc.clearRect(0, 0, getWidth(), getHeight()); }
+  protected void clearReactive() { reactiveGc.clearRect(0, 0, getWidth(), getHeight()); }
 
   /**
    * Returns true while the user is dragging (or just released a drag).

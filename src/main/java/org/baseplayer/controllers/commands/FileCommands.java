@@ -1,8 +1,9 @@
 package org.baseplayer.controllers.commands;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 
@@ -12,6 +13,7 @@ import org.baseplayer.services.ServiceRegistry;
 public class FileCommands {
   
   private static final SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
   
   /**
    * Load simulated VCF data for testing.
@@ -27,7 +29,7 @@ public class FileCommands {
     sampleRegistry.setSampleHeight(MainController.drawPane.getHeight() / sampleRegistry.getVisibleSampleCount());
     
     // Load variants for each stack based on its chromosome
-    for (var stack : MainController.drawStacks) {
+    for (var stack : stackManager.getStacks()) {
       stack.loadSimulatedVariants();
     }
     

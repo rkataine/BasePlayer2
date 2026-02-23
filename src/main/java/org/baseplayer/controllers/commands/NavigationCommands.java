@@ -2,14 +2,17 @@ package org.baseplayer.controllers.commands;
 
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.GeneLocation;
-import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.ServiceRegistry;
 
 /**
  * Handles navigation operations: zoom, pan, chromosome switching, gene navigation.
  */
 public class NavigationCommands {
+
+  private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
 
   /**
    * Zoom in on the hover stack.
@@ -21,9 +24,9 @@ public class NavigationCommands {
   }
   
   public static void zoomIn(boolean maxZoom) {
-    if (MainController.hoverStack == null) return;
+    if (stackManager.getHoverStack() == null) return;
     
-    var stack = MainController.hoverStack;
+    var stack = stackManager.getHoverStack();
     double middle = stack.middlePos();
     
     if (maxZoom) {
@@ -49,9 +52,9 @@ public class NavigationCommands {
   }
   
   public static void zoomOut(boolean fullChrom) {
-    if (MainController.hoverStack == null) return;
+    if (stackManager.getHoverStack() == null) return;
     
-    var stack = MainController.hoverStack;
+    var stack = stackManager.getHoverStack();
     
     // Prevent zoom out if already showing 99% or more of the chromosome
     if (stack.viewLength >= stack.chromSize * 0.99) {
@@ -96,8 +99,8 @@ public class NavigationCommands {
    * @param end End position (1-based, inclusive)
    */
   public static void navigateToPosition(int start, int end) {
-    if (MainController.hoverStack != null) {
-      MainController.hoverStack.alignmentCanvas.zoomAnimation(start, end);
+    if (stackManager.getHoverStack() != null) {
+      stackManager.getHoverStack().alignmentCanvas.zoomAnimation(start, end);
     }
   }
   
@@ -122,8 +125,8 @@ public class NavigationCommands {
     if (loc == null) return;
     
     // Only navigate the active/hover stack
-    if (MainController.hoverStack != null) {
-      DrawStack stack = MainController.hoverStack;
+    if (stackManager.getHoverStack() != null) {
+      DrawStack stack = stackManager.getHoverStack();
       
       // Switch chromosome if needed (only for this stack)
       if (!loc.chrom().equals(stack.chromosome)) {
@@ -158,7 +161,7 @@ public class NavigationCommands {
     if (chromLength == null) return;
     
     // Update ALL stacks to same chromosome (global chromosome change)
-    for (var stack : MainController.drawStacks) {
+    for (var stack : stackManager.getStacks()) {
       stack.chromosome = chromosome;
       stack.chromSize = chromLength;
       stack.chromosomeDropdown.setValue(chromosome);

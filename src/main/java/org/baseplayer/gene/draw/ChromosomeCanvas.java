@@ -218,7 +218,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
    */
   private void drawReactive() {
     // Clear the reactive canvas
-    reactivegc.clearRect(0, 0, getWidth(), getHeight());
+    reactiveGc.clearRect(0, 0, getWidth(), getHeight());
     
     double viewLength = drawStack.viewLength;
     
@@ -256,14 +256,14 @@ public class ChromosomeCanvas extends GenomicCanvas {
         
         // Draw white highlight for gene body from first to last visible exon (only if wider than 3px)
         if (clippedX2 - clippedX1 > 3) {
-          reactivegc.setStroke(Color.WHITE);
-          reactivegc.setLineWidth(2);
-          reactivegc.strokeLine(Math.round(clippedX1) + 1, bodyY, Math.round(clippedX2) - 1, bodyY);
-          reactivegc.setLineWidth(1);
+          reactiveGc.setStroke(Color.WHITE);
+          reactiveGc.setLineWidth(2);
+          reactiveGc.strokeLine(Math.round(clippedX1) + 1, bodyY, Math.round(clippedX2) - 1, bodyY);
+          reactiveGc.setLineWidth(1);
         }
         
         // Draw white exons with rounded coordinates
-        reactivegc.setFill(Color.WHITE);
+        reactiveGc.setFill(Color.WHITE);
         boolean showExonNumbers = viewLength < 100000;  // Show exon numbers when zoomed in closer than 100kbp
         boolean isReverse = "-".equals(hoveredGene.strand());
         int exonIndex = 0;
@@ -283,26 +283,26 @@ public class ChromosomeCanvas extends GenomicCanvas {
               exonWidth = 1;
             }
             double exonY = Math.round(rowY + DrawExon.GENE_LABEL_HEIGHT);
-            reactivegc.fillRect(exonX, exonY, exonWidth, DrawExon.GENE_HEIGHT);
+            reactiveGc.fillRect(exonX, exonY, exonWidth, DrawExon.GENE_HEIGHT);
             
             // Draw exon number on top of the exon when zoomed in
             if (showExonNumbers && exonWidth > 10) {  // Only show if exon is wide enough
-              reactivegc.setFont(AppFonts.getUIFont(9));
-              reactivegc.setFill(Color.rgb(220, 220, 220, 0.9));  // Smoky white
+              reactiveGc.setFont(AppFonts.getUIFont(9));
+              reactiveGc.setFill(Color.rgb(220, 220, 220, 0.9));  // Smoky white
               String exonLabel = String.valueOf(exonNumber);
               double textWidth = exonLabel.length() * 5;  // Approximate text width
               double textX = exonX + (exonWidth - textWidth) / 2;
-              reactivegc.fillText(exonLabel, textX, exonY - 2);
-              reactivegc.setFill(Color.WHITE);
+              reactiveGc.fillText(exonLabel, textX, exonY - 2);
+              reactiveGc.setFill(Color.WHITE);
             }
           }
         }
         
         // Draw white label
         double labelX = Math.max(2, x1);
-        reactivegc.setFont(AppFonts.getUIFont(DrawGene.GENE_FONT_SIZE));
-        reactivegc.setFill(Color.WHITE);
-        reactivegc.fillText(hoveredGene.name(), labelX, rowY + DrawExon.GENE_LABEL_HEIGHT - 2);
+        reactiveGc.setFont(AppFonts.getUIFont(DrawGene.GENE_FONT_SIZE));
+        reactiveGc.setFill(Color.WHITE);
+        reactiveGc.fillText(hoveredGene.name(), labelX, rowY + DrawExon.GENE_LABEL_HEIGHT - 2);
         
         break;
       }
@@ -322,10 +322,10 @@ public class ChromosomeCanvas extends GenomicCanvas {
     double ovalHeight = DrawExon.GENE_HEIGHT - 2;
     
     // Draw white oval highlight around the codon
-    reactivegc.setStroke(Color.WHITE);
-    reactivegc.setLineWidth(2);
-    reactivegc.strokeOval(cx1 - 1, cy1, codonWidth + 2, ovalHeight + 2);
-    reactivegc.setLineWidth(1);
+    reactiveGc.setStroke(Color.WHITE);
+    reactiveGc.setLineWidth(2);
+    reactiveGc.strokeOval(cx1 - 1, cy1, codonWidth + 2, ovalHeight + 2);
+    reactiveGc.setLineWidth(1);
   }
 
   @Override
@@ -336,7 +336,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
     // Clear hover state on redraw
     hoveredGene = null;
     hoveredAminoAcid = null;
-    reactivegc.clearRect(0, 0, getWidth(), getHeight());
+    reactiveGc.clearRect(0, 0, getWidth(), getHeight());
    
     drawGenes();
     drawIndicators();

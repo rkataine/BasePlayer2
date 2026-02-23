@@ -23,6 +23,7 @@ public class ServiceRegistry {
     private final ViewportState viewportState;
     private final SampleRegistry sampleRegistry;
     private final ReferenceGenomeService referenceGenomeService;
+    private final DrawStackManager drawStackManager;
     
     /**
      * Private constructor - use getInstance() to access.
@@ -31,6 +32,7 @@ public class ServiceRegistry {
         this.viewportState = new ViewportState();
         this.sampleRegistry = new SampleRegistry();
         this.referenceGenomeService = new ReferenceGenomeService();
+        this.drawStackManager = new DrawStackManager();
     }
     
     /**
@@ -63,6 +65,13 @@ public class ServiceRegistry {
      */
     public ReferenceGenomeService getReferenceGenomeService() {
         return referenceGenomeService;
+    }
+    
+    /**
+     * Get the draw stack manager.
+     */
+    public DrawStackManager getDrawStackManager() {
+        return drawStackManager;
     }
     
     /**
