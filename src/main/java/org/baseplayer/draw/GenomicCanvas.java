@@ -42,11 +42,11 @@ public class GenomicCanvas extends Canvas {
   // Note: heightToScreen currently unused, kept for potential future use
   protected Function<Double, Double> heightToScreen = height -> height; // Placeholder
   protected Function<Double, Integer> screenPosToChromPos = screenPos -> (int)(drawStack.start + screenPos * drawStack.scale);
-  private double mousePressedX;
+  protected double mousePressedX;
   private final Canvas reactiveCanvas;
-  private double mouseDraggedX;
-	private double mouseDragDeltaX = 0;
-  private double mousePressedY;
+  protected double mouseDraggedX;
+	protected double mouseDragDeltaX = 0;
+  protected double mousePressedY;
   private boolean lineZoomer = false;
   private boolean zoomDrag;
   /** True while the mouse is being dragged in this canvas; cleared shortly after release. */
@@ -183,7 +183,7 @@ public class GenomicCanvas extends Canvas {
       pt.play();
     });
   }
-  void handleScroll(ScrollEvent event) {
+  protected void handleScroll(ScrollEvent event) {
     event.consume();
       
     if (event.isControlDown()) {        
@@ -257,7 +257,7 @@ public class GenomicCanvas extends Canvas {
         }
     }
   }
-  void handleDrag(MouseEvent event) {
+  protected void handleDrag(MouseEvent event) {
     double dragX = event.getX();
 		double dragY = event.getY();
     if (event.getButton() == MouseButton.SECONDARY) {
@@ -286,7 +286,7 @@ public class GenomicCanvas extends Canvas {
       zoom(mouseDragDeltaX, mousePressedX);
     }
   }
-  void handleMouseRelease(MouseEvent event) {
+  protected void handleMouseRelease(MouseEvent event) {
     clearReactive();
    
     if (lineZoomer) { 
@@ -396,7 +396,7 @@ public class GenomicCanvas extends Canvas {
   }
 
 
-  void zoom(double zoomDirection, double targetX) {
+  protected void zoom(double zoomDirection, double targetX) {
 		if (zoomDirection == 0.0) return;
     int direction = zoomDirection > 0 ? 1 : -1;
     double pivot = targetX / getWidth();

@@ -7,7 +7,9 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 
+import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -40,7 +42,8 @@ public class SampleRegistry {
     // UI layout state
     private double scrollBarPosition = 0;
     private double sampleHeight = 0;
-    private double masterTrackHeight = 28;
+    public static final double DEFAULT_MASTER_TRACK_HEIGHT = 28;
+    private final DoubleProperty masterTrackHeight = new SimpleDoubleProperty(DEFAULT_MASTER_TRACK_HEIGHT);
     
     public SampleRegistry() {
         // Initialize with empty state
@@ -183,6 +186,10 @@ public class SampleRegistry {
      * Get the height of the master track.
      */
     public double getMasterTrackHeight() {
+        return masterTrackHeight.get();
+    }
+    
+    public DoubleProperty masterTrackHeightProperty() {
         return masterTrackHeight;
     }
     
@@ -190,7 +197,7 @@ public class SampleRegistry {
      * Set the height of the master track.
      */
     public void setMasterTrackHeight(double height) {
-        this.masterTrackHeight = Math.max(0, height);
+        this.masterTrackHeight.set(Math.max(0, height));
     }
     
     // ── Operations ─────────────────────────────────────────────────────────

@@ -25,10 +25,10 @@ import javafx.stage.FileChooser;
  */
 public class FeatureTracksCanvas extends GenomicCanvas {
   
-  /** Panel header height in pixels — shared with {@link FeatureTracksSidebar}. */
-  static final double HEADER_HEIGHT = 18;
-  /** Padding between tracks in pixels — shared with {@link FeatureTracksSidebar}. */
-  static final double TRACK_PADDING = 2;
+  /** Panel header height in pixels — shared with {@link org.baseplayer.components.sidebars.FeatureTracksSidebar}. */
+  public static final double HEADER_HEIGHT = 18;
+  /** Padding between tracks in pixels — shared with {@link org.baseplayer.components.sidebars.FeatureTracksSidebar}. */
+  public static final double TRACK_PADDING = 2;
   
   private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
   private final GraphicsContext gc;

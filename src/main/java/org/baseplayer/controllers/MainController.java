@@ -1,15 +1,16 @@
 package org.baseplayer.controllers;
+
 import java.util.List;
 
-import org.baseplayer.components.AnnotationOptionsDialog;
+import org.baseplayer.components.sidebars.FeatureTracksSidebar;
+import org.baseplayer.components.sidebars.GenomeSidebar;
+import org.baseplayer.components.sidebars.SampleSidebar;
+import org.baseplayer.components.sidebars.SidebarController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.features.FeatureTracksSidebar;
-import org.baseplayer.features.draw.SidebarPanel;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.EventCoordinator;
 import org.baseplayer.services.InitializationService;
-import org.baseplayer.genome.ReferenceGenome;
-import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.BaseUtils;
 
@@ -18,8 +19,6 @@ import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.fxml.FXML;
 import javafx.scene.canvas.Canvas;
-import javafx.scene.control.Button;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.SplitPane;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.AnchorPane;
@@ -32,27 +31,24 @@ public class MainController {
   @FXML private SplitPane drawSplit;
   @FXML private StackPane drawSideBarStackPane;
   @FXML private SplitPane mainSplit;
-  @FXML private AnchorPane chromSideBar;
+  @FXML private StackPane genomeSideBarPane;
   @FXML private SplitPane drawSideBar;
   @FXML private AnchorPane chromPane;
   @FXML private AnchorPane featureTracksPane;
   @FXML private SplitPane featureTracksSplit;
   @FXML private StackPane featureTracksSideBarPane;
   @FXML private SplitPane featureTracksContentSplit;
-  @FXML private ComboBox<ReferenceGenome> referenceComboBox;
-  @FXML private ComboBox<String> annotationComboBox;
-  @FXML private Button annotationOptionsButton;
   public Canvas drawSideBarCanvas; 
   public static SplitPane chromSplitPane;
   public static SplitPane drawPane;
   public static SplitPane featureTracksContentPane;
   private FeatureTracksSidebar featureTracksSidebar;
- 
+  SampleSidebar sidebarPanel;
+
   public static boolean dividerHovered;
   public static boolean isActive = false;
   Runtime instance = Runtime.getRuntime();
   IntegerProperty memoryUsage = new SimpleIntegerProperty(0);
-  SidebarPanel sidebarPanel;
   
   public static boolean showOnlyCancerGenes = false;
   
@@ -78,8 +74,9 @@ public class MainController {
       chromSplitPane = chromosomeSplitPane;
       drawPane = alignmentSplitPane;
       featureTracksContentPane = featureTracksContentSplit;
-      sidebarPanel = new SidebarPanel(drawSideBarStackPane);
+      sidebarPanel = new SampleSidebar(drawSideBarStackPane);
       eventCoordinator.setSidebarPanel(sidebarPanel);
+      new GenomeSidebar(genomeSideBarPane, initializationService);
       
       // Setup unified sidebar controller for all horizontal split panes
       sidebarController.addPane(chromSplit);
@@ -88,10 +85,8 @@ public class MainController {
       
       addStack(true);  // Create stack first
       
-      // Setup feature tracks sidebar
+      // Setup feature tracks sidebar (featureTracksSidebar connects to the draw stack)
       setupFeatureTracksSidebar();
-      
-      loadAvailableGenomes(); // Then load genomes which will update stack sizes
       
       addMemUpdateListener();
       eventCoordinator.setupDrawUpdateListener(memoryUsage);
@@ -140,38 +135,6 @@ public class MainController {
     featureTracksSidebar.draw();
   }
   
-  private void loadAvailableGenomes() {
-    List<ReferenceGenome> genomes = initializationService.loadAvailableGenomes();
-    referenceComboBox.getItems().addAll(genomes);
-    
-    referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
-    
-    // Load available annotations
-    loadAvailableAnnotations();
-    
-    if (!referenceComboBox.getItems().isEmpty()) {
-      referenceComboBox.getSelectionModel().selectFirst();
-      onReferenceGenomeSelected();
-    }
-  }
-  
-  private void loadAvailableAnnotations() {
-    List<String> annotations = initializationService.loadAvailableAnnotations("GRCh38");
-    annotationComboBox.getItems().addAll(annotations);
-    
-    // Select default annotation if available
-    if (!annotationComboBox.getItems().isEmpty()) {
-      String defaultAnnotation = initializationService.findDefaultAnnotation(annotations);
-      if (defaultAnnotation != null) {
-        annotationComboBox.getSelectionModel().select(defaultAnnotation);
-      }
-    }
-  }
-  
-  private void onReferenceGenomeSelected() {
-    ReferenceGenome genome = referenceComboBox.getValue();
-    initializationService.selectReferenceGenome(genome);
-  }
   
   public static void zoomout() {
     DrawStack hover = stackManager.getHoverStack();
@@ -314,7 +277,7 @@ public class MainController {
   void lockSidebarConstraints() {
     // Prevent sidebars and chrom pane from resizing when parent resizes,
     // but still allow manual divider adjustment
-    javafx.scene.control.SplitPane.setResizableWithParent(chromSideBar, false);
+    javafx.scene.control.SplitPane.setResizableWithParent(genomeSideBarPane, false);
     javafx.scene.control.SplitPane.setResizableWithParent(drawSideBar, false);
     javafx.scene.control.SplitPane.setResizableWithParent(featureTracksSideBarPane, false);
     javafx.scene.control.SplitPane.setResizableWithParent(chromPane, false);
@@ -325,13 +288,7 @@ public class MainController {
   void takeSnapshot() {
     eventCoordinator.takeCanvasSnapshots();
   }
-  
-  @FXML
-  @SuppressWarnings("unused")
-  private void showAnnotationOptions() {
-    AnnotationOptionsDialog.show(annotationOptionsButton.getScene().getWindow());
-  }
-  
+
   /**
    * Get the feature tracks canvas (from the first draw stack).
    * Used by SampleDataManager to add BED/BigWig tracks.

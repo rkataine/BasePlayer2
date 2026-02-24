@@ -1,4 +1,4 @@
-package org.baseplayer.controllers;
+package org.baseplayer.components.sidebars;
 
 import java.util.ArrayList;
 import java.util.List;

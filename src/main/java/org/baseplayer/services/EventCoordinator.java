@@ -2,11 +2,11 @@ package org.baseplayer.services;
 
 import java.util.List;
 
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
+import org.baseplayer.components.sidebars.FeatureTracksSidebar;
+import org.baseplayer.components.sidebars.SampleSidebar;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.features.draw.SidebarPanel;
-import org.baseplayer.features.FeatureTracksSidebar;
+import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.utils.BaseUtils;
 
 import javafx.beans.property.IntegerProperty;
@@ -21,7 +21,7 @@ public class EventCoordinator {
   private final Runtime runtime = Runtime.getRuntime();
   private final List<DrawStack> drawStacks;
   private FeatureTracksSidebar featureTracksSidebar;
-  private SidebarPanel sidebarPanel;
+  private SampleSidebar sidebarPanel;
   
   public EventCoordinator(List<DrawStack> drawStacks) {
     this.drawStacks = drawStacks;
@@ -31,7 +31,7 @@ public class EventCoordinator {
     this.featureTracksSidebar = sidebar;
   }
   
-  public void setSidebarPanel(SidebarPanel sidebarPanel) {
+  public void setSidebarPanel(SampleSidebar sidebarPanel) {
     this.sidebarPanel = sidebarPanel;
   }
   
@@ -60,8 +60,8 @@ public class EventCoordinator {
       }
       
       // Update track info sidebar
-      if (sidebarPanel != null && sidebarPanel.trackInfo != null) {
-        sidebarPanel.trackInfo.draw();
+      if (sidebarPanel != null) {
+        sidebarPanel.draw();
       }
       
       // Update memory usage
