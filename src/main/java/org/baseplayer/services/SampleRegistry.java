@@ -4,8 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.sample.Sample;
-import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.samples.Sample;
+import org.baseplayer.samples.SampleTrack;
 
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;

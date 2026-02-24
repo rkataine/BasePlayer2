@@ -6,8 +6,10 @@ import java.util.List;
 import java.util.Map;
 
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.gene.Gene;
-import org.baseplayer.gene.Transcript;
+import org.baseplayer.genome.Cytoband;
+import org.baseplayer.genome.gene.Gene;
+import org.baseplayer.genome.gene.GeneLocation;
+import org.baseplayer.genome.gene.Transcript;
 
 /**
  * Holds loaded annotation data (genes, cytobands) for application-wide access.

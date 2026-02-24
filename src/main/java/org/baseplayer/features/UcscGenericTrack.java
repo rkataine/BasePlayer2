@@ -2,9 +2,9 @@ package org.baseplayer.features;
 
 import java.util.concurrent.CompletableFuture;
 
+import org.baseplayer.components.InfoPopup;
 import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
-import org.baseplayer.ui.InfoPopup;
 
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;

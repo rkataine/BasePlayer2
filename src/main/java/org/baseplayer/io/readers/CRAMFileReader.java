@@ -17,8 +17,8 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.zip.GZIPInputStream;
 
-import org.baseplayer.alignment.BAMRecord;
-import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 
 /**

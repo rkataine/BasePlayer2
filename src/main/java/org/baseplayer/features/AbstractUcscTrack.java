@@ -6,7 +6,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
 import org.baseplayer.utils.AppFonts;

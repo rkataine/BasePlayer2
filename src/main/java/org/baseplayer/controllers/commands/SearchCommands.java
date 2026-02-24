@@ -3,7 +3,7 @@ package org.baseplayer.controllers.commands;
 import java.util.List;
 
 import org.baseplayer.annotation.AnnotationData;
-import org.baseplayer.annotation.GeneLocation;
+import org.baseplayer.genome.gene.GeneLocation;
 
 /**
  * Handles search operations: gene search, position search.

@@ -7,12 +7,12 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.samples.alignment.FetchManager;
+import org.baseplayer.components.InfoPopup;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.APIs.GnomadApiClient;
 import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 import org.baseplayer.io.APIs.GnomadApiClient.VariantData;
-import org.baseplayer.ui.InfoPopup;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
 

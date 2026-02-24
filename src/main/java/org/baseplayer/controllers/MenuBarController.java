@@ -1,7 +1,8 @@
 package org.baseplayer.controllers;
 
-import org.baseplayer.alignment.FetchManager;
-import org.baseplayer.alignment.draw.AlignmentCanvas;
+import org.baseplayer.samples.alignment.FetchManager;
+import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
+import org.baseplayer.components.GeneSearchComponent;
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
@@ -124,7 +125,10 @@ public class MenuBarController {
       
       chromosomeLabelMenu.getItems().clear();
       // Sort chromosomes properly (1-22, X, Y, MT)
-      java.util.List<String> chroms = new java.util.ArrayList<>(DrawStack.CHROMOSOME_SIZES.keySet());
+      var refGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
+      java.util.List<String> chroms = refGenomeService.hasGenome()
+          ? new java.util.ArrayList<>(refGenomeService.getCurrentGenome().getStandardChromosomeNames())
+          : new java.util.ArrayList<>();
       chroms.sort((c1, c2) -> {
         Integer n1 = BaseUtils.tryParseInt(c1);
         Integer n2 = BaseUtils.tryParseInt(c2);

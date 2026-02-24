@@ -1,5 +1,7 @@
 package org.baseplayer.services;
 
+import org.baseplayer.genome.ReferenceGenomeService;
+
 /**
  * Simple service registry for dependency injection.
  * 

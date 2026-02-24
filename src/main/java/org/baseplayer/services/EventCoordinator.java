@@ -2,7 +2,7 @@ package org.baseplayer.services;
 
 import java.util.List;
 
-import org.baseplayer.alignment.draw.AlignmentCanvas;
+import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.draw.SidebarPanel;

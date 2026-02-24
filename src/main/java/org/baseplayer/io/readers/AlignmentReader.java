@@ -1,6 +1,6 @@
 package org.baseplayer.io.readers;
 
-import org.baseplayer.alignment.BAMRecord;
+import org.baseplayer.samples.alignment.BAMRecord;
 
 import java.io.Closeable;
 import java.io.IOException;

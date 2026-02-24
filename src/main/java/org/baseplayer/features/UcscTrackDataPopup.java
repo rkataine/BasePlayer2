@@ -1,7 +1,7 @@
 package org.baseplayer.features;
 
-import org.baseplayer.ui.InfoPopup;
-import org.baseplayer.ui.PopupContent;
+import org.baseplayer.components.InfoPopup;
+import org.baseplayer.components.PopupContent;
 
 import javafx.scene.paint.Color;
 

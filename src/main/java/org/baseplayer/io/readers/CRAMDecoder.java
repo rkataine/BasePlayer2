@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
-import org.baseplayer.alignment.BAMRecord;
-import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.genome.ReferenceGenomeService;
 
 /**
  * Decodes CRAM 3.0 container data into BAM records.

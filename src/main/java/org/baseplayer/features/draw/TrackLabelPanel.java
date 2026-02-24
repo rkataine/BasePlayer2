@@ -1,12 +1,12 @@
 package org.baseplayer.features.draw;
 
-import org.baseplayer.alignment.AlignmentFile;
+import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
-import org.baseplayer.sample.Sample;
-import org.baseplayer.sample.SampleTrack;
+import org.baseplayer.samples.Sample;
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;

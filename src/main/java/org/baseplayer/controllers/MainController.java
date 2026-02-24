@@ -1,14 +1,15 @@
 package org.baseplayer.controllers;
 import java.util.List;
 
+import org.baseplayer.components.AnnotationOptionsDialog;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.FeatureTracksSidebar;
 import org.baseplayer.features.draw.SidebarPanel;
-import org.baseplayer.io.ReferenceGenome;
 import org.baseplayer.services.EventCoordinator;
 import org.baseplayer.services.InitializationService;
-import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.genome.ReferenceGenome;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.BaseUtils;
 
@@ -198,9 +199,6 @@ public class MainController {
         drawStack.setChromosomeList(refService.getCurrentGenome().getStandardChromosomeNames());
       }
       
-      // Load simulated variants if generated
-      drawStack.loadSimulatedVariants();
-      
       drawStacks.add(drawStack);
       chromSplitPane.getItems().add(drawStack.chromContainer);
       featureTracksContentPane.getItems().add(drawStack.featureTracksStack);
@@ -244,7 +242,6 @@ public class MainController {
       drawStack.setChromosomeList(refService.getCurrentGenome().getStandardChromosomeNames());
     }
     drawStack.chromosomeDropdown.setValue(finalChrom);
-    drawStack.loadSimulatedVariants();
 
     drawStacks.add(drawStack);
     chromSplitPane.getItems().add(drawStack.chromContainer);

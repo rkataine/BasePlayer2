@@ -1,9 +1,9 @@
 package org.baseplayer.controllers.commands;
 
 import org.baseplayer.annotation.AnnotationData;
-import org.baseplayer.annotation.GeneLocation;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.ServiceRegistry;
 
@@ -130,15 +130,7 @@ public class NavigationCommands {
       
       // Switch chromosome if needed (only for this stack)
       if (!loc.chrom().equals(stack.chromosome)) {
-        Long chromLength = DrawStack.CHROMOSOME_SIZES.get(loc.chrom());
-        if (chromLength != null) {
-          stack.chromosome = loc.chrom();
-          stack.chromSize = chromLength;
-          stack.chromosomeDropdown.setValue(loc.chrom());
-          stack.loadSimulatedVariants();
-          stack.alignmentCanvas.setStartEnd(1.0, chromLength + 1);
-          stack.chromosomeCanvas.setStartEnd(1.0, chromLength + 1);
-        }
+        stack.switchToChromosome(loc.chrom());
       }
       
       // Navigate to gene location with some padding
@@ -157,18 +149,8 @@ public class NavigationCommands {
    * @param chromosome Chromosome name (e.g., "1", "X", "MT")
    */
   public static void switchChromosome(String chromosome) {
-    Long chromLength = DrawStack.CHROMOSOME_SIZES.get(chromosome);
-    if (chromLength == null) return;
-    
-    // Update ALL stacks to same chromosome (global chromosome change)
     for (var stack : stackManager.getStacks()) {
-      stack.chromosome = chromosome;
-      stack.chromSize = chromLength;
-      stack.chromosomeDropdown.setValue(chromosome);
-      stack.loadSimulatedVariants();
-      // Properly set coordinates and derived values (pixelSize, scale)
-      stack.alignmentCanvas.setStartEnd(1.0, chromLength + 1);
-      stack.chromosomeCanvas.setStartEnd(1.0, chromLength + 1);
+      stack.switchToChromosome(chromosome);
     }
   }
 }

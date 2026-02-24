@@ -7,7 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
-import org.baseplayer.io.ReferenceGenome;
+import org.baseplayer.genome.ReferenceGenome;
+import org.baseplayer.genome.ReferenceGenomeService;
 
 /**
  * Handles application initialization: loading genomes, annotations, initial setup.

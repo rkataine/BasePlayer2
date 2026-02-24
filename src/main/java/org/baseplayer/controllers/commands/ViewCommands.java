@@ -1,8 +1,8 @@
 package org.baseplayer.controllers.commands;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.SettingsDialog;
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.controllers.SettingsDialog;
 
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;

@@ -8,7 +8,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import static org.baseplayer.features.FeatureTracksCanvas.HEADER_HEIGHT;
 import static org.baseplayer.features.FeatureTracksCanvas.TRACK_PADDING;
 import org.baseplayer.io.UserPreferences;
-import org.baseplayer.services.ReferenceGenomeService;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;

@@ -1,9 +1,9 @@
 package org.baseplayer.features;
 
+import org.baseplayer.components.InfoPopup;
+import org.baseplayer.components.PopupContent;
+import org.baseplayer.components.PopupContent.Badge;
 import org.baseplayer.io.APIs.GnomadApiClient.Variant;
-import org.baseplayer.ui.InfoPopup;
-import org.baseplayer.ui.PopupContent;
-import org.baseplayer.ui.PopupContent.Badge;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.paint.Color;

@@ -2,7 +2,7 @@ package org.baseplayer.draw;
 
 import java.util.function.Function;
 
-import org.baseplayer.alignment.FetchManager;
+import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -201,8 +201,8 @@ public class GenomicCanvas extends Canvas {
           if (sampleH > 0 && mouseY > masterOffset) {
             int sampleIdx = (int)((mouseY - masterOffset + sampleRegistry.getScrollBarPosition()) / sampleH);
             if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
-              org.baseplayer.sample.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
-              org.baseplayer.alignment.AlignmentFile sf = track.getFirstBam();
+              org.baseplayer.samples.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
+              org.baseplayer.samples.alignment.AlignmentFile sf = track.getFirstBam();
               if (sf != null) {
                 sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
               }
