@@ -1,7 +1,5 @@
 package org.baseplayer.controllers;
 
-import org.baseplayer.samples.alignment.FetchManager;
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.components.GeneSearchComponent;
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
@@ -9,6 +7,8 @@ import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.controllers.commands.ViewCommands;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.samples.alignment.FetchManager;
+import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -41,12 +41,6 @@ public class MenuBarController {
   @FXML private Pane memoryBar;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
-  @FXML@SuppressWarnings("unused")
- private Button minimizeButton;
-  @FXML@SuppressWarnings("unused")
- private Button maximizeButton;
-  @FXML@SuppressWarnings("unused")
- private Button closeButton;
   
   // Zoom button icons for state updates
   private FontIcon zoomInIcon;
@@ -300,19 +294,16 @@ public class MenuBarController {
   }
 
   @FXML
-  @SuppressWarnings("unused")
   private void minimizeWindow() {
     ViewCommands.minimizeWindow();
   }
 
   @FXML
-  @SuppressWarnings("unused")
   private void maximizeWindow() {
     ViewCommands.maximizeWindow();
   }
 
   @FXML
-  @SuppressWarnings("unused")
   private void closeWindow() {
     ViewCommands.closeWindow();
   }

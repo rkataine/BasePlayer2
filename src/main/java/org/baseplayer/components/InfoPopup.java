@@ -15,6 +15,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -305,20 +306,22 @@ public class InfoPopup {
     private void renderBadgeRow(List<PopupContent.Badge> badges) {
         if (badges.isEmpty()) return;
 
-        HBox row = new HBox(6);
-        row.setAlignment(Pos.CENTER_LEFT);
+        FlowPane flow = new FlowPane(6, 4);
+        flow.setAlignment(Pos.CENTER_LEFT);
+        flow.setMaxWidth(maxWidth - 24);
 
         for (PopupContent.Badge badge : badges) {
             Label label = new Label(badge.text());
             label.setFont(AppFonts.getMonoFont(10));
             label.setTextFill(badge.textColor());
+            label.setWrapText(false);
             label.setStyle(String.format(
                     "-fx-background-color: %s; -fx-padding: 2 6; -fx-background-radius: 3;",
                     toRgb(badge.bgColor())));
-            row.getChildren().add(label);
+            flow.getChildren().add(label);
         }
 
-        content.getChildren().add(row);
+        content.getChildren().add(flow);
     }
 
     private void renderScrollList(List<Node> nodes, double maxHeight) {

@@ -157,11 +157,8 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     tracks.add(track);
     
     // Set up callback for async tracks to trigger redraw
-    if (track instanceof ConservationTrack ct) {
-      ct.setOnDataLoaded(() -> update.set(!update.get()));
-    }
-    if (track instanceof GnomadTrack gt) {
-      gt.setOnDataLoaded(() -> update.set(!update.get()));
+    if (track instanceof AbstractUcscTrack ucscTrack) {
+      ucscTrack.setOnDataLoaded(() -> update.set(!update.get()));
     }
     
     notifyRegionChanged();

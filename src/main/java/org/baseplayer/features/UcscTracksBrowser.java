@@ -307,7 +307,8 @@ public class UcscTracksBrowser {
   private Track createTrackFromInfo(UcscTrackInfo trackInfo) {
     // For now, create a generic UCSC track
     // TODO: Create specific track types based on trackInfo.type()
-    return new UcscGenericTrack(trackInfo.trackName(), trackInfo.shortLabel(), genome);
+    return new FeatureTrack(trackInfo.shortLabel(), "UCSC: " + trackInfo.trackName(),
+        UcscApiClient::fetchConservation);
   }
   
   public void show() {

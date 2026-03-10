@@ -1,9 +1,11 @@
 package org.baseplayer.genome.gene.draw;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
+import org.baseplayer.components.PopupContent.Badge;
 import org.baseplayer.io.APIs.AlphaFoldApiClient;
 import org.baseplayer.io.APIs.AlphaFoldApiClient.MissensePrediction;
 import org.baseplayer.utils.AminoAcids;
@@ -13,11 +15,11 @@ import org.baseplayer.utils.GeneColors;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.FlowPane;
-import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Window;
@@ -71,24 +73,8 @@ public class AminoAcidPopup {
     String threeLetterCode = AminoAcids.getThreeLetter(aminoAcidChar);
     String fullName = AminoAcids.getName(aminoAcidChar);
 
-    // Header: amino acid badge + name (custom node for badge styling)
-    HBox header = new HBox(10);
-    header.setAlignment(Pos.CENTER_LEFT);
-
-    Label aaBadge = new Label(threeLetterCode);
-    aaBadge.setFont(AppFonts.getBoldFont(14));
-    aaBadge.setTextFill(GeneColors.getContrastingTextColor(aaColor));
-    aaBadge.setStyle(String.format(
-        "-fx-background-color: %s; -fx-padding: 4 8; -fx-background-radius: 4;",
-        GeneColors.toHexString(aaColor)));
-    header.getChildren().add(aaBadge);
-
-    Label nameLabel = new Label(fullName + " (" + aminoAcidChar + ")");
-    nameLabel.setFont(AppFonts.getBoldFont(13));
-    nameLabel.setTextFill(Color.WHITE);
-    header.getChildren().add(nameLabel);
-
-    c.node(header);
+    // Header
+    c.title(threeLetterCode, fullName + " (" + aminoAcidChar + ")", aaColor);
 
     if (geneName != null && !geneName.isEmpty()) {
       c.row("Gene", geneName);
@@ -118,22 +104,17 @@ public class AminoAcidPopup {
     c.separator();
     c.section("Synonymous Codons");
 
-    // Codon badges (custom FlowPane node)
+    // Codon badges
     String[] synonymousCodons = AminoAcids.getSynonymousCodons(aminoAcidChar);
     if (synonymousCodons.length > 0) {
-      FlowPane codonBox = new FlowPane(6, 4);
-      codonBox.setAlignment(Pos.CENTER_LEFT);
-      codonBox.setPrefWrapLength(MAX_WIDTH - 24);
-
+      List<Badge> codonBadges = new ArrayList<>();
       for (String syn : synonymousCodons) {
-        Label codonLabel = new Label(syn);
-        codonLabel.setFont(AppFonts.getMonoFont(11));
         boolean isCurrent = syn.equalsIgnoreCase(codon);
-        codonLabel.setTextFill(isCurrent ? aaColor : Color.LIGHTGRAY);
-        if (isCurrent) codonLabel.setStyle("-fx-font-weight: bold;");
-        codonBox.getChildren().add(codonLabel);
+        Color bg = isCurrent ? aaColor : Color.rgb(60, 60, 60);
+        Color text = isCurrent ? GeneColors.getContrastingTextColor(aaColor) : Color.LIGHTGRAY;
+        codonBadges.add(new Badge(syn, bg, text));
       }
-      c.node(codonBox);
+      c.badges(codonBadges);
 
       int degeneracy = synonymousCodons.length;
       String degInfo = switch (degeneracy) {
@@ -144,78 +125,91 @@ public class AminoAcidPopup {
         case 6 -> "6-fold degenerate";
         default -> degeneracy + "-fold degenerate";
       };
-      Label degLabel = new Label(degInfo);
-      degLabel.setTextFill(Color.GRAY);
-      degLabel.setFont(AppFonts.getUIFont(10));
-      c.node(degLabel);
+      c.text(degInfo);
     }
 
-    // AlphaMissense section (async, rendered into a placeholder VBox)
-    VBox asyncSection = new VBox(4);
-    asyncSection.setVisible(false);
-    asyncSection.setManaged(false);
-    c.node(asyncSection);
-
+    // AlphaMissense section — lazy-loaded on button click
     if (geneName != null && !geneName.isEmpty()) {
-      AlphaFoldApiClient.getMissensePredictions(geneName, aminoAcidNumber)
-          .thenAccept(predictions -> {
-            if (predictions == null || predictions.isEmpty()
-                || predictions.stream().allMatch(p -> "unknown".equals(p.classification()))) {
-              return;
-            }
-            List<MissensePrediction> valid = predictions.stream()
-                .filter(p -> !"unknown".equals(p.classification())).toList();
-            if (valid.isEmpty()) return;
-
-            Platform.runLater(() -> {
-              asyncSection.setVisible(true);
-              asyncSection.setManaged(true);
-
-              // Separator
-              asyncSection.getChildren().add(new javafx.scene.control.Separator());
-
-              Label title = new Label("AlphaMissense Predictions");
-              title.setFont(AppFonts.getBoldFont(11));
-              title.setTextFill(Color.web("#ff9800"));
-              asyncSection.getChildren().add(title);
-
-              Label desc = new Label("Pathogenicity predictions for substitutions at this position:");
-              desc.setTextFill(Color.GRAY);
-              desc.setFont(AppFonts.getUIFont(10));
-              desc.setWrapText(true);
-              asyncSection.getChildren().add(desc);
-
-              VBox predList = new VBox(2);
-              predList.setPadding(new Insets(4, 0, 0, 0));
-
-              List<MissensePrediction> pathogenic = valid.stream()
-                  .filter(MissensePrediction::isPathogenic)
-                  .sorted((a, b) -> Double.compare(b.pathogenicity(), a.pathogenicity())).toList();
-              List<MissensePrediction> benign = valid.stream()
-                  .filter(MissensePrediction::isBenign)
-                  .sorted((a, b) -> Double.compare(a.pathogenicity(), b.pathogenicity())).toList();
-              List<MissensePrediction> ambiguous = valid.stream()
-                  .filter(p -> !p.isPathogenic() && !p.isBenign())
-                  .sorted((a, b) -> Double.compare(b.pathogenicity(), a.pathogenicity())).toList();
-
-              if (!pathogenic.isEmpty()) addMissenseGroup(predList, pathogenic, Color.web("#f44336"));
-              if (!ambiguous.isEmpty())  addMissenseGroup(predList, ambiguous,  Color.web("#ff9800"));
-              if (!benign.isEmpty())     addMissenseGroup(predList, benign,     Color.web("#4caf50"));
-
-              if (predList.getChildren().size() > 4) {
-                ScrollPane sp = new ScrollPane(predList);
-                sp.setFitToWidth(true);
-                sp.setMaxHeight(100);
-                sp.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
-                asyncSection.getChildren().add(sp);
-              } else {
-                asyncSection.getChildren().add(predList);
-              }
-            });
-          });
+      c.separator();
+      VBox asyncSection = new VBox(4);
+      Button loadBtn = new Button("Load AlphaMissense Predictions");
+      loadBtn.setMaxWidth(Double.MAX_VALUE);
+      loadBtn.setStyle("-fx-background-color: #3a5a7a; -fx-text-fill: #cce0ff; -fx-cursor: hand;");
+      loadBtn.setOnAction(e -> {
+        loadBtn.setDisable(true);
+        fetchAlphaMissense(asyncSection);
+      });
+      c.node(loadBtn);
+      c.node(asyncSection);
     }
 
     return c;
+  }
+
+  private void fetchAlphaMissense(VBox asyncSection) {
+    Platform.runLater(() -> {
+      asyncSection.getChildren().clear();
+      Label loading = new Label("Loading\u2026");
+      loading.setTextFill(Color.GRAY);
+      loading.setFont(AppFonts.getUIFont(10));
+      asyncSection.getChildren().add(loading);
+    });
+
+    AlphaFoldApiClient.getMissensePredictions(geneName, aminoAcidNumber)
+        .thenAccept(predictions -> {
+          List<MissensePrediction> valid = predictions == null ? List.of() : predictions.stream()
+              .filter(p -> !"unknown".equals(p.classification())).toList();
+
+          Platform.runLater(() -> {
+            asyncSection.getChildren().clear();
+
+            if (valid.isEmpty()) {
+              Label noData = new Label("No predictions available for this position.");
+              noData.setTextFill(Color.GRAY);
+              noData.setFont(AppFonts.getUIFont(10));
+              asyncSection.getChildren().add(noData);
+              return;
+            }
+
+            Label title = new Label("AlphaMissense Predictions");
+            title.setFont(AppFonts.getBoldFont(11));
+            title.setTextFill(Color.web("#ff9800"));
+            asyncSection.getChildren().add(title);
+
+            Label desc = new Label("Pathogenicity predictions for substitutions at this position:");
+            desc.setTextFill(Color.GRAY);
+            desc.setFont(AppFonts.getUIFont(10));
+            desc.setWrapText(true);
+            asyncSection.getChildren().add(desc);
+
+            VBox predList = new VBox(2);
+            predList.setPadding(new Insets(4, 0, 0, 0));
+
+            List<MissensePrediction> pathogenic = valid.stream()
+                .filter(MissensePrediction::isPathogenic)
+                .sorted((a, b) -> Double.compare(b.pathogenicity(), a.pathogenicity())).toList();
+            List<MissensePrediction> benign = valid.stream()
+                .filter(MissensePrediction::isBenign)
+                .sorted((a, b) -> Double.compare(a.pathogenicity(), b.pathogenicity())).toList();
+            List<MissensePrediction> ambiguous = valid.stream()
+                .filter(p -> !p.isPathogenic() && !p.isBenign())
+                .sorted((a, b) -> Double.compare(b.pathogenicity(), a.pathogenicity())).toList();
+
+            if (!pathogenic.isEmpty()) addMissenseGroup(predList, pathogenic, Color.web("#f44336"));
+            if (!ambiguous.isEmpty())  addMissenseGroup(predList, ambiguous,  Color.web("#ff9800"));
+            if (!benign.isEmpty())     addMissenseGroup(predList, benign,     Color.web("#4caf50"));
+
+            if (predList.getChildren().size() > 4) {
+              ScrollPane sp = new ScrollPane(predList);
+              sp.setFitToWidth(true);
+              sp.setMaxHeight(100);
+              sp.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
+              asyncSection.getChildren().add(sp);
+            } else {
+              asyncSection.getChildren().add(predList);
+            }
+          });
+        });
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────

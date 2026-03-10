@@ -17,13 +17,9 @@ import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;
 
-import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Label;
-import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Window;
 
@@ -53,34 +49,14 @@ public class GeneInfoPopup {
   private PopupContent buildContent(Gene gene) {
     PopupContent c = new PopupContent();
 
-    // Header: gene name (clickable) + biotype badge + optional MANE badge
-    HBox header = new HBox(10);
-    header.setAlignment(Pos.CENTER_LEFT);
-
-    Label nameLabel = new Label(gene.name());
-    nameLabel.setFont(AppFonts.getBoldFont(16));
+    // Header: gene name + biotype
     Color geneColor = GeneColors.getGeneColor(gene.name(), gene.biotype());
-    nameLabel.setTextFill(geneColor);
-    nameLabel.setStyle("-fx-cursor: hand; -fx-underline: true;");
-    nameLabel.setOnMouseClicked(e -> navigateToGene(gene));
+    c.title(gene.name(), formatBiotype(gene.biotype()), geneColor);
 
-    Label biotypeLabel = new Label(formatBiotype(gene.biotype()));
-    biotypeLabel.setFont(AppFonts.getUIFont());
-    biotypeLabel.setTextFill(Color.LIGHTGRAY);
-    biotypeLabel.setStyle("-fx-background-color: rgba(80,80,80,0.5); -fx-padding: 2 6; -fx-background-radius: 3;");
-
+    // Badges: MANE if applicable
     if (gene.hasManeSelect()) {
-      HBox spacer = new HBox();
-      HBox.setHgrow(spacer, Priority.ALWAYS);
-      Label maneLabel = new Label("MANE");
-      maneLabel.setFont(AppFonts.getMonoFont(10));
-      maneLabel.setTextFill(Color.WHITE);
-      maneLabel.setStyle("-fx-background-color: #2e7d32; -fx-padding: 2 6; -fx-background-radius: 3;");
-      header.getChildren().addAll(nameLabel, biotypeLabel, spacer, maneLabel);
-    } else {
-      header.getChildren().addAll(nameLabel, biotypeLabel);
+      c.badges(List.of(new Badge("MANE Select", "#2e7d32")));
     }
-    c.node(header);
 
     // Info rows
     c.link("Ensembl ID", gene.id().replace("gene:", ""), () -> openEnsembl(gene.id()));
@@ -147,30 +123,15 @@ public class GeneInfoPopup {
   // ── COSMIC section ─────────────────────────────────────────────────────────
 
   private void buildCosmicSection(PopupContent c, CosmicCensusEntry cosmic) {
-    // Header with tier badge(s)
+    c.section("COSMIC Cancer Gene Census");
+
     List<Badge> cosmicBadges = new ArrayList<>();
     String tierColor = cosmic.isTier1() ? "#c62828" : "#e65100";
     cosmicBadges.add(new Badge("Tier " + cosmic.tier(), tierColor));
     if (cosmic.hallmark()) {
       cosmicBadges.add(new Badge("Hallmark", "#6a1b9a"));
     }
-
-    // Custom header row
-    HBox header = new HBox(8);
-    header.setAlignment(Pos.CENTER_LEFT);
-    Label title = new Label("COSMIC Cancer Gene Census");
-    title.setFont(AppFonts.getBoldFont(12));
-    title.setTextFill(Color.web("#ff6b6b"));
-    header.getChildren().add(title);
-    for (Badge b : cosmicBadges) {
-      Label bl = new Label(b.text());
-      bl.setFont(AppFonts.getMonoFont(10));
-      bl.setTextFill(Color.WHITE);
-      bl.setStyle(String.format("-fx-background-color: %s; -fx-padding: 2 6; -fx-background-radius: 3;",
-          toHex(b.bgColor())));
-      header.getChildren().add(bl);
-    }
-    c.node(header);
+    c.badges(cosmicBadges);
 
     if (cosmic.roleInCancer() != null && !cosmic.roleInCancer().isEmpty()) {
       c.row("Role", formatRoleInCancer(cosmic.roleInCancer()));
@@ -182,28 +143,14 @@ public class GeneInfoPopup {
       c.row("Mutations", formatMutationTypes(cosmic.mutationTypes()));
     }
 
-    // Tumour types
-    VBox associationBox = new VBox(4);
-    associationBox.setPadding(new Insets(4, 0, 0, 0));
-    boolean hasAssociations = false;
-
     if (cosmic.somatic() && cosmic.tumourTypesSomatic() != null && !cosmic.tumourTypesSomatic().isEmpty()) {
-      Label somaticTitle = new Label("Somatic tumours:");
-      somaticTitle.setFont(AppFonts.getUIFont());
-      somaticTitle.setTextFill(Color.GRAY);
-      associationBox.getChildren().add(somaticTitle);
-      associationBox.getChildren().add(createTumourBadges(cosmic.tumourTypesSomatic(), "#455a64"));
-      hasAssociations = true;
+      c.text("Somatic tumours:");
+      c.badges(createTumourBadgeList(cosmic.tumourTypesSomatic(), "#455a64"));
     }
     if (cosmic.germline() && cosmic.tumourTypesGermline() != null && !cosmic.tumourTypesGermline().isEmpty()) {
-      Label germlineTitle = new Label("Germline tumours:");
-      germlineTitle.setFont(AppFonts.getUIFont());
-      germlineTitle.setTextFill(Color.GRAY);
-      associationBox.getChildren().add(germlineTitle);
-      associationBox.getChildren().add(createTumourBadges(cosmic.tumourTypesGermline(), "#37474f"));
-      hasAssociations = true;
+      c.text("Germline tumours:");
+      c.badges(createTumourBadgeList(cosmic.tumourTypesGermline(), "#37474f"));
     }
-    if (hasAssociations) c.node(associationBox);
 
     if (cosmic.hasCancerSyndrome()) {
       c.row("Syndrome", cosmic.cancerSyndrome());
@@ -226,17 +173,9 @@ public class GeneInfoPopup {
     row.getChildren().add(nameLabel);
 
     if (tx.isManeSelect()) {
-      Label mane = new Label("MANE Select");
-      mane.setFont(AppFonts.getMonoFont(9));
-      mane.setTextFill(Color.WHITE);
-      mane.setStyle("-fx-background-color: #2e7d32; -fx-padding: 1 4; -fx-background-radius: 2;");
-      row.getChildren().add(mane);
+      row.getChildren().add(createBadgeLabel("MANE Select", "#2e7d32"));
     } else if (tx.isManeClinic()) {
-      Label mane = new Label("MANE Plus Clinical");
-      mane.setFont(AppFonts.getMonoFont(9));
-      mane.setTextFill(Color.WHITE);
-      mane.setStyle("-fx-background-color: #1565c0; -fx-padding: 1 4; -fx-background-radius: 2;");
-      row.getChildren().add(mane);
+      row.getChildren().add(createBadgeLabel("MANE Plus Clinical", "#1565c0"));
     }
 
     Label exonLabel = new Label(tx.exons().size() + " exons");
@@ -245,6 +184,14 @@ public class GeneInfoPopup {
     row.getChildren().add(exonLabel);
 
     return row;
+  }
+
+  private Label createBadgeLabel(String text, String bgColor) {
+    Label label = new Label(text);
+    label.setFont(AppFonts.getMonoFont(9));
+    label.setTextFill(Color.WHITE);
+    label.setStyle("-fx-background-color: " + bgColor + "; -fx-padding: 1 4; -fx-background-radius: 2;");
+    return label;
   }
 
   // ── Navigation / URL helpers ───────────────────────────────────────────────
@@ -302,11 +249,8 @@ public class GeneInfoPopup {
 
   // ── UI utility ─────────────────────────────────────────────────────────────
 
-  private FlowPane createTumourBadges(String tumourTypes, String bgColor) {
-    FlowPane pane = new FlowPane(4, 4);
-    pane.setPadding(new Insets(0, 0, 0, 8));
-    pane.setMaxWidth(MAX_WIDTH - 30);
-
+  private List<Badge> createTumourBadgeList(String tumourTypes, String bgColor) {
+    List<Badge> badges = new ArrayList<>();
     String[] tumours = tumourTypes.split(",\\s*");
     java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
     for (String tumour : tumours) {
@@ -317,17 +261,9 @@ public class GeneInfoPopup {
       seen.add(displayName);
     }
     for (String displayName : seen) {
-      Label badge = new Label(displayName);
-      badge.setFont(AppFonts.getUIFont(10));
-      badge.setTextFill(Color.WHITE);
-      badge.setStyle("-fx-background-color: " + bgColor + "; -fx-padding: 2 6; -fx-background-radius: 3;");
-      pane.getChildren().add(badge);
+      badges.add(new Badge(displayName, bgColor));
     }
-    return pane;
+    return badges;
   }
 
-  private static String toHex(Color c) {
-    return String.format("#%02x%02x%02x",
-        (int) (c.getRed() * 255), (int) (c.getGreen() * 255), (int) (c.getBlue() * 255));
-  }
 }

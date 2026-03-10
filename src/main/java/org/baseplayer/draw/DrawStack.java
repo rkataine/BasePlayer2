@@ -1,16 +1,17 @@
 package org.baseplayer.draw;
 
-import org.baseplayer.samples.alignment.FetchManager;
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
+import org.baseplayer.controllers.MainController;
+import org.baseplayer.features.FeatureTrack;
+import org.baseplayer.features.FeatureTracksCanvas;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.draw.ChromosomeCanvas;
-import org.baseplayer.controllers.MainController;
-import org.baseplayer.features.ConservationTrack;
-import org.baseplayer.features.FeatureTracksCanvas;
-import org.baseplayer.features.GnomadTrack;
+import org.baseplayer.io.APIs.UcscApiClient;
+import org.baseplayer.io.GnomadDataParser;
+import org.baseplayer.samples.alignment.FetchManager;
+import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.NavigationState;
-import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
 
 import javafx.geometry.Insets;
@@ -116,11 +117,17 @@ public class DrawStack {
     featureTracksStack.getChildren().addAll(featureTracksCanvas, featureTracksCanvas.getReactiveCanvas());
     
     // Add default tracks
-    ConservationTrack conservationTrack = new ConservationTrack();
+    FeatureTrack conservationTrack = new FeatureTrack(
+        "PhyloP Conservation", "UCSC API", UcscApiClient::fetchConservation);
+    conservationTrack.setCoordinateBase(0); // UCSC is 0-based
     conservationTrack.setVisible(false);
     featureTracksCanvas.addTrack(conservationTrack);
-    
-    GnomadTrack gnomadTrack = new GnomadTrack();
+
+    GnomadDataParser gnomadParser = new GnomadDataParser();
+    FeatureTrack gnomadTrack = new FeatureTrack(
+        "gnomAD Variants", "gnomAD v4", gnomadParser::fetch);
+    gnomadTrack.setCoordinateBase(1); // gnomAD uses 1-based VCF coordinates
+    gnomadTrack.setPopupContentBuilder(gnomadParser::buildPopupContent);
     gnomadTrack.setVisible(false);
     featureTracksCanvas.addTrack(gnomadTrack);
     
