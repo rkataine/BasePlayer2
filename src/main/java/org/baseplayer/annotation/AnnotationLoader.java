@@ -27,7 +27,7 @@ import org.baseplayer.genome.gene.Transcript;
  */
 public final class AnnotationLoader {
   
-  private static final int CACHE_VERSION = 5;  // Increment when format changes (added CDS bounds)
+  private static final int CACHE_VERSION = 6;  // Increment when format changes (noncoding representative transcript + merged exons)
   private static final int TRANSCRIPT_CACHE_VERSION = 2;  // Version for non-MANE transcript cache (added CDS bounds)
   
   private AnnotationLoader() {} // Utility class
@@ -232,6 +232,9 @@ public final class AnnotationLoader {
                                   Map<String, List<long[]>> exonsByTranscript,
                                   Map<String, long[]> cdsBoundsByTranscript) {
     
+    // Track longest non-MANE transcript per gene (for noncoding fallback display)
+    Map<String, Transcript> longestNonMane = new HashMap<>();
+    
     // Assign transcripts to genes
     for (TranscriptBuilder tb : transcriptBuilders.values()) {
       GeneBuilder gb = geneBuilders.get(tb.parentGeneId);
@@ -250,23 +253,44 @@ public final class AnnotationLoader {
         // Only add MANE transcripts to the gene object (others saved separately)
         if (transcript.isMane()) {
           gb.transcripts.add(transcript);
+        } else {
+          // Track longest non-MANE transcript per gene for noncoding display
+          Transcript current = longestNonMane.get(tb.parentGeneId);
+          if (current == null || (transcript.end() - transcript.start()) > (current.end() - current.start())) {
+            longestNonMane.put(tb.parentGeneId, transcript);
+          }
         }
         
-        // Merge exons into gene's combined exon list (from all transcripts)
+        // Collect exons into gene's combined exon list (from all transcripts)
         for (long[] exon : txExons) {
-          boolean exists = gb.exons.stream().anyMatch(e -> e[0] == exon[0] && e[1] == exon[1]);
-          if (!exists) {
-            gb.exons.add(exon);
-          }
+          gb.exons.add(exon);
         }
       }
     }
     
-    // Create final Gene objects (with MANE transcripts only + description)
+    // For genes without MANE transcripts (e.g., lncRNA, miRNA), add the longest
+    // transcript as a representative so getDisplayExons() uses its exons instead
+    // of the merged exon list from all transcripts
+    for (Map.Entry<String, GeneBuilder> entry : geneBuilders.entrySet()) {
+      GeneBuilder gb = entry.getValue();
+      if (gb.transcripts.isEmpty()) {
+        Transcript longest = longestNonMane.get(entry.getKey());
+        if (longest != null) {
+          // Ensure exons are sorted by position
+          longest.exons().sort((a, b) -> Long.compare(a[0], b[0]));
+          gb.transcripts.add(longest);
+        }
+      }
+    }
+    
+    // Create final Gene objects
     for (GeneBuilder gb : geneBuilders.values()) {
+      // Properly merge overlapping exons from all transcripts
+      List<long[]> mergedExons = mergeOverlappingExons(gb.exons);
+      
       Gene gene = new Gene(
           gb.chrom, gb.start, gb.end, gb.name, gb.id, gb.strand, gb.biotype,
-          gb.description, gb.transcripts, gb.exons
+          gb.description, gb.transcripts, mergedExons
       );
       
       AnnotationData.getGenesByChrom()
@@ -284,6 +308,31 @@ public final class AnnotationLoader {
     }
     
     AnnotationData.getGeneNames().sort(String.CASE_INSENSITIVE_ORDER);
+  }
+  
+  /**
+   * Merge overlapping exon intervals into non-overlapping sorted intervals.
+   * Adjacent exons (gap <= 1bp) are also merged.
+   */
+  private static List<long[]> mergeOverlappingExons(List<long[]> exons) {
+    if (exons.isEmpty()) return new ArrayList<>();
+    if (exons.size() == 1) return new ArrayList<>(List.of(new long[]{exons.get(0)[0], exons.get(0)[1]}));
+    
+    List<long[]> sorted = new ArrayList<>(exons);
+    sorted.sort((a, b) -> Long.compare(a[0], b[0]));
+    
+    List<long[]> merged = new ArrayList<>();
+    long[] current = new long[]{sorted.get(0)[0], sorted.get(0)[1]};
+    for (int i = 1; i < sorted.size(); i++) {
+      if (sorted.get(i)[0] <= current[1] + 1) {
+        current[1] = Math.max(current[1], sorted.get(i)[1]);
+      } else {
+        merged.add(current);
+        current = new long[]{sorted.get(i)[0], sorted.get(i)[1]};
+      }
+    }
+    merged.add(current);
+    return merged;
   }
   
   // Builder classes for mutable construction

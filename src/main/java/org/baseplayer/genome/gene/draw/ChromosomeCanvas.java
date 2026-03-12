@@ -6,11 +6,11 @@ import java.util.List;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.annotation.CosmicGenes;
-import org.baseplayer.genome.draw.PositionIndicator;
-import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.genome.draw.PositionIndicator;
+import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
@@ -19,6 +19,7 @@ import org.baseplayer.utils.StackingAlgorithm;
 import javafx.scene.Cursor;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
@@ -51,6 +52,10 @@ public class ChromosomeCanvas extends GenomicCanvas {
     this.referenceGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
     this.drawExon = new DrawExon(gc, drawStack, referenceGenomeService);
     this.drawGene = new DrawGene(gc, drawExon);
+
+    // Unbind height from parent — we manage it dynamically based on gene rows
+    heightProperty().unbind();
+    reactiveCanvas.heightProperty().unbind();
 
     // Initialize gene stacker with label-aware visual extension
     geneStacker = StackingAlgorithm.createWithVisual(
@@ -344,6 +349,22 @@ public class ChromosomeCanvas extends GenomicCanvas {
     super.draw();
   }
 
+  @Override
+  protected void handleScroll(ScrollEvent event) {
+    if (event.isControlDown()) {
+      // Ctrl+scroll = zoom (consume to prevent ScrollPane from scrolling)
+      event.consume();
+      zoom(event.getDeltaY(), event.getX());
+    } else if (event.getDeltaX() != 0) {
+      // Horizontal scroll = pan genomic position (consume)
+      event.consume();
+      double scrollMultiplier = 0.3;
+      double genomeDelta = event.getDeltaX() * scrollMultiplier * drawStack.scale;
+      setStart(drawStack.start - genomeDelta);
+    }
+    // Vertical scroll without Ctrl: do NOT consume — let ScrollPane handle it
+  }
+
   void drawGenes() {
     String currentChrom = drawStack.chromosome;
     
@@ -373,19 +394,34 @@ public class ChromosomeCanvas extends GenomicCanvas {
           filteredGenes.add(gene);
         }
       } else {
-        // Normal mode: show cancer genes always, others if >= 1 pixel
+        // Cancer genes always visible regardless of pixel width
         if (isCancerGene) {
           filteredGenes.add(gene);
         } else {
-          double pixelWidth = ((gene.end() - gene.start()) / viewLength) * canvasWidth;
-          if (pixelWidth >= 1.0) {
+          // For other genes, gene body must be at least 1 pixel wide
+          double genePixelWidth = ((gene.end() - gene.start()) / viewLength) * canvasWidth;
+          if (genePixelWidth >= 1.0) {
             filteredGenes.add(gene);
           }
         }
       }
     }
     
+    // Stacking uses normal start-position order; visual extender already
+    // accounts for max(label width, gene width) per gene
     StackingAlgorithm.StackResult<Gene> stacked = geneStacker.stack(filteredGenes, viewStart, viewEnd, canvasWidth);
+    
+    // Count actual rows used and resize canvas to fit all gene rows
+    int usedRows = 0;
+    for (int row = 0; row < stacked.getRowCount(); row++) {
+      if (!stacked.getRow(row).isEmpty()) usedRows = row + 1;
+    }
+    double contentHeight = DrawGene.GENE_AREA_TOP + usedRows * (DrawGene.GENE_ROW_HEIGHT + DrawExon.GENE_LABEL_HEIGHT) + 10;
+    double minHeight = drawStack.chromScrollPane != null 
+        ? drawStack.chromScrollPane.getViewportBounds().getHeight() : 100;
+    double canvasHeight = Math.max(contentHeight, minHeight);
+    setHeight(canvasHeight);
+    getReactiveCanvas().setHeight(canvasHeight);
     
     // Clear and rebuild hit boxes
     drawGene.clearHitBoxes();
@@ -418,6 +454,13 @@ public class ChromosomeCanvas extends GenomicCanvas {
 	}
 
   void drawIndicators() {
-    PositionIndicator.draw(gc, drawStack, getWidth(), getHeight());
+    // Draw indicators at the bottom of the visible viewport, not the full canvas
+    double visibleHeight = getHeight();
+    if (drawStack.chromScrollPane != null) {
+      double viewportHeight = drawStack.chromScrollPane.getViewportBounds().getHeight();
+      double scrollOffset = drawStack.chromScrollPane.getVvalue() * (getHeight() - viewportHeight);
+      visibleHeight = scrollOffset + viewportHeight;
+    }
+    PositionIndicator.draw(gc, drawStack, getWidth(), visibleHeight);
   }
 }

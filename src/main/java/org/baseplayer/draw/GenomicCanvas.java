@@ -169,7 +169,7 @@ public class GenomicCanvas extends Canvas {
     reactiveCanvas.setOnMousePressed(event -> { 
       mousePressedX = event.getX(); 
       mousePressedY = event.getY();
-      mouseDraggedX = 0; // Reset for delta calculation
+      mouseDraggedX = event.getX(); // Use press position so first drag delta is correct
       mouseDragged = false;
     });
     reactiveCanvas.setOnMouseDragged(event -> { mouseDragged = true; drawStack.nav.navigating = true; handleDrag(event); onDragActive(); });

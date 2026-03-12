@@ -27,7 +27,7 @@ class DrawGene {
   static final double GENE_ROW_HEIGHT  = 22;
   static final double GENE_CHAR_WIDTH  = 6.0;
   static final double GENE_PADDING     = 15.0;
-  static final int    MAX_GENE_ROWS    = 8;
+  static final int    MAX_GENE_ROWS    = 500;
   static final int    GENE_FONT_SIZE   = 10;
 
   // ── Owned state ──────────────────────────────────────────────────────────────
@@ -87,6 +87,12 @@ class DrawGene {
     double clippedX1 = Math.max(0, x1);
     double clippedX2 = Math.min(canvasWidth, x2);
     if (clippedX2 <= clippedX1) return;
+
+    // Ensure cancer genes are always at least 1 pixel wide
+    boolean isCancerGene = CosmicGenes.isCosmicGene(gene.name());
+    if (isCancerGene && clippedX2 - clippedX1 < 1) {
+      clippedX2 = clippedX1 + 1;
+    }
 
     // Gene body line (first to last visible exon)
     if (clippedX2 - clippedX1 > 3) {
@@ -174,19 +180,25 @@ class DrawGene {
         double exonY     = Math.round(rowY + DrawExon.GENE_LABEL_HEIGHT);
 
         if (exonWidth > 10) {
-          gc.setFont(AppFonts.getUIFont(9));
-          gc.setFill(Color.rgb(220, 220, 220, 0.9));
+          // Skip exon number if it would overlap the gene name label above it
+          double labelX   = Math.max(2, x1);
+          double labelEnd = labelX + gene.name().length() * GENE_CHAR_WIDTH;
           String exonLabel = String.valueOf(exonNumber);
           double textWidth = exonLabel.length() * 5;
           double textX     = exonX + (exonWidth - textWidth) / 2;
-          gc.fillText(exonLabel, textX, exonY - 2);
-          gc.setFont(AppFonts.getUIFont());
+          boolean overlapsLabel = textX < labelEnd && (textX + textWidth) > labelX;
+
+          if (!overlapsLabel) {
+            gc.setFont(AppFonts.getUIFont(9));
+            gc.setFill(Color.rgb(220, 220, 220, 0.9));
+            gc.fillText(exonLabel, textX, exonY - 2);
+            gc.setFont(AppFonts.getUIFont());
+          }
         }
       }
     }
 
-    // Gene name label
-    boolean isCancerGene = CosmicGenes.isCosmicGene(gene.name());
+    // Gene name label (already computed above for overlap check)
     boolean showLabel     = isCancerGene || viewLength < 10_000_000 || "protein_coding".equals(gene.biotype());
     double  labelX        = Math.max(2, x1);
     double  labelWidth    = 0;

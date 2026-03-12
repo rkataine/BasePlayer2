@@ -19,6 +19,7 @@ import javafx.geometry.Pos;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -42,6 +43,7 @@ public class DrawStack {
   
   public VBox chromContainer = new VBox();  // Container for cytoband + chrom stack
   public StackPane chromStack = new StackPane(); 
+  public ScrollPane chromScrollPane;  // Scroll pane for gene canvas vertical scrolling
   public StackPane drawStack = new StackPane();
   public StackPane featureTracksStack = new StackPane();  // Container for feature tracks
   public CytobandCanvas cytobandCanvas;
@@ -100,9 +102,25 @@ public class DrawStack {
     cytobandCanvas.widthProperty().bind(cytoWrapper.widthProperty());
     cytobandCanvas.setHeight(CytobandCanvas.PREFERRED_HEIGHT);
     
-    // Create gene/reference canvas (fills remaining space)
-    chromosomeCanvas = new ChromosomeCanvas(new Canvas(), chromStack, this);
-    chromStack.getChildren().addAll(chromosomeCanvas, chromosomeCanvas.getReactiveCanvas(), chromosomeDropdown, closeButton);
+    // Create gene/reference canvas (fills remaining space, with vertical scrolling)
+    StackPane canvasPane = new StackPane();
+    canvasPane.setMinSize(0, 0);
+    chromosomeCanvas = new ChromosomeCanvas(new Canvas(), canvasPane, this);
+    canvasPane.getChildren().addAll(chromosomeCanvas, chromosomeCanvas.getReactiveCanvas());
+    
+    // Wrap canvas in ScrollPane for vertical scrolling when many gene rows
+    chromScrollPane = new ScrollPane(canvasPane);
+    chromScrollPane.setFitToWidth(true);
+    chromScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    chromScrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+    chromScrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
+    chromScrollPane.setPannable(false);
+    
+    // Redraw when scroll position changes so position indicators stay at bottom
+    chromScrollPane.vvalueProperty().addListener((obs, oldVal, newVal) -> chromosomeCanvas.draw());
+    
+    // Overlay dropdown and close button on top of ScrollPane
+    chromStack.getChildren().addAll(chromScrollPane, chromosomeDropdown, closeButton);
     VBox.setVgrow(chromStack, Priority.ALWAYS);
     
     // Assemble the container: cytoband at top, chromStack below
