@@ -60,6 +60,7 @@ public class GenomeSidebar extends SidebarBase {
     annotationLabel.getStyleClass().add("sidebar-label");
 
     annotationComboBox.setPrefHeight(22);
+    annotationComboBox.setMinWidth(0);
     annotationComboBox.setMaxWidth(Double.MAX_VALUE);
     annotationComboBox.getStyleClass().add("minimal-combo-box");
     annotationComboBox.setPromptText("Annotations");
@@ -68,6 +69,7 @@ public class GenomeSidebar extends SidebarBase {
     referenceLabel.getStyleClass().add("sidebar-label");
 
     referenceComboBox.setPrefHeight(22);
+    referenceComboBox.setMinWidth(0);
     referenceComboBox.setMaxWidth(Double.MAX_VALUE);
     referenceComboBox.getStyleClass().add("minimal-combo-box");
     referenceComboBox.setPromptText("Homo Sapiens GRCh38");
@@ -78,8 +80,9 @@ public class GenomeSidebar extends SidebarBase {
 
     VBox layout = new VBox(4);
     layout.setPadding(new Insets(5));
-    layout.prefWidthProperty().bind(contentPane.widthProperty());
-    layout.prefHeightProperty().bind(contentPane.heightProperty());
+    layout.setMinWidth(0);
+    layout.setMaxWidth(Double.MAX_VALUE);
+    layout.setMaxHeight(Double.MAX_VALUE);
     layout.getChildren().addAll(annotationLabel, annotationComboBox, spacer, referenceLabel, referenceComboBox);
 
     contentPane.getChildren().add(layout);

@@ -12,6 +12,10 @@ import org.baseplayer.draw.DrawStack;
  * Handles row packing algorithm for BAM reads.
  * Assigns each read a display row to minimize vertical space while
  * preventing overlaps at the current zoom level.
+ *
+ * <p>CIGAR-aware: for spliced RNA-seq reads (containing CIGAR N operations),
+ * only exonic segments are considered when checking row occupancy, allowing
+ * other reads to be packed into the intronic gaps.
  */
 public class ReadPacker {
   
@@ -94,20 +98,18 @@ public class ReadPacker {
       result.readGroupStartRows.put(entry.getKey(), currentStartRow);
       rgReads.sort(Comparator.comparingInt(r -> r.pos));
       
-      List<Integer> rowEnds = new ArrayList<>();
+      List<List<int[]>> rowSegments = new ArrayList<>();
       for (BAMRecord record : rgReads) {
-        boolean placed = false;
-        for (int r = 0; r < rowEnds.size(); r++) {
-          if (record.pos >= rowEnds.get(r) + gap) {
-            record.row = currentStartRow + r;
-            rowEnds.set(r, record.end);
-            placed = true;
-            break;
-          }
-        }
-        if (!placed) {
-          record.row = currentStartRow + rowEnds.size();
-          rowEnds.add(record.end);
+        int[][] exons = getExonSegments(record);
+        int r = findFittingRow(rowSegments, exons, gap);
+        if (r >= 0) {
+          record.row = currentStartRow + r;
+          addSegments(rowSegments.get(r), exons);
+        } else {
+          record.row = currentStartRow + rowSegments.size();
+          List<int[]> segs = new ArrayList<>();
+          addSegments(segs, exons);
+          rowSegments.add(segs);
         }
         if (record.row > result.maxRow) {
           result.maxRow = record.row;
@@ -138,20 +140,18 @@ public class ReadPacker {
     hp2Reads.sort(Comparator.comparingInt(r -> r.pos));
     
     // Pack HP1 reads: rows 0, 1, 2, ...
-    List<Integer> rowEnds = new ArrayList<>();
+    List<List<int[]>> rowSegments = new ArrayList<>();
     for (BAMRecord record : hp1Reads) {
-      boolean placed = false;
-      for (int r = 0; r < rowEnds.size(); r++) {
-        if (record.pos >= rowEnds.get(r) + gap) {
-          record.row = r;
-          rowEnds.set(r, record.end);
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        record.row = rowEnds.size();
-        rowEnds.add(record.end);
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(rowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = r;
+        addSegments(rowSegments.get(r), exons);
+      } else {
+        record.row = rowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        rowSegments.add(segs);
       }
       if (record.row > result.maxRow) {
         result.maxRow = record.row;
@@ -159,23 +159,21 @@ public class ReadPacker {
     }
     
     // HP2 starts on fresh rows after HP1
-    int hp2Start = rowEnds.isEmpty() ? 0 : rowEnds.size();
+    int hp2Start = rowSegments.isEmpty() ? 0 : rowSegments.size();
     result.hp2StartRow = hp2Start;
     
-    List<Integer> hp2RowEnds = new ArrayList<>();
+    List<List<int[]>> hp2RowSegments = new ArrayList<>();
     for (BAMRecord record : hp2Reads) {
-      boolean placed = false;
-      for (int r = 0; r < hp2RowEnds.size(); r++) {
-        if (record.pos >= hp2RowEnds.get(r) + gap) {
-          record.row = hp2Start + r;
-          hp2RowEnds.set(r, record.end);
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        record.row = hp2Start + hp2RowEnds.size();
-        hp2RowEnds.add(record.end);
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(hp2RowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = hp2Start + r;
+        addSegments(hp2RowSegments.get(r), exons);
+      } else {
+        record.row = hp2Start + hp2RowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        hp2RowSegments.add(segs);
       }
       if (record.row > result.maxRow) {
         result.maxRow = record.row;
@@ -189,24 +187,116 @@ public class ReadPacker {
   private static void packNormal(List<BAMRecord> reads, int gap, PackingResult result) {
     reads.sort(Comparator.comparingInt(r -> r.pos));
     
-    List<Integer> rowEnds = new ArrayList<>();
+    List<List<int[]>> rowSegments = new ArrayList<>();
     for (BAMRecord record : reads) {
-      boolean placed = false;
-      for (int r = 0; r < rowEnds.size(); r++) {
-        if (record.pos >= rowEnds.get(r) + gap) {
-          record.row = r;
-          rowEnds.set(r, record.end);
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        record.row = rowEnds.size();
-        rowEnds.add(record.end);
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(rowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = r;
+        addSegments(rowSegments.get(r), exons);
+      } else {
+        record.row = rowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        rowSegments.add(segs);
       }
       if (record.row > result.maxRow) {
         result.maxRow = record.row;
       }
+    }
+  }
+
+  // ── CIGAR-aware helpers ───────────────────────────────────────────────
+
+  /**
+   * Extract exon (reference-consuming, non-intron) segments from a read's CIGAR.
+   * For reads without CIGAR_N, returns a single [pos, end] segment.
+   */
+  static int[][] getExonSegments(BAMRecord record) {
+    if (record.cigarOps == null) {
+      return new int[][] {{ record.pos, record.end }};
+    }
+    // Quick check for any splice junctions
+    boolean hasSplice = false;
+    for (int cigarOp : record.cigarOps) {
+      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) { hasSplice = true; break; }
+    }
+    if (!hasSplice) {
+      return new int[][] {{ record.pos, record.end }};
+    }
+    // Walk CIGAR and collect exon segments
+    List<int[]> segments = new ArrayList<>();
+    int refPos = record.pos;
+    int segStart = refPos;
+    for (int cigarOp : record.cigarOps) {
+      int op  = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X, BAMRecord.CIGAR_D -> {
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_N -> {
+          // End current exon segment, start new one after intron
+          if (refPos > segStart) {
+            segments.add(new int[] { segStart, refPos });
+          }
+          refPos += len;
+          segStart = refPos;
+        }
+        default -> {} // I, S, H, P: no reference consumption
+      }
+    }
+    // Add final exon segment
+    if (refPos > segStart) {
+      segments.add(new int[] { segStart, refPos });
+    }
+    return segments.toArray(new int[0][]);
+  }
+
+  /**
+   * Find the first row where all exon segments fit without overlapping
+   * existing segments (respecting the gap).
+   * Returns row index, or -1 if no row fits.
+   */
+  private static int findFittingRow(List<List<int[]>> rowSegments, int[][] exons, int gap) {
+    for (int r = 0; r < rowSegments.size(); r++) {
+      if (fitsInRow(rowSegments.get(r), exons, gap)) {
+        return r;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Check if all exon segments fit in a row without overlapping existing segments.
+   * Both lists are sorted by start position.
+   */
+  private static boolean fitsInRow(List<int[]> existing, int[][] exons, int gap) {
+    // Fast path: check against the last existing segment's end
+    // (covers 99% of cases since reads are sorted by pos)
+    if (!existing.isEmpty()) {
+      int[] last = existing.get(existing.isEmpty() ? 0 : existing.size() - 1);
+      if (exons[0][0] >= last[1] + gap) {
+        return true; // all exons start after the last existing segment
+      }
+    }
+    // Full check: verify no exon overlaps any existing segment
+    for (int[] exon : exons) {
+      for (int[] seg : existing) {
+        if (exon[0] < seg[1] + gap && exon[1] + gap > seg[0]) {
+          return false; // overlap
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Add exon segments to a row's segment list, maintaining sorted order.
+   */
+  private static void addSegments(List<int[]> rowSegs, int[][] exons) {
+    for (int[] exon : exons) {
+      rowSegs.add(exon);
     }
   }
 }

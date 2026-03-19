@@ -5,12 +5,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.Gene;
+import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseColors;
@@ -82,8 +82,8 @@ class DrawExon {
                       double canvasWidth, double rowY, Color color,
                       boolean showAminoAcids, boolean showPropertyColors,
                       Gene gene, boolean isReverse, long cdsOffset) {
-    double ex1 = ((regionStart - viewStart) / viewLength) * canvasWidth;
-    double ex2 = ((regionEnd   - viewStart) / viewLength) * canvasWidth;
+    double ex1 = ((regionStart       - viewStart) / viewLength) * canvasWidth;
+    double ex2 = (((regionEnd + 1)  - viewStart) / viewLength) * canvasWidth;
     ex1 = Math.max(0, ex1);
     ex2 = Math.min(canvasWidth, ex2);
 

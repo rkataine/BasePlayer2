@@ -3,6 +3,7 @@ package org.baseplayer.components.sidebars;
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.MasterTrackCanvas;
 
+import javafx.geometry.Pos;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.MouseButton;
@@ -61,12 +62,16 @@ public abstract class SidebarBase {
     headerPane  = new StackPane();
     contentPane = new StackPane();
 
+    // Anchor to top-left so content doesn't center at negative X when sidebar shrinks
+    parent.setAlignment(Pos.TOP_LEFT);
+
     VBox layout = new VBox();
-    layout.prefWidthProperty().bind(parent.widthProperty());
-    layout.prefHeightProperty().bind(parent.heightProperty());
+    layout.setMinWidth(0);
+    layout.setMaxWidth(Double.MAX_VALUE);
+    layout.setMaxHeight(Double.MAX_VALUE);
 
     if (headerHeight > 0) {
-      headerPane.prefWidthProperty().bind(parent.widthProperty());
+      headerPane.setMaxWidth(Double.MAX_VALUE);
       headerPane.setMinHeight(headerHeight);
       headerPane.setMaxHeight(headerHeight);
       layout.getChildren().add(headerPane);
@@ -75,7 +80,7 @@ public abstract class SidebarBase {
       hasDefaultHeader = false;
     }
 
-    contentPane.prefWidthProperty().bind(parent.widthProperty());
+    contentPane.setMaxWidth(Double.MAX_VALUE);
     contentPane.setMinHeight(0);
     VBox.setVgrow(contentPane, Priority.ALWAYS);
     layout.getChildren().add(contentPane);

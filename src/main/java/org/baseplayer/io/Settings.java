@@ -2,6 +2,8 @@ package org.baseplayer.io;
 
 import java.util.prefs.Preferences;
 
+import org.baseplayer.samples.alignment.draw.ReadColorMode;
+
 /**
  * Application-wide settings with persistence via java.util.prefs.
  * Singleton — access via Settings.get().
@@ -12,7 +14,6 @@ import java.util.prefs.Preferences;
 public final class Settings {
 
   private static final Preferences prefs = Preferences.userNodeForPackage(Settings.class);
-  private static final Settings INSTANCE = new Settings();
 
   // ── Keys ──────────────────────────────────────────────────────────────
 
@@ -22,10 +23,11 @@ public final class Settings {
   private static final String KEY_SAMPLED_COVERAGE_POINTS = "sampledCoveragePoints";
   private static final String KEY_COVERAGE_FRACTION       = "coverageFraction";
   private static final String KEY_READ_GAP                = "readGap";
-  private static final String KEY_MIN_READ_HEIGHT         = "minReadHeight";
+  private static final String KEY_READ_HEIGHT             = "readHeight";
   private static final String KEY_SMOOTH_SMALL_FILES      = "smoothSmallFiles";
   private static final String KEY_MISMATCH_MIN_FRACTION   = "mismatchMinFraction";
   private static final String KEY_MISMATCH_MIN_COUNT      = "mismatchMinCount";
+  private static final String KEY_READ_COLOR_MODE         = "readColorMode";
 
   // ── Defaults (matching original hardcoded values) ─────────────────────
 
@@ -35,10 +37,13 @@ public final class Settings {
   public static final int    DEF_SAMPLED_COVERAGE_POINTS  = 20;
   public static final double DEF_COVERAGE_FRACTION        = 0.30;
   public static final double DEF_READ_GAP                 = 2.5;
-  public static final double DEF_MIN_READ_HEIGHT          = 3.0;
+  public static final double DEF_READ_HEIGHT              = 10.0;
   public static final boolean DEF_SMOOTH_SMALL_FILES      = false;
   public static final double DEF_MISMATCH_MIN_FRACTION    = 0.10;
   public static final int    DEF_MISMATCH_MIN_COUNT       = 2;
+  public static final ReadColorMode DEF_READ_COLOR_MODE   = ReadColorMode.STRAND;
+
+  private static final Settings INSTANCE = new Settings();
 
   // ── Cached values (read from prefs once, written on set) ──────────────
 
@@ -48,10 +53,11 @@ public final class Settings {
   private int    sampledCoveragePoints;
   private double coverageFraction;
   private double readGap;
-  private double minReadHeight;
+  private double readHeight;
   private boolean smoothSmallFiles;
   private double mismatchMinFraction;
   private int    mismatchMinCount;
+  private ReadColorMode readColorMode;
 
   private Settings() {
     load();
@@ -67,10 +73,15 @@ public final class Settings {
     sampledCoveragePoints = prefs.getInt(KEY_SAMPLED_COVERAGE_POINTS, DEF_SAMPLED_COVERAGE_POINTS);
     coverageFraction      = prefs.getDouble(KEY_COVERAGE_FRACTION, DEF_COVERAGE_FRACTION);
     readGap               = prefs.getDouble(KEY_READ_GAP, DEF_READ_GAP);
-    minReadHeight         = prefs.getDouble(KEY_MIN_READ_HEIGHT, DEF_MIN_READ_HEIGHT);
+    readHeight            = prefs.getDouble(KEY_READ_HEIGHT, DEF_READ_HEIGHT);
     smoothSmallFiles      = prefs.getBoolean(KEY_SMOOTH_SMALL_FILES, DEF_SMOOTH_SMALL_FILES);
     mismatchMinFraction   = prefs.getDouble(KEY_MISMATCH_MIN_FRACTION, DEF_MISMATCH_MIN_FRACTION);
     mismatchMinCount      = prefs.getInt(KEY_MISMATCH_MIN_COUNT, DEF_MISMATCH_MIN_COUNT);
+    try {
+      readColorMode = ReadColorMode.valueOf(prefs.get(KEY_READ_COLOR_MODE, DEF_READ_COLOR_MODE.name()));
+    } catch (IllegalArgumentException e) {
+      readColorMode = DEF_READ_COLOR_MODE;
+    }
   }
 
   // ── Getters ───────────────────────────────────────────────────────────
@@ -93,8 +104,8 @@ public final class Settings {
   /** Vertical gap between read rows in pixels. */
   public double getReadGap() { return readGap; }
 
-  /** Minimum read height in pixels. */
-  public double getMinReadHeight() { return minReadHeight; }
+  /** Read height in pixels. */
+  public double getReadHeight() { return readHeight; }
 
   /** Whether to apply smoothing to small-file sampled coverage. */
   public boolean isSmoothSmallFiles() { return smoothSmallFiles; }
@@ -105,6 +116,9 @@ public final class Settings {
   /** Minimum absolute read count a mismatch must reach to be drawn in coverage view. */
   public int getMismatchMinCount() { return mismatchMinCount; }
 
+  /** How reads are colored: STRAND (default) or UC_TAG. */
+  public ReadColorMode getReadColorMode() { return readColorMode; }
+
   // ── Setters (persist immediately) ─────────────────────────────────────
 
   public void setMaxReadViewLength(int bp)            { this.maxReadViewLength = bp; prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp); }
@@ -113,10 +127,11 @@ public final class Settings {
   public void setSampledCoveragePoints(int n)         { this.sampledCoveragePoints = n; prefs.putInt(KEY_SAMPLED_COVERAGE_POINTS, n); }
   public void setCoverageFraction(double f)           { this.coverageFraction = f; prefs.putDouble(KEY_COVERAGE_FRACTION, f); }
   public void setReadGap(double px)                   { this.readGap = px; prefs.putDouble(KEY_READ_GAP, px); }
-  public void setMinReadHeight(double px)             { this.minReadHeight = px; prefs.putDouble(KEY_MIN_READ_HEIGHT, px); }
+  public void setReadHeight(double px)                { this.readHeight = px; prefs.putDouble(KEY_READ_HEIGHT, px); }
   public void setSmoothSmallFiles(boolean smooth)     { this.smoothSmallFiles = smooth; prefs.putBoolean(KEY_SMOOTH_SMALL_FILES, smooth); }
   public void setMismatchMinFraction(double f)         { this.mismatchMinFraction = f; prefs.putDouble(KEY_MISMATCH_MIN_FRACTION, f); }
   public void setMismatchMinCount(int n)               { this.mismatchMinCount = n; prefs.putInt(KEY_MISMATCH_MIN_COUNT, n); }
+  public void setReadColorMode(ReadColorMode mode)     { this.readColorMode = mode; prefs.put(KEY_READ_COLOR_MODE, mode.name()); }
 
   /** Reset all settings to defaults. */
   public void resetDefaults() {
@@ -126,9 +141,10 @@ public final class Settings {
     setSampledCoveragePoints(DEF_SAMPLED_COVERAGE_POINTS);
     setCoverageFraction(DEF_COVERAGE_FRACTION);
     setReadGap(DEF_READ_GAP);
-    setMinReadHeight(DEF_MIN_READ_HEIGHT);
+    setReadHeight(DEF_READ_HEIGHT);
     setSmoothSmallFiles(DEF_SMOOTH_SMALL_FILES);
     setMismatchMinFraction(DEF_MISMATCH_MIN_FRACTION);
     setMismatchMinCount(DEF_MISMATCH_MIN_COUNT);
+    setReadColorMode(DEF_READ_COLOR_MODE);
   }
 }

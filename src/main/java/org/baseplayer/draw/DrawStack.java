@@ -108,16 +108,26 @@ public class DrawStack {
     chromosomeCanvas = new ChromosomeCanvas(new Canvas(), canvasPane, this);
     canvasPane.getChildren().addAll(chromosomeCanvas, chromosomeCanvas.getReactiveCanvas());
     
-    // Wrap canvas in ScrollPane for vertical scrolling when many gene rows
+    // Wrap canvas in ScrollPane for vertical scrolling when many gene rows.
     chromScrollPane = new ScrollPane(canvasPane);
-    chromScrollPane.setFitToWidth(true);
     chromScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
     chromScrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
     chromScrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
     chromScrollPane.setPannable(false);
+    // Bind canvas pane width to the full ScrollPane width (NOT fitToWidth).
+    // This makes the scrollbar overlay the content edge instead of shrinking it,
+    // eliminating the left/right shift when the scrollbar appears.
+    canvasPane.prefWidthProperty().bind(chromScrollPane.widthProperty());
+    canvasPane.minWidthProperty().bind(chromScrollPane.widthProperty());
+    canvasPane.maxWidthProperty().bind(chromScrollPane.widthProperty());
     
     // Redraw when scroll position changes so position indicators stay at bottom
     chromScrollPane.vvalueProperty().addListener((obs, oldVal, newVal) -> chromosomeCanvas.draw());
+
+    // Redraw when ScrollPane is vertically resized (e.g. split divider drag).
+    // ChromosomeCanvas suppresses the normal parent-height→update listener to
+    // avoid a feedback loop, so this replaces that mechanism.
+    chromScrollPane.heightProperty().addListener((obs, oldVal, newVal) -> chromosomeCanvas.draw());
     
     // Overlay dropdown and close button on top of ScrollPane
     chromStack.getChildren().addAll(chromScrollPane, chromosomeDropdown, closeButton);

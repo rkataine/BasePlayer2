@@ -46,6 +46,9 @@ public class BAMRecord {
   public int haplotype = 0;             // HP:i tag value (0=unphased, 1=HP1, 2=HP2)
   public int phaseSet = 0;              // PS:i tag value (phase set identifier)
   public String readGroup = null;       // RG:Z tag value (read group identifier)
+  public short[] ucTag = null;          // uc:B:s tag values (Uncalled current signal per base)
+  public short[] udTag = null;          // ud:B:s tag values (Uncalled dwelled current signal per base)
+  public int[] urTag = null;            // ur:B:i tag values (reference coordinate range for uc/ud, 2 elements: start, end)
 
   /**
    * Mismatches relative to the reference.

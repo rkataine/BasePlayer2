@@ -3,12 +3,14 @@ package org.baseplayer.components;
 import org.baseplayer.MainApp;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
+import org.baseplayer.samples.alignment.draw.ReadColorMode;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Spinner;
@@ -36,10 +38,11 @@ public class SettingsDialog {
   private final Spinner<Integer> sampledPointsSpinner;
   private final Spinner<Double>  coverageFractionSpinner;
   private final Spinner<Double>  readGapSpinner;
-  private final Spinner<Double>  minReadHeightSpinner;
+  private final Spinner<Double>  readHeightSpinner;
   private final CheckBox         smoothSmallFilesCheck;
   private final Spinner<Double>  mismatchMinFractionSpinner;
   private final Spinner<Integer> mismatchMinCountSpinner;
+  private final ComboBox<ReadColorMode> readColorModeCombo;
 
   public SettingsDialog() {
     dialog = new Stage(StageStyle.DECORATED);
@@ -55,11 +58,14 @@ public class SettingsDialog {
     sampledPointsSpinner      = intSpinner(5, 500, settings.getSampledCoveragePoints(), 5);
     coverageFractionSpinner   = dblSpinner(0.05, 1.0, settings.getCoverageFraction(), 0.05);
     readGapSpinner            = dblSpinner(0.0, 10.0, settings.getReadGap(), 0.5);
-    minReadHeightSpinner      = dblSpinner(1.0, 20.0, settings.getMinReadHeight(), 0.5);
+    readHeightSpinner         = dblSpinner(1.0, 50.0, settings.getReadHeight(), 0.5);
     smoothSmallFilesCheck     = new CheckBox("Apply smoothing to sampled coverage");
     smoothSmallFilesCheck.setSelected(settings.isSmoothSmallFiles());
     mismatchMinFractionSpinner = dblSpinner(0.0, 1.0, settings.getMismatchMinFraction(), 0.05);
     mismatchMinCountSpinner    = intSpinner(1, 100, settings.getMismatchMinCount(), 1);
+    readColorModeCombo = new ComboBox<>();
+    readColorModeCombo.getItems().addAll(ReadColorMode.values());
+    readColorModeCombo.setValue(settings.getReadColorMode());
 
     // ── Layout ──────────────────────────────────────────────────────────
 
@@ -99,8 +105,10 @@ public class SettingsDialog {
         "Fraction of track height used for coverage area");
     addRow(readGrid, row++, "Read gap (px):", readGapSpinner,
         "Vertical spacing between read rows");
-    addRow(readGrid, row++, "Min read height (px):", minReadHeightSpinner,
-        "Minimum height for individual reads");
+    addRow(readGrid, row++, "Read height (px):", readHeightSpinner,
+        "Height of individual reads in pixels");
+    addRow(readGrid, row++, "Read coloring:", readColorModeCombo,
+        "How to color reads (Strand = strand direction, UC tag = Uncalled signal values)");
     root.getChildren().add(readGrid);
 
     root.getChildren().add(new Separator());
@@ -159,10 +167,11 @@ public class SettingsDialog {
     settings.setSampledCoveragePoints(sampledPointsSpinner.getValue());
     settings.setCoverageFraction(coverageFractionSpinner.getValue());
     settings.setReadGap(readGapSpinner.getValue());
-    settings.setMinReadHeight(minReadHeightSpinner.getValue());
+    settings.setReadHeight(readHeightSpinner.getValue());
     settings.setSmoothSmallFiles(smoothSmallFilesCheck.isSelected());
     settings.setMismatchMinFraction(mismatchMinFractionSpinner.getValue());
     settings.setMismatchMinCount(mismatchMinCountSpinner.getValue());
+    settings.setReadColorMode(readColorModeCombo.getValue());
 
     // Trigger redraw so changes are visible immediately
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -175,10 +184,11 @@ public class SettingsDialog {
     sampledPointsSpinner.getValueFactory().setValue(Settings.DEF_SAMPLED_COVERAGE_POINTS);
     coverageFractionSpinner.getValueFactory().setValue(Settings.DEF_COVERAGE_FRACTION);
     readGapSpinner.getValueFactory().setValue(Settings.DEF_READ_GAP);
-    minReadHeightSpinner.getValueFactory().setValue(Settings.DEF_MIN_READ_HEIGHT);
+    readHeightSpinner.getValueFactory().setValue(Settings.DEF_READ_HEIGHT);
     smoothSmallFilesCheck.setSelected(Settings.DEF_SMOOTH_SMALL_FILES);
     mismatchMinFractionSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_FRACTION);
     mismatchMinCountSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_COUNT);
+    readColorModeCombo.setValue(Settings.DEF_READ_COLOR_MODE);
   }
 
   // ── Helper methods ────────────────────────────────────────────────────

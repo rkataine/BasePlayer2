@@ -3,6 +3,7 @@ package org.baseplayer.samples.alignment.draw;
 import java.util.List;
 import java.util.function.Function;
 
+import org.baseplayer.io.Settings;
 import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.utils.DrawColors;
 
@@ -83,6 +84,34 @@ class DrawReads {
             double clipTop, double clipBottom, double canvasWidth) {
 
     double middleY = readsY + readsH / 2;
+    ReadColorMode colorMode = Settings.get().getReadColorMode();
+    boolean ucMode = colorMode == ReadColorMode.UC_TAG;
+    boolean udMode = colorMode == ReadColorMode.UD_TAG;
+
+    // Compute dynamic color scale from visible reads' signal values.
+    // Center on the mean, use 2*stddev as half-range so bulk of values fill the color space.
+    double signalCenter = 0;
+    double signalHalfRange = UC_SCALE; // fallback
+    if (ucMode || udMode) {
+      long sum = 0;
+      long sumSq = 0;
+      int count = 0;
+      for (BAMRecord read : reads) {
+        short[] sig = ucMode ? read.ucTag : read.udTag;
+        if (sig == null) continue;
+        for (short v : sig) {
+          sum += v;
+          sumSq += (long) v * v;
+          count++;
+        }
+      }
+      if (count > 0) {
+        signalCenter = (double) sum / count;
+        double variance = (double) sumSq / count - signalCenter * signalCenter;
+        double stddev = Math.sqrt(Math.max(0, variance));
+        signalHalfRange = Math.max(1, 2 * stddev);
+      }
+    }
 
     for (BAMRecord read : reads) {
       double x1    = chromPosToScreenPos.apply((double) read.pos);
@@ -94,16 +123,23 @@ class DrawReads {
       if (y + h < clipTop || y > clipBottom) continue;
       if (x1 + width < 0 || x1 > canvasWidth) continue;
 
-      Color[] colors = pickColors(read, fwdFill, revFill, fwdStroke, revStroke);
-      gc.setFill(colors[0]);
-      gc.setStroke(colors[1]);
-
-      // Check if read has splice junctions (CIGAR N ops)
-      if (hasSpliceJunctions(read)) {
-        drawSplicedRead(gc, read, y, h, colors[0], colors[1], readHeight, canvasWidth);
+      // UC/UD tag coloring: draw per-base colors from uc:B:s or ud:B:s values
+      if (ucMode && read.ucTag != null) {
+        drawUcTagRead(gc, read, read.ucTag, y, h, readHeight, canvasWidth, signalCenter, signalHalfRange);
+      } else if (udMode && read.udTag != null) {
+        drawUcTagRead(gc, read, read.udTag, y, h, readHeight, canvasWidth, signalCenter, signalHalfRange);
       } else {
-        gc.fillRect(x1, y, width, h);
-        if (readHeight >= 3) gc.strokeRect(x1, y, width, h);
+        Color[] colors = pickColors(read, fwdFill, revFill, fwdStroke, revStroke);
+        gc.setFill(colors[0]);
+        gc.setStroke(colors[1]);
+
+        // Check if read has splice junctions (CIGAR N ops)
+        if (hasSpliceJunctions(read)) {
+          drawSplicedRead(gc, read, y, h, colors[0], colors[1], readHeight, canvasWidth);
+        } else {
+          gc.fillRect(x1, y, width, h);
+          if (readHeight >= 3) gc.strokeRect(x1, y, width, h);
+        }
       }
 
       MismatchRenderer.drawMismatches(gc, read.mismatches, y, h, canvasWidth,
@@ -154,14 +190,7 @@ class DrawReads {
           refPos += len;
         }
         case BAMRecord.CIGAR_N -> {
-          // Draw intron as a thin connecting line
-          double gapX1 = chromPosToScreenPos.apply((double) refPos);
-          double gapX2 = chromPosToScreenPos.apply((double) (refPos + len));
-          if (gapX1 <= canvasWidth && gapX2 >= 0) {
-            gc.setStroke(Color.rgb(140, 140, 140, 0.7));
-            gc.setLineWidth(1.0);
-            gc.strokeLine(gapX1, midY, gapX2, midY);
-          }
+          // Skip intron — sashimi plot shows junctions instead
           refPos += len;
         }
         case BAMRecord.CIGAR_D -> {
@@ -228,6 +257,107 @@ class DrawReads {
     rgc.setLineWidth(1.5);
     rgc.strokeRect(x1 - 0.5, y - 0.5, w + 1, h + 1);
     rgc.setLineWidth(1.0);
+  }
+
+  // ── UC tag rendering ────────────────────────────────────────────────────────
+
+  /** Max absolute UC value for color scaling. Values beyond this clip to full blue/red. */
+  private static final double UC_SCALE = 15000.0;
+
+  /**
+   * Draw a read colored by UC tag values. Walks the CIGAR to map each aligned
+   * base to its UC tag index, then paints base-sized rectangles with a
+   * blue (negative) → white (zero) → red (positive) diverging color scale.
+   */
+  private void drawUcTagRead(GraphicsContext gc, BAMRecord read, short[] uc,
+                              double y, double h, double readHeight, double canvasWidth,
+                              double center, double halfRange) {
+    int refPos = read.pos;
+    // When ur tag is present, uc values are indexed by reference position relative to ur.
+    // Forward strand: uc[0] → ur[0], index = refPos - urStart
+    // Reverse strand: uc[0] → ur[1] (signal is 3'→5'), index = urEnd - refPos
+    boolean useUrOffset = read.urTag != null && read.urTag.length >= 2;
+    int urStart = useUrOffset ? read.urTag[0] : 0;
+    int urEnd = useUrOffset ? read.urTag[1] : 0;
+    boolean reverse = read.isReverseStrand();
+    int ucIdx = 0; // used only when ur tag is absent
+
+    for (int cigarOp : read.cigarOps) {
+      int op = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X -> {
+          // Aligned bases: both consume reference and query → draw with UC color
+          for (int j = 0; j < len; j++) {
+            double bx = chromPosToScreenPos.apply((double) (refPos + j));
+            double bx2 = chromPosToScreenPos.apply((double) (refPos + j + 1));
+            double bw = Math.max(1, bx2 - bx);
+            if (bx + bw >= 0 && bx <= canvasWidth) {
+              int idx;
+              if (useUrOffset) {
+                idx = reverse ? (urEnd - refPos - j) : (refPos + j - urStart);
+              } else {
+                idx = ucIdx + j;
+              }
+              Color c = (idx >= 0 && idx < uc.length)
+                  ? ucValueToColor(uc[idx], center, halfRange)
+                  : Color.GRAY;
+              gc.setFill(c);
+              gc.fillRect(bx, y, bw, h);
+            }
+          }
+          refPos += len;
+          ucIdx += len;
+        }
+        case BAMRecord.CIGAR_I -> {
+          // Insertion: consumes query only → advance UC index (CIGAR fallback)
+          ucIdx += len;
+        }
+        case BAMRecord.CIGAR_D, BAMRecord.CIGAR_N -> {
+          // Deletion/skip: consumes reference only → advance refPos, draw thin line for deletion
+          if (op == BAMRecord.CIGAR_D) {
+            double dx1 = chromPosToScreenPos.apply((double) refPos);
+            double dx2 = chromPosToScreenPos.apply((double) (refPos + len));
+            if (dx1 + (dx2 - dx1) >= 0 && dx1 <= canvasWidth) {
+              gc.setFill(Color.GRAY);
+              gc.fillRect(dx1, y + h / 2 - 0.5, Math.max(1, dx2 - dx1), 1);
+            }
+          }
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_S -> {
+          // Soft clip: consumes query only
+          ucIdx += len;
+        }
+        case BAMRecord.CIGAR_H, BAMRecord.CIGAR_P -> {
+          // Hard clip/padding: consumes neither
+        }
+        default -> {}
+      }
+    }
+
+    // Stroke outline
+    if (readHeight >= 3) {
+      double x1 = chromPosToScreenPos.apply((double) read.pos);
+      double x2 = chromPosToScreenPos.apply((double) read.end);
+      gc.setStroke(Color.gray(0.3));
+      gc.strokeRect(x1, y, Math.max(1, x2 - x1), h);
+    }
+  }
+
+  /**
+   * Map a signal tag value to a diverging color: blue (below center) → white (center) → red (above center).
+   */
+  private static Color ucValueToColor(short value, double center, double halfRange) {
+    double t = Math.max(-1, Math.min(1, (value - center) / halfRange));
+    if (t < 0) {
+      // Negative: blue
+      return Color.color(1 + t, 1 + t, 1);
+    } else {
+      // Positive: red
+      return Color.color(1, 1 - t, 1 - t);
+    }
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────

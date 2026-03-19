@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Timer;
@@ -15,9 +16,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.io.Settings;
 import org.baseplayer.io.readers.AlignmentReader;
 import org.baseplayer.io.readers.BAMFileReader;
@@ -462,7 +463,7 @@ public class AlignmentFile implements Closeable {
         FetchManager.FetchTicket ticket = fm.acquire(FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd);
         try {
           List<BAMRecord> reads = new ArrayList<>();
-          List<Integer> rowEnds = new ArrayList<>();
+          List<List<int[]>> rowSegments = new ArrayList<>();
           int[] maxRowLocal = {0};
           // Pixel-based gap: 3 pixels converted to genomic coordinates (matches ReadPacker.MIN_PIXEL_GAP)
           int gap = skipPacking ? 0 : Math.max(1, (int)(3 * stack.scale));
@@ -480,19 +481,41 @@ public class AlignmentFile implements Closeable {
             }
             
             if (!skipPacking) {
-              // Incremental packing
-              boolean placed = false;
-              for (int r = 0; r < rowEnds.size(); r++) {
-                if (record.pos >= rowEnds.get(r) + gap) {
-                  record.row = r;
-                  rowEnds.set(r, record.end);
-                  placed = true;
-                  break;
+              // Incremental CIGAR-aware packing
+              int[][] exons = ReadPacker.getExonSegments(record);
+              int r = -1;
+              for (int i = 0; i < rowSegments.size(); i++) {
+                List<int[]> segs = rowSegments.get(i);
+                // Fast check: if first exon starts after the last segment's end, it fits
+                boolean fits;
+                if (!segs.isEmpty()) {
+                  int[] last = segs.get(segs.size() - 1);
+                  if (exons[0][0] >= last[1] + gap) {
+                    fits = true;
+                  } else {
+                    fits = true;
+                    for (int[] exon : exons) {
+                      for (int[] seg : segs) {
+                        if (exon[0] < seg[1] + gap && exon[1] + gap > seg[0]) {
+                          fits = false; break;
+                        }
+                      }
+                      if (!fits) break;
+                    }
+                  }
+                } else {
+                  fits = true;
                 }
+                if (fits) { r = i; break; }
               }
-              if (!placed) {
-                record.row = rowEnds.size();
-                rowEnds.add(record.end);
+              if (r >= 0) {
+                record.row = r;
+                rowSegments.get(r).addAll(Arrays.asList(exons));
+              } else {
+                record.row = rowSegments.size();
+                List<int[]> segs = new ArrayList<>();
+                segs.addAll(Arrays.asList(exons));
+                rowSegments.add(segs);
               }
               if (record.row > maxRowLocal[0]) maxRowLocal[0] = record.row;
             }
@@ -568,6 +591,11 @@ public class AlignmentFile implements Closeable {
             System.err.println("Suppressing further BAM errors for " + name);
           }
           consecutiveErrors++;
+          sc.fetchingChrom = "";
+          sc.fetchingStart = -1;
+          sc.fetchingEnd = -1;
+        } catch (RuntimeException e) {
+          System.err.println("Runtime error in BAM fetch (" + name + "): " + e.getMessage());
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;

@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 
-import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.services.ServiceRegistry;
 
 /**
@@ -555,6 +555,76 @@ public class BAMFileReader implements AlignmentReader {
         while (pos < data.length && data[pos] != 0) pos++;
         rec.readGroup = new String(data, start, pos - start);
         pos++;
+        continue;
+      }
+      
+      // ud:B:s — Uncalled dwelled current signal values (short array)
+      if (t1 == 'u' && t2 == 'd' && type == 'B') {
+        if (pos + 4 < data.length && (char) data[pos] == 's') {
+          pos++; // skip element type 's'
+          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
+          pos += 4;
+          if (pos + count * 2 <= data.length) {
+            rec.udTag = new short[count];
+            for (int i = 0; i < count; i++) {
+              rec.udTag[i] = (short) ((data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8));
+              pos += 2;
+            }
+          } else {
+            pos += count * 2; // skip if truncated
+          }
+        } else {
+          pos = skipTagValue(data, pos, type);
+          if (pos < 0) break;
+        }
+        continue;
+      }
+      
+      // uc:B:s — Uncalled current signal values (short array)
+      if (t1 == 'u' && t2 == 'c' && type == 'B') {
+        if (pos + 4 < data.length && (char) data[pos] == 's') {
+          pos++; // skip element type 's'
+          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
+          pos += 4;
+          if (pos + count * 2 <= data.length) {
+            rec.ucTag = new short[count];
+            for (int i = 0; i < count; i++) {
+              rec.ucTag[i] = (short) ((data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8));
+              pos += 2;
+            }
+          } else {
+            pos += count * 2; // skip if truncated
+          }
+        } else {
+          pos = skipTagValue(data, pos, type);
+          if (pos < 0) break;
+        }
+        continue;
+      }
+      
+      // ur:B:i — Reference coordinate range for uc signal (int array, typically 2 elements)
+      if (t1 == 'u' && t2 == 'r' && type == 'B') {
+        if (pos + 4 < data.length && (char) data[pos] == 'i') {
+          pos++; // skip element type 'i'
+          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
+          pos += 4;
+          if (pos + count * 4 <= data.length) {
+            rec.urTag = new int[count];
+            for (int i = 0; i < count; i++) {
+              rec.urTag[i] = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
+                  | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
+              pos += 4;
+            }
+          } else {
+            pos += count * 4; // skip if truncated
+          }
+        } else {
+          pos = skipTagValue(data, pos, type);
+          if (pos < 0) break;
+        }
         continue;
       }
       

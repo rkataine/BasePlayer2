@@ -77,10 +77,18 @@ public class GenomicCanvas extends Canvas {
     parent.widthProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
     reactiveCanvas.setOnMouseEntered(event -> { stackManager.setHoverStack(drawStack); update.set(!update.get()); });
 
-    parent.heightProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
+    setupParentHeightListener(parent);
    
     initializeMomentumTimer();
     setupReactiveCanvas();
+  }
+
+  /**
+   * Hook for parent-height change → redraw.  ChromosomeCanvas overrides this
+   * to avoid a feedback loop (it sets its own height during draw()).
+   */
+  protected final void setupParentHeightListener(StackPane parent) {
+    parent.heightProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
   }
 
   protected void draw() {

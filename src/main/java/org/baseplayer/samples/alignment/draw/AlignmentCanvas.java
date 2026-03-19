@@ -3,14 +3,14 @@ package org.baseplayer.samples.alignment.draw;
 import java.util.List;
 import java.util.Map;
 
-import org.baseplayer.samples.alignment.AlignmentFile;
-import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.samples.alignment.AlignmentFile;
+import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
 
@@ -56,15 +56,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       boolean butterfly = hp2Start >= 0 && sample.isHaplotypeData();
       boolean methyl    = sample.isMethylationData();
 
-      double readHeight;
-      if (butterfly) {
-        int maxPerHalf = Math.max(hp2Start, maxRow - hp2Start);
-        readHeight = Math.max(Settings.get().getMinReadHeight(),
-            Math.min(8, (readsH / 2 - 4) / Math.max(1, maxPerHalf)));
-      } else {
-        readHeight = Math.max(Settings.get().getMinReadHeight(),
-            Math.min(8, (readsH - 2) / Math.max(1, maxRow)));
-      }
+      double readHeight = Settings.get().getReadHeight();
 
       return new ReadLayout(readsY, readsH, readHeight, gap, maxRow,
                             hp2Start, scrollOff, butterfly, methyl);

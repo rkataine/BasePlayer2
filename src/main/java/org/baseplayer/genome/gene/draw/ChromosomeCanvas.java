@@ -338,10 +338,12 @@ public class ChromosomeCanvas extends GenomicCanvas {
     gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth(), getHeight());
     
-    // Clear hover state on redraw
+    // Clear hover state on redraw — but preserve reactive canvas during line zoom drag
     hoveredGene = null;
     hoveredAminoAcid = null;
-    reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+    if (!isDragging()) {
+      reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+    }
    
     drawGenes();
     drawIndicators();
@@ -418,10 +420,14 @@ public class ChromosomeCanvas extends GenomicCanvas {
     }
     double contentHeight = DrawGene.GENE_AREA_TOP + usedRows * (DrawGene.GENE_ROW_HEIGHT + DrawExon.GENE_LABEL_HEIGHT) + 10;
     double minHeight = drawStack.chromScrollPane != null 
-        ? drawStack.chromScrollPane.getViewportBounds().getHeight() : 100;
+        ? drawStack.chromScrollPane.getHeight() : 100;
     double canvasHeight = Math.max(contentHeight, minHeight);
-    setHeight(canvasHeight);
-    getReactiveCanvas().setHeight(canvasHeight);
+    // Only update height when it actually changed — avoids layout oscillation
+    // from setHeight → parent resize → update → draw → setHeight loop.
+    if (Math.abs(getHeight() - canvasHeight) > 1.0) {
+      setHeight(canvasHeight);
+      getReactiveCanvas().setHeight(canvasHeight);
+    }
     
     // Clear and rebuild hit boxes
     drawGene.clearHitBoxes();

@@ -3,14 +3,14 @@ package org.baseplayer.samples.alignment.draw;
 import java.util.List;
 import java.util.function.Function;
 
-import org.baseplayer.samples.alignment.AlignmentFile;
-import org.baseplayer.samples.alignment.BAMRecord;
-import org.baseplayer.samples.alignment.CoverageCalculator;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.Settings;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
-import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.samples.alignment.AlignmentFile;
+import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.samples.alignment.CoverageCalculator;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.DrawColors;
@@ -196,22 +196,12 @@ public class CoverageDrawer {
 
     // Single pass through reads
     for (BAMRecord read : reads) {
-      // Map read span to pixel columns for coverage
-      int px1 = Math.max(0, (int)(double) chromPosToScreenPos.apply((double) read.pos));
-      int px2 = Math.min(numColumns, (int)(double) chromPosToScreenPos.apply((double) read.end));
-      if (px1 < numColumns && px2 >= 0) {
-        pixEvents[px1]++;
-        if (px2 + 1 <= numColumns) pixEvents[px2 + 1]--;
-      }
+      // Map read exonic segments to pixel columns for coverage (CIGAR-aware)
+      addPixelCoverageEvents(read, pixEvents, numColumns);
 
-      // Base-level events for methylation
+      // Base-level events for methylation (CIGAR-aware)
       if (isMethyl) {
-        int r1 = Math.max(0, read.pos - start);
-        int r2 = Math.min(regionLen - 1, read.end - start);
-        if (r2 >= 0 && r1 < regionLen) {
-          baseEvents[r1]++;
-          if (r2 + 1 <= regionLen) baseEvents[r2 + 1]--;
-        }
+        addBaseCoverageEvents(read, baseEvents, regionLen, start);
       }
 
       // Mismatches: map directly to pixel columns (no intermediate arrays)
@@ -432,9 +422,7 @@ public class CoverageDrawer {
 
     // Single pass through reads — all accumulation at bin level
     for (BAMRecord read : reads) {
-      int b1 = Math.max(0, (int)((read.pos - binStart) / binSize));
-      int b2 = Math.min(numBins - 1, (int)((read.end - binStart) / binSize));
-      for (int b = b1; b <= b2; b++) binCov[b]++;
+      addBinCoverageEvents(read, binCov, numBins, binStart, binSize);
 
       if (read.mismatches != null) {
         for (int m = 0; m + 2 < read.mismatches.length; m += 3) {
@@ -875,5 +863,127 @@ public class CoverageDrawer {
       }
       System.arraycopy(tmp, 0, ratios, 0, n);
     }
+  }
+
+  // ── CIGAR-aware coverage helpers ──────────────────────────────────────────
+
+  /**
+   * Add pixel-level sweep-line events for the exonic segments of a read.
+   * Skips CIGAR_N (intron) regions so RNA-seq coverage only counts exons.
+   */
+  private void addPixelCoverageEvents(BAMRecord read, int[] pixEvents, int numCols) {
+    if (read.cigarOps == null) {
+      addPixelEvent(pixEvents, numCols, read.pos, read.end);
+      return;
+    }
+    boolean hasSplice = false;
+    for (int cigarOp : read.cigarOps) {
+      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) { hasSplice = true; break; }
+    }
+    if (!hasSplice) {
+      addPixelEvent(pixEvents, numCols, read.pos, read.end);
+      return;
+    }
+    int refPos = read.pos;
+    for (int cigarOp : read.cigarOps) {
+      int op  = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X, BAMRecord.CIGAR_D -> {
+          addPixelEvent(pixEvents, numCols, refPos, refPos + len);
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_N -> refPos += len; // intron: skip
+        default -> {} // I, S, H, P: no reference consumption
+      }
+    }
+  }
+
+  private void addPixelEvent(int[] pixEvents, int numCols, int segStart, int segEnd) {
+    int px1 = Math.max(0, (int)(double) chromPosToScreenPos.apply((double) segStart));
+    int px2 = Math.min(numCols, (int)(double) chromPosToScreenPos.apply((double) segEnd));
+    if (px1 < numCols && px2 >= 0) {
+      pixEvents[px1]++;
+      if (px2 + 1 <= numCols) pixEvents[px2 + 1]--;
+    }
+  }
+
+  /**
+   * Add base-level sweep-line events for exonic segments (methylation coverage).
+   */
+  private static void addBaseCoverageEvents(BAMRecord read, int[] baseEvents, int regionLen, int regionStart) {
+    if (read.cigarOps == null) {
+      addBaseEvent(baseEvents, regionLen, regionStart, read.pos, read.end);
+      return;
+    }
+    boolean hasSplice = false;
+    for (int cigarOp : read.cigarOps) {
+      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) { hasSplice = true; break; }
+    }
+    if (!hasSplice) {
+      addBaseEvent(baseEvents, regionLen, regionStart, read.pos, read.end);
+      return;
+    }
+    int refPos = read.pos;
+    for (int cigarOp : read.cigarOps) {
+      int op  = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X, BAMRecord.CIGAR_D -> {
+          addBaseEvent(baseEvents, regionLen, regionStart, refPos, refPos + len);
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_N -> refPos += len;
+        default -> {}
+      }
+    }
+  }
+
+  private static void addBaseEvent(int[] baseEvents, int regionLen, int regionStart, int segStart, int segEnd) {
+    int r1 = Math.max(0, segStart - regionStart);
+    int r2 = Math.min(regionLen - 1, segEnd - regionStart);
+    if (r2 >= 0 && r1 < regionLen) {
+      baseEvents[r1]++;
+      if (r2 + 1 <= regionLen) baseEvents[r2 + 1]--;
+    }
+  }
+
+  /**
+   * Add bin-level coverage for exonic segments (coverage-only / zoomed-out mode).
+   */
+  private static void addBinCoverageEvents(BAMRecord read, double[] binCov, int numBins,
+                                            int binStart, double binSize) {
+    if (read.cigarOps == null) {
+      addBinEvent(binCov, numBins, binStart, binSize, read.pos, read.end);
+      return;
+    }
+    boolean hasSplice = false;
+    for (int cigarOp : read.cigarOps) {
+      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) { hasSplice = true; break; }
+    }
+    if (!hasSplice) {
+      addBinEvent(binCov, numBins, binStart, binSize, read.pos, read.end);
+      return;
+    }
+    int refPos = read.pos;
+    for (int cigarOp : read.cigarOps) {
+      int op  = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X, BAMRecord.CIGAR_D -> {
+          addBinEvent(binCov, numBins, binStart, binSize, refPos, refPos + len);
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_N -> refPos += len;
+        default -> {}
+      }
+    }
+  }
+
+  private static void addBinEvent(double[] binCov, int numBins, int binStart, double binSize,
+                                   int segStart, int segEnd) {
+    int b1 = Math.max(0, (int)((segStart - binStart) / binSize));
+    int b2 = Math.min(numBins - 1, (int)((segEnd - binStart) / binSize));
+    for (int b = b1; b <= b2; b++) binCov[b]++;
   }
 }
