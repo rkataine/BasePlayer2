@@ -17,8 +17,8 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.zip.GZIPInputStream;
 
-import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.services.ServiceRegistry;
 
 /**
@@ -36,6 +36,7 @@ public class CRAMFileReader implements AlignmentReader {
   private final String[] refNames;
   private final int[] refLengths;
   private final Map<String, Integer> refNameToId;
+  private final TagProcessor tagProcessor = new TagProcessor();
   private final CRAMDecoder decoder;
 
   // ── public constructor ──────────────────────────────────────────
@@ -101,7 +102,7 @@ public class CRAMFileReader implements AlignmentReader {
     this.index = new CRAIIndex(craiPath);
     
     // 4) Create decoder
-    this.decoder = new CRAMDecoder(referenceGenomeService);
+    this.decoder = new CRAMDecoder(referenceGenomeService, tagProcessor);
   }
 
   // ── AlignmentReader implementation ──────────────────────────────
@@ -136,7 +137,7 @@ public class CRAMFileReader implements AlignmentReader {
 
         List<BAMRecord> containerRecords = decoder.decodeContainer(containerData, chrom);
         for (BAMRecord rec : containerRecords) {
-          if (rec.isUnmapped() || rec.isSecondary() || rec.isSupplementary()) continue;
+          if (rec.isUnmapped() || rec.isSecondary()) continue;
           if (rec.end <= start || rec.pos >= end) continue;
           if (!consumer.test(rec)) return;
         }
@@ -148,6 +149,8 @@ public class CRAMFileReader implements AlignmentReader {
   @Override public String[] getRefNames() { return refNames; }
   @Override public int[] getRefLengths() { return refLengths; }
   @Override public Path getPath() { return cramPath; }
+  @Override public void setActiveSignalTag(char tag) { tagProcessor.setActiveSignalTag(tag); }
+  public TagProcessor getTagProcessor() { return tagProcessor; }
 
   @Override
   public void querySampledCounts(String chrom, int[] positions, int window, int[] counts, Runnable onChunkDone) throws IOException {

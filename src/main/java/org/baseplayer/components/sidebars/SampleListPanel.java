@@ -7,18 +7,23 @@ import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
+import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.utils.DrawColors;
 
+import javafx.application.Platform;
+import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
-import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.layout.HBox;
@@ -36,7 +41,7 @@ import javafx.scene.text.Font;
  * panel — the master track header lives in a separate {@link MasterTrackCanvas}
  * pane above and is not included here.</p>
  */
-public class SampleListPanel {
+public class SampleListPanel extends SidebarContentPanel {
 
   // Layout constants
   private static final double ICON_SIZE   = 14;
@@ -44,52 +49,27 @@ public class SampleListPanel {
   private static final Font   ICON_FONT   = Font.font("Segoe UI Symbol", 12);
   private static final Font   NAME_FONT   = Font.font("Segoe UI", 12);
 
-  private final Canvas canvas;
-  private final Canvas reactiveCanvas;
-  private final GraphicsContext gc;
-
   private final SampleRegistry sampleRegistry;
   private static final DrawStackManager stackManager =
       ServiceRegistry.getInstance().getDrawStackManager();
 
-  private int hoverIndex = -1;
-
   public SampleListPanel(StackPane parent) {
-    this.canvas = new Canvas();
-    this.reactiveCanvas = new Canvas();
+    super(parent);
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
 
-    canvas.heightProperty().bind(parent.heightProperty());
-    canvas.widthProperty().bind(parent.widthProperty());
-    reactiveCanvas.heightProperty().bind(parent.heightProperty());
-    reactiveCanvas.widthProperty().bind(parent.widthProperty());
-    reactiveCanvas.setMouseTransparent(false);
-    gc = canvas.getGraphicsContext2D();
-
-    parent.getChildren().addAll(canvas, reactiveCanvas);
-
-    setupHandlers();
-
-    sampleRegistry.hoverSampleProperty().addListener((obs, oldVal, newVal) -> {
-      if (!oldVal.equals(newVal)) draw();
-    });
+    setupHoverHandlers();
+    setupScrollAndClickHandlers();
   }
 
-  private void setupHandlers() {
-    reactiveCanvas.setOnMouseMoved(event -> {
-      int idx = sampleIndexAtY(event.getY());
-      if (idx != hoverIndex) {
-        hoverIndex = idx;
-        draw();
-      }
-      sampleRegistry.hoverSampleProperty().set(idx);
-    });
+  @Override
+  protected void onHoverRowChanged(int previousRow, int currentRow) {
+    // Keep alignment divider highlighting synchronized with the hovered sample row.
+    sampleRegistry.hoverSampleProperty().set(currentRow);
+    // Repaint static layer so hover-row buttons appear/disappear immediately.
+    draw();
+  }
 
-    reactiveCanvas.setOnMouseExited(event -> {
-      hoverIndex = -1;
-      draw();
-    });
-
+  private void setupScrollAndClickHandlers() {
     reactiveCanvas.setOnScroll(event -> {
       double newPos = sampleRegistry.getScrollBarPosition() - event.getDeltaY();
       double maxPos = (sampleRegistry.getSampleTracks().size() - 1) * sampleRegistry.getSampleHeight();
@@ -105,32 +85,35 @@ public class SampleListPanel {
     reactiveCanvas.setOnMouseClicked(event -> {
       double x   = event.getX();
       double y   = event.getY();
-      double sideW = canvas.getWidth();
-      int idx = sampleIndexAtY(y);
+      int idx = findRowAt(y);
 
       if (idx >= 0 && idx < sampleRegistry.getSampleTracks().size()) {
-        double sampleY = idx * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
-
-        // Close (✕) — top-right
-        double closeX = sideW - ICON_SIZE - ICON_MARGIN;
-        double closeY = sampleY + ICON_MARGIN;
-        if (x >= closeX && x <= closeX + ICON_SIZE && y >= closeY && y <= closeY + ICON_SIZE) {
+        String icon = findIconAt(x, y, idx);
+        if ("close".equals(icon)) {
           SampleDataManager.removeSample(idx);
           return;
         }
-
-        // Settings (⚙) — next to close
-        double settingsX = closeX - ICON_SIZE - ICON_MARGIN;
-        if (x >= settingsX && x <= settingsX + ICON_SIZE && y >= closeY && y <= closeY + ICON_SIZE) {
+        if ("settings".equals(icon)) {
           showSettingsPopup(idx, event.getScreenX(), event.getScreenY());
           return;
         }
-
-        // Add-file (+) — bottom-left
-        double overlayX = ICON_MARGIN;
-        double overlayY = sampleY + sampleRegistry.getSampleHeight() - ICON_SIZE - ICON_MARGIN;
-        if (x >= overlayX && x <= overlayX + ICON_SIZE && y >= overlayY && y <= overlayY + ICON_SIZE) {
+        if ("add".equals(icon)) {
           showAddFileMenu(idx, event.getScreenX(), event.getScreenY());
+          return;
+        }
+        if ("reload".equals(icon)) {
+          // Reload all suspended files in this track
+          SampleTrack strack = sampleRegistry.getSampleTracks().get(idx);
+          for (Sample sf : strack.getSamples()) {
+            if (sf.isSuspended()) {
+              sf.resume();
+              ThreadRunner.RunnerTask readTask =
+                  ThreadRunner.get().track("Loading reads: " + sf.getName(), sf::cancelAndSuspend);
+              sf.setOnFirstLoadComplete(readTask::complete);
+            }
+          }
+          draw();
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
           return;
         }
       }
@@ -156,6 +139,7 @@ public class SampleListPanel {
 
   // ── Rendering ─────────────────────────────────────────────────────────────
 
+  @Override
   public void draw() {
     double w = canvas.getWidth();
     double h = canvas.getHeight();
@@ -163,6 +147,7 @@ public class SampleListPanel {
     gc.setFill(DrawColors.SIDEBAR);
     gc.fillRect(0, 0, w, h);
     gc.setStroke(DrawColors.BORDER);
+    clearIconRegions();
 
     if (sampleRegistry.getSampleTracks().isEmpty()) return;
 
@@ -172,18 +157,11 @@ public class SampleListPanel {
 
       // Y is relative to this panel's top — no master track offset
       double sampleY = i * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
-      boolean isHover   = (i == hoverIndex);
       boolean hasTrack  = (i < sampleRegistry.getSampleTracks().size());
       boolean isVisible = !hasTrack || sampleRegistry.getSampleTracks().get(i).isVisible();
 
       // Skip rows that scrolled above the panel top
       if (sampleY + sampleRegistry.getSampleHeight() < 0) continue;
-
-      // Hover highlight
-      if (isHover) {
-        gc.setFill(Color.web("#2a2d2e"));
-        gc.fillRect(0, Math.max(sampleY, 0), w, sampleRegistry.getSampleHeight());
-      }
 
       // Divider line
       if (sampleY >= 0) {
@@ -212,13 +190,14 @@ public class SampleListPanel {
         gc.fillText(displayName, 10, textY);
       }
 
-      // Per-file sub-rows
+      // Per-file sub-rows + action buttons both need strack — keep them in the same block.
       if (hasTrack) {
         SampleTrack strack = sampleRegistry.getSampleTracks().get(i);
         Font fileFont = Font.font("Segoe UI", 9);
         gc.setFont(fileFont);
         double fileY = textY + 4;
-        for (Sample sf : strack.getSamples()) {
+        for (int fileIdx = 0; fileIdx < strack.getSamples().size(); fileIdx++) {
+          Sample sf = strack.getSamples().get(fileIdx);
           fileY += 12;
           if (fileY > sampleY + sampleRegistry.getSampleHeight() - 4) break;
           if (fileY <= 0) continue;
@@ -239,49 +218,125 @@ public class SampleListPanel {
           gc.setFill(nameColor);
           gc.fillText(sf.getName(), 44, fileY);
 
-          if (sf.overlay) {
+          if (sf.isSuspended()) {
+            // Greyed-out indicator — full reload button drawn below
+            gc.setFill(new Color(tagColor.getRed(), tagColor.getGreen(), tagColor.getBlue(), 0.4));
+            gc.fillText("[" + tag + "]", 14, fileY);
+          } else if (sf.overlay) {
             gc.setFill(new Color(0.6, 0.8, 0.6, alpha * 0.8));
             gc.fillText("\u25CB", 6, fileY);
           }
         }
-      }
 
-      // Per-sample action buttons (hover only)
-      if (isHover && hasTrack) {
-        drawSampleButtons(sampleY, w, isVisible);
+        // Compute before hover/reload checks so both can use it
+        boolean hasSuspended = strack.getSamples().stream().anyMatch(Sample::isSuspended);
+
+        // Always-visible reload button at bottom-right when any file is suspended
+        if (hasSuspended) {
+          double reloadX = w - ICON_SIZE - ICON_MARGIN;
+          double reloadBtnY = sampleY + sampleRegistry.getSampleHeight() - ICON_SIZE - ICON_MARGIN;
+          gc.setFont(ICON_FONT);
+          gc.setFill(Color.web("#ff9944"));
+          gc.fillText("\u21ba", reloadX, reloadBtnY + ICON_SIZE - 3);
+          addIconRegion(i, "reload", reloadX - 1, reloadBtnY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
+        }
+
+        // Action buttons — drawn on the static canvas for the hovered row so the
+        // reactive overlay can add a clean glow on top (same pattern as SidebarBase).
+        if (i == hoverIndex) {
+          drawSampleButtons(i, sampleY, w, isVisible, hasSuspended);
+        }
       }
     }
   }
 
-  /** Draw the per-sample close/settings/add-file button icons. */
-  private void drawSampleButtons(double sampleY, double sideW, boolean isVisible) {
+  // ── Reactive overlay ──────────────────────────────────────────────────────
+
+  @Override
+  protected void drawReactive() {
+    double w = reactiveCanvas.getWidth();
+    double h = reactiveCanvas.getHeight();
+    reactiveGc.clearRect(0, 0, w, h);
+
+    if (hoverIndex < 0 || hoverIndex >= sampleRegistry.getSampleTracks().size()) return;
+
+    double sampleY = hoverIndex * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
+    if (sampleY + sampleRegistry.getSampleHeight() < 0 || sampleY > h) return;
+
+    // Subtle row highlight (exactly like FeatureTracksPanel)
+    reactiveGc.setFill(Color.rgb(255, 255, 255, 0.05));
+    reactiveGc.fillRect(0, Math.max(sampleY, 0), w, sampleRegistry.getSampleHeight());
+
+    // Icon-specific glow
+    if (hoveredIcon != null) {
+      drawIconGlow(hoveredIcon, hoverIndex);
+    }
+  }
+
+  /** Draw the per-sample close/settings/add-file (and optional reload) buttons on the STATIC canvas. */
+  private void drawSampleButtons(int rowIdx, double sampleY, double sideW,
+                                  boolean isVisible, boolean hasSuspended) {
     gc.setFont(ICON_FONT);
 
     // Close (✕) — top-right
     double closeX = sideW - ICON_SIZE - ICON_MARGIN;
     double closeY = sampleY + ICON_MARGIN;
     gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRect(closeX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
+    gc.fillRoundRect(closeX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
     gc.setFill(Color.web("#cc6666"));
     gc.fillText("✕", closeX + 1, closeY + ICON_SIZE - 3);
+    addIconRegion(rowIdx, "close", closeX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
 
     // Settings (⚙) — next to close
     double settingsX = closeX - ICON_SIZE - ICON_MARGIN;
     gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRect(settingsX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
+    gc.fillRoundRect(settingsX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
     gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
     gc.fillText("⚙", settingsX + 1, closeY + ICON_SIZE - 3);
+    addIconRegion(rowIdx, "settings", settingsX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
 
     // Add-file (+) — bottom-left
     double overlayX = ICON_MARGIN;
     double overlayY = sampleY + sampleRegistry.getSampleHeight() - ICON_SIZE - ICON_MARGIN;
     gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRect(overlayX - 1, overlayY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
+    gc.fillRoundRect(overlayX - 1, overlayY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
     gc.setFill(Color.web("#88bb88"));
     gc.fillText("+", overlayX + 2, overlayY + ICON_SIZE - 3);
+    addIconRegion(rowIdx, "add", overlayX - 1, overlayY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
+
+    // Reload (↺) — bottom-right, only when the track has suspended files.
+    // The icon text is drawn always in draw(); here we just add the dark background on hover.
+    if (hasSuspended) {
+      double reloadX = sideW - ICON_SIZE - ICON_MARGIN;
+      double reloadY = overlayY;
+      gc.setFill(Color.web("#3c3c3c"));
+      gc.fillRoundRect(reloadX - 1, reloadY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
+      gc.setFont(ICON_FONT);
+      gc.setFill(Color.web("#ff9944"));
+      gc.fillText("\u21ba", reloadX, reloadY + ICON_SIZE - 3);
+      // Icon region already registered in main draw loop; no duplicate needed.
+    }
   }
 
-  private int sampleIndexAtY(double y) {
+  private void drawIconGlow(String iconType, int rowIdx) {
+    IconRegion region = findIconRegion(iconType, rowIdx);
+    if (region == null) return;
+
+    reactiveGc.setFill(Color.rgb(255, 255, 255, 0.24));
+    reactiveGc.fillRoundRect(region.x() - 2, region.y() - 2,
+        region.width() + 4, region.height() + 4, 5, 5);
+    reactiveGc.setStroke(Color.rgb(255, 255, 255, 0.35));
+    reactiveGc.strokeRoundRect(region.x() - 2, region.y() - 2,
+        region.width() + 4, region.height() + 4, 5, 5);
+  }
+
+  @Override
+  protected String findIconAt(double x, double y, int rowIdx) {
+    return findIconFromRegions(x, y, rowIdx);
+  }
+
+  @Override
+  protected int findRowAt(double y) {
     if (sampleRegistry.getSampleHeight() <= 0 || sampleRegistry.getSampleTracks().isEmpty()) return -1;
     int idx = (int) ((y + sampleRegistry.getScrollBarPosition()) / sampleRegistry.getSampleHeight());
     if (idx < 0 || idx >= sampleRegistry.getSampleTracks().size()) return -1;
@@ -344,32 +399,104 @@ public class SampleListPanel {
       settingsMenu.getItems().add(new CustomMenuItem(hpBox, false));
     }
 
-    // Read groups section
+    // Read color + stacking mode section
     AlignmentFile primaryBam = track.getFirstBam();
-    if (primaryBam != null && primaryBam.getDetectedReadGroups().size() > 1) {
+    if (primaryBam != null) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
-      VBox rgBox = new VBox(4);
-      rgBox.setPadding(new Insets(4, 8, 4, 8));
-      Label rgLabel = new Label(
-          "📋 Read groups (" + primaryBam.getDetectedReadGroups().size() + " detected)");
-      rgLabel.setStyle("-fx-text-fill: #ccaa88; -fx-font-size: 11; -fx-font-weight: bold;");
-      CheckBox rgSplitCb = new CheckBox("Split pileup by read group");
-      rgSplitCb.setSelected(primaryBam.isSplitByReadGroup());
-      rgSplitCb.getStyleClass().add("dark-checkbox");
-      rgSplitCb.setStyle("-fx-font-size: 11;");
-      rgSplitCb.selectedProperty().addListener((obs, o, n) -> {
-        primaryBam.setSplitByReadGroup(n);
+      VBox renderBox = new VBox(6);
+      renderBox.setPadding(new Insets(4, 8, 4, 8));
+
+      Label renderLabel = new Label("🎨 Read rendering");
+      renderLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
+
+      HBox colorRow = new HBox(6);
+      Label colorLabel = new Label("Read color:");
+      colorLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+      ComboBox<ReadColorMode> colorCombo = new ComboBox<>();
+      colorCombo.getItems().setAll(ReadColorMode.values());
+      colorCombo.setValue(primaryBam.getReadColorMode());
+      colorCombo.setPrefWidth(190);
+      styleDarkComboBox(colorCombo, settingsMenu);
+      colorCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
+        if (newMode == null) return;
+        for (Sample s : track.getSamples()) {
+          AlignmentFile bam = s.getBamFile();
+          if (bam != null) bam.setReadColorMode(newMode);
+        }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
-      StringBuilder sb = new StringBuilder();
-      for (String rg : primaryBam.getDetectedReadGroups()) sb.append("• ").append(rg).append("\n");
-      Label rgInfo = new Label(sb.toString().trim());
-      rgInfo.setStyle("-fx-text-fill: #999999; -fx-font-size: 9;");
-      rgBox.getChildren().addAll(rgLabel, rgSplitCb, rgInfo);
-      settingsMenu.getItems().add(new CustomMenuItem(rgBox, false));
+      colorRow.getChildren().addAll(colorLabel, colorCombo);
+
+      HBox stackRow = new HBox(6);
+      Label stackLabel = new Label("Stacking:");
+      stackLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+      ComboBox<AlignmentFile.ReadStackingMode> stackCombo = new ComboBox<>();
+      stackCombo.getItems().setAll(AlignmentFile.ReadStackingMode.values());
+      stackCombo.setValue(primaryBam.getReadStackingMode());
+      stackCombo.setPrefWidth(190);
+      styleDarkComboBox(stackCombo, settingsMenu);
+      stackCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
+        if (newMode == null) return;
+        for (Sample s : track.getSamples()) {
+          AlignmentFile bam = s.getBamFile();
+          if (bam != null) bam.setReadStackingMode(newMode);
+        }
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      });
+      stackRow.getChildren().addAll(stackLabel, stackCombo);
+
+      Label stackInfo = new Label("Only one stacking mode can be active at a time.");
+      stackInfo.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+      renderBox.getChildren().addAll(renderLabel, colorRow, stackRow, stackInfo);
+
+      if (primaryBam.getDetectedReadGroups().size() > 1) {
+        StringBuilder sb = new StringBuilder("Read groups: ");
+        for (int i = 0; i < primaryBam.getDetectedReadGroups().size(); i++) {
+          if (i > 0) sb.append(", ");
+          sb.append(primaryBam.getDetectedReadGroups().get(i));
+        }
+        Label rgInfo = new Label(sb.toString());
+        rgInfo.setStyle("-fx-text-fill: #999999; -fx-font-size: 9;");
+        rgInfo.setWrapText(true);
+        renderBox.getChildren().add(rgInfo);
+      }
+
+      settingsMenu.getItems().add(new CustomMenuItem(renderBox, false));
     }
 
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  private static <T> void styleDarkComboBox(ComboBox<T> comboBox, ContextMenu parentMenu) {
+    comboBox.setStyle(
+        "-fx-background-color: #333333;"
+            + "-fx-control-inner-background: #333333;"
+            + "-fx-text-fill: #dddddd;"
+            + "-fx-prompt-text-fill: #bbbbbb;"
+            + "-fx-mark-color: #dddddd;");
+
+    comboBox.setOnShowing(e -> parentMenu.setAutoHide(false));
+    comboBox.setOnHidden(e -> Platform.runLater(() -> parentMenu.setAutoHide(true)));
+    comboBox.addEventFilter(ActionEvent.ACTION, ActionEvent::consume);
+
+    comboBox.setButtonCell(createDarkComboCell());
+    comboBox.setCellFactory(listView -> createDarkComboCell());
+  }
+
+  private static <T> ListCell<T> createDarkComboCell() {
+    return new ListCell<>() {
+      @Override
+      protected void updateItem(T item, boolean empty) {
+        super.updateItem(item, empty);
+        if (empty || item == null) {
+          setText(null);
+          setStyle("-fx-text-fill: #dddddd;");
+          return;
+        }
+        setText(item.toString());
+        setStyle("-fx-text-fill: #dddddd;");
+      }
+    };
   }
 
   private void showAddFileMenu(int sampleIdx, double screenX, double screenY) {

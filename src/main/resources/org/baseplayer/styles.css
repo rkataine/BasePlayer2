@@ -89,6 +89,14 @@ VBox {
   -fx-background-color: transparent;
 }
 
+.minimal-combo-box .list-cell:hover {
+  -fx-background-color: rgba(255, 255, 255, 0.15);
+}
+
+.minimal-combo-box .list-cell:filled:selected {
+  -fx-background-color: rgba(100, 160, 220, 0.3);
+}
+
 .minimal-combo-box .arrow-button {
   -fx-background-color: transparent;
   -fx-padding: 0 4 0 4;

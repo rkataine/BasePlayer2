@@ -46,9 +46,10 @@ public class BAMRecord {
   public int haplotype = 0;             // HP:i tag value (0=unphased, 1=HP1, 2=HP2)
   public int phaseSet = 0;              // PS:i tag value (phase set identifier)
   public String readGroup = null;       // RG:Z tag value (read group identifier)
-  public short[] ucTag = null;          // uc:B:s tag values (Uncalled current signal per base)
-  public short[] udTag = null;          // ud:B:s tag values (Uncalled dwelled current signal per base)
-  public int[] urTag = null;            // ur:B:i tag values (reference coordinate range for uc/ud, 2 elements: start, end)
+  public short[] signalTag = null;      // uc:B:s or ud:B:s tag values (whichever signal mode is active)
+  public int[] urTag = null;            // ur:B:i tag values (reference coordinate range for signal, 2 elements: start, end)
+  public String saTag = null;           // SA:Z supplementary/chimeric alignment descriptor
+  public String extraTagsLine = null;   // other tags as "NM=5;AS=200" for display
 
   /**
    * Mismatches relative to the reference.
@@ -58,8 +59,20 @@ public class BAMRecord {
    */
   public int[] mismatches;
 
+  /** Per-base Phred quality scores (raw, not +33 offset). May be null if not loaded. */
+  public byte[] qualities;
+
+  /**
+   * Optional packed read bases using BAM 4-bit encoding (2 bases per byte).
+   * Used for base-aware rendering without keeping full char[] sequence in memory.
+   */
+  public byte[] packedBases;
+
   /** Temporary read sequence for reference-based mismatch computation when no MD tag. Nulled after use. */
   public char[] seq;
+
+  // BAM 4-bit base encoding: =ACMGRSVTWYHKDBN -> index 0-15
+  private static final char[] BAM_BASE = {'=','A','C','M','G','R','S','V','T','W','Y','H','K','D','B','N'};
 
   // Display: row assigned during packing
   public int row = -1;
@@ -84,6 +97,42 @@ public class BAMRecord {
     end = pos + refLen;
   }
 
+  /**
+   * Map a 1-based genomic reference position to the read base index (0-based).
+   * Returns -1 if the position falls outside the read or in a deletion / skip
+   * region (no base on the read at that reference position).
+   */
+  public int genomicPosToReadIndex(int refPos1Based) {
+    if (refPos1Based < pos || refPos1Based >= end) return -1;
+    if (cigarOps == null) {
+      int delta = refPos1Based - pos;
+      return (delta >= 0 && delta < readLength) ? delta : -1;
+    }
+    int refCursor = pos;
+    int readCursor = 0;
+    for (int cigarOp : cigarOps) {
+      int op = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+      switch (op) {
+        case CIGAR_M, CIGAR_EQ, CIGAR_X -> {
+          if (refPos1Based < refCursor + len) {
+            int idx = readCursor + (refPos1Based - refCursor);
+            return (idx >= 0 && idx < readLength) ? idx : -1;
+          }
+          refCursor += len;
+          readCursor += len;
+        }
+        case CIGAR_I, CIGAR_S -> readCursor += len;
+        case CIGAR_D, CIGAR_N -> {
+          if (refPos1Based < refCursor + len) return -1; // no read base here
+          refCursor += len;
+        }
+        default -> {}
+      }
+    }
+    return -1;
+  }
+
   public boolean isReverseStrand()  { return (flag & FLAG_REVERSE) != 0; }
   public boolean isPaired()         { return (flag & FLAG_PAIRED) != 0; }
   public boolean isProperPair()     { return (flag & FLAG_PROPER_PAIR) != 0; }
@@ -91,6 +140,28 @@ public class BAMRecord {
   public boolean isDuplicate()      { return (flag & FLAG_DUPLICATE) != 0; }
   public boolean isSecondary()      { return (flag & FLAG_SECONDARY) != 0; }
   public boolean isSupplementary()  { return (flag & FLAG_SUPPLEMENTARY) != 0; }
+
+  /**
+   * Return read base at 0-based read index, or 'N' if unavailable.
+   */
+  public char getBaseAtReadIndex(int readIndex) {
+    if (readIndex < 0 || readIndex >= readLength) return 'N';
+
+    if (packedBases != null) {
+      int packed = packedBases[readIndex / 2] & 0xFF;
+      int code = (readIndex % 2 == 0) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+      if (code >= 0 && code < BAM_BASE.length) {
+        char base = BAM_BASE[code];
+        return base == '=' ? 'N' : base;
+      }
+    }
+
+    if (seq != null && readIndex < seq.length) {
+      return seq[readIndex];
+    }
+
+    return 'N';
+  }
   
   /**
    * Detect discordant read type for color coding.

@@ -24,8 +24,14 @@ import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.text.Font;
+import javafx.scene.text.Text;
 
 public class DrawStack {
+  private static final double CHROM_DROPDOWN_MIN_WIDTH = 70;
+  private static final double CHROM_DROPDOWN_MAX_WIDTH = 320;
+  private static final double CHROM_DROPDOWN_CHROME_PADDING = 36;
+
   public String chromosome = "1";
   public double chromSize;
   public double start;
@@ -77,8 +83,9 @@ public class DrawStack {
     chromosomeDropdown = new ComboBox<>();
     chromosomeDropdown.getStyleClass().add("minimal-combo-box");
     chromosomeDropdown.setStyle("-fx-background-color: rgba(30, 30, 30, 0.95); -fx-background-radius: 3;");
-    chromosomeDropdown.setPrefWidth(60);
-    chromosomeDropdown.setMaxWidth(60);
+    chromosomeDropdown.setMinWidth(CHROM_DROPDOWN_MIN_WIDTH);
+    chromosomeDropdown.setPrefWidth(120);
+    chromosomeDropdown.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
     chromosomeDropdown.setOnAction(e -> onChromosomeSelected());
     StackPane.setAlignment(chromosomeDropdown, Pos.TOP_LEFT);
     StackPane.setMargin(chromosomeDropdown, new Insets(3, 0, 0, 5));
@@ -159,7 +166,7 @@ public class DrawStack {
     gnomadTrack.setVisible(false);
     featureTracksCanvas.addTrack(gnomadTrack);
     
-    featureTracksCanvas.setCollapsed(false);
+    featureTracksCanvas.setCollapsed(true);
     
     // Show close button on hover
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());
@@ -183,6 +190,7 @@ public class DrawStack {
       chromosome = chromosomes.get(0);
       chromosomeDropdown.setValue(chromosome);
     }
+    updateChromosomeDropdownWidthByLongestContig();
     // Genome just became available (or changed) — re-read the actual chromosome size.
     updateChromosomeSize();
     alignmentCanvas.setStartEnd(1.0, chromSize + 1);
@@ -215,6 +223,33 @@ public class DrawStack {
     chromosomeDropdown.setValue(chrom);
     alignmentCanvas.setStartEnd(1.0, chromSize + 1);
     chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
+  }
+
+  private void updateChromosomeDropdownWidthByLongestContig() {
+    double widestTextWidth = measureTextWidth(chromosome != null ? chromosome : "1");
+
+    for (String contig : chromosomeDropdown.getItems()) {
+      if (contig == null || contig.isBlank()) continue;
+      double width = measureTextWidth(contig);
+      if (width > widestTextWidth) {
+        widestTextWidth = width;
+      }
+    }
+
+    double targetWidth = widestTextWidth + CHROM_DROPDOWN_CHROME_PADDING;
+    targetWidth = Math.max(CHROM_DROPDOWN_MIN_WIDTH, Math.min(CHROM_DROPDOWN_MAX_WIDTH, targetWidth));
+    chromosomeDropdown.setPrefWidth(targetWidth);
+    chromosomeDropdown.setMaxWidth(targetWidth);
+  }
+
+  private double measureTextWidth(String value) {
+    Text text = new Text(value);
+    Font font = Font.getDefault();
+    if (chromosomeDropdown.getButtonCell() != null && chromosomeDropdown.getButtonCell().getFont() != null) {
+      font = chromosomeDropdown.getButtonCell().getFont();
+    }
+    text.setFont(font);
+    return Math.ceil(text.getLayoutBounds().getWidth());
   }
   
   private void updateChromosomeSize() {

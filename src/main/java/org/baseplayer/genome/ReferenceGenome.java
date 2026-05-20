@@ -50,10 +50,15 @@ public class ReferenceGenome {
     }
     
     public List<String> getStandardChromosomeNames() {
-        return chromosomes.keySet().stream()
+        List<String> standard = chromosomes.keySet().stream()
             .filter(this::isStandardChromosome)
             .sorted(this::compareChromosomes)
             .toList();
+        // Fall back to all contigs if no standard chromosome names matched
+        if (standard.isEmpty()) {
+            return List.copyOf(chromosomes.keySet());
+        }
+        return standard;
     }
     
     private int compareChromosomes(String chr1, String chr2) {

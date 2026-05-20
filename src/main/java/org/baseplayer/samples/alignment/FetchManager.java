@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.io.Settings;
 
 /**
  * Centralized fetch coordinator for all viewport-driven data loading.
@@ -28,6 +29,12 @@ import org.baseplayer.draw.DrawStack;
  * from background fetch threads.
  */
 public final class FetchManager {
+
+  private static final int  REPEAT_READ_FETCH_MAX_ATTEMPTS = 5;
+  private static final long REPEAT_READ_FETCH_WINDOW_MS = 4_000;
+  private static final long REPEAT_READ_FETCH_COOLDOWN_MS = 20_000;
+  private static final long REPEAT_READ_FETCH_GC_MS = 120_000;
+  private static final long REPEAT_READ_FETCH_CLEANUP_INTERVAL_MS = 10_000;
 
   // ── Fetch types ────────────────────────────────────────────────────────────
 
@@ -63,9 +70,6 @@ public final class FetchManager {
   /** Hard floor: refuse fetches if free memory drops below this many bytes. */
   private volatile long minFreeMemoryBytes = 100L * 1024 * 1024; // 100 MB
 
-  /** Max region size (bp) for READS fetches. */
-  private volatile int maxReadRegionBp = 2_500_000;
-
   // ── Global counters ────────────────────────────────────────────────────────
 
   /** Total reads currently held across all active READS fetches. */
@@ -85,6 +89,12 @@ public final class FetchManager {
 
   /** Fetch id sequence. */
   private final AtomicLong nextTicketId = new AtomicLong(1);
+
+  /** Per-key guard state to stop runaway repeated identical READS starts. */
+  private final ConcurrentHashMap<ReadFetchKey, ReadFetchGuard> readFetchGuards = new ConcurrentHashMap<>();
+
+  /** Last cleanup timestamp for {@link #readFetchGuards}. */
+  private final AtomicLong lastReadGuardCleanupMs = new AtomicLong(0);
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -108,8 +118,9 @@ public final class FetchManager {
     // Type-specific checks
     switch (type) {
       case READS -> {
-        if (regionBp > maxReadRegionBp) {
-          System.err.println("[FetchManager] READS region too large: " + regionBp + " bp (max " + maxReadRegionBp + ")");
+        int maxRegion = Settings.get().getMaxCoverageViewLength();
+        if (regionBp > maxRegion) {
+          System.err.println("[FetchManager] READS region too large: " + regionBp + " bp (max " + maxRegion + ")");
           return false;
         }
         if (globalReadCount.get() > maxGlobalReads) {
@@ -126,10 +137,83 @@ public final class FetchManager {
   }
 
   /**
+   * Context-aware overload for fetch-start kill-switches.
+   * <p>
+   * For READS, this additionally guards against repeated identical starts
+   * (same owner/stack/region) in a short time window.
+   */
+  public boolean canFetch(FetchType type, Object owner, DrawStack stack,
+                          String chrom, int start, int end) {
+    int regionBp = Math.max(0, end - start);
+    if (!canFetch(type, regionBp)) {
+      return false;
+    }
+    if (type == FetchType.READS) {
+      return allowReadFetchStart(owner, stack, chrom, start, end);
+    }
+    return true;
+  }
+
+  /**
    * Convenience overload: check whether a READS fetch is allowed.
    */
   public boolean canFetch(int regionBp) {
     return canFetch(FetchType.READS, regionBp);
+  }
+
+  private boolean allowReadFetchStart(Object owner, DrawStack stack,
+                                      String chrom, int start, int end) {
+    long now = System.currentTimeMillis();
+    cleanupReadFetchGuards(now);
+
+    ReadFetchKey key = new ReadFetchKey(owner, stack, chrom, start, end);
+    ReadFetchGuard guard = readFetchGuards.computeIfAbsent(key, k -> new ReadFetchGuard(now));
+
+    synchronized (guard) {
+      guard.lastSeenMs = now;
+
+      if (guard.blockedUntilMs > now) {
+        System.err.println("[FetchManager] Kill-switch active for repeated READS fetch: "
+            + chrom + ":" + start + "-" + end + " ("
+            + (guard.blockedUntilMs - now) + " ms remaining)");
+        return false;
+      }
+
+      if (now - guard.windowStartMs > REPEAT_READ_FETCH_WINDOW_MS) {
+        guard.windowStartMs = now;
+        guard.attemptsInWindow = 0;
+      }
+
+      guard.attemptsInWindow++;
+      if (guard.attemptsInWindow > REPEAT_READ_FETCH_MAX_ATTEMPTS) {
+        guard.blockedUntilMs = now + REPEAT_READ_FETCH_COOLDOWN_MS;
+        System.err.println("[FetchManager] Repeated identical READS fetch detected ("
+            + guard.attemptsInWindow + " starts in "
+            + (now - guard.windowStartMs) + " ms) for "
+            + chrom + ":" + start + "-" + end
+            + " — blocking starts for " + REPEAT_READ_FETCH_COOLDOWN_MS + " ms");
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private void cleanupReadFetchGuards(long now) {
+    long prev = lastReadGuardCleanupMs.get();
+    if (now - prev < REPEAT_READ_FETCH_CLEANUP_INTERVAL_MS) {
+      return;
+    }
+    if (!lastReadGuardCleanupMs.compareAndSet(prev, now)) {
+      return;
+    }
+
+    for (Map.Entry<ReadFetchKey, ReadFetchGuard> e : readFetchGuards.entrySet()) {
+      ReadFetchGuard g = e.getValue();
+      if (now - g.lastSeenMs > REPEAT_READ_FETCH_GC_MS) {
+        readFetchGuards.remove(e.getKey(), g);
+      }
+    }
   }
 
   /**
@@ -210,15 +294,38 @@ public final class FetchManager {
    * Cancel ALL in-flight fetches across all types, files, and stacks.
    * Bumps the generation counter so running fetches detect obsolescence quickly.
    * Call this on chromosome change or large navigation jumps.
+   *
+   * <p>Also evicts any cancelled tickets that callers never {@link #release}d —
+   * normally {@code release()} is invoked from the completion/exception
+   * handlers of each fetch, but if those are skipped the ticket would stay in
+   * the map forever. Tickets older than {@link #STALE_TICKET_MS} are
+   * force-removed here as a safety net.
    */
   public void cancelAll() {
     generation++;
+    long now = System.currentTimeMillis();
+    int evicted = 0;
     for (FetchTicket t : tickets.values()) {
       t.cancelled = true;
+      if (now - t.createdMs > STALE_TICKET_MS) {
+        if (tickets.remove(t.id) != null) {
+          if (t.type == FetchType.READS) {
+            globalReadCount.addAndGet(-t.itemCount.get());
+          }
+          activeFetches.decrementAndGet();
+          AtomicInteger typeCount = activeByType.get(t.type);
+          if (typeCount != null) typeCount.decrementAndGet();
+          evicted++;
+        }
+      }
     }
     System.out.println("[FetchManager] cancelAll — generation " + generation
-        + ", active=" + activeFetches.get() + ", reads=" + globalReadCount.get());
+        + ", active=" + activeFetches.get() + ", reads=" + globalReadCount.get()
+        + (evicted > 0 ? ", evicted stale=" + evicted : ""));
   }
+
+  /** Age threshold after which a cancelled but unreleased ticket is force-evicted. */
+  private static final long STALE_TICKET_MS = 60_000;
 
   /**
    * Cancel all in-flight fetches of a specific type.
@@ -279,11 +386,9 @@ public final class FetchManager {
   public void setMaxGlobalReads(int max)          { this.maxGlobalReads = max; }
   public void setMinFreeMemoryFraction(double f)  { this.minFreeMemoryFraction = f; }
   public void setMinFreeMemoryBytes(long bytes)   { this.minFreeMemoryBytes = bytes; }
-  public void setMaxReadRegionBp(int bp)          { this.maxReadRegionBp = bp; }
 
   public int getMaxReadsPerFetch()       { return maxReadsPerFetch; }
   public int getMaxGlobalReads()         { return maxGlobalReads; }
-  public int getMaxReadRegionBp()        { return maxReadRegionBp; }
 
   // ── Ticket ─────────────────────────────────────────────────────────────────
 
@@ -308,6 +413,8 @@ public final class FetchManager {
     public final AtomicLong itemCount = new AtomicLong(0);
     /** Set to true by cancelAll / cancelForStack / cancelType. */
     public volatile boolean cancelled;
+    /** Epoch ms when this ticket was created — used for stale-ticket eviction. */
+    final long createdMs = System.currentTimeMillis();
 
     FetchTicket(long id, long generation, FetchType type, Object owner,
                 DrawStack stack, String chrom, int start, int end) {
@@ -329,6 +436,64 @@ public final class FetchManager {
     /** Human-readable description of the owner for log messages. */
     public String description() {
       return owner != null ? owner.getClass().getSimpleName() : "unknown";
+    }
+  }
+
+  /** Identity-based key for repeated-start detection. */
+  private static final class ReadFetchKey {
+    private final Object owner;
+    private final DrawStack stack;
+    private final String chrom;
+    private final int start;
+    private final int end;
+    private final int hash;
+
+    ReadFetchKey(Object owner, DrawStack stack, String chrom, int start, int end) {
+      this.owner = owner;
+      this.stack = stack;
+      this.chrom = chrom;
+      this.start = start;
+      this.end = end;
+
+      int h = 17;
+      h = 31 * h + System.identityHashCode(owner);
+      h = 31 * h + System.identityHashCode(stack);
+      h = 31 * h + (chrom != null ? chrom.hashCode() : 0);
+      h = 31 * h + start;
+      h = 31 * h + end;
+      this.hash = h;
+    }
+
+    @Override
+    public int hashCode() {
+      return hash;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) return true;
+      if (!(obj instanceof ReadFetchKey other)) return false;
+      return owner == other.owner
+          && stack == other.stack
+          && start == other.start
+          && end == other.end
+          && ((chrom == null && other.chrom == null)
+              || (chrom != null && chrom.equals(other.chrom)));
+    }
+  }
+
+  /** Mutable guard state for repeated identical READS fetch starts. */
+  private static final class ReadFetchGuard {
+    long windowStartMs;
+    int attemptsInWindow;
+    long blockedUntilMs;
+    long lastSeenMs;
+
+    ReadFetchGuard(long now) {
+      windowStartMs = now;
+      attemptsInWindow = 0;
+      blockedUntilMs = 0;
+      lastSeenMs = now;
     }
   }
 }

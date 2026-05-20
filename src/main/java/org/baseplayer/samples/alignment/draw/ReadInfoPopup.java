@@ -3,13 +3,15 @@ package org.baseplayer.samples.alignment.draw;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
 import org.baseplayer.components.PopupContent.Badge;
+import org.baseplayer.io.Settings;
+import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.utils.AppFonts;
 
-import javafx.scene.control.Label;
+import javafx.scene.control.Button;
+import javafx.scene.control.TextField;
 import javafx.scene.paint.Color;
 import javafx.stage.Window;
 
@@ -19,18 +21,37 @@ import javafx.stage.Window;
  */
 public class ReadInfoPopup {
 
+  private static final double TOP_RIGHT_MARGIN_X = 16;
+  private static final double TOP_RIGHT_MARGIN_Y = 6;
+  // InfoPopup max width is 440 px; include padding/shadow for safe right alignment.
+  private static final double POPUP_ESTIMATED_WIDTH = 460;
+
   /** Callback to navigate to a mate read's location (chromosome, 0-based position). */
   @FunctionalInterface
   public interface MateNavigator {
     void goToMate(String chromosome, int position);
   }
 
-  private final InfoPopup infoPopup = new InfoPopup(420, 450, true);
+  private final InfoPopup infoPopup = new InfoPopup(440, 560, true);
 
   public void show(BAMRecord read, String chromosome, String mateChromName,
                    Window owner, double x, double y, MateNavigator mateNavigator) {
     PopupContent content = buildContent(read, chromosome, mateChromName, mateNavigator);
-    infoPopup.show(content, owner, x, y);
+    Settings.ReadInfoPopupPosition position = Settings.get().getReadInfoPopupPosition();
+    if (position == Settings.ReadInfoPopupPosition.TOP_RIGHT) {
+      if (owner != null) {
+        double anchoredX = owner.getX() + owner.getWidth() - POPUP_ESTIMATED_WIDTH - TOP_RIGHT_MARGIN_X;
+        double anchoredY = owner.getY() + TOP_RIGHT_MARGIN_Y;
+        anchoredX = Math.max(owner.getX() + TOP_RIGHT_MARGIN_X, anchoredX);
+        infoPopup.show(content, owner, anchoredX, anchoredY);
+      } else {
+        double anchoredX = x - POPUP_ESTIMATED_WIDTH - TOP_RIGHT_MARGIN_X;
+        double anchoredY = y + TOP_RIGHT_MARGIN_Y;
+        infoPopup.show(content, owner, anchoredX, anchoredY);
+      }
+    } else {
+      infoPopup.show(content, owner, x, y);
+    }
   }
 
   public void hide() { infoPopup.hide(); }
@@ -105,19 +126,27 @@ public class ReadInfoPopup {
       // "Go to mate" button (custom node)
       if (mateNavigator != null) {
         final String targetChr = mateChr;
-        Label goToMate = new Label("\u25B6 Go to mate");
+        Button goToMate = new Button("\u25B6 Go to mate");
         goToMate.setFont(AppFonts.getUIFont());
-        goToMate.setTextFill(Color.web("#66bbff"));
         goToMate.setStyle(
-          "-fx-cursor: hand; -fx-padding: 4 10; -fx-background-color: rgba(60,80,120,0.5); -fx-background-radius: 4;"
+          "-fx-background-color: rgba(60,80,120,0.5);" +
+          "-fx-text-fill: #66bbff;"                    +
+          "-fx-background-radius: 4;"                  +
+          "-fx-padding: 4 10;"
         );
         goToMate.setOnMouseEntered(e -> goToMate.setStyle(
-          "-fx-cursor: hand; -fx-padding: 4 10; -fx-background-color: rgba(80,110,160,0.7); -fx-background-radius: 4;"
+          "-fx-background-color: rgba(80,110,160,0.7);" +
+          "-fx-text-fill: #66bbff;"                     +
+          "-fx-background-radius: 4;"                   +
+          "-fx-padding: 4 10;"
         ));
         goToMate.setOnMouseExited(e -> goToMate.setStyle(
-          "-fx-cursor: hand; -fx-padding: 4 10; -fx-background-color: rgba(60,80,120,0.5); -fx-background-radius: 4;"
+          "-fx-background-color: rgba(60,80,120,0.5);" +
+          "-fx-text-fill: #66bbff;"                    +
+          "-fx-background-radius: 4;"                  +
+          "-fx-padding: 4 10;"
         ));
-        goToMate.setOnMouseClicked(e -> {
+        goToMate.setOnAction(e -> {
           infoPopup.hide();
           mateNavigator.goToMate(targetChr, read.matePos);
         });
@@ -125,15 +154,35 @@ public class ReadInfoPopup {
       }
     }
 
-    // Tags
-    boolean hasTags = read.hasMethylTag || read.haplotype > 0 || read.readGroup != null;
-    if (hasTags) {
+    // Split alignments (SA tag) — text rows (copyable) + clickable structure bar
+    if (read.saTag != null && !read.saTag.isBlank()) {
       c.separator();
-      c.section("Tags");
-      if (read.haplotype > 0) c.row("HP", String.valueOf(read.haplotype));
-      if (read.phaseSet > 0) c.row("PS", String.valueOf(read.phaseSet));
-      if (read.readGroup != null) c.row("RG", read.readGroup);
-      if (read.hasMethylTag) c.row("Methylation", "Yes", Color.web("#88cccc"));
+      String[] entries = read.saTag.split(";");
+      c.section("Split Alignments (SA)  \u00D7" + entries.length);
+      for (String entry : entries) {
+        if (entry.isBlank()) continue;
+        String[] parts = entry.split(",", -1);
+        // SA format: rname,pos(1-based),strand,CIGAR,mapQ,NM
+        String rname  = parts.length > 0 ? parts[0] : "?";
+        String posStr = parts.length > 1 ? parts[1] : "?";
+        String strand = parts.length > 2 ? parts[2] : "?";
+        String cigar  = parts.length > 3 ? parts[3] : "?";
+        String mapq   = parts.length > 4 ? parts[4] : "?";
+        String nm     = parts.length > 5 ? parts[5] : null;
+
+        String label = rname + ":" + posStr + " (" + strand + ")";
+        String detail = cigar + "  MAPQ=" + mapq + (nm != null ? "  NM=" + nm : "");
+        c.row(label, detail);
+      }
+
+      // Clickable read-structure diagram: click a segment to jump to its location.
+      // Wrap navigator so the popup closes after navigation.
+      c.node(new ReadStructureBar(read, chromosome,
+          (chr, pos) -> {
+            infoPopup.hide();
+            if (mateNavigator != null) mateNavigator.goToMate(chr, pos);
+          },
+          410));
     }
 
     // Mismatches summary
@@ -154,11 +203,39 @@ public class ReadInfoPopup {
       if (mmCount > showCount) {
         sb.append(String.format(" ... +%d more", mmCount - showCount));
       }
-      Label mmLabel = new Label(sb.toString());
-      mmLabel.setFont(AppFonts.getMonoFont(10));
-      mmLabel.setTextFill(Color.web("#cc8888"));
-      mmLabel.setWrapText(true);
-      c.node(mmLabel);
+      TextField mmField = new TextField(sb.toString());
+      mmField.setEditable(false);
+      mmField.setFocusTraversable(false);
+      mmField.setFont(AppFonts.getMonoFont(10));
+      mmField.setStyle(
+          "-fx-background-color: transparent;" +
+          "-fx-border-color: transparent;"     +
+          "-fx-background-insets: 0;"          +
+          "-fx-background-radius: 0;"          +
+          "-fx-text-fill: #cc8888;"            +
+          "-fx-padding: 0;"                    +
+          "-fx-focus-color: transparent;"      +
+          "-fx-faint-focus-color: transparent;");
+      mmField.setMaxWidth(Double.MAX_VALUE);
+      c.node(mmField);
+    }
+
+    // Tags — show all known tags plus any extras collected during parsing
+    boolean hasTags = read.hasMethylTag || read.haplotype > 0 || read.readGroup != null
+        || read.extraTagsLine != null;
+    if (hasTags) {
+      c.separator();
+      c.section("Tags");
+      if (read.haplotype > 0) c.row("HP", String.valueOf(read.haplotype));
+      if (read.phaseSet > 0)  c.row("PS", String.valueOf(read.phaseSet));
+      if (read.readGroup != null) c.row("RG", read.readGroup);
+      if (read.hasMethylTag)  c.row("Methylation", "Yes", Color.web("#88cccc"));
+      if (read.extraTagsLine != null) {
+        for (String entry : read.extraTagsLine.split(";")) {
+          int eq = entry.indexOf('=');
+          if (eq > 0) c.row(entry.substring(0, eq), entry.substring(eq + 1));
+        }
+      }
     }
 
     return c;

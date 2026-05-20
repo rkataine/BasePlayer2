@@ -1,8 +1,6 @@
 package org.baseplayer.components.sidebars;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.FeatureTracksCanvas;
@@ -12,11 +10,6 @@ import org.baseplayer.features.TrackSettingsPopup;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
 
-import javafx.scene.canvas.Canvas;
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.control.ContextMenu;
-import javafx.scene.control.MenuItem;
-import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
@@ -32,54 +25,24 @@ import javafx.scene.paint.Color;
  * <p>This is the feature-track equivalent of {@link SampleListPanel} for
  * alignment samples.</p>
  */
-public class FeatureTracksPanel {
+public class FeatureTracksPanel extends SidebarContentPanel {
 
   // ── Layout constants ──────────────────────────────────────────────────────
 
   private static final double ICON_SIZE    = 14;
   private static final double ICON_PADDING = 4;
 
-  // ── Icon click regions ────────────────────────────────────────────────────
-
-  private record IconRegion(Track track, String iconType, double x, double y, double size) {
-    boolean contains(double mx, double my) {
-      return mx >= x && mx <= x + size && my >= y && my <= y + size;
-    }
-  }
-
-  private final List<IconRegion> iconRegions = new ArrayList<>();
-
   // ── State ─────────────────────────────────────────────────────────────────
 
-  private final Canvas canvas;
-  private final Canvas reactiveCanvas;
-  private final GraphicsContext gc;
-  private final GraphicsContext reactiveGc;
-
   private FeatureTracksCanvas featureTracksCanvas;
-  private Track   hoveredTrack = null;
-  private String  hoveredIcon  = null;   // "eye" | "settings"
   private final TrackSettingsPopup settingsPopup = new TrackSettingsPopup();
-  private ContextMenu trackContextMenu;
 
   // ── Construction ──────────────────────────────────────────────────────────
 
   public FeatureTracksPanel(StackPane parent) {
-    this.canvas = new Canvas();
-    this.reactiveCanvas = new Canvas();
-
-    canvas.widthProperty().bind(parent.widthProperty());
-    canvas.heightProperty().bind(parent.heightProperty());
-    reactiveCanvas.widthProperty().bind(parent.widthProperty());
-    reactiveCanvas.heightProperty().bind(parent.heightProperty());
-
-    gc = canvas.getGraphicsContext2D();
-    reactiveGc = reactiveCanvas.getGraphicsContext2D();
-
-    parent.getChildren().addAll(canvas, reactiveCanvas);
-
-    setupContextMenu();
-    setupMouseHandlers();
+    super(parent);
+    setupHoverHandlers();
+    setupClickHandler();
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -95,6 +58,7 @@ public class FeatureTracksPanel {
 
   // ── Drawing ───────────────────────────────────────────────────────────────
 
+  @Override
   public void draw() {
     double w = canvas.getWidth();
     double h = canvas.getHeight();
@@ -105,12 +69,13 @@ public class FeatureTracksPanel {
 
     if (featureTracksCanvas == null || featureTracksCanvas.isCollapsed()) return;
 
-    iconRegions.clear();
+    clearIconRegions();
 
     List<Track> tracks = featureTracksCanvas.getTracks();
     double currentY = 0;
 
-    for (Track track : tracks) {
+    for (int i = 0; i < tracks.size(); i++) {
+      Track track = tracks.get(i);
       double trackHeight = calculateTrackHeight(track);
       boolean isVisible = track.isVisible();
 
@@ -118,13 +83,13 @@ public class FeatureTracksPanel {
       double eyeX = ICON_PADDING;
       double eyeY = currentY + (trackHeight - ICON_SIZE) / 2;
       drawEyeIcon(eyeX, eyeY, isVisible);
-      iconRegions.add(new IconRegion(track, "eye", eyeX, eyeY, ICON_SIZE));
+      addIconRegion(i, "eye", eyeX, eyeY, ICON_SIZE, ICON_SIZE);
 
       // Settings cogwheel icon (next to eye)
       double cogX = eyeX + ICON_SIZE + ICON_PADDING;
       double cogY = eyeY;
       drawCogwheelIcon(cogX, cogY, isVisible);
-      iconRegions.add(new IconRegion(track, "settings", cogX, cogY, ICON_SIZE));
+      addIconRegion(i, "settings", cogX, cogY, ICON_SIZE, ICON_SIZE);
 
       // Track name
       double textX = cogX + ICON_SIZE + ICON_PADDING + 2;
@@ -137,6 +102,16 @@ public class FeatureTracksPanel {
       gc.setFont(AppFonts.getUIFont(8));
       gc.fillText(track.getType(), textX, currentY + 22);
 
+      // Remove icon (right)
+      double removeX = Math.max(w - ICON_SIZE - ICON_PADDING, textX + 20);
+      double removeY = currentY + (trackHeight - ICON_SIZE) / 2;
+      gc.setFill(Color.web("#3c3c3c"));
+      gc.fillRoundRect(removeX - 1, removeY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
+      gc.setFill(Color.web("#cc6666"));
+      gc.setFont(AppFonts.getUIFont(10));
+      gc.fillText("✕", removeX + 3, removeY + ICON_SIZE - 3);
+      addIconRegion(i, "remove", removeX - 1, removeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
+
       // Separator
       gc.setStroke(DrawColors.BORDER);
       gc.strokeLine(0, currentY + trackHeight, w, currentY + trackHeight);
@@ -147,39 +122,40 @@ public class FeatureTracksPanel {
 
   // ── Reactive overlay ──────────────────────────────────────────────────────
 
-  private void drawReactive() {
+  @Override
+  protected void drawReactive() {
     double w = reactiveCanvas.getWidth();
     double h = reactiveCanvas.getHeight();
     reactiveGc.clearRect(0, 0, w, h);
 
     if (featureTracksCanvas == null || featureTracksCanvas.isCollapsed()) return;
 
+    List<Track> tracks = featureTracksCanvas.getTracks();
+
     // Icon hover glow
-    if (hoveredIcon != null && hoveredTrack != null) {
-      for (IconRegion region : iconRegions) {
-        if (region.iconType().equals(hoveredIcon) && region.track() == hoveredTrack) {
-          reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
-          reactiveGc.fillRoundRect(region.x() - 2, region.y() - 2,
-              region.size() + 4, region.size() + 4, 4, 4);
-        }
+    if (hoveredIcon != null && hoverIndex >= 0 && hoverIndex < tracks.size()) {
+      IconRegion region = findIconRegion(hoveredIcon, hoverIndex);
+      if (region != null) {
+        reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
+        reactiveGc.fillRoundRect(region.x() - 2, region.y() - 2,
+            region.width() + 4, region.height() + 4, 4, 4);
       }
     }
 
-    if (hoveredTrack == null) return;
+    if (hoverIndex < 0 || hoverIndex >= tracks.size()) return;
 
     // Track row highlight
-    List<Track> tracks = featureTracksCanvas.getTracks();
     double currentY = 0;
-    for (Track track : tracks) {
-      double trackHeight = calculateTrackHeight(track);
-      if (track == hoveredTrack) {
+    for (int i = 0; i < tracks.size(); i++) {
+      double trackHeight = calculateTrackHeight(tracks.get(i));
+      if (i == hoverIndex) {
         reactiveGc.setFill(Color.rgb(255, 255, 255, 0.05));
         reactiveGc.fillRect(0, currentY, w, trackHeight);
 
         double textX = ICON_PADDING + ICON_SIZE + ICON_PADDING + ICON_SIZE + ICON_PADDING + 2;
         reactiveGc.setFill(Color.WHITE);
         reactiveGc.setFont(AppFonts.getUIFont(9));
-        reactiveGc.fillText(track.getName(), textX, currentY + 12);
+        reactiveGc.fillText(tracks.get(i).getName(), textX, currentY + 12);
         break;
       }
       currentY += trackHeight + TRACK_PADDING;
@@ -188,72 +164,55 @@ public class FeatureTracksPanel {
 
   // ── Mouse handlers ────────────────────────────────────────────────────────
 
-  private void setupMouseHandlers() {
-    reactiveCanvas.setOnMouseMoved(event -> {
-      Track track = findTrackAt(event.getY());
-      String icon = findIconAt(event.getX(), event.getY());
-      if (track != hoveredTrack || !Objects.equals(icon, hoveredIcon)) {
-        hoveredTrack = track;
-        hoveredIcon = icon;
-        drawReactive();
-      }
-    });
-
-    reactiveCanvas.setOnMouseExited(event -> {
-      if (hoveredTrack != null || hoveredIcon != null) {
-        hoveredTrack = null;
-        hoveredIcon = null;
-        drawReactive();
-      }
-    });
-
-    reactiveCanvas.setOnMouseClicked(event -> {
-      if (event.getButton() == MouseButton.PRIMARY) {
-        // Icon clicks
-        for (IconRegion region : iconRegions) {
-          if (region.contains(event.getX(), event.getY())) {
-            if ("eye".equals(region.iconType())) {
-              region.track().setVisible(!region.track().isVisible());
-              if (featureTracksCanvas != null) {
-                featureTracksCanvas.notifyRegionChanged();
-                GenomicCanvas.update.set(!GenomicCanvas.update.get());
-              }
-              draw();
-            } else if ("settings".equals(region.iconType())) {
-              showSettingsPopup(region.track(), event.getScreenX(), event.getScreenY());
-            }
-            return;
-          }
-        }
-      } else if (event.getButton() == MouseButton.SECONDARY) {
-        Track trackAtMouse = findTrackAt(event.getY());
-        updateContextMenuForTrack(trackAtMouse);
-        trackContextMenu.show(reactiveCanvas, event.getScreenX(), event.getScreenY());
-      }
-    });
-  }
-
-  // ── Track lookup ──────────────────────────────────────────────────────────
-
-  private Track findTrackAt(double y) {
-    if (featureTracksCanvas == null || featureTracksCanvas.isCollapsed()) return null;
-
+  @Override
+  protected int findRowAt(double y) {
+    if (featureTracksCanvas == null || featureTracksCanvas.isCollapsed()) return -1;
     List<Track> tracks = featureTracksCanvas.getTracks();
     double currentY = 0;
-    for (Track track : tracks) {
-      double trackHeight = calculateTrackHeight(track);
-      if (y >= currentY && y < currentY + trackHeight) return track;
+    for (int i = 0; i < tracks.size(); i++) {
+      double trackHeight = calculateTrackHeight(tracks.get(i));
+      if (y >= currentY && y < currentY + trackHeight) return i;
       currentY += trackHeight + TRACK_PADDING;
     }
-    return null;
+    return -1;
   }
 
-  private String findIconAt(double x, double y) {
-    for (IconRegion region : iconRegions) {
-      if (region.contains(x, y)) return region.iconType();
-    }
-    return null;
+  @Override
+  protected String findIconAt(double x, double y, int rowIdx) {
+    return findIconFromRegions(x, y, rowIdx);
   }
+
+  private void setupClickHandler() {
+    reactiveCanvas.setOnMouseClicked(event -> {
+      if (event.getButton() == MouseButton.PRIMARY) {
+        int rowIdx = findRowAt(event.getY());
+        if (rowIdx >= 0 && featureTracksCanvas != null) {
+          List<Track> tracks = featureTracksCanvas.getTracks();
+          if (rowIdx < tracks.size()) {
+            String icon = findIconAt(event.getX(), event.getY(), rowIdx);
+            Track track = tracks.get(rowIdx);
+            if ("eye".equals(icon)) {
+              track.setVisible(!track.isVisible());
+              featureTracksCanvas.notifyRegionChanged();
+              GenomicCanvas.update.set(!GenomicCanvas.update.get());
+              draw();
+              drawReactive();
+            }
+            if ("settings".equals(icon)) {
+              showSettingsPopup(track, event.getScreenX(), event.getScreenY());
+            }
+            if ("remove".equals(icon)) {
+              featureTracksCanvas.removeTrack(track);
+              GenomicCanvas.update.set(!GenomicCanvas.update.get());
+              draw();
+              drawReactive();
+            }
+          }
+        }
+      }
+    });
+  }
+
 
   // ── Track height calculation ──────────────────────────────────────────────
 
@@ -312,34 +271,5 @@ public class FeatureTracksPanel {
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     }, canvas.getScene().getWindow(), screenX, screenY);
-  }
-
-  private void setupContextMenu() {
-    trackContextMenu = new ContextMenu();
-  }
-
-  private void updateContextMenuForTrack(Track track) {
-    trackContextMenu.getItems().clear();
-
-    if (track == null) return;
-
-    MenuItem toggleVisibility = new MenuItem(track.isVisible() ? "Hide Track" : "Show Track");
-    toggleVisibility.setOnAction(e -> {
-      track.setVisible(!track.isVisible());
-      if (featureTracksCanvas != null) {
-        GenomicCanvas.update.set(!GenomicCanvas.update.get());
-      }
-      draw();
-    });
-
-    MenuItem removeItem = new MenuItem("Remove Track");
-    removeItem.setOnAction(e -> {
-      if (featureTracksCanvas != null) {
-        featureTracksCanvas.removeTrack(track);
-        draw();
-      }
-    });
-
-    trackContextMenu.getItems().addAll(toggleVisibility, new SeparatorMenuItem(), removeItem);
   }
 }

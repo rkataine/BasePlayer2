@@ -37,7 +37,7 @@ shadowJar {
     version = '1.0.0'
     manifest {
         attributes(
-            'Main-Class': 'org.baseplayer.MainApp'
+            'Main-Class': 'org.baseplayer.Launcher'
         )
     }
 }
@@ -63,4 +63,60 @@ dependencies {
     // Ikonli icon font library for JavaFX
     implementation 'org.kordamp.ikonli:ikonli-javafx:12.3.1'
     implementation 'org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1'
+}
+
+// ── jpackage app-image ──────────────────────────────────────────────────────
+
+task jpackageImage(dependsOn: shadowJar) {
+    group = 'distribution'
+    description = 'Create a self-contained app image with bundled JRE using jpackage'
+
+    def outputDir = layout.buildDirectory.dir('jpackage')
+    def appName = 'BasePlayer2'
+
+    doLast {
+        def shadowFile = shadowJar.archiveFile.get().asFile
+        def jpackageOut = outputDir.get().asFile
+        def appDir = new File(jpackageOut, appName)
+
+        // Clean previous output
+        delete jpackageOut
+
+        exec {
+            commandLine 'jpackage',
+                '--type', 'app-image',
+                '--name', appName,
+                '--input', shadowFile.parentFile.absolutePath,
+                '--main-jar', shadowFile.name,
+                '--main-class', 'org.baseplayer.Launcher',
+                '--dest', jpackageOut.absolutePath,
+                '--java-options', '--add-opens=javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
+                '--java-options', '--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
+                '--java-options', '--add-exports=javafx.base/com.sun.javafx.event=ALL-UNNAMED',
+                '--java-options', '-Xmx4g'
+        }
+
+        // Copy data folders into the app image root (next to bin/ and lib/)
+        copy {
+            from 'genomes'
+            into new File(appDir, 'genomes')
+        }
+        copy {
+            from 'additions'
+            into new File(appDir, 'additions')
+        }
+
+        // Create a wrapper launch script that sets cwd to the app directory
+        // so relative Path.of("genomes") resolves correctly
+        def launcher = new File(appDir, 'run.sh')
+        launcher.text = """\
+#!/bin/bash
+cd "\$(dirname "\$0")"
+exec bin/${appName} "\$@"
+"""
+        launcher.setExecutable(true)
+
+        println "\n✓ App image created at: ${appDir.absolutePath}"
+        println "  Run with: ${appDir.absolutePath}/run.sh"
+    }
 }

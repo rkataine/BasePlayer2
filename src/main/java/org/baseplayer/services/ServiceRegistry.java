@@ -35,6 +35,8 @@ public class ServiceRegistry {
         this.sampleRegistry = new SampleRegistry();
         this.referenceGenomeService = new ReferenceGenomeService();
         this.drawStackManager = new DrawStackManager();
+        // Eagerly initialise LoadingManager so it registers with ThreadRunner before any tasks are submitted.
+        LoadingManager.get();
     }
     
     /**

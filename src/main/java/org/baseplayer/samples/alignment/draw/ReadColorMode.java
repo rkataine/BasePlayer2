@@ -6,10 +6,13 @@ package org.baseplayer.samples.alignment.draw;
 public enum ReadColorMode {
   /** Color by strand (forward/reverse) — the default. */
   STRAND("Strand"),
+  /** Color by average base quality (low=warm, high=cool). */
+  BASE_QUALITY("Base quality"),
   /** Color by Uncalled uc:B:s tag values — blue (negative) to red (positive). */
   UC_TAG("UC tag"),
   /** Color by Uncalled ud:B:s tag values — blue (negative) to red (positive). */
-  UD_TAG("UD tag");
+  UD_TAG("UD tag"),
+  UL_TAG("UL tag");
 
   private final String label;
 

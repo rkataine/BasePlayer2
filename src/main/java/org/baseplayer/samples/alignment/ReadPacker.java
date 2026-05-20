@@ -1,6 +1,7 @@
 package org.baseplayer.samples.alignment;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,6 +20,43 @@ import org.baseplayer.draw.DrawStack;
  */
 public class ReadPacker {
   
+  /**
+   * Pack reads in genomic order while preferring to place paired mates on the same row
+   * when they do not overlap existing segments.
+   */
+  private static void packByMateSideBySide(List<BAMRecord> reads, int gap, PackingResult result) {
+    reads.sort(Comparator.comparingInt(r -> r.pos));
+
+    List<List<int[]>> rowSegments = new ArrayList<>();
+    List<List<String>> rowOwners = new ArrayList<>();
+    // readName → {row, maxEnd}: tracks where the first part of a split/mate pair landed
+    Map<String, int[]> pendingByName = new LinkedHashMap<>();
+
+    for (BAMRecord record : reads) {
+      int[][] exons = getExonSegments(record);
+      int r = -1;
+      int bridgeFrom = -1; // if ≥ 0, add a bridge segment [bridgeFrom, record.pos] before exons
+
+      int[] pendingPlacement = findPendingPlacementAllowOwnOverlap(
+          record, pendingByName, rowSegments, rowOwners, exons, gap);
+      if (pendingPlacement != null) {
+        r = pendingPlacement[0];
+        bridgeFrom = calcBridgeFrom(record, pendingPlacement[1]);
+      }
+
+      if (r < 0) {
+        r = findFittingRow(rowSegments, exons, gap);
+      }
+
+      record.row = placeRecordInRow(rowSegments, rowOwners, record, r, bridgeFrom, exons);
+
+      if (record.row > result.maxRow) {
+        result.maxRow = record.row;
+      }
+
+      updatePendingPlacement(pendingByName, record);
+    }
+  }
   /** Minimum pixel gap between reads for packing (ensures consistent visual spacing at all zoom levels) */
   private static final int MIN_PIXEL_GAP = 3;
   
@@ -30,6 +68,8 @@ public class ReadPacker {
     public int discordantStartRow = -1;
     public int normalStartRow = -1;
     public int hp2StartRow = -1;
+    public int strandSplitStartRow = -1;
+    public int discordantSplitStartRow = -1;
     public Map<String, Integer> readGroupStartRows = new LinkedHashMap<>();
   }
   
@@ -41,11 +81,14 @@ public class ReadPacker {
    * @param stack DrawStack providing scale information
    * @param splitByReadGroup Whether to separate reads by read group
    * @param haplotypeDetected Whether haplotype data is present
+  * @param stackMatesSideBySide Whether to prefer placing mates on the same row
    * @param detectedReadGroups List of detected read group names
    * @return PackingResult with row assignments and metadata
    */
   public static PackingResult packReads(List<BAMRecord> reads, DrawStack stack, 
                                        boolean splitByReadGroup, boolean haplotypeDetected,
+                          boolean splitByStrand, boolean splitByDiscordant,
+                          boolean stackMatesSideBySide,
                                        List<String> detectedReadGroups) {
     if (reads.isEmpty()) {
       return new PackingResult();
@@ -56,6 +99,12 @@ public class ReadPacker {
     
     if (splitByReadGroup && detectedReadGroups.size() > 1) {
       packByReadGroup(reads, gap, detectedReadGroups, result);
+    } else if (splitByDiscordant) {
+      packByDiscordant(reads, gap, result);
+    } else if (splitByStrand) {
+      packByStrand(reads, gap, result);
+    } else if (stackMatesSideBySide) {
+      packByMateSideBySide(reads, gap, result);
     } else if (haplotypeDetected) {
       packByHaplotype(reads, gap, result);
     } else {
@@ -120,6 +169,129 @@ public class ReadPacker {
     }
   }
   
+  /**
+   * Pack reads separated by strand.
+   * Forward-strand on top (rendered upward), reverse-strand on bottom.
+   */
+  private static void packByStrand(List<BAMRecord> reads, int gap, PackingResult result) {
+    List<BAMRecord> fwdReads = new ArrayList<>();
+    List<BAMRecord> revReads = new ArrayList<>();
+
+    for (BAMRecord record : reads) {
+      if (record.isReverseStrand()) {
+        revReads.add(record);
+      } else {
+        fwdReads.add(record);
+      }
+    }
+
+    fwdReads.sort(Comparator.comparingInt(r -> r.pos));
+    revReads.sort(Comparator.comparingInt(r -> r.pos));
+
+    // Pack forward reads: rows 0, 1, 2, ...
+    List<List<int[]>> rowSegments = new ArrayList<>();
+    for (BAMRecord record : fwdReads) {
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(rowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = r;
+        addSegments(rowSegments.get(r), exons);
+      } else {
+        record.row = rowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        rowSegments.add(segs);
+      }
+      if (record.row > result.maxRow) {
+        result.maxRow = record.row;
+      }
+    }
+
+    // Reverse strand starts on fresh rows after forward
+    int revStart = rowSegments.isEmpty() ? 0 : rowSegments.size();
+    result.strandSplitStartRow = revStart;
+
+    List<List<int[]>> revRowSegments = new ArrayList<>();
+    for (BAMRecord record : revReads) {
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(revRowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = revStart + r;
+        addSegments(revRowSegments.get(r), exons);
+      } else {
+        record.row = revStart + revRowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        revRowSegments.add(segs);
+      }
+      if (record.row > result.maxRow) {
+        result.maxRow = record.row;
+      }
+    }
+  }
+
+  /**
+   * Pack reads separated by discordant/split status.
+   * Discordant reads or reads with SA (supplementary) tag on top (rendered upward),
+   * all other reads on bottom. Mirrors packByStrand exactly.
+   */
+  private static void packByDiscordant(List<BAMRecord> reads, int gap, PackingResult result) {
+    List<BAMRecord> discReads = new ArrayList<>();
+    List<BAMRecord> normReads = new ArrayList<>();
+
+    for (BAMRecord record : reads) {
+      if (record.getDiscordantType() > 0 || record.saTag != null) {
+        discReads.add(record);
+      } else {
+        normReads.add(record);
+      }
+    }
+
+    discReads.sort(Comparator.comparingInt(r -> r.pos));
+    normReads.sort(Comparator.comparingInt(r -> r.pos));
+
+    // Pack discordant/split reads: rows 0, 1, 2, ...
+    List<List<int[]>> rowSegments = new ArrayList<>();
+    for (BAMRecord record : discReads) {
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(rowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = r;
+        addSegments(rowSegments.get(r), exons);
+      } else {
+        record.row = rowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        rowSegments.add(segs);
+      }
+      if (record.row > result.maxRow) {
+        result.maxRow = record.row;
+      }
+    }
+
+    // Normal reads start on fresh rows after discordant/split
+    int normStart = rowSegments.isEmpty() ? 0 : rowSegments.size();
+    result.discordantSplitStartRow = normStart;
+
+    List<List<int[]>> normRowSegments = new ArrayList<>();
+    for (BAMRecord record : normReads) {
+      int[][] exons = getExonSegments(record);
+      int r = findFittingRow(normRowSegments, exons, gap);
+      if (r >= 0) {
+        record.row = normStart + r;
+        addSegments(normRowSegments.get(r), exons);
+      } else {
+        record.row = normStart + normRowSegments.size();
+        List<int[]> segs = new ArrayList<>();
+        addSegments(segs, exons);
+        normRowSegments.add(segs);
+      }
+      if (record.row > result.maxRow) {
+        result.maxRow = record.row;
+      }
+    }
+  }
+
   /**
    * Pack reads separated by haplotype.
    * HP1 on top (rendered upward), HP2+unphased on bottom.
@@ -250,7 +422,7 @@ public class ReadPacker {
     if (refPos > segStart) {
       segments.add(new int[] { segStart, refPos });
     }
-    return segments.toArray(new int[0][]);
+    return segments.toArray(int[][]::new);
   }
 
   /**
@@ -258,7 +430,7 @@ public class ReadPacker {
    * existing segments (respecting the gap).
    * Returns row index, or -1 if no row fits.
    */
-  private static int findFittingRow(List<List<int[]>> rowSegments, int[][] exons, int gap) {
+  static int findFittingRow(List<List<int[]>> rowSegments, int[][] exons, int gap) {
     for (int r = 0; r < rowSegments.size(); r++) {
       if (fitsInRow(rowSegments.get(r), exons, gap)) {
         return r;
@@ -271,15 +443,7 @@ public class ReadPacker {
    * Check if all exon segments fit in a row without overlapping existing segments.
    * Both lists are sorted by start position.
    */
-  private static boolean fitsInRow(List<int[]> existing, int[][] exons, int gap) {
-    // Fast path: check against the last existing segment's end
-    // (covers 99% of cases since reads are sorted by pos)
-    if (!existing.isEmpty()) {
-      int[] last = existing.get(existing.isEmpty() ? 0 : existing.size() - 1);
-      if (exons[0][0] >= last[1] + gap) {
-        return true; // all exons start after the last existing segment
-      }
-    }
+  static boolean fitsInRow(List<int[]> existing, int[][] exons, int gap) {
     // Full check: verify no exon overlaps any existing segment
     for (int[] exon : exons) {
       for (int[] seg : existing) {
@@ -294,9 +458,104 @@ public class ReadPacker {
   /**
    * Add exon segments to a row's segment list, maintaining sorted order.
    */
-  private static void addSegments(List<int[]> rowSegs, int[][] exons) {
-    for (int[] exon : exons) {
-      rowSegs.add(exon);
+  static void addSegments(List<int[]> rowSegs, int[][] exons) {
+    rowSegs.addAll(Arrays.asList(exons));
+  }
+
+  static void addSegmentOwners(List<String> owners, int count, String readName) {
+    for (int i = 0; i < count; i++) {
+      owners.add(readName);
     }
+  }
+
+  static boolean fitsInRowAllowOwnOverlap(List<int[]> existing, List<String> owners,
+                                          int[][] exons, int gap, String readName) {
+    for (int[] exon : exons) {
+      for (int i = 0; i < existing.size(); i++) {
+        int[] seg = existing.get(i);
+        if (exon[0] < seg[1] + gap && exon[1] + gap > seg[0]) {
+          String owner = i < owners.size() ? owners.get(i) : null;
+          if (!readName.equals(owner)) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  static int[] findPendingPlacementAllowOwnOverlap(BAMRecord record,
+                                                    Map<String, int[]> pendingByName,
+                                                    List<List<int[]>> rowSegments,
+                                                    List<List<String>> rowOwners,
+                                                    int[][] exons,
+                                                    int gap) {
+    if (record.readName == null) return null;
+    int[] pending = pendingByName.get(record.readName);
+    if (pending == null) return null;
+    int pendingRow = pending[0];
+    int pendingEnd = pending[1];
+    if (pendingRow < 0 || pendingRow >= rowSegments.size() || pendingRow >= rowOwners.size()) {
+      return null;
+    }
+    if (!fitsInRowAllowOwnOverlap(rowSegments.get(pendingRow), rowOwners.get(pendingRow), exons, gap, record.readName)) {
+      return null;
+    }
+    return new int[]{ pendingRow, pendingEnd };
+  }
+
+  static int calcBridgeFrom(BAMRecord record, int pendingEnd) {
+    // Bridge only for non-supplementary mates to avoid reserving huge genomic ranges.
+    if (!record.isSupplementary() && record.pos > pendingEnd) {
+      return pendingEnd;
+    }
+    return -1;
+  }
+
+  static void addBridgeSegment(List<int[]> rowSegs, List<String> owners, int bridgeFrom, BAMRecord record) {
+    if (bridgeFrom >= 0 && record.pos > bridgeFrom) {
+      rowSegs.add(new int[]{ bridgeFrom, record.pos });
+      if (owners != null) owners.add(record.readName);
+    }
+  }
+
+  static void addSegmentsWithOwner(List<int[]> rowSegs, List<String> owners,
+                                   int[][] exons, String readName) {
+    addSegments(rowSegs, exons);
+    if (owners != null) {
+      addSegmentOwners(owners, exons.length, readName);
+    }
+  }
+
+  static void updatePendingPlacement(Map<String, int[]> pendingByName, BAMRecord record) {
+    if (record.readName == null) return;
+    int[] pending = pendingByName.get(record.readName);
+    if (pending != null) {
+      if (record.end > pending[1]) pending[1] = record.end;
+      pending[0] = record.row;
+    } else {
+      pendingByName.put(record.readName, new int[]{ record.row, record.end });
+    }
+  }
+
+  static int placeRecordInRow(List<List<int[]>> rowSegments,
+                              List<List<String>> rowOwners,
+                              BAMRecord record,
+                              int targetRow,
+                              int bridgeFrom,
+                              int[][] exons) {
+    if (targetRow >= 0 && targetRow < rowSegments.size() && targetRow < rowOwners.size()) {
+      addBridgeSegment(rowSegments.get(targetRow), rowOwners.get(targetRow), bridgeFrom, record);
+      addSegmentsWithOwner(rowSegments.get(targetRow), rowOwners.get(targetRow), exons, record.readName);
+      return targetRow;
+    }
+
+    int newRow = rowSegments.size();
+    List<int[]> segs = new ArrayList<>();
+    List<String> owners = new ArrayList<>();
+    addSegmentsWithOwner(segs, owners, exons, record.readName);
+    rowSegments.add(segs);
+    rowOwners.add(owners);
+    return newRow;
   }
 }

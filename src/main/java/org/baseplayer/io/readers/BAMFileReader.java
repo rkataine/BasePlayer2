@@ -25,6 +25,9 @@ public class BAMFileReader implements AlignmentReader {
   /** Print raw SAM-like line for the first record only. */
   private static boolean firstRecordPrinted = false;
   
+  /** Common tag processor shared with CRAMFileReader. */
+  private final TagProcessor tagProcessor = new TagProcessor();
+  
   private final BGZFInputStream bgzf;
   private final BAIIndex index;
   private final String[] refNames;
@@ -136,8 +139,8 @@ public class BAMFileReader implements AlignmentReader {
           // Deduplicate: skip if we already saw a record at this offset
           if (!seenOffsets.add(recordOffset)) continue;
           
-          // Skip unmapped, secondary, supplementary reads
-          if (record.isUnmapped() || record.isSecondary() || record.isSupplementary()) continue;
+          // Skip unmapped and secondary reads; supplementary reads are allowed (needed for split-read arcs)
+          if (record.isUnmapped() || record.isSecondary()) continue;
           
           // Check if read is on the right reference
           if (record.refID != refId) break;
@@ -198,7 +201,7 @@ public class BAMFileReader implements AlignmentReader {
           if (record == null) break;
 
           if (!seenOffsets.add(recordOffset)) continue;
-          if (record.isUnmapped() || record.isSecondary() || record.isSupplementary()) continue;
+          if (record.isUnmapped() || record.isSecondary()) continue;
           
           // Different chromosome - skip rest of this chunk
           if (record.refID != refId) break;
@@ -283,14 +286,18 @@ public class BAMFileReader implements AlignmentReader {
     if (seqBytes > 0 && variableBytes >= seqBytes) {
       byte[] seqData = new byte[seqBytes];
       bgzf.readFully(seqData);
+      rec.packedBases = seqData;
       seq = decodeSeq(seqData, rec.readLength);
       variableBytes -= seqBytes;
     }
 
-    // Skip QUAL (readLength bytes)
+    // Read QUAL (readLength bytes)
     int qualBytes = rec.readLength;
     if (qualBytes > 0 && variableBytes >= qualBytes) {
-      bgzf.skip(qualBytes);
+      byte[] qualData = new byte[qualBytes];
+      bgzf.readFully(qualData);
+      // 0xFF means missing quality — leave qualities null in that case
+      if (qualData[0] != (byte) 0xFF) rec.qualities = qualData;
       variableBytes -= qualBytes;
     }
 
@@ -300,7 +307,7 @@ public class BAMFileReader implements AlignmentReader {
     if (variableBytes > 0) {
       tagData = new byte[variableBytes];
       bgzf.readFully(tagData);
-      mdTag = extractTags(tagData, rec);
+      mdTag = tagProcessor.processTagBlock(rec, tagData);
     }
 
     // Build mismatches from SEQ + MD tag, or keep seq for reference-based fallback
@@ -484,202 +491,6 @@ public class BAMFileReader implements AlignmentReader {
   }
 
   /**
-   * Extract tags from BAM auxiliary data.
-   * Finds MD:Z (returns as String), detects MM/ML/XM (methylation), and reads HP:i (haplotype).
-   * Tags format: tag[0], tag[1], type, value...
-   */
-  private static String extractTags(byte[] data, BAMRecord rec) {
-    String mdTag = null;
-    
-    int pos = 0;
-    while (pos + 2 < data.length) {
-      char t1 = (char) data[pos++];
-      char t2 = (char) data[pos++];
-      char type = (char) data[pos++];
-      
-      // MD:Z — mismatch descriptor
-      if (t1 == 'M' && t2 == 'D' && type == 'Z') {
-        int start = pos;
-        while (pos < data.length && data[pos] != 0) pos++;
-        mdTag = new String(data, start, pos - start);
-        pos++;
-        continue;
-      }
-      
-      // Methylation tags: MM:Z, Mm:Z, XM:Z
-      if (((t1 == 'M' && (t2 == 'M' || t2 == 'm')) || (t1 == 'X' && t2 == 'M')) && type == 'Z') {
-        rec.hasMethylTag = true;
-        // Parse XM:Z content for bisulfite detection: x=mismatch, h/z/Z=methylation calls, .=match
-        if (t1 == 'X' && t2 == 'M') {
-          int start = pos;
-          while (pos < data.length && data[pos] != 0) pos++;
-          rec.methylString = new String(data, start, pos - start);
-        } else {
-          while (pos < data.length && data[pos] != 0) pos++;
-        }
-        pos++;
-        continue;
-      }
-      
-      // ML:B:C or Ml:B:C — methylation likelihoods (also indicates methylation data)
-      if (t1 == 'M' && (t2 == 'L' || t2 == 'l') && type == 'B') {
-        rec.hasMethylTag = true;
-        pos = skipTagValue(data, pos, type);
-        if (pos < 0) break;
-        continue;
-      }
-      
-      // HP:i — haplotype phase
-      if (t1 == 'H' && t2 == 'P' && type == 'i') {
-        if (pos + 3 < data.length) {
-          rec.haplotype = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-        }
-        pos += 4;
-        continue;
-      }
-      
-      // PS:i — phase set
-      if (t1 == 'P' && t2 == 'S' && type == 'i') {
-        if (pos + 3 < data.length) {
-          rec.phaseSet = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-        }
-        pos += 4;
-        continue;
-      }
-      
-      // RG:Z — read group
-      if (t1 == 'R' && t2 == 'G' && type == 'Z') {
-        int start = pos;
-        while (pos < data.length && data[pos] != 0) pos++;
-        rec.readGroup = new String(data, start, pos - start);
-        pos++;
-        continue;
-      }
-      
-      // ud:B:s — Uncalled dwelled current signal values (short array)
-      if (t1 == 'u' && t2 == 'd' && type == 'B') {
-        if (pos + 4 < data.length && (char) data[pos] == 's') {
-          pos++; // skip element type 's'
-          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-          pos += 4;
-          if (pos + count * 2 <= data.length) {
-            rec.udTag = new short[count];
-            for (int i = 0; i < count; i++) {
-              rec.udTag[i] = (short) ((data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8));
-              pos += 2;
-            }
-          } else {
-            pos += count * 2; // skip if truncated
-          }
-        } else {
-          pos = skipTagValue(data, pos, type);
-          if (pos < 0) break;
-        }
-        continue;
-      }
-      
-      // uc:B:s — Uncalled current signal values (short array)
-      if (t1 == 'u' && t2 == 'c' && type == 'B') {
-        if (pos + 4 < data.length && (char) data[pos] == 's') {
-          pos++; // skip element type 's'
-          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-          pos += 4;
-          if (pos + count * 2 <= data.length) {
-            rec.ucTag = new short[count];
-            for (int i = 0; i < count; i++) {
-              rec.ucTag[i] = (short) ((data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8));
-              pos += 2;
-            }
-          } else {
-            pos += count * 2; // skip if truncated
-          }
-        } else {
-          pos = skipTagValue(data, pos, type);
-          if (pos < 0) break;
-        }
-        continue;
-      }
-      
-      // ur:B:i — Reference coordinate range for uc signal (int array, typically 2 elements)
-      if (t1 == 'u' && t2 == 'r' && type == 'B') {
-        if (pos + 4 < data.length && (char) data[pos] == 'i') {
-          pos++; // skip element type 'i'
-          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-              | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-          pos += 4;
-          if (pos + count * 4 <= data.length) {
-            rec.urTag = new int[count];
-            for (int i = 0; i < count; i++) {
-              rec.urTag[i] = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-                  | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-              pos += 4;
-            }
-          } else {
-            pos += count * 4; // skip if truncated
-          }
-        } else {
-          pos = skipTagValue(data, pos, type);
-          if (pos < 0) break;
-        }
-        continue;
-      }
-      
-      // Skip other tags
-      pos = skipTagValue(data, pos, type);
-      if (pos < 0) break;
-    }
-    
-    return mdTag;
-  }
-
-  /**
-   * Skip a BAM tag value based on its type code.
-   * Returns new position, or -1 on error.
-   */
-  private static int skipTagValue(byte[] data, int pos, char type) {
-    switch (type) {
-      case 'A', 'c', 'C' -> {
-          return pos + 1;
-          }
-			case 's', 'S' -> {
-					return pos + 2;
-								}
-			case 'i', 'I', 'f' -> {
-					return pos + 4;
-								}
-			case 'd' -> {
-					return pos + 8;
-					}
-			case 'Z', 'H' -> {
-     	while (pos < data.length && data[pos] != 0) pos++;
-     	return pos + 1; // skip null terminator
-          }
-      case 'B' -> {
-          if (pos + 4 >= data.length) return -1;
-          char elemType = (char) data[pos++];
-          int count = (data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8)
-                  | ((data[pos+2] & 0xFF) << 16) | ((data[pos+3] & 0xFF) << 24);
-          pos += 4;
-          int elemSize = switch (elemType) {
-              case 'c', 'C' -> 1;
-              case 's', 'S' -> 2;
-              case 'i', 'I', 'f' -> 4;
-              case 'd' -> 8;
-              default -> 0;
-          };
-          return pos + count * elemSize;
-          }
-      default -> {
-          return -1;
-          }
-    }
-  }
-
-  /**
    * Parse MD tag + read sequence to produce mismatch positions.
    * MD format: numbers (matching), letters (reference base = mismatch),
    * ^letters (deletion from reference). We need to walk the CIGAR
@@ -791,6 +602,8 @@ public class BAMFileReader implements AlignmentReader {
   @Override public String[] getRefNames() { return refNames; }
   @Override public int[] getRefLengths() { return refLengths; }
   @Override public Path getPath() { return bamPath; }
+  @Override public void setActiveSignalTag(char tag) { tagProcessor.setActiveSignalTag(tag); }
+  public TagProcessor getTagProcessor() { return tagProcessor; }
 
   /**
    * Read a BAM record minimally — only refID, pos, flag, and readLength.

@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.baseplayer.components.AnnotationOptionsDialog;
 import org.baseplayer.genome.ReferenceGenome;
+import org.baseplayer.io.Settings;
 import org.baseplayer.services.InitializationService;
 
 import javafx.geometry.Insets;
@@ -32,7 +33,6 @@ public class GenomeSidebar extends SidebarBase {
     this.initializationService = initializationService;
 
     buildContent();
-    loadAvailableAnnotations();
     loadAvailableGenomes();
   }
 
@@ -64,6 +64,10 @@ public class GenomeSidebar extends SidebarBase {
     annotationComboBox.setMaxWidth(Double.MAX_VALUE);
     annotationComboBox.getStyleClass().add("minimal-combo-box");
     annotationComboBox.setPromptText("Annotations");
+    annotationComboBox.setOnAction(e -> {
+      String sel = annotationComboBox.getValue();
+      if (sel != null) Settings.get().setLastAnnotation(sel);
+    });
 
     Label referenceLabel = new Label("Reference genome");
     referenceLabel.getStyleClass().add("sidebar-label");
@@ -95,26 +99,50 @@ public class GenomeSidebar extends SidebarBase {
     referenceComboBox.getItems().addAll(genomes);
     referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
 
-    if (!referenceComboBox.getItems().isEmpty()) {
-      referenceComboBox.getSelectionModel().selectFirst();
-      onReferenceGenomeSelected();
+    String lastGenome = Settings.get().getLastGenome();
+    ReferenceGenome selected = null;
+    if (lastGenome != null) {
+      selected = genomes.stream()
+          .filter(g -> g.getName().equals(lastGenome))
+          .findFirst().orElse(null);
     }
+    if (selected != null) {
+      referenceComboBox.getSelectionModel().select(selected);
+    } else if (!genomes.isEmpty()) {
+      referenceComboBox.getSelectionModel().selectFirst();
+    }
+    onReferenceGenomeSelected();
   }
 
   private void loadAvailableAnnotations() {
-    List<String> annotations = initializationService.loadAvailableAnnotations("GRCh38");
+    ReferenceGenome genome = referenceComboBox.getValue();
+    String genomeName = genome != null ? genome.getName() : "GRCh38";
+
+    annotationComboBox.getItems().clear();
+    List<String> annotations = initializationService.loadAvailableAnnotations(genomeName);
     annotationComboBox.getItems().addAll(annotations);
 
-    if (!annotationComboBox.getItems().isEmpty()) {
-      String defaultAnnotation = initializationService.findDefaultAnnotation(annotations);
-      if (defaultAnnotation != null) {
-        annotationComboBox.getSelectionModel().select(defaultAnnotation);
+    if (!annotations.isEmpty()) {
+      // Restore last used annotation if it belongs to this genome
+      String lastAnnotation = Settings.get().getLastAnnotation();
+      if (lastAnnotation != null && annotations.contains(lastAnnotation)) {
+        annotationComboBox.getSelectionModel().select(lastAnnotation);
+      } else {
+        String defaultAnnotation = initializationService.findDefaultAnnotation(annotations);
+        if (defaultAnnotation != null) {
+          annotationComboBox.getSelectionModel().select(defaultAnnotation);
+        }
       }
     }
+    // Save whatever is now selected
+    Settings.get().setLastAnnotation(annotationComboBox.getValue());
   }
 
   private void onReferenceGenomeSelected() {
     ReferenceGenome genome = referenceComboBox.getValue();
+    if (genome == null) return;
+    Settings.get().setLastGenome(genome.getName());
     initializationService.selectReferenceGenome(genome);
+    loadAvailableAnnotations();
   }
 }

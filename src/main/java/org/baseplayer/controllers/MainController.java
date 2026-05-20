@@ -18,11 +18,15 @@ import javafx.application.Platform;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.fxml.FXML;
+import javafx.geometry.Point2D;
+import javafx.scene.Node;
 import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.SplitPane;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.StackPane;
+import javafx.scene.paint.Color;
 
 public class MainController {
   @FXML private SplitPane alignmentSplitPane;
@@ -30,6 +34,7 @@ public class MainController {
   @FXML private SplitPane chromSplit;
   @FXML private SplitPane drawSplit;
   @FXML private StackPane drawSideBarStackPane;
+  @FXML private StackPane alignmentOverlayPane;
   @FXML private SplitPane mainSplit;
   @FXML private StackPane genomeSideBarPane;
   @FXML private SplitPane drawSideBar;
@@ -63,6 +68,13 @@ public class MainController {
   
   // Unified sidebar controller for all horizontal split panes
   private final SidebarController sidebarController = new SidebarController();
+
+  // Shared glasspane over the alignment split area for cross-stack connector arcs.
+  private Canvas crossStackOverlayCanvas;
+  private GraphicsContext crossStackOverlayGc;
+  private static Canvas sharedCrossStackOverlayCanvas;
+  private static GraphicsContext sharedCrossStackOverlayGc;
+  private static Object crossStackOverlayOwner;
   
   public MainController() {
     // Initialize services from registry
@@ -82,6 +94,8 @@ public class MainController {
       sidebarController.addPane(chromSplit);
       sidebarController.addPane(featureTracksSplit);
       sidebarController.addPane(drawSplit);
+
+      setupCrossStackOverlay();
       
       addStack(true);  // Create stack first
       
@@ -126,6 +140,131 @@ public class MainController {
     }
     updateFeatureTracksPaneHeight();
   }
+
+  private void setupCrossStackOverlay() {
+    if (alignmentOverlayPane == null) return;
+
+    crossStackOverlayCanvas = new Canvas();
+    crossStackOverlayCanvas.setManaged(false);
+    crossStackOverlayCanvas.setMouseTransparent(true);
+    crossStackOverlayCanvas.widthProperty().bind(alignmentOverlayPane.widthProperty());
+    crossStackOverlayCanvas.heightProperty().bind(alignmentOverlayPane.heightProperty());
+    crossStackOverlayGc = crossStackOverlayCanvas.getGraphicsContext2D();
+
+    alignmentOverlayPane.getChildren().add(crossStackOverlayCanvas);
+
+    sharedCrossStackOverlayCanvas = crossStackOverlayCanvas;
+    sharedCrossStackOverlayGc = crossStackOverlayGc;
+    crossStackOverlayOwner = null;
+
+    alignmentOverlayPane.widthProperty().addListener((obs, o, n) -> clearCrossStackOverlay());
+    alignmentOverlayPane.heightProperty().addListener((obs, o, n) -> clearCrossStackOverlay());
+  }
+
+  private static void clearCrossStackOverlay() {
+    if (sharedCrossStackOverlayCanvas == null || sharedCrossStackOverlayGc == null) return;
+    sharedCrossStackOverlayGc.clearRect(0, 0,
+        sharedCrossStackOverlayCanvas.getWidth(),
+        sharedCrossStackOverlayCanvas.getHeight());
+  }
+
+  public static void releaseCrossStackMateArc(Object owner) {
+    if (owner != null && owner == crossStackOverlayOwner) {
+      crossStackOverlayOwner = null;
+      clearCrossStackOverlay();
+    }
+  }
+
+  /** Force-clear any cross-stack connector regardless of current owner. */
+  public static void clearCrossStackMateArc() {
+    crossStackOverlayOwner = null;
+    clearCrossStackOverlay();
+  }
+
+  public static boolean drawCrossStackMateArc(Object owner,
+                                              Node sourceNode, double sourceX, double sourceY,
+                                              Node targetNode, double targetX, double targetY) {
+    return drawCrossStackMateArc(owner, sourceNode, sourceX, sourceY, targetNode, targetX, targetY,
+        Color.rgb(255, 180, 80, 0.94));
+  }
+
+  public static boolean drawCrossStackMateArc(Object owner,
+                                              Node sourceNode, double sourceX, double sourceY,
+                                              Node targetNode, double targetX, double targetY,
+                                              Color arcColor) {
+    if (sharedCrossStackOverlayCanvas == null || sharedCrossStackOverlayGc == null) return false;
+    if (sourceNode == null || targetNode == null) {
+      if (owner == crossStackOverlayOwner) clearCrossStackMateArc();
+      return false;
+    }
+
+    Point2D sourceScene = sourceNode.localToScene(sourceX, sourceY);
+    Point2D targetScene = targetNode.localToScene(targetX, targetY);
+    if (sourceScene == null || targetScene == null) {
+      if (owner == crossStackOverlayOwner) clearCrossStackMateArc();
+      return false;
+    }
+
+    Point2D source = sharedCrossStackOverlayCanvas.sceneToLocal(sourceScene);
+    Point2D target = sharedCrossStackOverlayCanvas.sceneToLocal(targetScene);
+    if (source == null || target == null) {
+      if (owner == crossStackOverlayOwner) clearCrossStackMateArc();
+      return false;
+    }
+    if (!Double.isFinite(source.getX()) || !Double.isFinite(source.getY())
+        || !Double.isFinite(target.getX()) || !Double.isFinite(target.getY())) {
+      if (owner == crossStackOverlayOwner) clearCrossStackMateArc();
+      return false;
+    }
+
+    if (owner != crossStackOverlayOwner) {
+      crossStackOverlayOwner = owner;
+    }
+
+    // Repaint this frame's connector only; prevents trail artifacts while moving.
+    clearCrossStackOverlay();
+
+    GraphicsContext gc = sharedCrossStackOverlayGc;
+    double x1 = source.getX();
+    double y1 = source.getY();
+    double x2 = target.getX();
+    double y2 = target.getY();
+    double ctrlX = (x1 + x2) * 0.5;
+    double archHeight = Math.max(24.0, Math.abs(x2 - x1) * 0.16);
+    double ctrlY = Math.min(y1, y2) - archHeight;
+    Color strokeColor = arcColor != null ? arcColor : Color.rgb(255, 180, 80, 0.94);
+
+    gc.setStroke(strokeColor);
+    gc.setLineWidth(1.3);
+    gc.setLineDashes(7, 4);
+    gc.beginPath();
+    gc.moveTo(x1, y1);
+    gc.quadraticCurveTo(ctrlX, ctrlY, x2, y2);
+    gc.stroke();
+    gc.setLineDashes(0);
+
+    // Arrow head at the target end, aligned to the curve tangent.
+    double tx = x2 - ctrlX;
+    double ty = y2 - ctrlY;
+    double len = Math.hypot(tx, ty);
+    if (len > 0.001) {
+      double ux = tx / len;
+      double uy = ty / len;
+      double arrowLen = 8.0;
+      double wing = 4.5;
+      double bx = x2 - ux * arrowLen;
+      double by = y2 - uy * arrowLen;
+      double px = -uy;
+      double py = ux;
+
+        gc.setFill(strokeColor.deriveColor(0, 1, 1, Math.min(1.0, strokeColor.getOpacity() + 0.02)));
+      gc.fillPolygon(
+          new double[]{x2, bx + px * wing, bx - px * wing},
+          new double[]{y2, by + py * wing, by - py * wing},
+          3);
+    }
+    return true;
+  }
   
   private void updateFeatureTracksPaneHeight() {
     if (drawStacks.isEmpty()) return;
@@ -149,6 +288,7 @@ public class MainController {
     });
   }
   public static void addStack(boolean add) {
+    clearCrossStackMateArc();
     if (add) {
       // Determine chromosome for new stack
       String[] defaultChroms = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "X", "Y"};
@@ -194,6 +334,7 @@ public class MainController {
   
   }
   public static void addStackAtPosition(String chrom, int position) {
+    clearCrossStackMateArc();
     // Strip "chr" prefix if present to match internal naming
     if (chrom.startsWith("chr")) chrom = chrom.substring(3);
     final String finalChrom = chrom;
@@ -233,6 +374,7 @@ public class MainController {
   }
   
   public static void removeStack(DrawStack stackToRemove) {
+    clearCrossStackMateArc();
     if (drawStacks.size() < 2) return;
     
     int index = drawStacks.indexOf(stackToRemove);
@@ -281,6 +423,7 @@ public class MainController {
     javafx.scene.control.SplitPane.setResizableWithParent(drawSideBar, false);
     javafx.scene.control.SplitPane.setResizableWithParent(featureTracksSideBarPane, false);
     javafx.scene.control.SplitPane.setResizableWithParent(chromPane, false);
+    javafx.scene.control.SplitPane.setResizableWithParent(featureTracksPane, false);
   }
   static void setDividerListeners() {
     EventCoordinator.synchronizeDividers(drawPane, chromSplitPane, featureTracksContentPane);

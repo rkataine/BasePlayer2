@@ -13,6 +13,19 @@ import org.baseplayer.samples.alignment.draw.ReadColorMode;
  */
 public final class Settings {
 
+  /** Placement policy for read info popup. */
+  public enum ReadInfoPopupPosition {
+    TOP_RIGHT("Top-right (fixed)"),
+    NEAR_CURSOR("Near click position");
+
+    private final String label;
+
+    ReadInfoPopupPosition(String label) { this.label = label; }
+
+    @Override
+    public String toString() { return label; }
+  }
+
   private static final Preferences prefs = Preferences.userNodeForPackage(Settings.class);
 
   // ── Keys ──────────────────────────────────────────────────────────────
@@ -28,6 +41,10 @@ public final class Settings {
   private static final String KEY_MISMATCH_MIN_FRACTION   = "mismatchMinFraction";
   private static final String KEY_MISMATCH_MIN_COUNT      = "mismatchMinCount";
   private static final String KEY_READ_COLOR_MODE         = "readColorMode";
+  private static final String KEY_READ_INFO_POPUP_POSITION = "readInfoPopupPosition";
+  private static final String KEY_MAX_READ_COVERAGE        = "maxReadCoverage";
+  private static final String KEY_LAST_GENOME              = "lastGenome";
+  private static final String KEY_LAST_ANNOTATION          = "lastAnnotation";
 
   // ── Defaults (matching original hardcoded values) ─────────────────────
 
@@ -42,6 +59,8 @@ public final class Settings {
   public static final double DEF_MISMATCH_MIN_FRACTION    = 0.10;
   public static final int    DEF_MISMATCH_MIN_COUNT       = 2;
   public static final ReadColorMode DEF_READ_COLOR_MODE   = ReadColorMode.STRAND;
+  public static final ReadInfoPopupPosition DEF_READ_INFO_POPUP_POSITION = ReadInfoPopupPosition.TOP_RIGHT;
+  public static final int    DEF_MAX_READ_COVERAGE        = 1000;
 
   private static final Settings INSTANCE = new Settings();
 
@@ -58,6 +77,10 @@ public final class Settings {
   private double mismatchMinFraction;
   private int    mismatchMinCount;
   private ReadColorMode readColorMode;
+  private ReadInfoPopupPosition readInfoPopupPosition;
+  private int    maxReadCoverage;
+  private String  lastGenome;
+  private String  lastAnnotation;
 
   private Settings() {
     load();
@@ -82,6 +105,15 @@ public final class Settings {
     } catch (IllegalArgumentException e) {
       readColorMode = DEF_READ_COLOR_MODE;
     }
+    try {
+      readInfoPopupPosition = ReadInfoPopupPosition.valueOf(
+          prefs.get(KEY_READ_INFO_POPUP_POSITION, DEF_READ_INFO_POPUP_POSITION.name()));
+    } catch (IllegalArgumentException e) {
+      readInfoPopupPosition = DEF_READ_INFO_POPUP_POSITION;
+    }
+    maxReadCoverage       = prefs.getInt(KEY_MAX_READ_COVERAGE, DEF_MAX_READ_COVERAGE);
+    lastGenome            = prefs.get(KEY_LAST_GENOME, null);
+    lastAnnotation        = prefs.get(KEY_LAST_ANNOTATION, null);
   }
 
   // ── Getters ───────────────────────────────────────────────────────────
@@ -119,6 +151,18 @@ public final class Settings {
   /** How reads are colored: STRAND (default) or UC_TAG. */
   public ReadColorMode getReadColorMode() { return readColorMode; }
 
+  /** Where the read info popup is shown. */
+  public ReadInfoPopupPosition getReadInfoPopupPosition() { return readInfoPopupPosition; }
+
+  /** Maximum coverage depth for showing individual reads (above this: coverage-only). */
+  public int getMaxReadCoverage() { return maxReadCoverage; }
+
+  /** Last selected reference genome name (e.g. "GRCh38"), or null if none saved. */
+  public String getLastGenome() { return lastGenome; }
+
+  /** Last selected annotation filename, or null if none saved. */
+  public String getLastAnnotation() { return lastAnnotation; }
+
   // ── Setters (persist immediately) ─────────────────────────────────────
 
   public void setMaxReadViewLength(int bp)            { this.maxReadViewLength = bp; prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp); }
@@ -132,6 +176,13 @@ public final class Settings {
   public void setMismatchMinFraction(double f)         { this.mismatchMinFraction = f; prefs.putDouble(KEY_MISMATCH_MIN_FRACTION, f); }
   public void setMismatchMinCount(int n)               { this.mismatchMinCount = n; prefs.putInt(KEY_MISMATCH_MIN_COUNT, n); }
   public void setReadColorMode(ReadColorMode mode)     { this.readColorMode = mode; prefs.put(KEY_READ_COLOR_MODE, mode.name()); }
+  public void setReadInfoPopupPosition(ReadInfoPopupPosition position) {
+    this.readInfoPopupPosition = position;
+    prefs.put(KEY_READ_INFO_POPUP_POSITION, position.name());
+  }
+  public void setMaxReadCoverage(int n)                  { this.maxReadCoverage = n; prefs.putInt(KEY_MAX_READ_COVERAGE, n); }
+  public void setLastGenome(String name)                  { this.lastGenome = name; if (name != null) prefs.put(KEY_LAST_GENOME, name); else prefs.remove(KEY_LAST_GENOME); }
+  public void setLastAnnotation(String name)              { this.lastAnnotation = name; if (name != null) prefs.put(KEY_LAST_ANNOTATION, name); else prefs.remove(KEY_LAST_ANNOTATION); }
 
   /** Reset all settings to defaults. */
   public void resetDefaults() {
@@ -146,5 +197,7 @@ public final class Settings {
     setMismatchMinFraction(DEF_MISMATCH_MIN_FRACTION);
     setMismatchMinCount(DEF_MISMATCH_MIN_COUNT);
     setReadColorMode(DEF_READ_COLOR_MODE);
+    setReadInfoPopupPosition(DEF_READ_INFO_POPUP_POSITION);
+    setMaxReadCoverage(DEF_MAX_READ_COVERAGE);
   }
 }

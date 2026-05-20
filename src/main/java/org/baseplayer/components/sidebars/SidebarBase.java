@@ -72,6 +72,7 @@ public abstract class SidebarBase {
 
     if (headerHeight > 0) {
       headerPane.setMaxWidth(Double.MAX_VALUE);
+      headerPane.setMinWidth(0);
       headerPane.setMinHeight(headerHeight);
       headerPane.setMaxHeight(headerHeight);
       layout.getChildren().add(headerPane);
@@ -81,6 +82,7 @@ public abstract class SidebarBase {
     }
 
     contentPane.setMaxWidth(Double.MAX_VALUE);
+    contentPane.setMinWidth(0);
     contentPane.setMinHeight(0);
     VBox.setVgrow(contentPane, Priority.ALWAYS);
     layout.getChildren().add(contentPane);
@@ -99,6 +101,10 @@ public abstract class SidebarBase {
     headerReactiveCanvas.heightProperty().bind(headerPane.heightProperty());
     headerPane.getChildren().addAll(headerCanvas, headerReactiveCanvas);
     setupHeaderHandlers();
+
+    // Redraw header whenever the canvas is resized (e.g. on first layout)
+    headerCanvas.widthProperty().addListener((obs, o, n) -> drawHeader());
+    headerCanvas.heightProperty().addListener((obs, o, n) -> drawHeader());
   }
 
   /**

@@ -1,6 +1,7 @@
 package org.baseplayer.services;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.baseplayer.components.sidebars.FeatureTracksSidebar;
 import org.baseplayer.components.sidebars.SampleSidebar;
@@ -9,6 +10,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.utils.BaseUtils;
 
+import javafx.application.Platform;
 import javafx.beans.property.IntegerProperty;
 import javafx.scene.control.SplitPane;
 
@@ -37,36 +39,53 @@ public class EventCoordinator {
   
   /**
    * Setup draw update listener that triggers redraws across all components.
+   *
+   * <p>The {@code GenomicCanvas.update} property is toggled from many call sites
+   * (mouse handlers, fetch completion callbacks, zoom animation, etc.), often
+   * several times per frame. To avoid running the full multi-canvas redraw
+   * pipeline multiple times per JavaFX pulse, redraws are coalesced via a
+   * {@link Platform#runLater} latch — every toggle during the same pulse
+   * collapses into a single redraw at the end of the pulse.
    */
   public void setupDrawUpdateListener(IntegerProperty memoryUsage) {
+    final AtomicBoolean redrawPending = new AtomicBoolean(false);
     AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
-      // Always draw all stacks so that data updates (e.g. BAM fetch completion)
-      // are reflected everywhere, not just on the hover stack
-      for (DrawStack pane : drawStacks) {
-        pane.cytobandCanvas.draw();
-        pane.chromosomeCanvas.draw();
-        pane.alignmentCanvas.draw();
+      if (redrawPending.compareAndSet(false, true)) {
+        Platform.runLater(() -> {
+          redrawPending.set(false);
+          redrawAll(memoryUsage);
+        });
       }
-      
-      // Update feature tracks when region changes
-      for (DrawStack stack : drawStacks) {
-        if (stack.featureTracksCanvas != null) {
-          stack.featureTracksCanvas.draw();
-        }
-      }
-      
-      if (featureTracksSidebar != null) {
-        featureTracksSidebar.draw();
-      }
-      
-      // Update track info sidebar
-      if (sidebarPanel != null) {
-        sidebarPanel.draw();
-      }
-      
-      // Update memory usage
-      memoryUsage.set(BaseUtils.toMegabytes.apply(runtime.totalMemory() - runtime.freeMemory()));
     });
+  }
+
+  private void redrawAll(IntegerProperty memoryUsage) {
+    // Always draw all stacks so that data updates (e.g. BAM fetch completion)
+    // are reflected everywhere, not just on the hover stack
+    for (DrawStack pane : drawStacks) {
+      pane.cytobandCanvas.draw();
+      pane.chromosomeCanvas.draw();
+      pane.alignmentCanvas.draw();
+    }
+
+    // Update feature tracks when region changes
+    for (DrawStack stack : drawStacks) {
+      if (stack.featureTracksCanvas != null) {
+        stack.featureTracksCanvas.draw();
+      }
+    }
+
+    if (featureTracksSidebar != null) {
+      featureTracksSidebar.draw();
+    }
+
+    // Update track info sidebar
+    if (sidebarPanel != null) {
+      sidebarPanel.draw();
+    }
+
+    // Update memory usage
+    memoryUsage.set(BaseUtils.toMegabytes.apply(runtime.totalMemory() - runtime.freeMemory()));
   }
   
   /**

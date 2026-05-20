@@ -5,15 +5,17 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.baseplayer.draw.DrawStack;
@@ -23,8 +25,10 @@ import org.baseplayer.io.Settings;
 import org.baseplayer.io.readers.AlignmentReader;
 import org.baseplayer.io.readers.BAMFileReader;
 import org.baseplayer.io.readers.CRAMFileReader;
+import org.baseplayer.samples.alignment.draw.ReadColorMode;
 
 import javafx.application.Platform;
+import javafx.scene.Cursor;
 
 /**
  * Represents a loaded BAM/CRAM alignment file.
@@ -36,6 +40,21 @@ import javafx.application.Platform;
  * read fetching, caching, packing, and coverage sampling.
  */
 public class AlignmentFile implements Closeable {
+
+  /** Exclusive read stacking modes exposed in track/master settings. */
+  public enum ReadStackingMode {
+    AUTO("Default"),
+    READ_GROUP("Read group split"),
+    STRAND_SPLIT("Strand split"),
+    DISCORDANT_SPLIT("Discordant/split split"),
+    MATE_SIDE_BY_SIDE("Mate side-by-side");
+
+    private final String label;
+
+    ReadStackingMode(String label) { this.label = label; }
+
+    @Override public String toString() { return label; }
+  }
 
   public final String name;
   public final Path path;
@@ -57,7 +76,24 @@ public class AlignmentFile implements Closeable {
   
   // Status message shown in the track (e.g., "No reads found", "Loaded 123 reads")
   private volatile String statusMessage = null;
-  
+
+  // Callback fired once on the JavaFX thread after the
+  // first read-fetch attempt completes (whether successful, empty, or error).
+  private volatile Runnable onFirstLoadComplete;
+  private final AtomicBoolean firstLoadFired = new AtomicBoolean(false);
+
+  /** When true, {@link #getReads} returns empty immediately and no new fetches are started. */
+  private volatile boolean suspended = false;
+
+  /**
+   * Fired once (then cleared) on the JavaFX thread the moment the first actual fetch
+   * is submitted to {@link #fetchPool}. Zoomed-out draw calls that return early never
+   * trigger this, so callers can use it to lazily register a "loading reads" task only
+   * when a real fetch is about to happen.
+   */
+  private volatile Runnable onFirstFetchStarted;
+  private final AtomicBoolean firstFetchStartedFired = new AtomicBoolean(false);
+
   // Data type detection (auto-detected from first batch of reads)
   private volatile boolean methylationDetected = false;
   private volatile boolean haplotypeDetected = false;
@@ -69,9 +105,21 @@ public class AlignmentFile implements Closeable {
   private volatile List<String> detectedReadGroups = new ArrayList<>();
   /** When true, reads are separated into sections by read group. */
   private volatile boolean splitByReadGroup = false;
+  /** When true, reads are separated by strand (butterfly layout). */
+  private volatile boolean splitByStrand = false;
+  /** When true, reads are separated by discordant/SA-tag status (butterfly layout). */
+  private volatile boolean splitByDiscordant = false;
+  /** When true, paired-end mates are preferentially packed on the same row. */
+  private volatile boolean stackMatesSideBySide = false;
+  /** Per-file read coloring mode (overrides global default for this track/file). */
+  private volatile ReadColorMode readColorMode;
   
   /** Vertical scroll offset for reads within this sample track (in pixels). */
   public volatile double readScrollOffset = 0;
+  /** Vertical scroll offset for top half in butterfly layout (forward / HP1). */
+  public volatile double readScrollOffsetTop = 0;
+  /** Vertical scroll offset for bottom half in butterfly layout (reverse / HP2). */
+  public volatile double readScrollOffsetBottom = 0;
 
   // Per-file coverage cache (keyed by DrawStack), so each file owns all its cached data
   public static class CoverageCache {
@@ -134,7 +182,11 @@ public class AlignmentFile implements Closeable {
       sc.fetchingChrom = "";
       sc.fetchingStart = -1;
       sc.fetchingEnd = -1;
+      sc.fetchingCoverageOnly = false;
       sc.loading = false;
+      sc.readScrollOffset = 0;
+      sc.readScrollOffsetTop = 0;
+      sc.readScrollOffsetBottom = 0;
     }
   }
   
@@ -168,7 +220,76 @@ public class AlignmentFile implements Closeable {
   public String getStatusMessage() {
     return statusMessage;
   }
-  
+
+  /**
+   * Register a callback that fires exactly once on the JavaFX thread after the
+   * first read-fetch attempt completes (whether successful, empty, or error).
+   * Safe to call from any thread before or after the first fetch starts.
+   */
+  public void setOnFirstLoadComplete(Runnable callback) {
+    // If the first fetch already finished before we registered, fire immediately.
+    if (firstLoadFired.get()) {
+      Platform.runLater(callback);
+    } else {
+      onFirstLoadComplete = callback;
+      // Guard against a race where the fetch finished between the check and the assignment.
+      if (firstLoadFired.get() && onFirstLoadComplete != null) {
+        Runnable cb = onFirstLoadComplete;
+        onFirstLoadComplete = null;
+        Platform.runLater(cb);
+      }
+    }
+  }
+
+  /**
+   * Register a callback fired once on the JavaFX thread right before the first actual
+   * fetch is submitted to the thread pool. Never fires for zoomed-out draw calls that
+   * return early. Safe to call from any thread.
+   */
+  public void setOnFirstFetchStarted(Runnable callback) {
+    if (firstFetchStartedFired.get()) {
+      Platform.runLater(callback);
+    } else {
+      onFirstFetchStarted = callback;
+      if (firstFetchStartedFired.get() && onFirstFetchStarted != null) {
+        Runnable cb = onFirstFetchStarted;
+        onFirstFetchStarted = null;
+        Platform.runLater(cb);
+      }
+    }
+  }
+
+  /**
+   * Cancel all in-flight read fetches and suspend future fetches.
+   * The draw loop will receive empty read lists until {@link #resume()} is called.
+   * Resets the first-load callback so it can be re-armed on reload.
+   */
+  public void cancelAndSuspend() {
+    suspended = true;
+    for (StackCache sc : stackCaches.values()) {
+      Future<?> f = sc.pendingFetch;
+      if (f != null) f.cancel(true);
+      sc.loading = false;
+      sc.fetchingChrom = "";
+      sc.fetchingStart = -1;
+      sc.fetchingEnd = -1;
+    }
+    coverageCalculator.cancelSampling();
+    // Reset so the callbacks can be re-armed when the user reloads
+    firstLoadFired.set(false);
+    firstFetchStartedFired.set(false);
+  }
+
+  /** Clear the suspension flag so the draw loop can trigger new read fetches. */
+  public void resume() {
+    suspended = false;
+  }
+
+  /** Whether read fetching is currently suspended for this file. */
+  public boolean isSuspended() {
+    return suspended;
+  }
+
   /** Whether this file contains methylation data (auto-detected or user-overridden). */
   public boolean isMethylationData() {
     Boolean override = suppressMethylMismatches;
@@ -209,15 +330,27 @@ public class AlignmentFile implements Closeable {
     volatile int lastViewStart = -1;
     volatile int lastViewEnd = -1;
     volatile boolean cachedCoverageOnly = false;
-    volatile double cachedScale = -1;
+    volatile boolean fetchingCoverageOnly = false;
+    /** Which signal tag was active when reads were cached: 'c', 'd', or '\0'. */
+    volatile char cachedSignalTag = '\0';
     /** The first row where discordant reads are placed (0 if discordant reads exist and are shown at top, -1 = no discordant reads). */
     volatile int discordantStartRow = -1;
     /** The first row where normal/concordant reads are placed (-1 if no separation, or no normal reads). */
     volatile int normalStartRow = -1;
     /** The first row where HP2/unphased reads are placed in allele view (-1 = not in allele view). */
     volatile int hp2StartRow = -1;
+    /** The first row where reverse-strand reads are placed in strand-split view (-1 = not in strand view). */
+    volatile int strandSplitStartRow = -1;
+    /** The first row where concordant reads are placed in discordant-split view (-1 = not in discordant view). */
+    volatile int discordantSplitStartRow = -1;
     /** Read group boundary rows: maps RG name → first row in that section. */
     volatile java.util.Map<String, Integer> readGroupStartRows = new java.util.LinkedHashMap<>();
+    /** Vertical scroll offset for reads within this stack panel (in pixels). */
+    volatile double readScrollOffset = 0;
+    /** Vertical scroll offset for top half in butterfly layout (forward / HP1). */
+    volatile double readScrollOffsetTop = 0;
+    /** Vertical scroll offset for bottom half in butterfly layout (reverse / HP2). */
+    volatile double readScrollOffsetBottom = 0;
   }
 
   private long fileSize = -1;
@@ -244,6 +377,7 @@ public class AlignmentFile implements Closeable {
       this.reader = new BAMFileReader(filePath);
     }
     this.name = reader.getSampleName();
+    this.readColorMode = Settings.get().getReadColorMode();
     this.fetchPool = Executors.newSingleThreadExecutor(
         r -> { Thread t = new Thread(r, "fetch-" + this.name); t.setDaemon(true); return t; }
     );
@@ -277,6 +411,9 @@ public class AlignmentFile implements Closeable {
    * @param coverageOnly if true, skip row packing for faster loading
    */
   public List<BAMRecord> getReads(String chrom, int start, int end, DrawStack stack, boolean blockDuringNavigation, boolean coverageOnly) {
+    // If reads are suspended (cancelled by user), return nothing until resumed
+    if (suspended) return Collections.emptyList();
+
     StackCache sc = getCache(stack);
     int viewLength = end - start;
     
@@ -299,6 +436,7 @@ public class AlignmentFile implements Closeable {
         sc.fetchingChrom = "";
         sc.fetchingStart = -1;
         sc.fetchingEnd = -1;
+        sc.fetchingCoverageOnly = false;
       }
       sc.loading = false;
       return Collections.emptyList();
@@ -318,7 +456,25 @@ public class AlignmentFile implements Closeable {
       sc.fetchingChrom = "";
       sc.fetchingStart = -1;
       sc.fetchingEnd = -1;
-      hasOverlap = false;
+      sc.fetchingCoverageOnly = false;
+    }
+
+    // Invalidate cache if signal tag mode changed (cached reads lack the needed tag data)
+    {
+      ReadColorMode cm = getReadColorMode();
+      char neededSignalTag = cm == ReadColorMode.UC_TAG ? 'c'
+                           : cm == ReadColorMode.UD_TAG ? 'd'
+                           : cm == ReadColorMode.UL_TAG ? 'l' : '\0';
+      if (neededSignalTag != sc.cachedSignalTag && !sc.cachedReads.get().isEmpty()) {
+        sc.cachedReads.set(Collections.emptyList());
+        sc.cachedChrom = "";
+        sc.cachedStart = -1;
+        sc.cachedEnd = -1;
+        sc.fetchingChrom = "";
+        sc.fetchingStart = -1;
+        sc.fetchingEnd = -1;
+        hasOverlap = false;
+      }
     }
     
     // If view has moved too far from cache (no overlap), clear it
@@ -327,7 +483,6 @@ public class AlignmentFile implements Closeable {
       sc.cachedChrom = "";
       sc.cachedStart = -1;
       sc.cachedEnd = -1;
-      hasOverlap = false;
     } else if (!hasOverlap && !sc.cachedChrom.isEmpty()) {
       sc.cachedReads.set(Collections.emptyList());
       sc.cachedChrom = "";
@@ -335,16 +490,13 @@ public class AlignmentFile implements Closeable {
       sc.cachedEnd = -1;
     }
     
-    // Fast path: reuse cache if requested region is within cached region
+    // Fast path: reuse cache if requested region is within cached region.
+    // We deliberately do NOT repack here on zoom even if the scale changed
+    // significantly — repacking only when new reads are fetched keeps the
+    // visible stacking stable while the user zooms or pans within the cached
+    // region. (The post-fetch repack below handles the case where new reads
+    // come in.)
     if (chrom.equals(sc.cachedChrom) && start >= sc.cachedStart && end <= sc.cachedEnd) {
-      // Repack if scale changed significantly (zoomed in/out)
-      if (!coverageOnly && sc.cachedScale > 0 && !sc.cachedReads.get().isEmpty()) {
-        double scaleRatio = stack.scale / sc.cachedScale;
-        if (scaleRatio < 0.5 || scaleRatio > 2.0) {
-          repackReads(stack);
-          sc.cachedScale = stack.scale;
-        }
-      }
       return sc.cachedReads.get();
     }
 
@@ -353,20 +505,10 @@ public class AlignmentFile implements Closeable {
       return sc.cachedReads.get(); // return stale or empty, no new fetches
     }
     
-    // During regular scroll/pan navigation, allow fetches to proceed with directional buffering
-    // This keeps UI responsive during scroll momentum
+    // During active navigation, callers that request blocking should reuse cached
+    // data only and defer any new fetch start until navigation settles.
     if (blockDuringNavigation && stack.nav.navigating) {
-      // If we have cached data, return it (but continue below to potentially start prefetch)
-      if (hasOverlap) {
-        // Check if there's already a fetch in progress that will cover us
-        if (chrom.equals(sc.fetchingChrom) && start >= sc.fetchingStart && end <= sc.fetchingEnd) {
-          return sc.cachedReads.get(); // Fetch in progress, return cached
-        }
-        // Fall through to trigger prefetch in scroll direction
-      } else {
-        // No cached data at all - allow immediate fetch even during navigation
-        // Fall through
-      }
+      return sc.cachedReads.get();
     }
 
     // Synchronize per-cache to prevent duplicate submits
@@ -375,7 +517,9 @@ public class AlignmentFile implements Closeable {
       if (chrom.equals(sc.cachedChrom) && start >= sc.cachedStart && end <= sc.cachedEnd) {
         return sc.cachedReads.get();
       }
-      if (chrom.equals(sc.fetchingChrom) && start >= sc.fetchingStart && end <= sc.fetchingEnd) {
+      // If in-flight fetch covers our region AND has compatible packing mode, wait for it
+      if (chrom.equals(sc.fetchingChrom) && start >= sc.fetchingStart && end <= sc.fetchingEnd
+          && (coverageOnly || !sc.fetchingCoverageOnly)) {
         return sc.cachedReads.get();
       }
 
@@ -418,21 +562,23 @@ public class AlignmentFile implements Closeable {
       final int fetchEnd = fetchEnd0;
 
       // Only cancel in-flight fetch if it won't cover our new buffered region
-      // This allows fetches to complete during navigation if they're still useful
+      // or if it's coverageOnly but we now need packed reads
       Future<?> prev = sc.pendingFetch;
       if (prev != null && !prev.isDone()) {
         boolean fetchCoversNewRegion = chrom.equals(sc.fetchingChrom) 
             && fetchStart >= sc.fetchingStart 
             && fetchEnd <= sc.fetchingEnd;
+        boolean packingMismatch = !coverageOnly && sc.fetchingCoverageOnly;
         
-        if (!fetchCoversNewRegion) {
-          // Stale fetch - cancel it and start new one
+        if (!fetchCoversNewRegion || packingMismatch) {
+          // Stale fetch or wrong packing mode - cancel it and start new one
           prev.cancel(true);
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;
+          sc.fetchingCoverageOnly = false;
         } else {
-          // In-flight fetch will cover us - keep it running
+          // In-flight fetch will cover us with correct packing - keep it running
           return sc.cachedReads.get();
         }
       }
@@ -440,35 +586,62 @@ public class AlignmentFile implements Closeable {
       sc.fetchingChrom = chrom;
       sc.fetchingStart = fetchStart;
       sc.fetchingEnd = fetchEnd;
+      sc.fetchingCoverageOnly = coverageOnly;
       sc.loading = true;
+      Platform.runLater(() -> {
+        if (org.baseplayer.MainApp.stage != null && org.baseplayer.MainApp.stage.getScene() != null) {
+          org.baseplayer.MainApp.stage.getScene().setCursor(Cursor.WAIT);
+        }
+      });
 
-      // Reset read scroll when fetching new region
-      readScrollOffset = 0;
-
-      System.out.println("Fetching BAM (" + name + "): " + chrom + ":" + fetchStart + "-" + fetchEnd);
+      // Reset read scroll for this stack panel when fetching a new region
+      resetReadScrollOffsets(stack);
 
       // Check FetchManager before submitting
       final FetchManager fm = FetchManager.get();
-      if (!fm.canFetch(fetchEnd - fetchStart)) {
+      if (!fm.canFetch(FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd)) {
         System.err.println("Fetch blocked by FetchManager for " + name);
         sc.loading = false;
         sc.fetchingChrom = "";
         sc.fetchingStart = -1;
         sc.fetchingEnd = -1;
+        sc.fetchingCoverageOnly = false;
         return sc.cachedReads.get();
+      }
+
+      System.out.println("Fetching BAM (" + name + "): " + chrom + ":" + fetchStart + "-" + fetchEnd);
+
+      // Notify that a real fetch is starting — fired once, lazily creates the loading task.
+      if (firstFetchStartedFired.compareAndSet(false, true)) {
+        Runnable cb = onFirstFetchStarted;
+        onFirstFetchStarted = null;
+        if (cb != null) Platform.runLater(cb);
       }
 
       final boolean skipPacking = coverageOnly;
       sc.pendingFetch = fetchPool.submit(() -> {
         FetchManager.FetchTicket ticket = fm.acquire(FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd);
         try {
+          // Enable signal tag parsing only when UC/UD color mode is active
+          ReadColorMode colorMode = getReadColorMode();
+          char signalTag = colorMode == ReadColorMode.UC_TAG ? 'c'
+                         : colorMode == ReadColorMode.UD_TAG ? 'd'
+                         : colorMode == ReadColorMode.UL_TAG ? 'l' : '\0';
+          reader.setActiveSignalTag(signalTag);
+
           List<BAMRecord> reads = new ArrayList<>();
           List<List<int[]>> rowSegments = new ArrayList<>();
+          List<List<String>> rowOwners = new ArrayList<>();
+          // In mate-side-by-side mode: track where first part of each readName landed so
+          // subsequent split parts / mates land on the same row with a bridge gap reserved.
+          final boolean sideBySide = stackMatesSideBySide;
+          Map<String, int[]> splitMateRow = sideBySide ? new LinkedHashMap<>() : null;
           int[] maxRowLocal = {0};
           // Pixel-based gap: 3 pixels converted to genomic coordinates (matches ReadPacker.MIN_PIXEL_GAP)
           int gap = skipPacking ? 0 : Math.max(1, (int)(3 * stack.scale));
           long[] lastUpdate = {System.nanoTime()};
           boolean[] detectionDone = {methylationDetected || haplotypeDetected || !detectedReadGroups.isEmpty()};
+          final int maxReadCoverage = Settings.get().getMaxReadCoverage();
 
           reader.queryStreaming(chrom, fetchStart, fetchEnd, record -> {
             if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) {
@@ -479,45 +652,39 @@ public class AlignmentFile implements Closeable {
                   + " after " + ticket.itemCount.get() + " reads");
               return false;
             }
+            // Stop when packing depth (actual coverage) exceeds the limit
+            if (maxRowLocal[0] >= maxReadCoverage) {
+              return false;
+            }
             
             if (!skipPacking) {
               // Incremental CIGAR-aware packing
               int[][] exons = ReadPacker.getExonSegments(record);
               int r = -1;
-              for (int i = 0; i < rowSegments.size(); i++) {
-                List<int[]> segs = rowSegments.get(i);
-                // Fast check: if first exon starts after the last segment's end, it fits
-                boolean fits;
-                if (!segs.isEmpty()) {
-                  int[] last = segs.get(segs.size() - 1);
-                  if (exons[0][0] >= last[1] + gap) {
-                    fits = true;
-                  } else {
-                    fits = true;
-                    for (int[] exon : exons) {
-                      for (int[] seg : segs) {
-                        if (exon[0] < seg[1] + gap && exon[1] + gap > seg[0]) {
-                          fits = false; break;
-                        }
-                      }
-                      if (!fits) break;
-                    }
-                  }
-                } else {
-                  fits = true;
+              int bridgeFrom = -1;
+
+              // In mate-side-by-side mode: prefer same row as the paired mate/split part (all reads).
+              // Bridge segments are only added for non-supplementary mates (to avoid huge range reservation).
+              // Overlap is allowed only with segments that belong to the same readName.
+              if (sideBySide && record.readName != null && splitMateRow != null) {
+                int[] pendingPlacement = ReadPacker.findPendingPlacementAllowOwnOverlap(
+                    record, splitMateRow, rowSegments, rowOwners, exons, gap);
+                if (pendingPlacement != null) {
+                  r = pendingPlacement[0];
+                  bridgeFrom = ReadPacker.calcBridgeFrom(record, pendingPlacement[1]);
                 }
-                if (fits) { r = i; break; }
               }
-              if (r >= 0) {
-                record.row = r;
-                rowSegments.get(r).addAll(Arrays.asList(exons));
-              } else {
-                record.row = rowSegments.size();
-                List<int[]> segs = new ArrayList<>();
-                segs.addAll(Arrays.asList(exons));
-                rowSegments.add(segs);
+
+              if (r < 0) {
+                r = ReadPacker.findFittingRow(rowSegments, exons, gap);
               }
+
+              record.row = ReadPacker.placeRecordInRow(rowSegments, rowOwners, record, r, bridgeFrom, exons);
               if (record.row > maxRowLocal[0]) maxRowLocal[0] = record.row;
+
+              if (sideBySide && record.readName != null && splitMateRow != null) {
+                ReadPacker.updatePendingPlacement(splitMateRow, record);
+              }
             }
             reads.add(record);
             
@@ -532,6 +699,7 @@ public class AlignmentFile implements Closeable {
             if (now - lastUpdate[0] > 100_000_000L && (detectionDone[0] || reads.size() > 200)) {
               sc.maxRow = maxRowLocal[0];
               sc.cachedReads.set(new ArrayList<>(reads));
+              sc.cachedSignalTag = signalTag;
               Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
               lastUpdate[0] = now;
             }
@@ -549,6 +717,7 @@ public class AlignmentFile implements Closeable {
             sc.lastViewStart = start;
             sc.lastViewEnd = end;
             sc.cachedCoverageOnly = skipPacking;
+            sc.cachedSignalTag = signalTag;
             consecutiveErrors = 0;
             System.out.println("Fetched BAM (" + name + "): " + reads.size() + " reads");
             
@@ -581,7 +750,6 @@ public class AlignmentFile implements Closeable {
             // Repack to optimize row usage now that all reads are loaded
             if (!skipPacking) {
               repackReads(stack);
-              sc.cachedScale = stack.scale;
             }
           }
         } catch (IOException e) {
@@ -594,15 +762,30 @@ public class AlignmentFile implements Closeable {
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;
+          sc.fetchingCoverageOnly = false;
         } catch (RuntimeException e) {
           System.err.println("Runtime error in BAM fetch (" + name + "): " + e.getMessage());
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;
+          sc.fetchingCoverageOnly = false;
         } finally {
           fm.release(ticket);
           sc.loading = false;
-          Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+          // Fire the first-load callback once — but not if we are suspended (cancelled),
+          // to prevent a racing cancelled fetch from prematurely completing a reload task.
+          if (!suspended && firstLoadFired.compareAndSet(false, true)) {
+            Runnable cb = onFirstLoadComplete;
+            onFirstLoadComplete = null;
+            if (cb != null) Platform.runLater(cb);
+          }
+          Platform.runLater(() -> {
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+            if (org.baseplayer.MainApp.stage != null && org.baseplayer.MainApp.stage.getScene() != null
+                && !isAnyStackLoading()) {
+              org.baseplayer.MainApp.stage.getScene().setCursor(Cursor.DEFAULT);
+            }
+          });
         }
       });
     }
@@ -620,11 +803,59 @@ public class AlignmentFile implements Closeable {
   }
 
   /**
+   * Whether any stack in this file is currently loading.
+   */
+  private boolean isAnyStackLoading() {
+    for (StackCache sc : stackCaches.values()) {
+      if (sc.loading) return true;
+    }
+    return false;
+  }
+
+  /**
    * Maximum row used in the current viewport for the given stack.
    */
   public int getMaxRow(DrawStack stack) {
     StackCache sc = stackCaches.get(stack);
     return sc != null ? sc.maxRow : 0;
+  }
+
+  /** Get normal-layout read scroll offset for the given stack panel. */
+  public double getReadScrollOffset(DrawStack stack) {
+    return getCache(stack).readScrollOffset;
+  }
+
+  /** Get top-half butterfly read scroll offset for the given stack panel. */
+  public double getReadScrollOffsetTop(DrawStack stack) {
+    return getCache(stack).readScrollOffsetTop;
+  }
+
+  /** Get bottom-half butterfly read scroll offset for the given stack panel. */
+  public double getReadScrollOffsetBottom(DrawStack stack) {
+    return getCache(stack).readScrollOffsetBottom;
+  }
+
+  /** Set normal-layout read scroll offset for the given stack panel (clamped to >= 0). */
+  public void setReadScrollOffset(DrawStack stack, double value) {
+    getCache(stack).readScrollOffset = Math.max(0, value);
+  }
+
+  /** Set top-half butterfly read scroll offset for the given stack panel (clamped to >= 0). */
+  public void setReadScrollOffsetTop(DrawStack stack, double value) {
+    getCache(stack).readScrollOffsetTop = Math.max(0, value);
+  }
+
+  /** Set bottom-half butterfly read scroll offset for the given stack panel (clamped to >= 0). */
+  public void setReadScrollOffsetBottom(DrawStack stack, double value) {
+    getCache(stack).readScrollOffsetBottom = Math.max(0, value);
+  }
+
+  /** Reset all read scroll offsets for the given stack panel. */
+  public void resetReadScrollOffsets(DrawStack stack) {
+    StackCache sc = getCache(stack);
+    sc.readScrollOffset = 0;
+    sc.readScrollOffsetTop = 0;
+    sc.readScrollOffsetBottom = 0;
   }
   
   /**
@@ -653,6 +884,24 @@ public class AlignmentFile implements Closeable {
     StackCache sc = stackCaches.get(stack);
     return sc != null ? sc.hp2StartRow : -1;
   }
+
+  /**
+   * Get the first row where reverse-strand reads are placed in strand-split view.
+   * Returns -1 if not in strand-split mode.
+   */
+  public int getStrandSplitStartRow(DrawStack stack) {
+    StackCache sc = stackCaches.get(stack);
+    return sc != null ? sc.strandSplitStartRow : -1;
+  }
+
+  /**
+   * Get the first row where concordant reads are placed in discordant-split view.
+   * Returns -1 if not in discordant-split mode.
+   */
+  public int getDiscordantSplitStartRow(DrawStack stack) {
+    StackCache sc = stackCaches.get(stack);
+    return sc != null ? sc.discordantSplitStartRow : -1;
+  }
   
   /** Get detected read groups. */
   public List<String> getDetectedReadGroups() { return detectedReadGroups; }
@@ -662,10 +911,95 @@ public class AlignmentFile implements Closeable {
   
   /** Enable/disable read group splitting. Repacks all stacks. */
   public void setSplitByReadGroup(boolean split) { 
+    if (split) {
+      splitByStrand = false;
+      splitByDiscordant = false;
+      stackMatesSideBySide = false;
+    }
     this.splitByReadGroup = split;
     repackAllStacks();
   }
-  
+
+  /** Whether strand splitting is enabled. */
+  public boolean isSplitByStrand() { return splitByStrand; }
+
+  /** Enable/disable strand splitting. Repacks all stacks. */
+  public void setSplitByStrand(boolean split) {
+    if (split) {
+      splitByReadGroup = false;
+      splitByDiscordant = false;
+      stackMatesSideBySide = false;
+    }
+    this.splitByStrand = split;
+    repackAllStacks();
+  }
+
+  /** Whether discordant/split-read splitting is enabled. */
+  public boolean isSplitByDiscordant() { return splitByDiscordant; }
+
+  /** Enable/disable discordant/split-read splitting. Repacks all stacks. */
+  public void setSplitByDiscordant(boolean split) {
+    if (split) {
+      splitByReadGroup = false;
+      splitByStrand = false;
+      stackMatesSideBySide = false;
+    }
+    this.splitByDiscordant = split;
+    repackAllStacks();
+  }
+
+  /** Whether mate-side-by-side packing is enabled. */
+  public boolean isStackMatesSideBySide() { return stackMatesSideBySide; }
+
+  /** Enable/disable mate-side-by-side packing. Repacks all stacks. */
+  public void setStackMatesSideBySide(boolean stackSideBySide) {
+    if (stackSideBySide) {
+      splitByReadGroup = false;
+      splitByStrand = false;
+      splitByDiscordant = false;
+    }
+    this.stackMatesSideBySide = stackSideBySide;
+    repackAllStacks();
+  }
+
+  /** Get current exclusive read stacking mode. */
+  public ReadStackingMode getReadStackingMode() {
+    if (splitByReadGroup) return ReadStackingMode.READ_GROUP;
+    if (splitByStrand) return ReadStackingMode.STRAND_SPLIT;
+    if (splitByDiscordant) return ReadStackingMode.DISCORDANT_SPLIT;
+    if (stackMatesSideBySide) return ReadStackingMode.MATE_SIDE_BY_SIDE;
+    return ReadStackingMode.AUTO;
+  }
+
+  /** Set exclusive read stacking mode. */
+  public void setReadStackingMode(ReadStackingMode mode) {
+    ReadStackingMode effective = mode != null ? mode : ReadStackingMode.AUTO;
+    splitByReadGroup = false;
+    splitByStrand = false;
+    splitByDiscordant = false;
+    stackMatesSideBySide = false;
+    switch (effective) {
+      case READ_GROUP -> splitByReadGroup = true;
+      case STRAND_SPLIT -> splitByStrand = true;
+      case DISCORDANT_SPLIT -> splitByDiscordant = true;
+      case MATE_SIDE_BY_SIDE -> stackMatesSideBySide = true;
+      case AUTO -> {
+        // keep all disabled
+      }
+    }
+    repackAllStacks();
+  }
+
+  /** Get this file's read color mode. */
+  public ReadColorMode getReadColorMode() {
+    return readColorMode != null ? readColorMode : Settings.get().getReadColorMode();
+  }
+
+  /** Set this file's read color mode. */
+  public void setReadColorMode(ReadColorMode mode) {
+    this.readColorMode = mode != null ? mode : Settings.get().getReadColorMode();
+  }
+
   /** Get the read group boundary rows for a given stack. */
   public java.util.Map<String, Integer> getReadGroupStartRows(DrawStack stack) {
     StackCache sc = stackCaches.get(stack);
@@ -766,13 +1100,16 @@ public class AlignmentFile implements Closeable {
     
     // Use ReadPacker to assign rows
     ReadPacker.PackingResult result = ReadPacker.packReads(
-        reads, stack, splitByReadGroup, haplotypeDetected, detectedReadGroups);
+      reads, stack, splitByReadGroup, haplotypeDetected, splitByStrand, splitByDiscordant,
+      stackMatesSideBySide, detectedReadGroups);
     
     // Update cache with packing results
     sc.maxRow = result.maxRow;
     sc.discordantStartRow = result.discordantStartRow;
     sc.normalStartRow = result.normalStartRow;
     sc.hp2StartRow = result.hp2StartRow;
+    sc.strandSplitStartRow = result.strandSplitStartRow;
+    sc.discordantSplitStartRow = result.discordantSplitStartRow;
     sc.readGroupStartRows = result.readGroupStartRows;
     sc.cachedReads.set(reads);
   }

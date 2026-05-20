@@ -1,0 +1,1 @@
+./gradlew jpackageImage 2>&1 | tail -30

@@ -4,8 +4,8 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Path;
 
-import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.features.BedTrack;
+import org.baseplayer.samples.alignment.AlignmentFile;
 
 /**
  * Represents a single loaded data file (BAM, BED, VCF, etc.) under an individual.
@@ -87,6 +87,46 @@ public class Sample implements Closeable {
   /** Get current status message for display in the track. */
   public String getStatusMessage() {
     return bamFile != null ? bamFile.getStatusMessage() : null;
+  }
+
+  /**
+   * Register a callback fired once on the JavaFX thread after the first read-fetch
+   * completes. For non-BAM files the callback is fired immediately.
+   */
+  public void setOnFirstLoadComplete(Runnable callback) {
+    if (bamFile != null) {
+      bamFile.setOnFirstLoadComplete(callback);
+    } else {
+      javafx.application.Platform.runLater(callback);
+    }
+  }
+
+  /**
+   * Register a callback fired once on the JavaFX thread right before the first actual
+   * BAM fetch is submitted. Never fires for zoomed-out views where no fetch occurs.
+   * For non-BAM files the callback is fired immediately.
+   */
+  public void setOnFirstFetchStarted(Runnable callback) {
+    if (bamFile != null) {
+      bamFile.setOnFirstFetchStarted(callback);
+    } else {
+      javafx.application.Platform.runLater(callback);
+    }
+  }
+
+  /** Whether read fetching is currently suspended for this file. */
+  public boolean isSuspended() {
+    return bamFile != null && bamFile.isSuspended();
+  }
+
+  /** Cancel in-flight reads and suspend future fetches until {@link #resume()} is called. */
+  public void cancelAndSuspend() {
+    if (bamFile != null) bamFile.cancelAndSuspend();
+  }
+
+  /** Clear the suspension flag so the draw loop can trigger new read fetches. */
+  public void resume() {
+    if (bamFile != null) bamFile.resume();
   }
 
   // ── BED delegation ──

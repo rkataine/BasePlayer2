@@ -1,11 +1,13 @@
 package org.baseplayer.samples.alignment.draw;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.Settings;
+import org.baseplayer.io.readers.BedFileReader.BedFeature;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
@@ -153,6 +155,19 @@ public class CoverageDrawer {
   }
 
   /**
+   * Return the maximum coverage across all computed sample rows.
+   */
+  public double getMaxCoverage() {
+    double max = 0;
+    if (rows != null) {
+      for (SampleRow row : rows) {
+        if (row.maxCoverage > max) max = row.maxCoverage;
+      }
+    }
+    return max;
+  }
+
+  /**
    * Build one SampleRow by computing coverage, mismatches, and methylation
    * from the sample's reads in a single pass.
    */
@@ -194,6 +209,15 @@ public class CoverageDrawer {
     int[] baseEvents = isMethyl ? new int[regionLen + 2] : null;
     int[] bisConv    = isMethyl ? new int[regionLen]      : null;
 
+    // Per-pixel: map genomic position → per-allele counts. Take the PEAK
+    // mismatch count at any single genomic position within the pixel rather
+    // than summing across all positions. Summing inflates values when multiple
+    // genomic positions land in one pixel (zoom-out within read view), giving
+    // misleading variant counts on the coverage track.  Mirrors the bin-level
+    // logic in computeCoverageCache().
+    @SuppressWarnings("unchecked")
+    java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[numColumns];
+
     // Single pass through reads
     for (BAMRecord read : reads) {
       // Map read exonic segments to pixel columns for coverage (CIGAR-aware)
@@ -222,14 +246,29 @@ public class CoverageDrawer {
 
           int px = (int)(double) chromPosToScreenPos.apply((double) mPos);
           if (px < 0 || px >= numColumns) continue;
+          if (posMM[px] == null) posMM[px] = new java.util.HashMap<>();
+          int[] c = posMM[px].computeIfAbsent(mPos, k -> new int[4]);
           switch (Character.toUpperCase((char) read.mismatches[m + 1])) {
-            case 'A' -> row.mmA[px]++;
-            case 'C' -> row.mmC[px]++;
-            case 'G' -> row.mmG[px]++;
-            case 'T' -> row.mmT[px]++;
+            case 'A' -> c[0]++;
+            case 'C' -> c[1]++;
+            case 'G' -> c[2]++;
+            case 'T' -> c[3]++;
           }
         }
       }
+    }
+
+    // Extract per-pixel peak: highest read count supporting any single allele
+    // at any single genomic position within the pixel.
+    for (int px = 0; px < numColumns; px++) {
+      if (posMM[px] == null) continue;
+      for (int[] c : posMM[px].values()) {
+        if (c[0] > row.mmA[px]) row.mmA[px] = c[0];
+        if (c[1] > row.mmC[px]) row.mmC[px] = c[1];
+        if (c[2] > row.mmG[px]) row.mmG[px] = c[2];
+        if (c[3] > row.mmT[px]) row.mmT[px] = c[3];
+      }
+      posMM[px] = null; // release for GC
     }
 
     // Convert pixel events → running coverage
@@ -355,10 +394,10 @@ public class CoverageDrawer {
       if (px >= numColumns) break;
 
       row.coverage[px] = Math.max(row.coverage[px], cache.smoothedCov[b]);
-      row.mmA[px] += cache.rawMmA[b];
-      row.mmC[px] += cache.rawMmC[b];
-      row.mmG[px] += cache.rawMmG[b];
-      row.mmT[px] += cache.rawMmT[b];
+      row.mmA[px] = Math.max(row.mmA[px], cache.rawMmA[b]);
+      row.mmC[px] = Math.max(row.mmC[px], cache.rawMmC[b]);
+      row.mmG[px] = Math.max(row.mmG[px], cache.rawMmG[b]);
+      row.mmT[px] = Math.max(row.mmT[px], cache.rawMmT[b]);
     }
 
     // Map methylation from cache
@@ -420,6 +459,14 @@ public class CoverageDrawer {
     double[] mmT = new double[numBins];
     double[] bisulfiteBin = new double[numBins];
 
+    // Per-bin: map genomic position → per-allele counts, so we can take the
+    // PEAK mismatch count at any single position instead of summing across all
+    // positions in the bin. Summing inflates values proportionally to binSize,
+    // causing false positives when zoomed out (noise from many positions exceeds
+    // the absolute count threshold). Peak values are zoom-invariant.
+    @SuppressWarnings("unchecked")
+    java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[numBins];
+
     // Single pass through reads — all accumulation at bin level
     for (BAMRecord read : reads) {
       addBinCoverageEvents(read, binCov, numBins, binStart, binSize);
@@ -438,14 +485,30 @@ public class CoverageDrawer {
             }
           }
 
+          if (posMM[bin] == null) posMM[bin] = new java.util.HashMap<>();
+          int pos = read.mismatches[m];
+          int[] c = posMM[bin].computeIfAbsent(pos, k -> new int[4]);
           switch (Character.toUpperCase((char) read.mismatches[m + 1])) {
-            case 'A' -> mmA[bin]++;
-            case 'C' -> mmC[bin]++;
-            case 'G' -> mmG[bin]++;
-            case 'T' -> mmT[bin]++;
+            case 'A' -> c[0]++;
+            case 'C' -> c[1]++;
+            case 'G' -> c[2]++;
+            case 'T' -> c[3]++;
           }
         }
       }
+    }
+
+    // Extract per-bin peak: the highest read count supporting any single allele
+    // at any single genomic position within the bin.
+    for (int b = 0; b < numBins; b++) {
+      if (posMM[b] == null) continue;
+      for (int[] c : posMM[b].values()) {
+        if (c[0] > mmA[b]) mmA[b] = c[0];
+        if (c[1] > mmC[b]) mmC[b] = c[1];
+        if (c[2] > mmG[b]) mmG[b] = c[2];
+        if (c[3] > mmT[b]) mmT[b] = c[3];
+      }
+      posMM[b] = null; // release for GC
     }
 
     double maxRaw = 0;
@@ -531,14 +594,16 @@ public class CoverageDrawer {
   public void render(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
                      double sampleHeight, double scrollBarPosition,
                      boolean coverageOnly, double coverageFractionH) {
-    if (rows == null || rows.length == 0 || numColumns == 0) return;
+    if (numColumns == 0) return;
+
+    SampleRow[] currentRows = rows != null ? rows : new SampleRow[0];
 
     double mmMinFrac = Settings.get().getMismatchMinFraction();
     int mmMinCount = Settings.get().getMismatchMinCount();
 
     // Determine which samples have methylation data for master track
     java.util.List<SampleRow> methylRows = new java.util.ArrayList<>();
-    for (SampleRow row : rows) {
+    for (SampleRow row : currentRows) {
       if (row.sample.isMethylationData() && row.smoothedMethylRatio != null) {
         methylRows.add(row);
       }
@@ -560,7 +625,7 @@ public class CoverageDrawer {
     // ── Single left-to-right pass: draw per-sample coverage + master methylation ──
 
     // First draw per-sample coverage bars and mismatches
-    for (SampleRow row : rows) {
+    for (SampleRow row : currentRows) {
       if (row.masterTrackOnly) continue; // Skip rows only needed for master track
       double sampleY = masterTrackHeight + row.sampleIndex * sampleHeight - scrollBarPosition;
       double covH = coverageOnly ? sampleHeight : coverageFractionH;
@@ -585,29 +650,45 @@ public class CoverageDrawer {
         lastMmPx = px;
 
         double cov = row.coverage[px];
+        // Top of the coverage bar at this pixel — mismatch bars must not exceed it.
+        double covBarH = cov * scale;
+        if (covBarH <= 0) continue;
+        double covBarTop = yBottom - covBarH; // bars are capped to this y
+
         double baseY = yBottom;
         if (row.mmT[px] >= mmMinCount && (cov == 0 || row.mmT[px] / cov >= mmMinFrac)) {
-          double h = row.mmT[px] * scale;
-          gc.setFill(DrawColors.MISMATCH_T);
-          gc.fillRect(px, baseY - h, barW, h);
-          baseY -= h;
+          double h = Math.min(row.mmT[px] * scale, baseY - covBarTop);
+          if (h > 0) {
+            gc.setFill(DrawColors.MISMATCH_T);
+            gc.fillRect(px, baseY - h, barW, h);
+            baseY -= h;
+          }
         }
+        if (baseY <= covBarTop) continue;
         if (row.mmG[px] >= mmMinCount && (cov == 0 || row.mmG[px] / cov >= mmMinFrac)) {
-          double h = row.mmG[px] * scale;
-          gc.setFill(DrawColors.MISMATCH_G);
-          gc.fillRect(px, baseY - h, barW, h);
-          baseY -= h;
+          double h = Math.min(row.mmG[px] * scale, baseY - covBarTop);
+          if (h > 0) {
+            gc.setFill(DrawColors.MISMATCH_G);
+            gc.fillRect(px, baseY - h, barW, h);
+            baseY -= h;
+          }
         }
+        if (baseY <= covBarTop) continue;
         if (row.mmC[px] >= mmMinCount && (cov == 0 || row.mmC[px] / cov >= mmMinFrac)) {
-          double h = row.mmC[px] * scale;
-          gc.setFill(DrawColors.MISMATCH_C);
-          gc.fillRect(px, baseY - h, barW, h);
-          baseY -= h;
+          double h = Math.min(row.mmC[px] * scale, baseY - covBarTop);
+          if (h > 0) {
+            gc.setFill(DrawColors.MISMATCH_C);
+            gc.fillRect(px, baseY - h, barW, h);
+            baseY -= h;
+          }
         }
+        if (baseY <= covBarTop) continue;
         if (row.mmA[px] >= mmMinCount && (cov == 0 || row.mmA[px] / cov >= mmMinFrac)) {
-          double h = row.mmA[px] * scale;
-          gc.setFill(DrawColors.MISMATCH_A);
-          gc.fillRect(px, baseY - h, barW, h);
+          double h = Math.min(row.mmA[px] * scale, baseY - covBarTop);
+          if (h > 0) {
+            gc.setFill(DrawColors.MISMATCH_A);
+            gc.fillRect(px, baseY - h, barW, h);
+          }
         }
       }
 
@@ -636,12 +717,15 @@ public class CoverageDrawer {
 
       // Max coverage label
       gc.setFill(Color.web("#aaaaaa"));
-      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
+      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
       gc.fillText(String.valueOf((int) row.maxCoverage), 3, sampleY + 10);
 
       // Sashimi arches (splice junction arches) for RNAseq data
       sashimiDrawer.draw(gc, row.sample, sampleY, covH, canvasWidth, drawStack, chromPosToScreenPos);
     }
+
+    // Draw BED samples in sample tracks (including BED-only tracks).
+    drawBedSamples(gc, canvasWidth, masterTrackHeight, sampleHeight, scrollBarPosition, coverageFractionH);
 
     // ── Master track methylation lines (same data, just different y-mapping) ──
     if (hasMasterMethyl && masterTrackHeight >= 10) {
@@ -667,7 +751,7 @@ public class CoverageDrawer {
       gc.setLineWidth(1.0);
 
       // Sample name legend
-      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 8));
+      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 8));
       double legendX = 4;
       for (SampleRow row : methylRows) {
         Color color = DrawColors.SAMPLE_METHYL_COLORS[row.methylColorIndex % DrawColors.SAMPLE_METHYL_COLORS.length];
@@ -683,6 +767,88 @@ public class CoverageDrawer {
       // Separator at bottom of master track
       gc.setStroke(Color.rgb(100, 100, 100, 0.6));
       gc.strokeLine(0, masterTrackHeight, canvasWidth, masterTrackHeight);
+    }
+  }
+
+  private void drawBedSamples(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
+                              double sampleHeight, double scrollBarPosition,
+                              double coverageFractionH) {
+    if (drawStack == null || drawStack.chromosome == null) return;
+
+    String chrom = drawStack.chromosome;
+    double viewStart = drawStack.start;
+    double viewEnd = drawStack.end;
+
+    for (int sIdx = sampleRegistry.getFirstVisibleSample();
+         sIdx <= sampleRegistry.getLastVisibleSample() && sIdx < sampleRegistry.getSampleTracks().size();
+         sIdx++) {
+      SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
+      if (track == null || !track.isVisible()) continue;
+
+      double sampleY = masterTrackHeight + sIdx * sampleHeight - scrollBarPosition;
+      // Keep BED rendering anchored exactly like the < maxReadViewLength layout
+      // regardless of current zoom level.
+      double covH = coverageFractionH;
+      if (sampleY + covH < 0) continue;
+
+      List<Sample> bedSamples = new ArrayList<>();
+      for (Sample sample : track.getSamples()) {
+        if (sample.visible && sample.getDataType() == Sample.DataType.BED && sample.getBedTrack() != null) {
+          bedSamples.add(sample);
+        }
+      }
+      if (bedSamples.isEmpty()) continue;
+
+      int laneCount = bedSamples.size();
+      double laneGap = laneCount > 1 ? 1.0 : 0.0;
+      double laneTopBase;
+      double laneHeight;
+
+      // Keep the old single-BED geometry exactly the same.
+      if (laneCount == 1) {
+        double usableH = Math.max(1, covH - 2);
+        laneHeight = Math.max(4, Math.min(usableH, covH * 0.55));
+        laneTopBase = sampleY + (covH - laneHeight) * 0.5;
+      } else {
+        double totalGap = laneGap * (laneCount - 1);
+        double laneArea = Math.max(1, covH - 2 - totalGap);
+        laneHeight = Math.max(2, laneArea / laneCount);
+        double usedH = laneHeight * laneCount + totalGap;
+        laneTopBase = sampleY + (covH - usedH) * 0.5;
+      }
+
+      for (int lane = 0; lane < bedSamples.size(); lane++) {
+        Sample sample = bedSamples.get(lane);
+        double featureY = laneTopBase + lane * (laneHeight + laneGap);
+        double featureH = laneHeight;
+
+        List<BedFeature> features = sample.getBedTrack().getFeatures(chrom);
+        if (features == null || features.isEmpty()) continue;
+
+        double alpha = sample.overlay ? 0.45 : 0.8;
+        for (BedFeature feature : features) {
+          if (feature.end() < viewStart || feature.start() + 1 > viewEnd) continue;
+
+          double sx1 = chromPosToScreenPos.apply((double) feature.start() + 1);
+          double sx2 = chromPosToScreenPos.apply((double) feature.end());
+          if (sx2 < 0 || sx1 > canvasWidth) continue;
+
+          double x1 = Math.max(0, Math.min(canvasWidth, sx1));
+          double x2 = Math.max(0, Math.min(canvasWidth, sx2));
+          double w = Math.max(1, x2 - x1);
+
+          Color base = feature.color();
+          gc.setFill(Color.color(base.getRed(), base.getGreen(), base.getBlue(), alpha));
+          double arc = Math.min(2.0, Math.max(0.0, featureH * 0.5));
+          gc.fillRoundRect(x1, featureY, w, featureH, arc, arc);
+
+          if (w > 40 && featureH >= 7 && feature.name() != null && !feature.name().isEmpty()) {
+            gc.setFill(Color.rgb(235, 235, 235, 0.9));
+            gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 8));
+            gc.fillText(feature.name(), x1 + 2, featureY + featureH - 1);
+          }
+        }
+      }
     }
   }
 
@@ -749,13 +915,13 @@ public class CoverageDrawer {
 
     if (sampled == null) {
       gc.setFill(Color.web("#888888"));
-      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
+      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 11));
       gc.fillText("Sampling coverage...", 10, sampleY + sampleH / 2 + 4);
       return;
     }
     if (sampled.samplesCompleted == 0) {
       gc.setFill(Color.web("#888888"));
-      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 11));
+      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 11));
       String msg = sampled.chunksProcessed > 0
           ? "Sampling coverage... (" + sampled.chunksProcessed + " chunks processed)"
           : "Sampling coverage...";
@@ -821,11 +987,11 @@ public class CoverageDrawer {
     if (!sampled.complete) {
       int pct = (int)(100.0 * count / sampled.numSamples);
       gc.setFill(Color.web("#888888"));
-      gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
+      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
       gc.fillText("Sampling " + pct + "%", 3, sampleY + sampleH - 4);
     }
     gc.setFill(Color.web("#aaaaaa"));
-    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
+    gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
     gc.fillText(String.valueOf((int) maxDepth), 3, sampleY + 10);
   }
 

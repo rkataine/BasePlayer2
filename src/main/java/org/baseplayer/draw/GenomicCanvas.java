@@ -1,5 +1,8 @@
 package org.baseplayer.draw;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.function.Function;
 
 import org.baseplayer.samples.alignment.FetchManager;
@@ -10,14 +13,11 @@ import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
 import javafx.animation.PauseTransition;
-import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
-import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.SimpleBooleanProperty;
-import javafx.beans.property.SimpleDoubleProperty;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.input.MouseButton;
+import javafx.scene.image.Image;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
@@ -49,6 +49,9 @@ public class GenomicCanvas extends Canvas {
   protected double mousePressedY;
   private boolean lineZoomer = false;
   private boolean zoomDrag;
+  private boolean secondaryDragAnchorInitialized = false;
+  private boolean primaryDragAnchorInitialized = false;
+  private static final double MIN_ZOOM_DRAG_PIXELS = 5.0;
   /** True while the mouse is being dragged in this canvas; cleared shortly after release. */
   protected volatile boolean mouseDragged = false;
   public static double zoomFactor = 10;
@@ -63,6 +66,17 @@ public class GenomicCanvas extends Canvas {
   private boolean momentumTimerRunning = false;
   private static final double MAX_VELOCITY = 50000.0; // Cap maximum scroll velocity
   private static final long SCROLL_IDLE_THRESHOLD = 50_000_000; // 50ms in nanoseconds
+
+  /** Reused after mouse release to clear {@link #mouseDragged}. */
+  private PauseTransition dragFlagClearTimer;
+
+  // Snapshot-transform preview used only during animated zoom.
+  private Image interactionSnapshot;
+  private boolean zoomPreviewActive = false;
+  private AnimationTimer zoomPreviewTimer;
+  private double pendingZoomStart = Double.NaN;
+  private double pendingZoomEnd = Double.NaN;
+  private static final double CLOSE_ZOOM_NO_ANIMATION_FACTOR = 3.0;
 
   public GenomicCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
@@ -179,6 +193,8 @@ public class GenomicCanvas extends Canvas {
       mousePressedY = event.getY();
       mouseDraggedX = event.getX(); // Use press position so first drag delta is correct
       mouseDragged = false;
+      secondaryDragAnchorInitialized = false;
+      primaryDragAnchorInitialized = event.isPrimaryButtonDown();
     });
     reactiveCanvas.setOnMouseDragged(event -> { mouseDragged = true; drawStack.nav.navigating = true; handleDrag(event); onDragActive(); });
     reactiveCanvas.setOnScroll(event -> { drawStack.nav.navigating = true; handleScroll(event); } );
@@ -186,9 +202,11 @@ public class GenomicCanvas extends Canvas {
       handleMouseRelease(event);
       // Clear the drag flag shortly after release so the click event (which fires
       // after release) can still observe it, then normal interaction resumes.
-      PauseTransition pt = new PauseTransition(javafx.util.Duration.millis(50));
-      pt.setOnFinished(e -> mouseDragged = false);
-      pt.play();
+      if (dragFlagClearTimer == null) {
+        dragFlagClearTimer = new PauseTransition(javafx.util.Duration.millis(50));
+        dragFlagClearTimer.setOnFinished(e -> mouseDragged = false);
+      }
+      dragFlagClearTimer.playFromStart();
     });
   }
   protected void handleScroll(ScrollEvent event) {
@@ -212,10 +230,57 @@ public class GenomicCanvas extends Canvas {
               org.baseplayer.samples.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
               org.baseplayer.samples.alignment.AlignmentFile sf = track.getFirstBam();
               if (sf != null) {
-                sf.readScrollOffset = Math.max(0, sf.readScrollOffset - deltaY);
+                double readGap = org.baseplayer.io.Settings.get().getReadGap();
+                double readHeight = org.baseplayer.io.Settings.get().getReadHeight();
+                double rowPitch = Math.max(1.0, readHeight + readGap);
+                int totalRows = Math.max(0, sf.getMaxRow(drawStack) + 1);
+                double coverageH = Math.max(30,
+                    Math.min(60, sampleH * org.baseplayer.io.Settings.get().getCoverageFraction()));
+                double readsH = Math.max(1.0, sampleH - coverageH);
+
+                // Check if in butterfly layout and which half the mouse is in
+                double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
+                double middleY = sampleY + sampleH / 2;
+                int hp2Start = sf.getHP2StartRow(drawStack);
+                int strandStart = sf.getStrandSplitStartRow(drawStack);
+                int discStart = sf.getDiscordantSplitStartRow(drawStack);
+                boolean isButterfly = (hp2Start >= 0 && track.getSamples().stream().anyMatch(s -> s.isHaplotypeData()))
+                    || (strandStart >= 0 && sf.isSplitByStrand())
+                    || (discStart >= 0 && sf.isSplitByDiscordant());
+
+                int splitRow;
+                if (discStart >= 0 && sf.isSplitByDiscordant()) {
+                  splitRow = discStart;
+                } else if (strandStart >= 0 && sf.isSplitByStrand()) {
+                  splitRow = strandStart;
+                } else {
+                  splitRow = hp2Start;
+                }
+
+                if (isButterfly) {
+                  double halfReadsH = Math.max(1.0, readsH / 2.0);
+                  int topRows = Math.max(0, Math.min(totalRows, splitRow));
+                  int bottomRows = Math.max(0, totalRows - topRows);
+                  double maxTop = Math.max(0, topRows * rowPitch - halfReadsH);
+                  double maxBottom = Math.max(0, bottomRows * rowPitch - halfReadsH);
+                  if (mouseY < middleY) {
+                    // Top half (forward / HP1): scroll up reveals more rows
+                    double next = Math.max(0, Math.min(maxTop, sf.getReadScrollOffsetTop(drawStack) + deltaY));
+                    sf.setReadScrollOffsetTop(drawStack, next);
+                  } else {
+                    // Bottom half (reverse / HP2): scroll down reveals more rows
+                    double next = Math.max(0, Math.min(maxBottom, sf.getReadScrollOffsetBottom(drawStack) - deltaY));
+                    sf.setReadScrollOffsetBottom(drawStack, next);
+                  }
+                } else {
+                  double maxScroll = Math.max(0, totalRows * rowPitch - readsH);
+                  double next = Math.max(0, Math.min(maxScroll, sf.getReadScrollOffset(drawStack) - deltaY));
+                  sf.setReadScrollOffset(drawStack, next);
+                }
               }
               // Trigger redraw
               update.set(!update.get());
+              resetScrollIdleTimer();
             }
           }
         }
@@ -248,6 +313,10 @@ public class GenomicCanvas extends Canvas {
             scrollVelocity = genomeDelta * 30; // Reduced from 60fps assumption for less initial momentum
             scrollVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, scrollVelocity));
           }
+          // Cap velocity proportional to view size — prevents close-zoom from feeling frictionless.
+          // At ≤100 bp view velocity stays below velocityThreshold so momentum won't fire at all.
+          double dynamicMaxVelocity = Math.min(MAX_VELOCITY, drawStack.viewLength * 1.0);
+          scrollVelocity = Math.max(-dynamicMaxVelocity, Math.min(dynamicMaxVelocity, scrollVelocity));
           lastScrollTime = currentTime;
           
           // Dynamic velocity threshold based on zoom level (logarithmic)
@@ -268,11 +337,29 @@ public class GenomicCanvas extends Canvas {
   protected void handleDrag(MouseEvent event) {
     double dragX = event.getX();
 		double dragY = event.getY();
-    if (event.getButton() == MouseButton.SECONDARY) {
-      // Calculate delta from last drag position for smooth scrolling
-      double deltaX = dragX - (mouseDraggedX != 0 ? mouseDraggedX : mousePressedX);
-      setStart(drawStack.start - deltaX * drawStack.scale);
+    if (event.isSecondaryButtonDown()) {
+      // First drag frame may arrive without a matching press on canvas (e.g. popup auto-hide).
+      // Initialize the anchor here to prevent a stale-coordinate jump.
+      if (!secondaryDragAnchorInitialized) {
+        mouseDraggedX = dragX;
+        secondaryDragAnchorInitialized = true;
+        return;
+      }
+      double deltaX = dragX - mouseDraggedX;
+      if (deltaX != 0) {
+        setStart(drawStack.start - deltaX * drawStack.scale);
+      }
       mouseDraggedX = dragX;
+      return;
+    }
+    secondaryDragAnchorInitialized = false;
+    if (!primaryDragAnchorInitialized) {
+      // First primary-drag frame may arrive without a matching press on canvas
+      // (e.g. popup auto-hide consumed the initial click). Anchor here.
+      mousePressedX = dragX;
+      mousePressedY = dragY;
+      mouseDraggedX = dragX;
+      primaryDragAnchorInitialized = true;
       return;
     }
     
@@ -281,11 +368,17 @@ public class GenomicCanvas extends Canvas {
     zoomDrag = true;
 		mouseDragDeltaX = dragX - mouseDraggedX;
     mouseDraggedX = dragX;
+    double totalDragPixels = Math.abs(mouseDraggedX - mousePressedX);
     if (!lineZoomer && mouseDraggedX >= mousePressedX) {
       clearReactive();
       reactiveGc.fillRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight());
       reactiveGc.strokeRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight() + 2);
     } else {
+      if (totalDragPixels < MIN_ZOOM_DRAG_PIXELS) {
+        zoomDrag = false;
+        clearReactive();
+        return;
+      }
       zoomDrag = false;
       lineZoomer = true;
       drawStack.nav.lineZoomerActive = true; // Block all fetches during line zoom
@@ -295,12 +388,19 @@ public class GenomicCanvas extends Canvas {
     }
   }
   protected void handleMouseRelease(MouseEvent event) {
+    secondaryDragAnchorInitialized = false;
+    primaryDragAnchorInitialized = false;
     clearReactive();
    
     if (lineZoomer) { 
       lineZoomer = false;
       drawStack.nav.lineZoomerActive = false; // Re-enable fetches
       drawStack.nav.navigating = false; // Allow fetches now that lineZoomer is done
+      // Stop momentum timer to prevent stale velocity from triggering fetches
+      scrollVelocity = 0;
+      if (momentumTimerRunning) {
+        momentumTimer.stop();
+      }
       update.set(!update.get()); 
       return; 
     }
@@ -309,6 +409,10 @@ public class GenomicCanvas extends Canvas {
     
     if (zoomDrag) {
       zoomDrag = false;
+      if (Math.abs(mouseDraggedX - mousePressedX) < MIN_ZOOM_DRAG_PIXELS) {
+        update.set(!update.get());
+        return;
+      }
      
       if (mousePressedX > mouseDraggedX) { update.set(!update.get()); return; }
 
@@ -328,6 +432,15 @@ public class GenomicCanvas extends Canvas {
    */
   protected boolean isDragging() {
     return mouseDragged || drawStack.nav.lineZoomerActive || drawStack.nav.navigating;
+  }
+
+  /**
+   * True while the reactive canvas is used by GenomicCanvas for zoom visuals
+   * (drag rectangle / line zoom). Subclasses can use this to decide whether
+   * it is safe to draw their own reactive overlays.
+   */
+  protected boolean isReactiveOverlayReserved() {
+    return zoomDrag || lineZoomer || drawStack.nav.lineZoomerActive || zoomPreviewActive;
   }
 
   /**
@@ -354,9 +467,10 @@ public class GenomicCanvas extends Canvas {
   }
   public void setStartEnd(Double start, double end) {
     if (end - start < minZoom) {
-			start = drawStack.middlePos() - minZoom / 2;
-			end = drawStack.middlePos() + minZoom / 2;
-		}
+      double requestedCenter = (start + end) / 2.0;
+      start = requestedCenter - minZoom / 2.0;
+      end = requestedCenter + minZoom / 2.0;
+    }
     if (start < 1) start = 1.0;
     if (end >= drawStack.chromSize - 1) end = drawStack.chromSize + 1;
 
@@ -394,6 +508,18 @@ public class GenomicCanvas extends Canvas {
         }
       }
     }
+    
+    // If zooming out beyond read view threshold, clear read caches (reads won't be drawn)
+    if (newViewLength > org.baseplayer.io.Settings.get().getMaxReadViewLength() && 
+        oldViewLength <= org.baseplayer.io.Settings.get().getMaxReadViewLength()) {
+      for (var track : sampleRegistry.getSampleTracks()) {
+        for (var sample : track.getSamples()) {
+          if (sample.getBamFile() != null) {
+            sample.getBamFile().clearReadCache(drawStack);
+          }
+        }
+      }
+    }
 
     drawStack.start = start;
     drawStack.end = end;
@@ -417,6 +543,19 @@ public class GenomicCanvas extends Canvas {
   }
 
   public void zoomAnimation(double start, double end) {
+    if (shouldSkipZoomAnimation(start, end)) {
+      cancelZoomAnimation(true);
+      setStartEnd(start, end);
+      return;
+    }
+
+    // Preempt an in-flight zoom so repeated zoom-in clicks cannot leave the
+    // viewport in an intermediate state.
+    cancelZoomAnimation(true);
+
+    pendingZoomStart = start;
+    pendingZoomEnd = end;
+
     // Only cancel fetches if we're jumping to a different region (not zooming in on same area)
     double overlapStart = Math.max(start, drawStack.start);
     double overlapEnd = Math.min(end, drawStack.end);
@@ -428,40 +567,128 @@ public class GenomicCanvas extends Canvas {
     if (overlapRatio < 0.3) {
       FetchManager.get().cancelAll();
     }
-    
-    new Thread(() -> {
-      drawStack.nav.animationRunning = true;
-      drawStack.nav.navigating = true;
-      final DoubleProperty currentStart = new SimpleDoubleProperty(drawStack.start);
-      final DoubleProperty currentEnd = new SimpleDoubleProperty(drawStack.end);
-      double startStep = (start - drawStack.start)/10;
-      double endStep = (drawStack.end - end)/10;
-      final boolean[] ended = {false};
-      for(int i = 0; i < 10; i++) {
-        Platform.runLater(() -> { setStartEnd(currentStart.get(), currentEnd.get()); });
-        currentStart.set(currentStart.get() + startStep);
-        currentEnd.set(currentEnd.get() - endStep);
-        if ((startStep > 0 && currentStart.get() >= start) || (startStep < 0 && currentStart.get() <= start)) {
-          ended[0] = true;
-          break;
+
+    // Animate by transforming the current canvas snapshot and commit genomic
+    // coordinates only once at the end.
+    final double sourceStart = drawStack.start;
+    final double sourceEnd = drawStack.end;
+
+    final List<GenomicCanvas> previewCanvases = collectStackPreviewCanvases();
+    boolean hasPreviewSnapshot = false;
+    for (GenomicCanvas canvas : previewCanvases) {
+      Image snap = canvas.snapshot(null, null);
+      if (snap == null) continue;
+      canvas.interactionSnapshot = snap;
+      canvas.zoomPreviewActive = true;
+      hasPreviewSnapshot = true;
+    }
+
+    if (!hasPreviewSnapshot) {
+      drawStack.nav.animationRunning = false;
+      drawStack.nav.navigating = false;
+      setStartEnd(start, end);
+      pendingZoomStart = Double.NaN;
+      pendingZoomEnd = Double.NaN;
+      return;
+    }
+
+    drawStack.nav.animationRunning = true;
+    drawStack.nav.navigating = true;
+
+    final long durationNanos = 120_000_000L; // 120 ms
+    final long[] startNanos = { -1L };
+
+    zoomPreviewTimer = new AnimationTimer() {
+      @Override
+      public void handle(long now) {
+        if (startNanos[0] < 0) {
+          startNanos[0] = now;
         }
-        
-        try { 
-          Thread.sleep(10); 
-        } catch (InterruptedException e) { 
-          Thread.currentThread().interrupt();
-          break; 
+        double t = Math.min(1.0, (now - startNanos[0]) / (double) durationNanos);
+
+        double currentStart = sourceStart + (start - sourceStart) * t;
+        double currentEnd = sourceEnd + (end - sourceEnd) * t;
+        for (GenomicCanvas canvas : previewCanvases) {
+          if (canvas.interactionSnapshot == null) continue;
+          canvas.drawZoomPreview(sourceStart, sourceEnd, currentStart, currentEnd);
+        }
+
+        if (t >= 1.0) {
+          stop();
+          zoomPreviewTimer = null;
+          for (GenomicCanvas canvas : previewCanvases) {
+            canvas.zoomPreviewActive = false;
+            canvas.interactionSnapshot = null;
+            canvas.clearReactive();
+          }
+          drawStack.nav.animationRunning = false;
+          drawStack.nav.navigating = false;
+          setStartEnd(start, end);
+          pendingZoomStart = Double.NaN;
+          pendingZoomEnd = Double.NaN;
         }
       }
-      
-      // Schedule final position update and flag clearing together
-      Platform.runLater(() -> {
-        // Set final position (either target or current depending on early termination)
-        setStartEnd(ended[0] ? start : drawStack.start, end);
-        drawStack.nav.animationRunning = false;
-        drawStack.nav.navigating = false;
-        update.set(!update.get());
-      });
-    }).start();
+    };
+    zoomPreviewTimer.start();
+  }
+
+  private boolean shouldSkipZoomAnimation(double targetStart, double targetEnd) {
+    double currentView = Math.max(minZoom, drawStack.end - drawStack.start);
+    double targetView = Math.max(minZoom, targetEnd - targetStart);
+    boolean zoomingIn = targetView < currentView;
+    double closeZoomThreshold = minZoom * CLOSE_ZOOM_NO_ANIMATION_FACTOR;
+    return zoomingIn && (currentView <= closeZoomThreshold || targetView <= closeZoomThreshold);
+  }
+
+  private void cancelZoomAnimation(boolean snapToPendingTarget) {
+    if (zoomPreviewTimer != null) {
+      zoomPreviewTimer.stop();
+      zoomPreviewTimer = null;
+    }
+
+    boolean hadPreview = false;
+    for (GenomicCanvas canvas : collectStackPreviewCanvases()) {
+      if (canvas.zoomPreviewActive || canvas.interactionSnapshot != null) {
+        hadPreview = true;
+      }
+      canvas.zoomPreviewActive = false;
+      canvas.interactionSnapshot = null;
+      canvas.clearReactive();
+    }
+
+    if (hadPreview) {
+      drawStack.nav.animationRunning = false;
+      drawStack.nav.navigating = false;
+    }
+
+    if (snapToPendingTarget && !Double.isNaN(pendingZoomStart) && !Double.isNaN(pendingZoomEnd)) {
+      setStartEnd(pendingZoomStart, pendingZoomEnd);
+    }
+
+    pendingZoomStart = Double.NaN;
+    pendingZoomEnd = Double.NaN;
+  }
+
+  private List<GenomicCanvas> collectStackPreviewCanvases() {
+    LinkedHashSet<GenomicCanvas> set = new LinkedHashSet<>();
+    set.add(this);
+    if (drawStack.alignmentCanvas != null) set.add(drawStack.alignmentCanvas);
+    if (drawStack.chromosomeCanvas != null) set.add(drawStack.chromosomeCanvas);
+    if (drawStack.featureTracksCanvas != null) set.add(drawStack.featureTracksCanvas);
+    return new ArrayList<>(set);
+  }
+
+  private void drawZoomPreview(double sourceStart, double sourceEnd,
+                               double currentStart, double currentEnd) {
+    if (interactionSnapshot == null) return;
+
+    double sourceView = sourceEnd - sourceStart;
+    double currentView = Math.max(minZoom, currentEnd - currentStart);
+    double scaleX = sourceView / currentView;
+    double translateX = (sourceStart - currentStart) * (getWidth() / currentView);
+
+    reactiveGc.setFill(DrawColors.BACKGROUND);
+    reactiveGc.fillRect(0, 0, getWidth(), getHeight());
+    reactiveGc.drawImage(interactionSnapshot, translateX, 0, getWidth() * scaleX, getHeight());
   }
 }

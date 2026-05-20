@@ -104,7 +104,7 @@ public class SashimiDrawer {
     double archMaxH = covH * 0.6; // max arch height as fraction of coverage area
     double archMinH = 8;          // minimum visible arch height
 
-    gc.setFont(javafx.scene.text.Font.font("Segoe UI", 9));
+    gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
 
     for (SpliceJunction junc : junctions.values()) {
       double sx1 = chromPosToScreenPos.apply((double) junc.start);

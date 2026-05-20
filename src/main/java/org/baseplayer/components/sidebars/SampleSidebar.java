@@ -33,6 +33,11 @@ public class SampleSidebar extends SidebarBase {
     replaceHeaderContent();
     Canvas reactiveCanvas = new Canvas();
     masterTrack = new MasterTrackCanvas(reactiveCanvas, headerPane, new DrawStack());
+
+    // These canvases are bound to headerPane size; avoid layout feedback loops.
+    masterTrack.setManaged(false);
+    reactiveCanvas.setManaged(false);
+
     headerPane.getChildren().addAll(masterTrack, reactiveCanvas);
 
     // Sample list in content pane

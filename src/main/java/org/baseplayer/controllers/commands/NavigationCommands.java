@@ -13,6 +13,13 @@ import org.baseplayer.services.ServiceRegistry;
 public class NavigationCommands {
 
   private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+  /**
+   * Shift centered single-position windows by +0.5 bp so base tiles align with
+   * the center marker borders rather than sitting half a base off.
+   */
+  private static final double SINGLE_BASE_ALIGNMENT_BP = 0.5;
+
+  private record ViewWindow(double start, double end) {}
 
   /**
    * Zoom in on the hover stack.
@@ -110,8 +117,23 @@ public class NavigationCommands {
    * @param position Position to center on (1-based)
    */
   public static void navigateToPosition(int position) {
-    int flank = GenomicCanvas.minZoom / 2;
-    navigateToPosition(position - flank, position + flank);
+    ViewWindow window = centeredWindow(position, GenomicCanvas.minZoom, SINGLE_BASE_ALIGNMENT_BP);
+    if (stackManager.getHoverStack() != null) {
+      stackManager.getHoverStack().alignmentCanvas.zoomAnimation(window.start(), window.end());
+    }
+  }
+
+  /**
+   * Build a symmetric [start,end] window around a center position.
+   *
+   * @param centerBp genomic center position (1-based coordinates)
+   * @param viewLengthBp desired window length in bp
+   * @param alignmentOffsetBp optional bp offset used for base/pixel alignment
+   */
+  private static ViewWindow centeredWindow(double centerBp, double viewLengthBp, double alignmentOffsetBp) {
+    double half = viewLengthBp / 2.0;
+    double start = centerBp - half + alignmentOffsetBp;
+    return new ViewWindow(start, start + viewLengthBp);
   }
   
   /**

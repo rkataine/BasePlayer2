@@ -372,10 +372,16 @@ public class ChromosomeCanvas extends GenomicCanvas {
     
 		geneLoadingIndicator();
     
-    if (!AnnotationData.isGenesLoaded() || currentChrom == null) return;
+    if (!AnnotationData.isGenesLoaded() || currentChrom == null) {
+      ensureMinimumHeight();
+      return;
+    }
     
     List<Gene> genes = AnnotationData.getGenesByChrom().get(currentChrom);
-    if (genes == null) return;
+    if (genes == null) {
+      ensureMinimumHeight();
+      return;
+    }
     
     double viewStart = drawStack.start;
     double viewEnd = drawStack.end;
@@ -458,6 +464,15 @@ public class ChromosomeCanvas extends GenomicCanvas {
 		gc.fillText("Loading genes...", 10, DrawGene.GENE_AREA_TOP + 12);
 		gc.restore();
 	}
+
+  private void ensureMinimumHeight() {
+    double minHeight = drawStack.chromScrollPane != null
+        ? drawStack.chromScrollPane.getHeight() : 100;
+    if (minHeight > 0 && Math.abs(getHeight() - minHeight) > 1.0) {
+      setHeight(minHeight);
+      getReactiveCanvas().setHeight(minHeight);
+    }
+  }
 
   void drawIndicators() {
     // Draw indicators at the bottom of the visible viewport, not the full canvas

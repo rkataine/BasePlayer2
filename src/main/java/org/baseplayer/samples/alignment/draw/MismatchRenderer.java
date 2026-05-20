@@ -1,7 +1,6 @@
 package org.baseplayer.samples.alignment.draw;
 
-import java.util.function.Function;
-
+import org.baseplayer.utils.ArrowShape;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -28,8 +27,34 @@ public class MismatchRenderer {
    */
   public static void drawMismatches(GraphicsContext gc, int[] mismatches,
                                     double y, double h, double canvasWidth,
-                                    Function<Double, Double> chromPosToScreen,
+                                    double viewStart, double pixelSize,
                                     boolean isMethylData, boolean isReverseStrand) {
+    drawMismatches(gc, mismatches, y, h, canvasWidth, viewStart, pixelSize, isMethylData, isReverseStrand, false);
+  }
+
+  /**
+   * Draw mismatch markers with optional signal-overlay mode.
+   * In signal mode, colored backgrounds are suppressed and letters are drawn in black
+   * so that the underlying UC/UD heatmap remains visible.
+   */
+  public static void drawMismatches(GraphicsContext gc, int[] mismatches,
+                                    double y, double h, double canvasWidth,
+                                    double viewStart, double pixelSize,
+                                    boolean isMethylData, boolean isReverseStrand,
+                                    boolean signalMode) {
+    drawMismatches(gc, mismatches, y, h, canvasWidth, viewStart, pixelSize,
+        isMethylData, isReverseStrand, signalMode, false, false);
+  }
+
+  /**
+   * Draw mismatch markers with optional signal-overlay mode and text/background overrides.
+   */
+  public static void drawMismatches(GraphicsContext gc, int[] mismatches,
+                                    double y, double h, double canvasWidth,
+                                    double viewStart, double pixelSize,
+                                    boolean isMethylData, boolean isReverseStrand,
+                                    boolean signalMode, boolean blackLetters,
+                                    boolean suppressBackgroundFill) {
     if (mismatches == null) return;
     
     for (int m = 0; m + 2 < mismatches.length; m += 3) {
@@ -48,18 +73,19 @@ public class MismatchRenderer {
         if (refB == 'G' && readB == 'A') continue;
       }
       
-      double mx1 = chromPosToScreen.apply((double) mmPos);
-      double mx2 = chromPosToScreen.apply((double) (mmPos + 1));
+      double mx1 = (mmPos - viewStart) * pixelSize;
+      double mx2 = (mmPos + 1 - viewStart) * pixelSize;
       double mw = Math.max(1, mx2 - mx1);
 
       if (mx1 + mw < 0 || mx1 > canvasWidth) continue;
 
-      gc.setFill(baseColor(mmBase));
-      gc.fillRect(mx1, y, mw, h);
+      if (!signalMode && !suppressBackgroundFill) {
+        ArrowShape.fillArrow(gc, mx1, y, mw, h, isReverseStrand, baseColor(mmBase));
+      }
 
       // Draw base letter when there's enough space
       if (mw >= 6 && h >= 8) {
-        gc.setFill(Color.WHITE);
+        gc.setFill((signalMode || blackLetters) ? Color.BLACK : Color.WHITE);
         gc.setFont(mw >= 10 ? BASE_FONT_LARGE : BASE_FONT_SMALL);
         String letter = String.valueOf((char) Character.toUpperCase(mmBase));
         double textX = mx1 + (mw - (mw >= 10 ? 7 : 5.5)) / 2;
@@ -74,8 +100,8 @@ public class MismatchRenderer {
    */
   public static void drawMismatches(GraphicsContext gc, int[] mismatches,
                                     double y, double h, double canvasWidth,
-                                    Function<Double, Double> chromPosToScreen) {
-    drawMismatches(gc, mismatches, y, h, canvasWidth, chromPosToScreen, false, false);
+                                    double viewStart, double pixelSize) {
+    drawMismatches(gc, mismatches, y, h, canvasWidth, viewStart, pixelSize, false, false);
   }
 
   /**

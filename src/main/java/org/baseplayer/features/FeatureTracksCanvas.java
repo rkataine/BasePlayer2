@@ -26,16 +26,21 @@ import javafx.stage.FileChooser;
 public class FeatureTracksCanvas extends GenomicCanvas {
   
   /** Panel header height in pixels — shared with {@link org.baseplayer.components.sidebars.FeatureTracksSidebar}. */
-  public static final double HEADER_HEIGHT = 18;
+  public static final double HEADER_HEIGHT = 20;
   /** Padding between tracks in pixels — shared with {@link org.baseplayer.components.sidebars.FeatureTracksSidebar}. */
   public static final double TRACK_PADDING = 2;
   
   private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
   private final GraphicsContext gc;
   private final List<Track> tracks = new ArrayList<>();
-  private boolean collapsed = false;
+  private boolean collapsed = true;
   private ContextMenu contextMenu;
   private Runnable onCollapsedChanged;
+  
+  /** Cached region parameters to avoid redundant notifyRegionChanged calls every frame. */
+  private String lastNotifiedChrom = "";
+  private long lastNotifiedStart = -1;
+  private long lastNotifiedEnd = -1;
   
   public FeatureTracksCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
@@ -58,6 +63,12 @@ public class FeatureTracksCanvas extends GenomicCanvas {
    */
   public void setOnCollapsedChanged(Runnable callback) {
     this.onCollapsedChanged = callback;
+  }
+
+  private void notifyPreferredHeightChanged() {
+    if (onCollapsedChanged != null) {
+      onCollapsedChanged.run();
+    }
   }
   
   @Override
@@ -120,21 +131,18 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     
     // Header text
     gc.setFill(Color.rgb(150, 150, 150));
-    gc.setFont(AppFonts.getUIFont(10));
+    gc.setFont(AppFonts.getUIFont(11));
     
     String headerText = collapsed ? "▶ Feature Tracks" : "▼ Feature Tracks";
     if (!tracks.isEmpty()) {
       headerText += " (" + tracks.size() + ")";
     }
-    gc.fillText(headerText, 6, 13);
-    
-    // Add track hint
-    gc.setFill(Color.rgb(100, 100, 100));
-    gc.fillText("Right-click to add tracks", width - 140, 13);
+    gc.fillText(headerText, 8, HEADER_HEIGHT / 2 + 4);
   }
   
   /**
    * Notify all tracks of region change to trigger data fetching.
+   * Skips notification if the region hasn't changed since the last call.
    */
   public void notifyRegionChanged() {
     if (drawStack == null) return;
@@ -142,6 +150,14 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     String chrom = drawStack.chromosome;
     long start = (long) drawStack.start;
     long end = (long) drawStack.end;
+    
+    // Skip if region is identical to last notification
+    if (chrom != null && chrom.equals(lastNotifiedChrom) && start == lastNotifiedStart && end == lastNotifiedEnd) {
+      return;
+    }
+    lastNotifiedChrom = chrom;
+    lastNotifiedStart = start;
+    lastNotifiedEnd = end;
     
     for (Track track : tracks) {
       if (track.isVisible()) {
@@ -162,6 +178,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     }
     
     notifyRegionChanged();
+    notifyPreferredHeightChanged();
     update.set(!update.get());
   }
   
@@ -171,6 +188,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   public void removeTrack(Track track) {
     track.dispose();
     tracks.remove(track);
+    notifyPreferredHeightChanged();
     update.set(!update.get());
   }
   
@@ -187,9 +205,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   
   public void setCollapsed(boolean collapsed) {
     this.collapsed = collapsed;
-    if (onCollapsedChanged != null) {
-      onCollapsedChanged.run();
-    }
+    notifyPreferredHeightChanged();
     update.set(!update.get());
   }
   

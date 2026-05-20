@@ -1,12 +1,12 @@
 package org.baseplayer.io.readers;
 
-import org.baseplayer.samples.alignment.BAMRecord;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Predicate;
+
+import org.baseplayer.samples.alignment.BAMRecord;
 
 /**
  * Common interface for alignment file readers (BAM, CRAM).
@@ -49,4 +49,7 @@ public interface AlignmentReader extends Closeable {
 
   /** Get the path to the alignment file. */
   Path getPath();
+  
+  /** Set which signal tag to parse: 'c' for uc, 'd' for ud, '\0' for none. */
+  default void setActiveSignalTag(char tag) {}
 }

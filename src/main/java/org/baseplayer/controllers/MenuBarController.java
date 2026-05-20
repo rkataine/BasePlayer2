@@ -1,12 +1,15 @@
 package org.baseplayer.controllers;
 
+import java.io.File;
+import java.util.List;
+
 import org.baseplayer.components.GeneSearchComponent;
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
-import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.controllers.commands.ViewCommands;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.services.DrawStackManager;
@@ -17,19 +20,29 @@ import org.baseplayer.utils.BaseUtils;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
+import javafx.animation.PauseTransition;
 import javafx.event.ActionEvent;
+import javafx.event.Event;
 import javafx.fxml.FXML;
+import javafx.geometry.Bounds;
 import javafx.geometry.Side;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
+import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
+import javafx.stage.Popup;
+import javafx.stage.Window;
 import javafx.util.Duration;
 
 public class MenuBarController {
@@ -38,9 +51,11 @@ public class MenuBarController {
   @FXML private Label chromosomeLabel;
   @FXML private Label viewLengthLabel;
   @FXML private MenuBar menuBar;
+  @FXML private Menu recentFilesMenu;
   @FXML private Pane memoryBar;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
+  @FXML private Button copyPositionButton;
   
   // Zoom button icons for state updates
   private FontIcon zoomInIcon;
@@ -54,6 +69,13 @@ public class MenuBarController {
   private ContextMenu chromosomeLabelMenu;
   private Rectangle memoryFill;
   private Tooltip memoryTooltip;
+  private Popup snackbarPopup;
+  private Label snackbarLabel;
+  private PauseTransition snackbarHideTimer;
+
+  private record ParsedPosition(String chromosome, int start, Integer end) {
+    boolean isRange() { return end != null; }
+  }
   
   // Services
   private SampleRegistry sampleRegistry;
@@ -71,13 +93,17 @@ public class MenuBarController {
     new GeneSearchComponent(geneSearchField, viewportState);
     setupPositionField();
     setupZoomButtons();
+    refreshRecentFilesMenu();
     
     AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
       DrawStack hoverStack = stackManager.getHoverStack();
       if(hoverStack == null) return;
       String chrom = hoverStack.chromosome != null ? hoverStack.chromosome : "1";
-      chromosomeLabel.setText("chr" + chrom + ":");
-      positionField.setText((int)hoverStack.start + "-" + (int)(hoverStack.end - 1));
+      String chromDisplay = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
+      chromosomeLabel.setText(chromDisplay + ":");
+      if (!isEditingPositionField()) {
+        syncPositionFieldFromHoverStack();
+      }
       updateViewLengthLabel();
       updateZoomButtonStates();
     });
@@ -135,7 +161,8 @@ public class MenuBarController {
       });
       
       for (String chrom : chroms) {
-        MenuItem item = new MenuItem("chr" + chrom);
+        String label = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
+        MenuItem item = new MenuItem(label);
         item.setOnAction(event -> {
           onChromosomeSelected(chrom);
         });
@@ -148,10 +175,194 @@ public class MenuBarController {
     chromosomeLabel.setStyle("-fx-cursor: hand;");
     
     // Setup position field for editing
-    positionField.setOnAction(e -> {
-      String text = positionField.getText();
-      SearchCommands.navigateToPositionString(text);
+    positionField.setOnAction(e -> navigateFromPositionField());
+    positionField.focusedProperty().addListener((obs, oldFocused, focused) -> {
+      if (!focused) {
+        // After editing ends, restore canonical start-end text from current hover stack.
+        syncPositionFieldFromHoverStack();
+      }
     });
+
+    if (copyPositionButton != null) {
+      copyPositionButton.setText("\u2398");
+      copyPositionButton.setTooltip(new Tooltip("Copy current locus (chr:start-end)"));
+      copyPositionButton.setFocusTraversable(false);
+    }
+  }
+
+  private boolean isEditingPositionField() {
+    return positionField != null && positionField.isFocused();
+  }
+
+  private void syncPositionFieldFromHoverStack() {
+    DrawStack hoverStack = stackManager.getHoverStack();
+    if (hoverStack == null || positionField == null) return;
+    positionField.setText((int) hoverStack.start + "-" + (int) (hoverStack.end - 1));
+  }
+
+  private void navigateFromPositionField() {
+    ParsedPosition parsed = parsePositionInput(positionField.getText());
+    if (parsed == null) return;
+
+    if (parsed.chromosome != null && !parsed.chromosome.isBlank()) {
+      onChromosomeSelected(parsed.chromosome);
+    }
+
+    if (parsed.isRange()) {
+      NavigationCommands.navigateToPosition(parsed.start, parsed.end);
+    } else {
+      NavigationCommands.navigateToPosition(parsed.start);
+    }
+  }
+
+  private ParsedPosition parsePositionInput(String input) {
+    if (input == null) return null;
+
+    String text = input.trim();
+    if (text.isEmpty()) return null;
+
+    String chromToken = null;
+    String coordToken = text;
+
+    int colon = text.indexOf(':');
+    if (colon >= 0) {
+      chromToken = text.substring(0, colon).trim();
+      coordToken = text.substring(colon + 1).trim();
+    }
+
+    coordToken = coordToken.replace(",", "").replace("_", "").replace(" ", "");
+    if (coordToken.isEmpty()) return null;
+
+    String resolvedChrom = resolveChromosomeToken(chromToken);
+
+    try {
+      int dash = coordToken.indexOf('-');
+      if (dash >= 0) {
+        String s1 = coordToken.substring(0, dash).trim();
+        String s2 = coordToken.substring(dash + 1).trim();
+        if (s1.isEmpty() || s2.isEmpty()) return null;
+        int start = Math.max(1, Integer.parseInt(s1));
+        int end = Math.max(1, Integer.parseInt(s2));
+        if (end < start) {
+          int tmp = start;
+          start = end;
+          end = tmp;
+        }
+        return new ParsedPosition(resolvedChrom, start, end);
+      }
+
+      int pos = Math.max(1, Integer.parseInt(coordToken));
+      return new ParsedPosition(resolvedChrom, pos, null);
+    } catch (NumberFormatException ex) {
+      return null;
+    }
+  }
+
+  private String resolveChromosomeToken(String chromToken) {
+    if (chromToken == null || chromToken.isBlank()) return null;
+
+    String requested = normalizeChromToken(chromToken);
+    var refGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
+    if (!refGenomeService.hasGenome()) {
+      return requested;
+    }
+
+    for (String chrom : refGenomeService.getCurrentGenome().getChromosomeNames()) {
+      if (normalizeChromToken(chrom).equalsIgnoreCase(requested)) {
+        return chrom;
+      }
+    }
+    return requested;
+  }
+
+  private String normalizeChromToken(String chrom) {
+    String c = chrom.trim();
+    return c.regionMatches(true, 0, "chr", 0, 3) ? c.substring(3) : c;
+  }
+
+  @FXML
+  private void copyCurrentPosition() {
+    DrawStack hoverStack = stackManager.getHoverStack();
+    if (hoverStack == null) return;
+
+    String chrom = hoverStack.chromosome != null ? hoverStack.chromosome : "1";
+    String withChr = chrom.regionMatches(true, 0, "chr", 0, 3) ? chrom : "chr" + chrom;
+    String locus = withChr + ":" + (int) hoverStack.start + "-" + (int) (hoverStack.end - 1);
+
+    ClipboardContent content = new ClipboardContent();
+    content.putString(locus);
+    Clipboard.getSystemClipboard().setContent(content);
+    showSnackbar("Copied: " + locus);
+  }
+
+  private void showSnackbar(String message) {
+    if (menuBar == null || menuBar.getScene() == null) return;
+    Window owner = menuBar.getScene().getWindow();
+    if (owner == null) return;
+
+    if (snackbarPopup == null) {
+      snackbarPopup = new Popup();
+      snackbarPopup.setAutoHide(false);
+      snackbarPopup.setHideOnEscape(false);
+
+      snackbarLabel = new Label();
+      snackbarLabel.setStyle(
+          "-fx-text-fill: #f0f0f0;"
+              + "-fx-font-size: 12;"
+              + "-fx-background-color: rgba(45, 45, 45, 0.96);"
+              + "-fx-background-radius: 6;"
+              + "-fx-border-color: rgba(170, 170, 170, 0.35);"
+              + "-fx-border-radius: 6;"
+              + "-fx-padding: 8 12 8 12;");
+
+      HBox root = new HBox(snackbarLabel);
+      root.setMouseTransparent(true);
+      snackbarPopup.getContent().add(root);
+
+      snackbarHideTimer = new PauseTransition(Duration.millis(1400));
+      snackbarHideTimer.setOnFinished(e -> snackbarPopup.hide());
+    }
+
+    snackbarLabel.setText(message);
+
+    // Rough width estimate for centering near the copy button.
+    double estimatedW = Math.max(120, message.length() * 7.0 + 30.0);
+
+    double x = owner.getX() + 12.0;
+    double y = owner.getY() + 40.0;
+
+    Bounds menuBounds = menuBar.localToScreen(menuBar.getBoundsInLocal());
+    if (menuBounds != null) {
+      y = menuBounds.getMaxY() + 8.0;
+    }
+
+    if (copyPositionButton != null) {
+      Bounds copyBounds = copyPositionButton.localToScreen(copyPositionButton.getBoundsInLocal());
+      if (copyBounds != null) {
+        x = copyBounds.getMinX() + (copyBounds.getWidth() - estimatedW) / 2.0;
+        y = copyBounds.getMaxY() + 8.0;
+      }
+    }
+
+    // Clamp into the window bounds to avoid clipping.
+    double minX = owner.getX() + 8.0;
+    double maxX = owner.getX() + owner.getWidth() - estimatedW - 8.0;
+    if (maxX < minX) maxX = minX;
+    x = Math.max(minX, Math.min(maxX, x));
+
+    double minY = owner.getY() + 8.0;
+    double maxY = owner.getY() + owner.getHeight() - 40.0;
+    if (maxY < minY) maxY = minY;
+    y = Math.max(minY, Math.min(maxY, y));
+
+    if (!snackbarPopup.isShowing()) {
+      snackbarPopup.show(owner, x, y);
+    } else {
+      snackbarPopup.setX(x);
+      snackbarPopup.setY(y);
+    }
+
+    snackbarHideTimer.playFromStart();
   }
   
   private void setupZoomButtons() {
@@ -261,6 +472,59 @@ public class MenuBarController {
       FileCommands.openFile(filtertype);
       //boolean multiSelect = !filtertype.equals("SES"); // TODO later: when opening bam or vcf for a track, refactor to work for that too
       //new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
+  }
+
+  @FXML
+  public void populateRecentFilesMenu(Event event) {
+    refreshRecentFilesMenu();
+  }
+
+  private void refreshRecentFilesMenu() {
+    if (recentFilesMenu == null) return;
+
+    recentFilesMenu.getItems().clear();
+    List<UserPreferences.RecentFile> recentFiles = UserPreferences.getRecentFiles();
+    if (recentFiles.isEmpty()) {
+      MenuItem emptyItem = new MenuItem("No recent files");
+      emptyItem.setDisable(true);
+      recentFilesMenu.getItems().add(emptyItem);
+      return;
+    }
+
+    int shown = 0;
+    for (UserPreferences.RecentFile rf : recentFiles) {
+      if (rf == null || rf.path() == null || rf.path().isBlank()) continue;
+      shown++;
+      File file = new File(rf.path());
+      String type = rf.fileType() != null ? rf.fileType() : "FILE";
+      String itemText = shown + ". " + file.getName() + " [" + type + "]";
+      MenuItem item = new MenuItem(itemText);
+      item.setOnAction(e -> {
+        if (!file.exists() || !file.isFile()) {
+          UserPreferences.removeRecentFile(rf.path());
+          refreshRecentFilesMenu();
+          System.err.println("Recent file not found: " + rf.path());
+          return;
+        }
+        FileCommands.openRecentFile(type, rf.path());
+      });
+      recentFilesMenu.getItems().add(item);
+    }
+
+    if (shown == 0) {
+      MenuItem emptyItem = new MenuItem("No recent files");
+      emptyItem.setDisable(true);
+      recentFilesMenu.getItems().add(emptyItem);
+      return;
+    }
+
+    recentFilesMenu.getItems().add(new SeparatorMenuItem());
+    MenuItem clear = new MenuItem("Clear Recent Files");
+    clear.setOnAction(e -> {
+      UserPreferences.clearRecentFiles();
+      refreshRecentFilesMenu();
+    });
+    recentFilesMenu.getItems().add(clear);
   }
   public void addStack(ActionEvent event) { ViewCommands.addStack(); }
   public void removeStack(ActionEvent event) { ViewCommands.removeStack(); }

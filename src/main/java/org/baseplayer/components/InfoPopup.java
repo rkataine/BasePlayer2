@@ -8,22 +8,18 @@ import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.StringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
-import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.SVGPath;
-import javafx.scene.text.Text;
-import javafx.scene.text.TextFlow;
 import javafx.stage.Popup;
 import javafx.stage.Window;
 
@@ -119,16 +115,43 @@ public class InfoPopup {
         content.setMaxWidth(maxWidth);
         content.setStyle(POPUP_STYLE);
 
+        // ── Close button ──────────────────────────────────────────────────────
+        Button closeBtn = new Button("\u00D7");
+        closeBtn.setFocusTraversable(false);
+        String closeBtnNormal =
+                "-fx-background-color: rgba(80,80,80,0.0);" +
+                "-fx-text-fill: #888888;"                   +
+                "-fx-font-size: 14;"                        +
+                "-fx-padding: 0 5 1 5;"                     +
+                "-fx-background-radius: 4;"                 +
+                "-fx-cursor: hand;";
+        String closeBtnHover =
+                "-fx-background-color: rgba(180,50,50,0.75);" +
+                "-fx-text-fill: white;"                       +
+                "-fx-font-size: 14;"                          +
+                "-fx-padding: 0 5 1 5;"                       +
+                "-fx-background-radius: 4;"                   +
+                "-fx-cursor: hand;";
+        closeBtn.setStyle(closeBtnNormal);
+        closeBtn.setOnMouseEntered(e -> closeBtn.setStyle(closeBtnHover));
+        closeBtn.setOnMouseExited (e -> closeBtn.setStyle(closeBtnNormal));
+        closeBtn.setOnAction(e -> hide());
+
+        StackPane root = new StackPane();
+        StackPane.setAlignment(closeBtn, Pos.TOP_RIGHT);
+        StackPane.setMargin(closeBtn, new Insets(4, 4, 0, 0));
+
         if (scrollable) {
             ScrollPane sp = new ScrollPane(content);
             sp.setMaxWidth(maxWidth + 20);
             sp.setMaxHeight(maxHeight);
             sp.setFitToWidth(true);
             sp.setStyle(SCROLL_STYLE);
-            popup.getContent().add(sp);
+            root.getChildren().addAll(sp, closeBtn);
         } else {
-            popup.getContent().add(content);
+            root.getChildren().addAll(content, closeBtn);
         }
+        popup.getContent().add(root);
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -146,9 +169,57 @@ public class InfoPopup {
      */
     public void show(PopupContent popupContent, Window owner, double x, double y) {
         content.getChildren().clear();
-        for (PopupContent.Item item : popupContent.items()) {
-            render(item);
+
+        // ── Single selectable TextArea with all text content ─────────────────
+        String text = popupContent.toPlainText();
+        if (!text.isEmpty()) {
+            TextArea ta = new TextArea(text);
+            ta.setEditable(false);
+            ta.setWrapText(true);
+            ta.setFont(AppFonts.getMonoFont(11));
+            int lineCount = (int) text.chars().filter(c -> c == '\n').count() + 1;
+            ta.setPrefRowCount(Math.min(lineCount, 22));
+            ta.setMaxWidth(maxWidth - 24);
+            ta.setStyle(
+                    "-fx-control-inner-background: #1a1a1a;" +
+                    "-fx-text-fill: #d3d3d3;"                +
+                    "-fx-highlight-fill: #4477aa;"           +
+                    "-fx-highlight-text-fill: white;"        +
+                    "-fx-focus-color: #4477aa;"              +
+                    "-fx-faint-focus-color: transparent;"    +
+                    "-fx-background-color: #1a1a1a;"         +
+                    "-fx-background-radius: 4;"              +
+                    "-fx-border-color: #444;"                +
+                    "-fx-border-radius: 4;");
+            content.getChildren().add(ta);
         }
+
+        // ── Interactive items (navigation links, buttons, inputs) ────────────
+        boolean hasInteractive = popupContent.items().stream().anyMatch(
+                i -> i instanceof PopupContent.ClickableRowItem  ||
+                     i instanceof PopupContent.CustomNodeItem    ||
+                     i instanceof PopupContent.ActionButtonsItem ||
+                     i instanceof PopupContent.CheckboxItem      ||
+                     i instanceof PopupContent.InputRowItem);
+        if (hasInteractive) {
+            content.getChildren().add(new Separator());
+            for (PopupContent.Item item : popupContent.items()) {
+                switch (item) {
+                    case PopupContent.ClickableRowItem c ->
+                        renderClickableRow(c.label(), c.value(), c.action());
+                    case PopupContent.CustomNodeItem n ->
+                        content.getChildren().add(n.node());
+                    case PopupContent.ActionButtonsItem ab ->
+                        renderActionButtons(ab.buttons());
+                    case PopupContent.CheckboxItem cb ->
+                        renderCheckbox(cb.label(), cb.selected());
+                    case PopupContent.InputRowItem ir ->
+                        renderInputRow(ir.label(), ir.value(), ir.disabled());
+                    default -> { /* text items already in TextArea */ }
+                }
+            }
+        }
+
         popup.show(owner, x, y);
     }
 
@@ -160,124 +231,6 @@ public class InfoPopup {
     /** Returns {@code true} if the popup is currently visible. */
     public boolean isShowing() {
         return popup.isShowing();
-    }
-
-    // ── Item dispatching ─────────────────────────────────────────────────────
-
-    /**
-     * Dispatch a {@link PopupContent.Item} to its concrete renderer.
-     * The {@code switch} is exhaustive over all permitted subtypes.
-     */
-    private void render(PopupContent.Item item) {
-        switch (item) {
-
-            case PopupContent.HeaderItem h ->
-                renderHeader(h.text(), h.color());
-
-            case PopupContent.SubtitleHeaderItem h ->
-                renderSubtitleHeader(h.title(), h.subtitle(), h.titleColor());
-
-            case PopupContent.SeparatorItem _ ->
-                content.getChildren().add(new Separator());
-
-            case PopupContent.TextItem t ->
-                renderText(t.text());
-
-            case PopupContent.SectionTitleItem s ->
-                renderSectionTitle(s.title());
-
-            case PopupContent.InfoRowItem r ->
-                renderInfoRow(r.label(), r.value(), r.valueColor());
-
-            case PopupContent.ClickableRowItem c ->
-                renderClickableRow(c.label(), c.value(), c.action());
-
-            case PopupContent.BadgeRowItem b ->
-                renderBadgeRow(b.badges());
-
-            case PopupContent.CheckboxItem cb ->
-                renderCheckbox(cb.label(), cb.selected());
-
-            case PopupContent.InputRowItem ir ->
-                renderInputRow(ir.label(), ir.value(), ir.disabled());
-
-            case PopupContent.ActionButtonsItem ab ->
-                renderActionButtons(ab.buttons());
-
-            case PopupContent.CustomNodeItem n ->
-                content.getChildren().add(n.node());
-
-            case PopupContent.ScrollListItem s ->
-                renderScrollList(s.nodes(), s.maxHeight());
-        }
-    }
-
-    // ── Concrete renderers ───────────────────────────────────────────────────
-
-    private void renderHeader(String title, Color color) {
-        Label label = new Label(title);
-        label.setFont(AppFonts.getBoldFont(14));
-        label.setTextFill(color);
-        content.getChildren().add(label);
-    }
-
-    private void renderSubtitleHeader(String title, String subtitle, Color titleColor) {
-        HBox row = new HBox(10);
-        row.setAlignment(Pos.CENTER_LEFT);
-
-        Label titleLabel = new Label(title);
-        titleLabel.setFont(AppFonts.getBoldFont(14));
-        titleLabel.setTextFill(titleColor);
-
-        Label subtitleLabel = new Label(subtitle);
-        subtitleLabel.setFont(AppFonts.getUIFont());
-        subtitleLabel.setTextFill(Color.LIGHTGRAY);
-        subtitleLabel.setStyle(
-                "-fx-background-color: rgba(80,80,80,0.5);" +
-                "-fx-padding: 2 6;"                         +
-                "-fx-background-radius: 3;");
-
-        row.getChildren().addAll(titleLabel, subtitleLabel);
-        content.getChildren().add(row);
-    }
-
-    private void renderText(String text) {
-        TextFlow flow = new TextFlow();
-        flow.setMaxWidth(maxWidth - 30);
-
-        Text t = new Text(text);
-        t.setFill(Color.LIGHTGRAY);
-        t.setFont(AppFonts.getUIFont());
-        flow.getChildren().add(t);
-
-        content.getChildren().add(flow);
-    }
-
-    private void renderSectionTitle(String title) {
-        Label label = new Label(title);
-        label.setFont(AppFonts.getUIFont());
-        label.setTextFill(Color.GRAY);
-        label.setStyle("-fx-padding: 4 0 0 0;");
-        content.getChildren().add(label);
-    }
-
-    private void renderInfoRow(String label, String value, Color valueColor) {
-        HBox row = new HBox(8);
-        row.setAlignment(Pos.CENTER_LEFT);
-
-        Label labelNode = new Label(label + ":");
-        labelNode.setFont(AppFonts.getUIFont());
-        labelNode.setTextFill(Color.GRAY);
-        labelNode.setMinWidth(LABEL_MIN_WIDTH);
-
-        Label valueNode = new Label(value);
-        valueNode.setFont(AppFonts.getUIFont());
-        valueNode.setTextFill(valueColor);
-        valueNode.setWrapText(true);
-        HBox.setHgrow(valueNode, Priority.ALWAYS);
-
-        row.getChildren().addAll(labelNode, valueNode);
-        content.getChildren().add(row);
     }
 
     private void renderClickableRow(String label, String value, Runnable action) {
@@ -303,50 +256,6 @@ public class InfoPopup {
         content.getChildren().add(row);
     }
 
-    private void renderBadgeRow(List<PopupContent.Badge> badges) {
-        if (badges.isEmpty()) return;
-
-        FlowPane flow = new FlowPane(6, 4);
-        flow.setAlignment(Pos.CENTER_LEFT);
-        flow.setMaxWidth(maxWidth - 24);
-
-        for (PopupContent.Badge badge : badges) {
-            Label label = new Label(badge.text());
-            label.setFont(AppFonts.getMonoFont(10));
-            label.setTextFill(badge.textColor());
-            label.setWrapText(false);
-            label.setStyle(String.format(
-                    "-fx-background-color: %s; -fx-padding: 2 6; -fx-background-radius: 3;",
-                    toRgb(badge.bgColor())));
-            flow.getChildren().add(label);
-        }
-
-        content.getChildren().add(flow);
-    }
-
-    private void renderScrollList(List<Node> nodes, double maxHeight) {
-        VBox listBox = new VBox(4);
-        listBox.getChildren().addAll(nodes);
-
-        ScrollPane sp = new ScrollPane(listBox);
-        sp.setFitToWidth(true);
-        sp.setMaxHeight(maxHeight);
-        sp.setStyle(SCROLL_STYLE);
-
-        content.getChildren().add(sp);
-    }
-
-    // ── Popup control ────────────────────────────────────────────────────────
-
-    /**
-     * Render a labelled checkbox with a custom green SVG checkmark.
-     * The {@link BooleanProperty} reflects and drives the checked state.
-     */
-    /**
-     * Render a labelled text-input row with dark theme styling.
-     * The field is bound bidirectionally to {@code value}; if {@code disabled}
-     * is non-{@code null} the field's disable state tracks that property.
-     */
     private void renderInputRow(String label, StringProperty value, BooleanProperty disabled) {
         HBox row = new HBox(8);
         row.setAlignment(Pos.CENTER_LEFT);
@@ -435,15 +344,6 @@ public class InfoPopup {
     /** Pixel width of the rendered content pane. */
     public double getContentWidth() { return content.getWidth(); }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    /** Convert a JavaFX {@link Color} to a CSS {@code rgb(r,g,b)} string. */
-    private static String toRgb(Color c) {
-        return String.format("rgb(%d,%d,%d)",
-                (int) (c.getRed()   * 255),
-                (int) (c.getGreen() * 255),
-                (int) (c.getBlue()  * 255));
-    }
 
     /**
      * Open a URL in the user's default browser.

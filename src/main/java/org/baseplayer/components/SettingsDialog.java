@@ -43,6 +43,8 @@ public class SettingsDialog {
   private final Spinner<Double>  mismatchMinFractionSpinner;
   private final Spinner<Integer> mismatchMinCountSpinner;
   private final ComboBox<ReadColorMode> readColorModeCombo;
+  private final ComboBox<Settings.ReadInfoPopupPosition> readInfoPopupPositionCombo;
+  private final Spinner<Integer> maxReadCoverageSpinner;
 
   public SettingsDialog() {
     dialog = new Stage(StageStyle.DECORATED);
@@ -54,7 +56,7 @@ public class SettingsDialog {
     // ── Build spinners with current values ──────────────────────────────
 
     maxReadViewSpinner        = intSpinner(10_000, 500_000, settings.getMaxReadViewLength(), 10_000);
-    maxCoverageViewSpinner    = intSpinner(100_000, 50_000_000, settings.getMaxCoverageViewLength(), 100_000);
+    maxCoverageViewSpinner    = intSpinner(100_000, 5_000_000, settings.getMaxCoverageViewLength(), 100_000);
     sampledPointsSpinner      = intSpinner(5, 500, settings.getSampledCoveragePoints(), 5);
     coverageFractionSpinner   = dblSpinner(0.05, 1.0, settings.getCoverageFraction(), 0.05);
     readGapSpinner            = dblSpinner(0.0, 10.0, settings.getReadGap(), 0.5);
@@ -66,6 +68,10 @@ public class SettingsDialog {
     readColorModeCombo = new ComboBox<>();
     readColorModeCombo.getItems().addAll(ReadColorMode.values());
     readColorModeCombo.setValue(settings.getReadColorMode());
+    readInfoPopupPositionCombo = new ComboBox<>();
+    readInfoPopupPositionCombo.getItems().addAll(Settings.ReadInfoPopupPosition.values());
+    readInfoPopupPositionCombo.setValue(settings.getReadInfoPopupPosition());
+    maxReadCoverageSpinner        = intSpinner(100, 100_000, settings.getMaxReadCoverage(), 100);
 
     // ── Layout ──────────────────────────────────────────────────────────
 
@@ -109,6 +115,8 @@ public class SettingsDialog {
         "Height of individual reads in pixels");
     addRow(readGrid, row++, "Read coloring:", readColorModeCombo,
         "How to color reads (Strand = strand direction, UC tag = Uncalled signal values)");
+    addRow(readGrid, row++, "Max read coverage:", maxReadCoverageSpinner,
+        "Skip individual reads when coverage exceeds this depth (show coverage only)");
     root.getChildren().add(readGrid);
 
     root.getChildren().add(new Separator());
@@ -122,6 +130,16 @@ public class SettingsDialog {
     addRow(mmGrid, row++, "Min read count:", mismatchMinCountSpinner,
         "Only show mismatches with at least this many reads");
     root.getChildren().add(mmGrid);
+
+    root.getChildren().add(new Separator());
+
+    // Section: UI
+    root.getChildren().add(sectionLabel("UI"));
+    GridPane uiGrid = createGrid();
+    row = 0;
+    addRow(uiGrid, row++, "Read info popup:", readInfoPopupPositionCombo,
+      "Top-right keeps the popup away from reads; near click opens it where you clicked");
+    root.getChildren().add(uiGrid);
 
     root.getChildren().add(new Separator());
 
@@ -172,6 +190,8 @@ public class SettingsDialog {
     settings.setMismatchMinFraction(mismatchMinFractionSpinner.getValue());
     settings.setMismatchMinCount(mismatchMinCountSpinner.getValue());
     settings.setReadColorMode(readColorModeCombo.getValue());
+    settings.setReadInfoPopupPosition(readInfoPopupPositionCombo.getValue());
+    settings.setMaxReadCoverage(maxReadCoverageSpinner.getValue());
 
     // Trigger redraw so changes are visible immediately
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -189,6 +209,8 @@ public class SettingsDialog {
     mismatchMinFractionSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_FRACTION);
     mismatchMinCountSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_COUNT);
     readColorModeCombo.setValue(Settings.DEF_READ_COLOR_MODE);
+    readInfoPopupPositionCombo.setValue(Settings.DEF_READ_INFO_POPUP_POSITION);
+    maxReadCoverageSpinner.getValueFactory().setValue(Settings.DEF_MAX_READ_COVERAGE);
   }
 
   // ── Helper methods ────────────────────────────────────────────────────

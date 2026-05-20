@@ -2,7 +2,9 @@ package org.baseplayer.genome.gene.draw;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.baseplayer.draw.DrawStack;
@@ -60,6 +62,35 @@ class DrawExon {
   /** Amino-acid hit boxes rebuilt each frame. Read by ChromosomeCanvas for mouse events. */
   final List<AminoAcidHitBox> hitBoxes = new ArrayList<>();
 
+  // ── Cached gradients ─────────────────────────────────────────────────────────
+  // LinearGradient and Stop are immutable; allocating fresh ones per exon per
+  // frame was a major source of GC pressure. We cache by exon color (a handful
+  // of distinct values) and reuse them; gradients use proportional coordinates
+  // so they scale correctly to the exon's bounding box regardless of row.
+
+  private static final javafx.scene.paint.LinearGradient EXON_OVERLAY_GRADIENT =
+      new javafx.scene.paint.LinearGradient(
+          0, 0, 0, 1, true, javafx.scene.paint.CycleMethod.NO_CYCLE,
+          new javafx.scene.paint.Stop(0.0, Color.rgb(255, 255, 255, 0.20)),
+          new javafx.scene.paint.Stop(0.4, Color.TRANSPARENT),
+          new javafx.scene.paint.Stop(1.0, Color.rgb(0, 0, 0, 0.18)));
+
+  private static final Map<Color, javafx.scene.paint.LinearGradient> EXON_GRADIENT_CACHE =
+      new ConcurrentHashMap<>();
+
+  private static javafx.scene.paint.LinearGradient exonGradientFor(Color color) {
+    return EXON_GRADIENT_CACHE.computeIfAbsent(color, c -> {
+      Color lighter = c.interpolate(Color.WHITE, 0.3);
+      Color darker  = c.interpolate(Color.BLACK, 0.2);
+      return new javafx.scene.paint.LinearGradient(
+          0, 0, 0, 1, true, javafx.scene.paint.CycleMethod.NO_CYCLE,
+          new javafx.scene.paint.Stop(0,   lighter),
+          new javafx.scene.paint.Stop(0.3, c),
+          new javafx.scene.paint.Stop(0.7, c),
+          new javafx.scene.paint.Stop(1,   darker));
+    });
+  }
+
   // ────────────────────────────────────────────────────────────────────────────
 
   DrawExon(GraphicsContext gc, DrawStack drawStack, ReferenceGenomeService referenceGenomeService) {
@@ -78,10 +109,15 @@ class DrawExon {
    * Draws one contiguous exon (or UTR) region.
    * Delegates to amino-acid, property-color, or solid-gradient rendering depending on zoom.
    */
+  /**
+   * Variant that optionally draws this region with an arrowhead at the strand-outer
+   * end (right side for forward genes, left side for reverse). Used by {@link DrawGene}
+   * to make whole transcripts visually point in their direction of transcription.
+   */
   void drawExonRegion(long regionStart, long regionEnd, double viewStart, double viewLength,
                       double canvasWidth, double rowY, Color color,
                       boolean showAminoAcids, boolean showPropertyColors,
-                      Gene gene, boolean isReverse, long cdsOffset) {
+                      Gene gene, boolean isReverse, long cdsOffset, boolean drawArrowhead) {
     double ex1 = ((regionStart       - viewStart) / viewLength) * canvasWidth;
     double ex2 = (((regionEnd + 1)  - viewStart) / viewLength) * canvasWidth;
     ex1 = Math.max(0, ex1);
@@ -102,27 +138,16 @@ class DrawExon {
       drawPropertyColoredExon(regionStart, regionEnd, viewStart, viewLength, canvasWidth,
                                rowY, isReverse, cdsOffset);
       // Subtle 3D highlight/shadow overlay
-      javafx.scene.paint.LinearGradient overlay = new javafx.scene.paint.LinearGradient(
-          0, exonY, 0, exonY + GENE_HEIGHT, false, javafx.scene.paint.CycleMethod.NO_CYCLE,
-          new javafx.scene.paint.Stop(0.0, Color.rgb(255, 255, 255, 0.20)),
-          new javafx.scene.paint.Stop(0.4, Color.TRANSPARENT),
-          new javafx.scene.paint.Stop(1.0, Color.rgb(0, 0, 0, 0.18))
-      );
-      gc.setFill(overlay);
+      gc.setFill(EXON_OVERLAY_GRADIENT);
       gc.fillRect(exonX, exonY, exonWidth, GENE_HEIGHT);
 
+    } else if (drawArrowhead) {
+      // Strand-outer exon: render as arrow shape pointing in transcription direction
+      org.baseplayer.utils.ArrowShape.fillArrow(
+          gc, exonX, exonY, exonWidth, GENE_HEIGHT, isReverse, exonGradientFor(color));
     } else {
       // Standard 3D gradient (UTRs, non-coding genes, or genome not loaded)
-      Color lighter = color.interpolate(Color.WHITE, 0.3);
-      Color darker  = color.interpolate(Color.BLACK, 0.2);
-      javafx.scene.paint.LinearGradient gradient = new javafx.scene.paint.LinearGradient(
-          0, exonY, 0, exonY + GENE_HEIGHT, false, javafx.scene.paint.CycleMethod.NO_CYCLE,
-          new javafx.scene.paint.Stop(0,   lighter),
-          new javafx.scene.paint.Stop(0.3, color),
-          new javafx.scene.paint.Stop(0.7, color),
-          new javafx.scene.paint.Stop(1,   darker)
-      );
-      gc.setFill(gradient);
+      gc.setFill(exonGradientFor(color));
       gc.fillRect(exonX, exonY, exonWidth, GENE_HEIGHT);
     }
   }

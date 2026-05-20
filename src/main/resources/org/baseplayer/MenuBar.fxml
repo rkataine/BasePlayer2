@@ -23,10 +23,11 @@
     <menus>
       <Menu text="File">
         <items>
-            <MenuItem id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF file(s)" />
-            <MenuItem id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM file(s)" />
-            <MenuItem id="LOAD_CTRL" onAction="#openFileMenu" text="Open control file(s)" />
-            <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open track file(s)" />
+            <MenuItem id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM/CRAM file(s)" />
+            <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open BED track file(s)" />
+            <MenuItem id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig track file(s)" />
+            <MenuItem id="LOAD_VCF" disable="true" text="Open VCF file(s) (coming soon)" />
+            <Menu fx:id="recentFilesMenu" text="Open Recent" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />
             <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open session" />
             <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save session" />
@@ -57,14 +58,14 @@
   </MenuBar>
   <ToolBar HBox.hgrow="ALWAYS" styleClass="toolBar">
     <items>
-      <Button text="Variant Manager" />
       <Button onAction="#removeStack" text="&lt;" />
       <TextField fx:id="geneSearchField" prefHeight="0.0" prefWidth="149.0" promptText="Search gene" />
       <Button onAction="#addStack" text="&gt;" />
-      <HBox fx:id="positionBox" styleClass="position-box" prefHeight="20.0" prefWidth="200.0" spacing="0">
+      <HBox fx:id="positionBox" styleClass="position-box" prefHeight="20.0" spacing="0">
         <Label fx:id="chromosomeLabel" text="chr1:" styleClass="chromosome-label" />
-        <TextField fx:id="positionField" prefHeight="20.0" prefWidth="150.0" promptText="1-100000" styleClass="position-text-field" />
+        <TextField fx:id="positionField" minWidth="140.0" prefHeight="20.0" prefWidth="210.0" promptText="235352 or chr6:23235-235235" styleClass="position-text-field" />
       </HBox>
+      <Button fx:id="copyPositionButton" onAction="#copyCurrentPosition" styleClass="icon-button" prefHeight="20.0" prefWidth="22.0" focusTraversable="false" />
       <Label fx:id="viewLengthLabel" text="200Mb" styleClass="view-length-label" minWidth="70" prefWidth="70" alignment="CENTER_RIGHT" />
       <Button fx:id="zoomInButton" text="+" onAction="#zoomIn" styleClass="zoom-button" />
       <Button fx:id="zoomOutButton" text="−" onAction="#zoomOut" styleClass="zoom-button" />

@@ -91,9 +91,20 @@ public class FeatureTracksSidebar extends SidebarBase {
     ContextMenu menu = new ContextMenu();
     menu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
 
+    MenuItem removeAll = new MenuItem("Remove all feature tracks");
+    removeAll.setOnAction(e -> {
+      FeatureTracksCanvas ftc = trackList.getFeatureTracksCanvas();
+      if (ftc == null) return;
+      java.util.List<org.baseplayer.features.Track> current = ftc.getTracks();
+      for (org.baseplayer.features.Track track : current) {
+        ftc.removeTrack(track);
+      }
+      draw();
+    });
+
     MenuItem placeholder = new MenuItem("Track Analysis (coming soon)");
     placeholder.setDisable(true);
-    menu.getItems().add(placeholder);
+    menu.getItems().addAll(removeAll, new SeparatorMenuItem(), placeholder);
     return menu;
   }
 

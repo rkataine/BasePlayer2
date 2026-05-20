@@ -1,11 +1,14 @@
 package org.baseplayer.genome.draw;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.Cytoband;
 import org.baseplayer.genome.gene.GeneLocation;
-import org.baseplayer.annotation.AnnotationData;
-import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.DrawColors;
@@ -226,7 +229,7 @@ public class CytobandCanvas extends Canvas {
       double bandWidth = Math.max(1, xEnd - xStart);
       
       Color baseColor = getCytobandColor(band.stain());
-      gc.setFill(getCytobandGradient(baseColor, CYTO_PADDING_Y, CYTO_HEIGHT));
+      gc.setFill(getCytobandGradient(baseColor));
       
       boolean isFirstBand = band.start() == 0;
       boolean isLastBand = band.end() >= drawStack.chromSize - 1;
@@ -284,7 +287,7 @@ public class CytobandCanvas extends Canvas {
       double width = Math.max(20, (drawStack.viewLength / drawStack.chromSize) * cytoWidth);
       
       Color indicatorColor = Color.rgb(30, 144, 255, 0.5);
-      LinearGradient indicatorGradient = getCytobandGradient(indicatorColor, CYTO_PADDING_Y, CYTO_HEIGHT);
+      LinearGradient indicatorGradient = getCytobandGradient(indicatorColor);
       gc.setFill(indicatorGradient);
       gc.fillRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
       gc.strokeRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
@@ -299,7 +302,7 @@ public class CytobandCanvas extends Canvas {
       gc.setStroke(Color.ORANGE);
       gc.setLineWidth(2);
       Color selectColor = Color.rgb(255, 165, 0, 0.5);
-      LinearGradient selectGradient = getCytobandGradient(selectColor, CYTO_PADDING_Y, CYTO_HEIGHT);
+      LinearGradient selectGradient = getCytobandGradient(selectColor);
       gc.setFill(selectGradient);
       gc.fillRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
       gc.strokeRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
@@ -334,14 +337,20 @@ public class CytobandCanvas extends Canvas {
     };
   }
   
-  private LinearGradient getCytobandGradient(Color baseColor, double y, double height) {
-    Color lighter = baseColor.interpolate(Color.WHITE, 0.4);
-    Color darker = baseColor.interpolate(Color.BLACK, 0.2);
-    return new LinearGradient(0, y, 0, y + height, false, CycleMethod.NO_CYCLE,
-      new Stop(0, lighter),
-      new Stop(0.3, baseColor),
-      new Stop(0.7, baseColor),
-      new Stop(1, darker)
-    );
+  private LinearGradient getCytobandGradient(Color baseColor) {
+    return GRADIENT_CACHE.computeIfAbsent(baseColor, c -> {
+      Color lighter = c.interpolate(Color.WHITE, 0.4);
+      Color darker  = c.interpolate(Color.BLACK, 0.2);
+      // Proportional coordinates so the cached gradient scales to any fill rect
+      // (y/height arguments are ignored — all callers use the same CYTO_HEIGHT).
+      return new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+        new Stop(0, lighter),
+        new Stop(0.3, c),
+        new Stop(0.7, c),
+        new Stop(1, darker)
+      );
+    });
   }
+
+  private static final Map<Color, LinearGradient> GRADIENT_CACHE = new ConcurrentHashMap<>();
 }

@@ -3,6 +3,7 @@ package org.baseplayer.components;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -331,5 +332,41 @@ public class PopupContent {
     /** Returns {@code true} if no items have been added. */
     public boolean isEmpty() {
         return items.isEmpty();
+    }
+
+    /**
+     * Serialise all text-bearing items to a single plain-text string suitable
+     * for display in a {@link javafx.scene.control.TextArea} or clipboard copy.
+     * Interactive-only items (checkboxes, input fields, action buttons, custom
+     * nodes, scroll lists) are skipped.
+     */
+    public String toPlainText() {
+        StringBuilder sb = new StringBuilder();
+        for (Item item : items) {
+            switch (item) {
+                case HeaderItem h ->
+                    sb.append(h.text()).append('\n');
+                case SubtitleHeaderItem h ->
+                    sb.append(h.title()).append("  ").append(h.subtitle()).append('\n');
+                case SeparatorItem _ ->
+                    sb.append("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n");
+                case TextItem t ->
+                    sb.append(t.text()).append('\n');
+                case SectionTitleItem s ->
+                    sb.append(s.title()).append('\n');
+                case InfoRowItem r ->
+                    sb.append(r.label()).append(": ").append(r.value()).append('\n');
+                case ClickableRowItem c ->
+                    sb.append(c.label()).append(": ").append(c.value()).append('\n');
+                case BadgeRowItem b ->
+                    sb.append(b.badges().stream().map(Badge::text)
+                               .collect(Collectors.joining("  "))).append('\n');
+                default -> { /* skip interactive widgets */ }
+            }
+        }
+        // trim trailing blank lines
+        String s = sb.toString();
+        while (s.endsWith("\n\n")) s = s.substring(0, s.length() - 1);
+        return s.stripTrailing();
     }
 }

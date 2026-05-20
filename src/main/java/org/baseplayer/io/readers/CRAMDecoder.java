@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
-import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.samples.alignment.BAMRecord;
 
 /**
  * Decodes CRAM 3.0 container data into BAM records.
@@ -21,10 +21,15 @@ import org.baseplayer.genome.ReferenceGenomeService;
  */
 public class CRAMDecoder {
 
-  private final ReferenceGenomeService referenceGenomeService;
+  // CRAM/BAM base code table used by several read-feature encodings.
+  private static final char[] BASE_CODE_TABLE = {'=', 'A', 'C', 'M', 'G', 'R', 'S', 'V', 'T', 'W', 'Y', 'H', 'K', 'D', 'B', 'N'};
 
-  public CRAMDecoder(ReferenceGenomeService referenceGenomeService) {
+  private final ReferenceGenomeService referenceGenomeService;
+  private final TagProcessor tagProcessor;
+
+  public CRAMDecoder(ReferenceGenomeService referenceGenomeService, TagProcessor tagProcessor) {
     this.referenceGenomeService = referenceGenomeService;
+    this.tagProcessor = tagProcessor;
   }
 
   /**
@@ -397,40 +402,22 @@ public class CRAMDecoder {
         if (nfDec != null) nfDec.decode(); // distance to next fragment
       }
 
-      // Tags
-      boolean recHasMethylTag = false;
-      int recHaplotype = 0;
-      String recMethylString = null;
+      // Tags — use a temporary BAMRecord to collect tag values via TagProcessor,
+      // then copy to the final record after it's created.
+      BAMRecord tagRec = new BAMRecord();
       if (tlDec != null) {
         int tlIdx = tlDec.decode();
         if (ch.tagDictionary != null && tlIdx >= 0 && tlIdx < ch.tagDictionary.length) {
           byte[] tagList = ch.tagDictionary[tlIdx];
-          // Each tag is 3 bytes: tag[0], tag[1], type
           for (int t = 0; t + 2 < tagList.length; t += 3) {
             int tagKey = ((tagList[t] & 0xFF) << 16) | ((tagList[t + 1] & 0xFF) << 8) | (tagList[t + 2] & 0xFF);
             ByteArrayDecoder td = tagDecoders.get(tagKey);
             if (td != null) {
               byte[] tagValue = td.decode();
-              // Detect methylation tags: MM, Mm, ML, Ml, XM
               char c1 = (char)(tagList[t] & 0xFF);
               char c2 = (char)(tagList[t + 1] & 0xFF);
               char tagType = (char)(tagList[t + 2] & 0xFF);
-              if ((c1 == 'M' && (c2 == 'M' || c2 == 'm' || c2 == 'L' || c2 == 'l'))
-                  || (c1 == 'X' && c2 == 'M')) {
-                recHasMethylTag = true;
-                // Extract XM:Z string for bisulfite detection
-                if (c1 == 'X' && c2 == 'M' && tagType == 'Z' && tagValue != null) {
-                  // String tags are null-terminated
-                  int len = tagValue.length;
-                  if (len > 0 && tagValue[len - 1] == 0) len--;
-                  recMethylString = new String(tagValue, 0, len, java.nio.charset.StandardCharsets.US_ASCII);
-                }
-              }
-              // Detect HP:i haplotype tag
-              if (c1 == 'H' && c2 == 'P' && tagValue != null && tagValue.length >= 4) {
-                recHaplotype = (tagValue[0] & 0xFF) | ((tagValue[1] & 0xFF) << 8)
-                    | ((tagValue[2] & 0xFF) << 16) | ((tagValue[3] & 0xFF) << 24);
-              }
+              tagProcessor.processTag(tagRec, c1, c2, tagType, tagValue);
             }
           }
         }
@@ -440,6 +427,8 @@ public class CRAMDecoder {
       boolean unmappedSeq = (cramFlags & 0x08) != 0;
       int refSpan = readLen;
       List<int[]> mmList = null; // collected as [genomicPos, readBase, refBase]
+      byte[] featureQualities = readLen > 0 ? new byte[readLen] : null;
+      boolean hasFeatureQualities = false;
       // CIGAR reconstruction: collect events as [readPos (1-based), cigarOp, length]
       List<int[]> cigarEvents = null;
 
@@ -456,17 +445,19 @@ public class CRAMDecoder {
           switch ((char) fc) {
             case 'B' -> { // read base (explicit mismatch)
               int base = baDec != null ? baDec.decode() : 'N';
-              if (qsDec != null) qsDec.decode();
+              char readBase = normalizeReadBase(base);
+              int qual = qsDec != null ? qsDec.decode() : -1;
               int genomicPos = alignStart + (featurePos - 1) + refOffset;
-              int refBaseChar = 0;
-              if (refBases != null) {
-                int refIdx = genomicPos - refBasesStart;
-                if (refIdx >= 0 && refIdx < refBases.length()) {
-                  refBaseChar = Character.toUpperCase(refBases.charAt(refIdx));
+              int refBaseChar = getRefBaseAt(refBases, refBasesStart, genomicPos);
+              if (mmList == null) mmList = new ArrayList<>();
+              mmList.add(new int[]{genomicPos, readBase, refBaseChar});
+              if (qual >= 0 && featureQualities != null) {
+                int qIdx = featurePos - 1;
+                if (qIdx >= 0 && qIdx < featureQualities.length) {
+                  featureQualities[qIdx] = (byte) qual;
+                  hasFeatureQualities = true;
                 }
               }
-              if (mmList == null) mmList = new ArrayList<>();
-              mmList.add(new int[]{genomicPos, base, refBaseChar});
             }
             case 'X' -> { // substitution
               int bsCode = bsDec != null ? bsDec.decode() : 0;
@@ -539,14 +530,51 @@ public class CRAMDecoder {
               if (pdDec != null) pdDec.decode();
             }
             case 'Q' -> { // single quality score
-              if (qsDec != null) qsDec.decode();
+              int q = qsDec != null ? qsDec.decode() : -1;
+              if (q >= 0 && featureQualities != null) {
+                int qIdx = featurePos - 1;
+                if (qIdx >= 0 && qIdx < featureQualities.length) {
+                  featureQualities[qIdx] = (byte) q;
+                  hasFeatureQualities = true;
+                }
+              }
             }
             case 'q' -> { // quality score stretch
-              if (qqDec != null) qqDec.decode();
+              byte[] qrun = qqDec != null ? qqDec.decode() : null;
+              if (qrun != null && featureQualities != null) {
+                int startIdx = featurePos - 1;
+                for (int qi = 0; qi < qrun.length; qi++) {
+                  int qIdx = startIdx + qi;
+                  if (qIdx < 0 || qIdx >= featureQualities.length) break;
+                  featureQualities[qIdx] = qrun[qi];
+                  hasFeatureQualities = true;
+                }
+              }
             }
             case 'b' -> { // bases + qualities
-              if (bbDec != null) bbDec.decode();
-              if (qqDec != null) qqDec.decode();
+              byte[] bases = bbDec != null ? bbDec.decode() : null;
+              byte[] qrun = qqDec != null ? qqDec.decode() : null;
+              if (bases != null) {
+                int startIdx = featurePos - 1;
+                for (int bi = 0; bi < bases.length; bi++) {
+                  int readIdx = startIdx + bi;
+                  if (readIdx < 0) continue;
+                  int genomicPos = alignStart + readIdx + refOffset;
+                  char readBase = normalizeReadBase(bases[bi] & 0xFF);
+                  int refBase = getRefBaseAt(refBases, refBasesStart, genomicPos);
+                  if (mmList == null) mmList = new ArrayList<>();
+                  mmList.add(new int[]{genomicPos, readBase, refBase});
+                }
+              }
+              if (qrun != null && featureQualities != null) {
+                int startIdx = featurePos - 1;
+                for (int qi = 0; qi < qrun.length; qi++) {
+                  int qIdx = startIdx + qi;
+                  if (qIdx < 0 || qIdx >= featureQualities.length) break;
+                  featureQualities[qIdx] = qrun[qi];
+                  hasFeatureQualities = true;
+                }
+              }
             }
             default -> {
               // Unknown feature code—skip
@@ -559,8 +587,15 @@ public class CRAMDecoder {
       int mapq = mqDec != null ? mqDec.decode() : 0;
 
       // Quality scores (if preserved as array)
+      byte[] readQualities = null;
       if ((cramFlags & 0x01) != 0 && qsDec != null) {
-        for (int q = 0; q < readLen; q++) qsDec.decode();
+        readQualities = new byte[Math.max(0, readLen)];
+        for (int q = 0; q < readLen; q++) {
+          readQualities[q] = (byte) qsDec.decode();
+        }
+      }
+      if (readQualities == null && hasFeatureQualities) {
+        readQualities = featureQualities;
       }
 
       // Build BAMRecord
@@ -572,6 +607,7 @@ public class CRAMDecoder {
       rec.mapq = mapq;
       rec.readLength = readLen;
       rec.readName = readName;
+      rec.qualities = readQualities;
       
       // Build cigarOps from collected CIGAR events for splice junction rendering
       if (cigarEvents != null && !cigarEvents.isEmpty()) {
@@ -613,9 +649,14 @@ public class CRAMDecoder {
       rec.mateRefID = mateRefIDCRAM;
       rec.matePos = matePosValue;
       rec.insertSize = templateSize;
-      rec.hasMethylTag = recHasMethylTag;
-      rec.methylString = recMethylString;
-      rec.haplotype = recHaplotype;
+      // Copy tag values from temporary record
+      rec.hasMethylTag = tagRec.hasMethylTag;
+      rec.methylString = tagRec.methylString;
+      rec.haplotype = tagRec.haplotype;
+      rec.phaseSet = tagRec.phaseSet;
+      rec.readGroup = tagRec.readGroup;
+      rec.signalTag = tagRec.signalTag;
+      rec.urTag = tagRec.urTag;
 
       // Pack mismatches: [pos0, readBase0, refBase0, pos1, readBase1, refBase1, ...]
       if (mmList != null && !mmList.isEmpty()) {
@@ -630,6 +671,23 @@ public class CRAMDecoder {
       records.add(rec);
     }
     return records;
+  }
+
+  private static int getRefBaseAt(String refBases, int refBasesStart, int genomicPos) {
+    if (refBases == null) return 0;
+    int refIdx = genomicPos - refBasesStart;
+    if (refIdx < 0 || refIdx >= refBases.length()) return 0;
+    return Character.toUpperCase(refBases.charAt(refIdx));
+  }
+
+  private static char normalizeReadBase(int baseVal) {
+    if (baseVal >= 'a' && baseVal <= 'z') return (char) (baseVal - 32);
+    if (baseVal >= 'A' && baseVal <= 'Z') return (char) baseVal;
+    if (baseVal >= 0 && baseVal < BASE_CODE_TABLE.length) {
+      char c = BASE_CODE_TABLE[baseVal];
+      return c == '=' ? 'N' : c;
+    }
+    return 'N';
   }
 
   // ── Decoder builders ───────────────────────────────────────────
