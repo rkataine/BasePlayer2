@@ -59,9 +59,10 @@ class DrawGene {
    * @param viewLength   number of bases across the full canvas width
    * @param canvasWidth  pixel width of the canvas
    * @param showManeOnly if {@code true}, only MANE-select exons are shown
+  * @param drawLabel    if {@code true}, draw the gene label text on this row
    */
   void drawGene(Gene gene, double rowY, double viewStart, double viewLength,
-                double canvasWidth, boolean showManeOnly) {
+           double canvasWidth, boolean showManeOnly, boolean drawLabel) {
     Color geneColor = GeneColors.getGeneColor(gene.name(), gene.biotype());
 
     List<long[]> exonsToShow = gene.getDisplayExons(showManeOnly);
@@ -70,6 +71,9 @@ class DrawGene {
     if (maneTranscript == null && gene.transcripts() != null && !gene.transcripts().isEmpty()) {
       maneTranscript = gene.transcripts().get(0);
     }
+    String displayedTranscriptId = maneTranscript != null
+        ? maneTranscript.id().replace("transcript:", "")
+        : null;
     long    cdsStart = maneTranscript != null ? maneTranscript.cdsStart() : 0;
     long    cdsEnd   = maneTranscript != null ? maneTranscript.cdsEnd()   : 0;
     boolean hasCDS   = cdsStart > 0 && cdsEnd > 0;
@@ -201,7 +205,8 @@ class DrawGene {
     }
 
     // Gene name label (already computed above for overlap check)
-    boolean showLabel     = isCancerGene || viewLength < 10_000_000 || "protein_coding".equals(gene.biotype());
+    boolean showLabel     = drawLabel
+      && (isCancerGene || viewLength < 10_000_000 || "protein_coding".equals(gene.biotype()));
     double  labelX        = Math.max(2, x1);
     double  labelWidth    = 0;
     if (showLabel) {
@@ -212,13 +217,13 @@ class DrawGene {
 
     double hitX1 = Math.max(0, Math.min(labelX, clippedX1));
     double hitX2 = Math.max(clippedX2, labelX + labelWidth);
-    hitBoxes.add(new GeneHitBox(gene, hitX1, rowY, hitX2,
+    hitBoxes.add(new GeneHitBox(gene, displayedTranscriptId, hitX1, rowY, hitX2,
                                 rowY + DrawExon.GENE_LABEL_HEIGHT + DrawExon.GENE_HEIGHT));
   }
 
   // ── Hit-box record ───────────────────────────────────────────────────────────
 
-  record GeneHitBox(Gene gene, double x1, double y1, double x2, double y2) {
+  record GeneHitBox(Gene gene, String transcriptId, double x1, double y1, double x2, double y2) {
     boolean contains(double x, double y) {
       return x >= x1 && x <= x2 && y >= y1 && y <= y2;
     }

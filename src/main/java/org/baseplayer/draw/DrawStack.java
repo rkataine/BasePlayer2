@@ -20,6 +20,8 @@ import javafx.scene.canvas.Canvas;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -87,6 +89,13 @@ public class DrawStack {
     chromosomeDropdown.setPrefWidth(120);
     chromosomeDropdown.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
     chromosomeDropdown.setOnAction(e -> onChromosomeSelected());
+    chromosomeDropdown.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+      if (event.getButton() == MouseButton.PRIMARY
+          && !chromosomeDropdown.isShowing()
+          && !chromosomeDropdown.getItems().isEmpty()) {
+        chromosomeDropdown.show();
+      }
+    });
     StackPane.setAlignment(chromosomeDropdown, Pos.TOP_LEFT);
     StackPane.setMargin(chromosomeDropdown, new Insets(3, 0, 0, 5));
     

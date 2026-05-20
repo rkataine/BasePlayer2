@@ -17,7 +17,9 @@ import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;
 
+import javafx.application.Platform;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
 import javafx.scene.paint.Color;
@@ -33,9 +35,12 @@ public class GeneInfoPopup {
 
   private final InfoPopup infoPopup = new InfoPopup(MAX_WIDTH, 500, true);
   private DrawStack drawStack;
+  private String selectedTranscriptId;
 
-  public void show(Gene gene, DrawStack drawStack, Window owner, double x, double y) {
+  public void show(Gene gene, DrawStack drawStack, Window owner, double x, double y,
+                   String selectedTranscriptId) {
     this.drawStack = drawStack;
+    this.selectedTranscriptId = selectedTranscriptId;
     PopupContent content = buildContent(gene);
     infoPopup.show(content, owner, x, y);
   }
@@ -43,6 +48,10 @@ public class GeneInfoPopup {
   public void hide() { infoPopup.hide(); }
 
   public boolean isShowing() { return infoPopup.isShowing(); }
+
+  public void setOnHidden(Runnable onHidden) {
+    infoPopup.setOnHidden(onHidden);
+  }
 
   // ── Content builder ────────────────────────────────────────────────────────
 
@@ -68,6 +77,10 @@ public class GeneInfoPopup {
         BaseUtils.formatNumber(gene.end()),
         gene.strand().equals("+") ? "forward" : "reverse");
     c.link("Location", location, () -> navigateToGene(gene));
+
+    if (selectedTranscriptId != null && !selectedTranscriptId.isBlank()) {
+      c.row("Transcript ID", selectedTranscriptId);
+    }
 
     long size = gene.end() - gene.start();
     c.row("Size", formatSize(size));
@@ -97,27 +110,66 @@ public class GeneInfoPopup {
       c.separator();
       c.section("Transcripts (" + allTranscripts.size() + ")");
 
-      List<javafx.scene.Node> txNodes = allTranscripts.stream()
+      List<Transcript> sortedTranscripts = allTranscripts.stream()
           .sorted((a, b) -> {
             if (a.isManeSelect() != b.isManeSelect()) return a.isManeSelect() ? -1 : 1;
             if (a.isManeClinic() != b.isManeClinic()) return a.isManeClinic() ? -1 : 1;
             return a.name() != null && b.name() != null ? a.name().compareTo(b.name()) : 0;
           })
-          .limit(10)
+          .toList();
+
+      List<Node> txNodes = sortedTranscripts.stream()
           .map(this::createTranscriptRow)
           .collect(java.util.stream.Collectors.toList());
 
-      if (allTranscripts.size() > 10) {
-        Label moreLabel = new Label("... and " + (allTranscripts.size() - 10) + " more");
-        moreLabel.setTextFill(Color.GRAY);
-        moreLabel.setFont(AppFonts.getUIFont());
-        txNodes.add(moreLabel);
-      }
-
       c.scrollList(txNodes, 150);
+
+      if (drawStack != null && drawStack.chromosomeCanvas != null) {
+        boolean maneOnlyMode = drawStack.chromosomeCanvas.isShowManeOnly();
+        boolean expandedInGeneView = drawStack.chromosomeCanvas.isGeneExpanded(gene.id());
+
+        c.section("Gene View");
+        if (maneOnlyMode) {
+          c.row("Transcript display", expandedInGeneView ? "Expanded for this gene" : "MANE only");
+          c.actions(new PopupContent.ActionButton(
+              expandedInGeneView ? "Show MANE Only" : "Expand In Gene View",
+              true,
+              () -> {
+                toggleGeneViewExpansion(gene, !expandedInGeneView);
+                reopenAtCurrentPosition(gene);
+              }));
+        } else {
+          c.row("Transcript display", "All transcript exons (global mode)");
+          c.actions(new PopupContent.ActionButton(
+              "Switch To MANE Mode",
+              false,
+              () -> {
+                drawStack.chromosomeCanvas.setShowManeOnly(true);
+                drawStack.chromosomeCanvas.setGeneExpanded(gene.id(), false);
+                reopenAtCurrentPosition(gene);
+              }));
+        }
+      }
     }
 
     return c;
+  }
+
+  private void reopenAtCurrentPosition(Gene gene) {
+    Window owner = infoPopup.getOwnerWindow();
+    double x = infoPopup.getPopupX();
+    double y = infoPopup.getPopupY();
+    Platform.runLater(() -> {
+      if (owner != null) {
+        PopupContent content = buildContent(gene);
+        infoPopup.show(content, owner, x, y);
+      }
+    });
+  }
+
+  private void toggleGeneViewExpansion(Gene gene, boolean expanded) {
+    if (drawStack == null || drawStack.chromosomeCanvas == null || gene == null) return;
+    drawStack.chromosomeCanvas.setGeneExpanded(gene.id(), expanded);
   }
 
   // ── COSMIC section ─────────────────────────────────────────────────────────

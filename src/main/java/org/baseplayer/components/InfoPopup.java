@@ -85,6 +85,7 @@ public class InfoPopup {
     private final Popup  popup;
     private final VBox   content;
     private final double maxWidth;
+    private Runnable onHidden;
 
     // ── Constructors ─────────────────────────────────────────────────────────
 
@@ -109,6 +110,9 @@ public class InfoPopup {
         popup = new Popup();
         popup.setAutoHide(true);
         popup.setHideOnEscape(true);
+        popup.setOnHidden(e -> {
+            if (onHidden != null) onHidden.run();
+        });
 
         content = new VBox(6);
         content.setPadding(new Insets(12));
@@ -333,6 +337,11 @@ public class InfoPopup {
     /** Returns the owner {@link Window} passed to the last {@link #show} call. */
     public Window getOwnerWindow() {
         return popup.getOwnerWindow();
+    }
+
+    /** Set callback invoked whenever the popup is hidden (auto-hide or explicit hide). */
+    public void setOnHidden(Runnable onHidden) {
+        this.onHidden = onHidden;
     }
 
     /** Screen X of the popup (valid only while showing). */

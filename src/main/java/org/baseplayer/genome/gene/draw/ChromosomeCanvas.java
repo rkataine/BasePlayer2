@@ -1,7 +1,11 @@
 package org.baseplayer.genome.gene.draw;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.AnnotationLoader;
@@ -11,6 +15,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.PositionIndicator;
 import org.baseplayer.genome.gene.Gene;
+import org.baseplayer.genome.gene.Transcript;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
@@ -38,12 +43,15 @@ public class ChromosomeCanvas extends GenomicCanvas {
 
   // ── Gene display settings ────────────────────────────────────────────────────
   private boolean showManeOnly = true;
+  private final Set<String> expandedGeneIds = new HashSet<>();
 
   // ── Hover / click state ──────────────────────────────────────────────────────
   private final GeneInfoPopup genePopup = new GeneInfoPopup();
   private final AminoAcidPopup aminoAcidPopup = new AminoAcidPopup();
   private Gene hoveredGene = null;
   private DrawExon.AminoAcidHitBox hoveredAminoAcid = null;
+  private String selectedGeneId = null;
+  private String selectedTranscriptId = null;
 
   public ChromosomeCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
@@ -77,6 +85,8 @@ public class ChromosomeCanvas extends GenomicCanvas {
       AnnotationLoader.loadGenesBackground();
     }
 
+    genePopup.setOnHidden(this::clearSelectedGeneHighlight);
+
     // Double-click to zoom in, single click to show gene/amino acid info
     reactiveCanvas.setOnMouseClicked(event -> {
       // Skip if this click is the tail-end of a drag gesture anywhere (local or global)
@@ -84,6 +94,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
 
       if (event.getClickCount() == 2) {
         genePopup.hide();
+        clearSelectedGeneHighlight();
         aminoAcidPopup.hide();
         double mouseX = event.getX();
         double genomicPos = drawStack.start + (mouseX / getWidth()) * drawStack.viewLength;
@@ -114,19 +125,25 @@ public class ChromosomeCanvas extends GenomicCanvas {
         
         // Find what's at the click position directly (don't rely on hover state)
         DrawExon.AminoAcidHitBox aaHit = findAminoAcidAt(mouseX, mouseY);
-        Gene geneHit = findGeneAt(mouseX, mouseY);
+        DrawGene.GeneHitBox geneHitBox = findGeneHitAt(mouseX, mouseY);
+        Gene geneHit = geneHitBox != null ? geneHitBox.gene() : null;
+        String transcriptId = geneHitBox != null ? geneHitBox.transcriptId() : null;
         
         if (aaHit != null) {
           genePopup.hide();
+          clearSelectedGeneHighlight();
           aminoAcidPopup.setData(aaHit.aminoAcid(), aaHit.codon(), aaHit.aminoAcidNumber(),
                                   aaHit.genomicStart(), aaHit.cdsPosition(), aaHit.geneName(), aaHit.isReverse());
           aminoAcidPopup.show(owner, screenX + 10, screenY + 10);
         } else if (geneHit != null) {
           // Show gene popup if no amino acid hit
           aminoAcidPopup.hide();
-          genePopup.show(geneHit, drawStack, owner, screenX + 10, screenY + 10);
+          setSelectedGeneHighlight(geneHit.id(), transcriptId);
+          genePopup.show(geneHit, drawStack, owner, screenX + 10, screenY + 10, transcriptId);
+          drawReactive();
         } else {
           genePopup.hide();
+          clearSelectedGeneHighlight();
           aminoAcidPopup.hide();
         }
       }
@@ -191,10 +208,39 @@ public class ChromosomeCanvas extends GenomicCanvas {
     clearHover();
   }
 
-  private Gene findGeneAt(double x, double y) {
+  private DrawGene.GeneHitBox findGeneHitAt(double x, double y) {
     for (DrawGene.GeneHitBox hitBox : drawGene.hitBoxes) {
       if (hitBox.contains(x, y)) {
-        return hitBox.gene();
+        return hitBox;
+      }
+    }
+    return null;
+  }
+
+  private Gene findGeneAt(double x, double y) {
+    DrawGene.GeneHitBox hitBox = findGeneHitAt(x, y);
+    return hitBox != null ? hitBox.gene() : null;
+  }
+
+  private void setSelectedGeneHighlight(String geneId, String transcriptId) {
+    selectedGeneId = geneId;
+    selectedTranscriptId = transcriptId;
+  }
+
+  private void clearSelectedGeneHighlight() {
+    selectedGeneId = null;
+    selectedTranscriptId = null;
+    if (reactiveGc != null) {
+      reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+    }
+  }
+
+  private DrawGene.GeneHitBox findSelectedGeneHitBox() {
+    if (selectedGeneId == null || !genePopup.isShowing()) return null;
+    for (DrawGene.GeneHitBox hitBox : drawGene.hitBoxes) {
+      if (!selectedGeneId.equals(hitBox.gene().id())) continue;
+      if (selectedTranscriptId == null || selectedTranscriptId.equals(hitBox.transcriptId())) {
+        return hitBox;
       }
     }
     return null;
@@ -213,6 +259,67 @@ public class ChromosomeCanvas extends GenomicCanvas {
     this.showManeOnly = maneOnly;
     draw();
   }
+
+  public void setGeneExpanded(String geneId, boolean expanded) {
+    if (geneId == null || geneId.isBlank()) return;
+    if (expanded) {
+      expandedGeneIds.add(geneId);
+    } else {
+      expandedGeneIds.remove(geneId);
+    }
+    draw();
+  }
+
+  public boolean isGeneExpanded(String geneId) {
+    return geneId != null && expandedGeneIds.contains(geneId);
+  }
+
+  private boolean useManeOnlyForGene() {
+    return showManeOnly;
+  }
+
+  private List<Transcript> getGeneTranscriptsForView(Gene gene) {
+    if (gene == null) return List.of();
+
+    List<Transcript> transcripts = new ArrayList<>();
+    if (gene.transcripts() != null) {
+      transcripts.addAll(gene.transcripts());
+    }
+    transcripts.addAll(AnnotationData.getNonManeTranscripts(gene.id()));
+
+    java.util.LinkedHashMap<String, Transcript> uniqueById = new java.util.LinkedHashMap<>();
+    for (Transcript tx : transcripts) {
+      if (tx == null) continue;
+      String key = tx.id() != null ? tx.id() : (tx.name() != null ? tx.name() : String.valueOf(uniqueById.size()));
+      uniqueById.putIfAbsent(key, tx);
+    }
+
+    List<Transcript> sorted = new ArrayList<>(uniqueById.values());
+    sorted.sort((a, b) -> {
+      if (a.isManeSelect() != b.isManeSelect()) return a.isManeSelect() ? -1 : 1;
+      if (a.isManeClinic() != b.isManeClinic()) return a.isManeClinic() ? -1 : 1;
+      String an = a.name() != null ? a.name() : "";
+      String bn = b.name() != null ? b.name() : "";
+      return an.compareTo(bn);
+    });
+    return sorted;
+  }
+
+  private Gene transcriptProxyGene(Gene sourceGene, Transcript transcript) {
+    List<Transcript> singleTranscript = List.of(transcript);
+    List<long[]> transcriptExons = transcript.exons() != null ? transcript.exons() : sourceGene.exons();
+    return new Gene(
+        sourceGene.chrom(),
+        sourceGene.start(),
+        sourceGene.end(),
+        sourceGene.name(),
+        sourceGene.id(),
+        sourceGene.strand(),
+        sourceGene.biotype(),
+        sourceGene.description(),
+        singleTranscript,
+        transcriptExons);
+  }
   
   public boolean isShowManeOnly() {
     return showManeOnly;
@@ -224,94 +331,90 @@ public class ChromosomeCanvas extends GenomicCanvas {
   private void drawReactive() {
     // Clear the reactive canvas
     reactiveGc.clearRect(0, 0, getWidth(), getHeight());
-    
+
+    DrawGene.GeneHitBox selectedHit = findSelectedGeneHitBox();
+    if (selectedHit != null) {
+      drawGeneHitHighlight(selectedHit, Color.rgb(255, 220, 150, 0.95));
+    }
+
     double viewLength = drawStack.viewLength;
-    
-    // If hovering an amino acid at close zoom, only highlight the codon
     if (hoveredAminoAcid != null && viewLength < 500) {
       drawAminoAcidHighlight();
       return;
     }
-    
+
     if (hoveredGene == null) return;
-    
-    double viewStart = drawStack.start;
-    double canvasWidth = getWidth();
-    
-    // Find the hit box for the hovered gene to get its row position
     for (DrawGene.GeneHitBox hitBox : drawGene.hitBoxes) {
       if (hitBox.gene() == hoveredGene) {
-        List<long[]> exonsToShow = hoveredGene.getDisplayExons(showManeOnly);
-        
-        // Calculate body line based on visible exons (not full gene)
-        long bodyStart = hoveredGene.start();
-        long bodyEnd = hoveredGene.end();
-        if (!exonsToShow.isEmpty()) {
-          bodyStart = exonsToShow.get(0)[0];
-          bodyEnd = exonsToShow.get(exonsToShow.size() - 1)[1];
-        }
-        
-        double x1 = ((bodyStart - viewStart) / viewLength) * canvasWidth;
-        double x2 = ((bodyEnd - viewStart) / viewLength) * canvasWidth;
-        double clippedX1 = Math.max(0, x1);
-        double clippedX2 = Math.min(canvasWidth, x2);
-        
-        double rowY = hitBox.y1();
-        double bodyY = Math.round(rowY + DrawExon.GENE_LABEL_HEIGHT + DrawExon.GENE_HEIGHT / 2) + 0.5;
-        
-        // Draw white highlight for gene body from first to last visible exon (only if wider than 3px)
-        if (clippedX2 - clippedX1 > 3) {
-          reactiveGc.setStroke(Color.WHITE);
-          reactiveGc.setLineWidth(2);
-          reactiveGc.strokeLine(Math.round(clippedX1) + 1, bodyY, Math.round(clippedX2) - 1, bodyY);
-          reactiveGc.setLineWidth(1);
-        }
-        
-        // Draw white exons with rounded coordinates
-        reactiveGc.setFill(Color.WHITE);
-        boolean showExonNumbers = viewLength < 100000;  // Show exon numbers when zoomed in closer than 100kbp
-        boolean isReverse = "-".equals(hoveredGene.strand());
-        int exonIndex = 0;
-        for (long[] exon : exonsToShow) {
-          exonIndex++;
-          // For reverse strand, count from the end
-          int exonNumber = isReverse ? (exonsToShow.size() - exonIndex + 1) : exonIndex;
-          double ex1 = ((exon[0] - viewStart) / viewLength) * canvasWidth;
-          double ex2 = ((exon[1] - viewStart) / viewLength) * canvasWidth;
-          ex1 = Math.max(0, ex1);
-          ex2 = Math.min(canvasWidth, ex2);
-          if (ex2 >= ex1) {  // Changed to >= to include 1px exons
-            double exonX = Math.round(ex1);
-            double exonWidth = Math.round(ex2) - exonX;
-            // Ensure exon is at least 1 pixel wide if visible
-            if (exonWidth < 1) {
-              exonWidth = 1;
-            }
-            double exonY = Math.round(rowY + DrawExon.GENE_LABEL_HEIGHT);
-            reactiveGc.fillRect(exonX, exonY, exonWidth, DrawExon.GENE_HEIGHT);
-            
-            // Draw exon number on top of the exon when zoomed in
-            if (showExonNumbers && exonWidth > 10) {  // Only show if exon is wide enough
-              reactiveGc.setFont(AppFonts.getUIFont(9));
-              reactiveGc.setFill(Color.rgb(220, 220, 220, 0.9));  // Smoky white
-              String exonLabel = String.valueOf(exonNumber);
-              double textWidth = exonLabel.length() * 5;  // Approximate text width
-              double textX = exonX + (exonWidth - textWidth) / 2;
-              reactiveGc.fillText(exonLabel, textX, exonY - 2);
-              reactiveGc.setFill(Color.WHITE);
-            }
-          }
-        }
-        
-        // Draw white label
-        double labelX = Math.max(2, x1);
-        reactiveGc.setFont(AppFonts.getUIFont(DrawGene.GENE_FONT_SIZE));
-        reactiveGc.setFill(Color.WHITE);
-        reactiveGc.fillText(hoveredGene.name(), labelX, rowY + DrawExon.GENE_LABEL_HEIGHT - 2);
-        
+        drawGeneHitHighlight(hitBox, Color.WHITE);
         break;
       }
     }
+  }
+
+  private void drawGeneHitHighlight(DrawGene.GeneHitBox hitBox, Color color) {
+    Gene gene = hitBox.gene();
+    if (gene == null) return;
+
+    List<long[]> exonsToShow = gene.getDisplayExons(useManeOnlyForGene());
+    double viewStart = drawStack.start;
+    double viewLength = drawStack.viewLength;
+    double canvasWidth = getWidth();
+
+    long bodyStart = gene.start();
+    long bodyEnd = gene.end();
+    if (!exonsToShow.isEmpty()) {
+      bodyStart = exonsToShow.get(0)[0];
+      bodyEnd = exonsToShow.get(exonsToShow.size() - 1)[1];
+    }
+
+    double x1 = ((bodyStart - viewStart) / viewLength) * canvasWidth;
+    double x2 = ((bodyEnd - viewStart) / viewLength) * canvasWidth;
+    double clippedX1 = Math.max(0, x1);
+    double clippedX2 = Math.min(canvasWidth, x2);
+
+    double rowY = hitBox.y1();
+    double bodyY = Math.round(rowY + DrawExon.GENE_LABEL_HEIGHT + DrawExon.GENE_HEIGHT / 2) + 0.5;
+    if (clippedX2 - clippedX1 > 3) {
+      reactiveGc.setStroke(color);
+      reactiveGc.setLineWidth(2);
+      reactiveGc.strokeLine(Math.round(clippedX1) + 1, bodyY, Math.round(clippedX2) - 1, bodyY);
+      reactiveGc.setLineWidth(1);
+    }
+
+    reactiveGc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.9));
+    boolean showExonNumbers = viewLength < 100000;
+    boolean isReverse = "-".equals(gene.strand());
+    int exonIndex = 0;
+    for (long[] exon : exonsToShow) {
+      exonIndex++;
+      int exonNumber = isReverse ? (exonsToShow.size() - exonIndex + 1) : exonIndex;
+      double ex1 = ((exon[0] - viewStart) / viewLength) * canvasWidth;
+      double ex2 = ((exon[1] - viewStart) / viewLength) * canvasWidth;
+      ex1 = Math.max(0, ex1);
+      ex2 = Math.min(canvasWidth, ex2);
+      if (ex2 >= ex1) {
+        double exonX = Math.round(ex1);
+        double exonWidth = Math.max(1, Math.round(ex2) - exonX);
+        double exonY = Math.round(rowY + DrawExon.GENE_LABEL_HEIGHT);
+        reactiveGc.fillRect(exonX, exonY, exonWidth, DrawExon.GENE_HEIGHT);
+
+        if (showExonNumbers && exonWidth > 10) {
+          reactiveGc.setFont(AppFonts.getUIFont(9));
+          reactiveGc.setFill(Color.rgb(220, 220, 220, 0.9));
+          String exonLabel = String.valueOf(exonNumber);
+          double textWidth = exonLabel.length() * 5;
+          double textX = exonX + (exonWidth - textWidth) / 2;
+          reactiveGc.fillText(exonLabel, textX, exonY - 2);
+          reactiveGc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.9));
+        }
+      }
+    }
+
+    double labelX = Math.max(2, x1);
+    reactiveGc.setFont(AppFonts.getUIFont(DrawGene.GENE_FONT_SIZE));
+    reactiveGc.setFill(color);
+    reactiveGc.fillText(gene.name(), labelX, rowY + DrawExon.GENE_LABEL_HEIGHT - 2);
   }
   
   /**
@@ -346,6 +449,9 @@ public class ChromosomeCanvas extends GenomicCanvas {
     }
    
     drawGenes();
+    if (selectedGeneId != null && genePopup.isShowing()) {
+      drawReactive();
+    }
     drawIndicators();
 		drawExon.drawReferenceBases(getWidth(), getHeight());
     super.draw();
@@ -415,16 +521,38 @@ public class ChromosomeCanvas extends GenomicCanvas {
       }
     }
     
+    List<Gene> genesForStacking = new ArrayList<>();
+    Map<Gene, RenderSpec> renderSpecs = new IdentityHashMap<>();
+    for (Gene gene : filteredGenes) {
+      boolean expanded = showManeOnly && isGeneExpanded(gene.id());
+      if (expanded) {
+        List<Transcript> transcripts = getGeneTranscriptsForView(gene);
+        if (!transcripts.isEmpty()) {
+          for (int i = 0; i < transcripts.size(); i++) {
+            Gene transcriptGene = transcriptProxyGene(gene, transcripts.get(i));
+            genesForStacking.add(transcriptGene);
+            renderSpecs.put(transcriptGene, new RenderSpec(i == 0, true));
+          }
+          continue;
+        }
+      }
+
+      genesForStacking.add(gene);
+      renderSpecs.put(gene, new RenderSpec(true, showManeOnly));
+    }
+
     // Stacking uses normal start-position order; visual extender already
     // accounts for max(label width, gene width) per gene
-    StackingAlgorithm.StackResult<Gene> stacked = geneStacker.stack(filteredGenes, viewStart, viewEnd, canvasWidth);
-    
-    // Count actual rows used and resize canvas to fit all gene rows
+    StackingAlgorithm.StackResult<Gene> stacked = geneStacker.stack(genesForStacking, viewStart, viewEnd, canvasWidth);
+
+    // Count actual rows used and resize canvas to fit all visible stacked rows.
     int usedRows = 0;
     for (int row = 0; row < stacked.getRowCount(); row++) {
       if (!stacked.getRow(row).isEmpty()) usedRows = row + 1;
     }
-    double contentHeight = DrawGene.GENE_AREA_TOP + usedRows * (DrawGene.GENE_ROW_HEIGHT + DrawExon.GENE_LABEL_HEIGHT) + 10;
+    double contentHeight = DrawGene.GENE_AREA_TOP
+        + usedRows * (DrawGene.GENE_ROW_HEIGHT + DrawExon.GENE_LABEL_HEIGHT)
+        + 10;
     double minHeight = drawStack.chromScrollPane != null 
         ? drawStack.chromScrollPane.getHeight() : 100;
     double canvasHeight = Math.max(contentHeight, minHeight);
@@ -445,9 +573,12 @@ public class ChromosomeCanvas extends GenomicCanvas {
     
     // Use stacker's row assignments directly to ensure no overlaps
     for (int row = 0; row < stacked.getRowCount(); row++) {
+      double rowY = DrawGene.GENE_AREA_TOP + row * (DrawGene.GENE_ROW_HEIGHT + DrawExon.GENE_LABEL_HEIGHT);
       for (Gene gene : stacked.getRow(row)) {
-        double rowY = DrawGene.GENE_AREA_TOP + row * (DrawGene.GENE_ROW_HEIGHT + DrawExon.GENE_LABEL_HEIGHT);
-        drawGene.drawGene(gene, rowY, viewStart, viewLength, canvasWidth, showManeOnly);
+        RenderSpec spec = renderSpecs.get(gene);
+        boolean drawLabel = spec == null || spec.drawLabel();
+        boolean maneOnly = spec == null ? useManeOnlyForGene() : spec.maneOnly();
+        drawGene.drawGene(gene, rowY, viewStart, viewLength, canvasWidth, maneOnly, drawLabel);
       }
     }
     
@@ -484,4 +615,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
     }
     PositionIndicator.draw(gc, drawStack, getWidth(), visibleHeight);
   }
+
+  private record RenderSpec(boolean drawLabel, boolean maneOnly) {}
 }
