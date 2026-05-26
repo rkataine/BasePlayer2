@@ -372,28 +372,69 @@ public class CoverageDrawer {
     int lastBin = Math.min(cache.numBins - 1, (int)((end - cache.genomicStart) / cache.binSize) + 1);
 
     for (int b = firstBin; b <= lastBin; b++) {
-      double gpos = cache.genomicStart + b * cache.binSize;
-      double x = chromPosToScreenPos.apply(gpos);
-      int px = (int) x;
-      if (px < 0) continue;
-      if (px >= numColumns) break;
+      double gStart = cache.genomicStart + b * cache.binSize;
+      double gEnd = gStart + cache.binSize;
+      double x1 = chromPosToScreenPos.apply(gStart);
+      double x2 = chromPosToScreenPos.apply(gEnd);
 
-      row.coverage[px] = Math.max(row.coverage[px], cache.smoothedCov[b]);
-      row.mmA[px] = Math.max(row.mmA[px], cache.rawMmA[b]);
-      row.mmC[px] = Math.max(row.mmC[px], cache.rawMmC[b]);
-      row.mmG[px] = Math.max(row.mmG[px], cache.rawMmG[b]);
-      row.mmT[px] = Math.max(row.mmT[px], cache.rawMmT[b]);
+      int pxStart = (int) Math.floor(Math.min(x1, x2));
+      int pxEnd = (int) Math.ceil(Math.max(x1, x2)) - 1;
+      if (pxEnd < pxStart) pxEnd = pxStart;
+      if (pxEnd < 0) continue;
+      if (pxStart >= numColumns) break;
+
+      int drawStart = Math.max(0, pxStart);
+      int drawEnd = Math.min(numColumns - 1, pxEnd);
+      for (int px = drawStart; px <= drawEnd; px++) {
+        row.coverage[px] = Math.max(row.coverage[px], cache.smoothedCov[b]);
+        row.mmA[px] = Math.max(row.mmA[px], cache.rawMmA[b]);
+        row.mmC[px] = Math.max(row.mmC[px], cache.rawMmC[b]);
+        row.mmG[px] = Math.max(row.mmG[px], cache.rawMmG[b]);
+        row.mmT[px] = Math.max(row.mmT[px], cache.rawMmT[b]);
+      }
     }
 
     // Map methylation from cache
-    if (isMethyl && cache.smoothedMethylRatio != null) {
+    if (isMethyl && cache.methylRatio != null && cache.smoothedMethylRatio != null) {
+      double[] rawSum = new double[numColumns];
+      double[] smoothSum = new double[numColumns];
+      int[] rawCount = new int[numColumns];
+      int[] smoothCount = new int[numColumns];
+
       for (int b = firstBin; b <= lastBin; b++) {
-        double gpos = cache.genomicStart + b * cache.binSize + cache.binSize / 2.0;
-        double x = chromPosToScreenPos.apply(gpos);
-        int px = (int) x;
-        if (px >= 0 && px < numColumns) {
-          row.methylRatio[px] = cache.methylRatio[b];
-          row.smoothedMethylRatio[px] = cache.smoothedMethylRatio[b];
+        double gStart = cache.genomicStart + b * cache.binSize;
+        double gEnd = gStart + cache.binSize;
+        double x1 = chromPosToScreenPos.apply(gStart);
+        double x2 = chromPosToScreenPos.apply(gEnd);
+
+        int pxStart = (int) Math.floor(Math.min(x1, x2));
+        int pxEnd = (int) Math.ceil(Math.max(x1, x2)) - 1;
+        if (pxEnd < pxStart) pxEnd = pxStart;
+        if (pxEnd < 0) continue;
+        if (pxStart >= numColumns) break;
+
+        int drawStart = Math.max(0, pxStart);
+        int drawEnd = Math.min(numColumns - 1, pxEnd);
+        double rawVal = cache.methylRatio[b];
+        double smoothVal = cache.smoothedMethylRatio[b];
+        for (int px = drawStart; px <= drawEnd; px++) {
+          if (rawVal >= 0) {
+            rawSum[px] += rawVal;
+            rawCount[px]++;
+          }
+          if (smoothVal >= 0) {
+            smoothSum[px] += smoothVal;
+            smoothCount[px]++;
+          }
+        }
+      }
+
+      for (int px = 0; px < numColumns; px++) {
+        if (rawCount[px] > 0) {
+          row.methylRatio[px] = rawSum[px] / rawCount[px];
+        }
+        if (smoothCount[px] > 0) {
+          row.smoothedMethylRatio[px] = smoothSum[px] / smoothCount[px];
         }
       }
       
