@@ -38,6 +38,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextField;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
@@ -526,6 +527,13 @@ public class MasterTrackCanvas extends GenomicCanvas {
             + "-fx-prompt-text-fill: #bbbbbb;"
             + "-fx-mark-color: #dddddd;");
 
+    comboBox.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+      parentMenu.setAutoHide(false);
+      if (!comboBox.isShowing()) {
+        comboBox.show();
+      }
+      e.consume();
+    });
     comboBox.setOnShowing(e -> parentMenu.setAutoHide(false));
     comboBox.setOnHidden(e -> Platform.runLater(() -> parentMenu.setAutoHide(true)));
     comboBox.addEventFilter(ActionEvent.ACTION, ActionEvent::consume);

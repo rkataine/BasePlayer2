@@ -14,7 +14,6 @@ import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.utils.DrawColors;
 
-import javafx.application.Platform;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.scene.canvas.GraphicsContext;
@@ -26,6 +25,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -475,8 +475,15 @@ public class SampleListPanel extends SidebarContentPanel {
             + "-fx-prompt-text-fill: #bbbbbb;"
             + "-fx-mark-color: #dddddd;");
 
+    comboBox.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+      parentMenu.setAutoHide(false);
+      if (!comboBox.isShowing()) {
+        comboBox.show();
+      }
+      e.consume();
+    });
     comboBox.setOnShowing(e -> parentMenu.setAutoHide(false));
-    comboBox.setOnHidden(e -> Platform.runLater(() -> parentMenu.setAutoHide(true)));
+    comboBox.setOnHidden(e -> javafx.application.Platform.runLater(() -> parentMenu.setAutoHide(true)));
     comboBox.addEventFilter(ActionEvent.ACTION, ActionEvent::consume);
 
     comboBox.setButtonCell(createDarkComboCell());
