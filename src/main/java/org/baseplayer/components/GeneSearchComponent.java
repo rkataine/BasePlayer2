@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.annotation.AnnotationData;
-import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.genome.gene.GeneLocation;
@@ -253,6 +252,7 @@ public class GeneSearchComponent {
   private void navigateToGene(String geneName) {
     autoComplete.hide();
     SearchCommands.clearGeneHighlight();
+    NavigationUndoComponent.pushCurrentNavigationToUndo();
     NavigationCommands.navigateToGene(geneName);
     geneSearchField.setText(geneName);
     geneSearchField.selectAll();

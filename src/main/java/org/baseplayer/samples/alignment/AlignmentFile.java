@@ -20,15 +20,17 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.io.Settings;
 import org.baseplayer.io.readers.AlignmentReader;
 import org.baseplayer.io.readers.BAMFileReader;
 import org.baseplayer.io.readers.CRAMFileReader;
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
+import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.ThreadRunner;
 
 import javafx.application.Platform;
-import javafx.scene.Cursor;
 
 /**
  * Represents a loaded BAM/CRAM alignment file.
@@ -68,6 +70,8 @@ public class AlignmentFile implements Closeable {
   private static final int MAX_ERROR_LOG = 3;
   /** Fetch this fraction of view-length extra on each side to avoid refetching on tiny movements. */
   private static final double FETCH_BUFFER_FRACTION = 0.3;
+  /** How often to publish partial coverage cache updates while streaming. */
+  private static final long COVERAGE_PROGRESS_INTERVAL_NS = 60_000_000L;
   /** Maximum view length for BAM queries — now read from Settings. */
   private static int getMaxBamViewLength() { return Settings.get().getMaxCoverageViewLength(); }
 
@@ -127,17 +131,47 @@ public class AlignmentFile implements Closeable {
     public double[] rawMmA, rawMmC, rawMmG, rawMmT;
     public double[] methylRatio;  // per-bin methylation ratio (0-1, or -1 = no data)
     public double[] smoothedMethylRatio; // smoothed version for stable display
+    public String chrom;
+    public boolean methyl;
     public int genomicStart;
     public double binSize;
     public int numBins;
     public double scaleMax;
-    public List<BAMRecord> sourceReads; // identity check for invalidation
   }
   private final ConcurrentHashMap<DrawStack, CoverageCache> coverageCaches = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<DrawStack, Future<?>> coverageFetches = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<DrawStack, CoverageRequest> coverageRequests = new ConcurrentHashMap<>();
+  private final ReferenceGenomeService referenceGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
 
-  /** Get the coverage cache for a given DrawStack, or null. */
-  public CoverageCache getCoverageCache(DrawStack stack) {
-    return coverageCaches.get(stack);
+  private static class CoverageRequest {
+    final String chrom;
+    final int viewStart;
+    final int viewEnd;
+    final int fetchStart;
+    final int fetchEnd;
+    final double binSize;
+    final int numBins;
+    final boolean methyl;
+
+    CoverageRequest(String chrom, int viewStart, int viewEnd,
+                    int fetchStart, int fetchEnd,
+                    double binSize, int numBins, boolean methyl) {
+      this.chrom = chrom;
+      this.viewStart = viewStart;
+      this.viewEnd = viewEnd;
+      this.fetchStart = fetchStart;
+      this.fetchEnd = fetchEnd;
+      this.binSize = binSize;
+      this.numBins = numBins;
+      this.methyl = methyl;
+    }
+
+    boolean covers(String c, int start, int end, double requestedBinSize, boolean requestedMethyl) {
+      if (!chrom.equals(c)) return false;
+      if (requestedMethyl && !methyl) return false;
+      if (start < viewStart || end > viewEnd) return false;
+      return relativeDifference(binSize, requestedBinSize) < 0.01;
+    }
   }
 
   /** Get currently cached reads for a DrawStack without triggering a new fetch. */
@@ -146,9 +180,98 @@ public class AlignmentFile implements Closeable {
     return sc != null ? sc.cachedReads.get() : Collections.emptyList();
   }
 
-  /** Set the coverage cache for a given DrawStack. */
-  public void setCoverageCache(DrawStack stack, CoverageCache cache) {
-    coverageCaches.put(stack, cache);
+  /**
+   * Request a coverage-only matrix cache for the current viewport.
+   * <p>
+   * This path never stores per-read lists: reads are streamed and reduced
+   * directly into bin arrays used for coverage rendering.
+   */
+  public CoverageCache requestCoverageCache(String chrom, int start, int end,
+                                            DrawStack stack, boolean blockDuringNavigation,
+                                            boolean isMethyl, int numColumns) {
+    if (suspended || numColumns <= 0 || end <= start) return null;
+
+    int viewLength = end - start;
+    if (viewLength > getMaxBamViewLength()) {
+      clearCoverageCache(stack);
+      return null;
+    }
+
+    double binSize = (double) viewLength / Math.max(1, numColumns);
+    int fetchStart = Math.max(0, start);
+    int fetchEnd = end;
+    int numBins = Math.max(1, (int) ((fetchEnd - fetchStart) / binSize) + 1);
+
+    CoverageCache cache = coverageCaches.get(stack);
+    if (isCoverageCacheValid(cache, chrom, start, end, binSize, isMethyl)) {
+      return cache;
+    }
+
+    if (stack.nav.lineZoomerActive || stack.nav.animationRunning || CytobandCanvas.isDragging) {
+      return null;
+    }
+    if (blockDuringNavigation && stack.nav.navigating) {
+      return null;
+    }
+
+    StackCache sc = getCache(stack);
+    CoverageRequest req = new CoverageRequest(chrom, start, end, fetchStart, fetchEnd, binSize, numBins, isMethyl);
+
+    synchronized (sc) {
+      cache = coverageCaches.get(stack);
+      if (isCoverageCacheValid(cache, chrom, start, end, binSize, isMethyl)) {
+        return cache;
+      }
+
+      CoverageRequest inFlightReq = coverageRequests.get(stack);
+      Future<?> inFlight = coverageFetches.get(stack);
+      if (inFlight != null && !inFlight.isDone() && inFlightReq != null
+          && inFlightReq.covers(chrom, start, end, binSize, isMethyl)) {
+        return null;
+      }
+
+      if (inFlight != null && !inFlight.isDone()) {
+        inFlight.cancel(true);
+      }
+
+      FetchManager fm = FetchManager.get();
+      if (!fm.canFetch(FetchManager.FetchType.READS, this, stack, chrom, fetchStart, fetchEnd)) {
+        return null;
+      }
+
+      // Coverage-only mode should not retain row-packed reads.
+      if (!sc.cachedReads.get().isEmpty()) {
+        sc.cachedReads.set(Collections.emptyList());
+      }
+      sc.cachedChrom = "";
+      sc.cachedStart = -1;
+      sc.cachedEnd = -1;
+      sc.loading = true;
+
+      coverageRequests.put(stack, req);
+      Future<?> fetch = fetchPool.submit(() -> computeCoverageCacheAsync(stack, req));
+      coverageFetches.put(stack, fetch);
+    }
+
+    return null;
+  }
+
+  private boolean isCoverageCacheValid(CoverageCache cache, String chrom, int start, int end,
+                                       double binSize, boolean isMethyl) {
+    if (cache == null || cache.chrom == null) return false;
+    if (!cache.chrom.equals(chrom)) return false;
+    if (isMethyl && cache.methylRatio == null) return false;
+    if (relativeDifference(cache.binSize, binSize) >= 0.01) return false;
+    double cacheEnd = cache.genomicStart + cache.numBins * cache.binSize;
+    return start >= cache.genomicStart && end <= cacheEnd;
+  }
+
+  private void cancelCoverageFetch(DrawStack stack) {
+    Future<?> fetch = coverageFetches.remove(stack);
+    if (fetch != null && !fetch.isDone()) {
+      fetch.cancel(true);
+    }
+    coverageRequests.remove(stack);
   }
 
   // --- Chromosome-level sampled coverage ---
@@ -182,7 +305,6 @@ public class AlignmentFile implements Closeable {
       sc.fetchingChrom = "";
       sc.fetchingStart = -1;
       sc.fetchingEnd = -1;
-      sc.fetchingCoverageOnly = false;
       sc.loading = false;
       sc.readScrollOffset = 0;
       sc.readScrollOffsetTop = 0;
@@ -192,6 +314,7 @@ public class AlignmentFile implements Closeable {
   
   /** Clear coverage cache for a specific DrawStack. */
   public void clearCoverageCache(DrawStack stack) {
+    cancelCoverageFetch(stack);
     coverageCaches.remove(stack);
   }
   
@@ -211,6 +334,13 @@ public class AlignmentFile implements Closeable {
         prev.cancel(true);
       }
     }
+    for (Future<?> fetch : coverageFetches.values()) {
+      if (fetch != null && !fetch.isDone()) {
+        fetch.cancel(true);
+      }
+    }
+    coverageFetches.clear();
+    coverageRequests.clear();
     stackCaches.clear();
     coverageCaches.clear();
     coverageCalculator.clearSampledCoverageCache();
@@ -274,6 +404,11 @@ public class AlignmentFile implements Closeable {
       sc.fetchingStart = -1;
       sc.fetchingEnd = -1;
     }
+    for (Future<?> f : coverageFetches.values()) {
+      if (f != null) f.cancel(true);
+    }
+    coverageFetches.clear();
+    coverageRequests.clear();
     coverageCalculator.cancelSampling();
     // Reset so the callbacks can be re-armed when the user reloads
     firstLoadFired.set(false);
@@ -329,8 +464,6 @@ public class AlignmentFile implements Closeable {
     volatile Future<?> pendingFetch;
     volatile int lastViewStart = -1;
     volatile int lastViewEnd = -1;
-    volatile boolean cachedCoverageOnly = false;
-    volatile boolean fetchingCoverageOnly = false;
     /** Which signal tag was active when reads were cached: 'c', 'd', or '\0'. */
     volatile char cachedSignalTag = '\0';
     /** The first row where discordant reads are placed (0 if discordant reads exist and are shown at top, -1 = no discordant reads). */
@@ -394,27 +527,18 @@ public class AlignmentFile implements Closeable {
    * (or empty) until the fetch completes, at which point a redraw is triggered.
    */
   public List<BAMRecord> getReads(String chrom, int start, int end, DrawStack stack) {
-    return getReads(chrom, start, end, stack, true, false);
+    return getReads(chrom, start, end, stack, true);
   }
   
   /**
    * Get reads with optional navigation blocking.
    */
   public List<BAMRecord> getReads(String chrom, int start, int end, DrawStack stack, boolean blockDuringNavigation) {
-    return getReads(chrom, start, end, stack, blockDuringNavigation, false);
-  }
-
-  /**
-   * Get reads with optional navigation blocking and coverage-only mode.
-   * @param stack the DrawStack requesting reads (each stack caches independently)
-   * @param blockDuringNavigation if false, allows fetches even during navigation
-   * @param coverageOnly if true, skip row packing for faster loading
-   */
-  public List<BAMRecord> getReads(String chrom, int start, int end, DrawStack stack, boolean blockDuringNavigation, boolean coverageOnly) {
     // If reads are suspended (cancelled by user), return nothing until resumed
     if (suspended) return Collections.emptyList();
 
     StackCache sc = getCache(stack);
+    cancelCoverageFetch(stack);
     int viewLength = end - start;
     
     // Block all fetches during line zoom - just return cached data
@@ -436,7 +560,6 @@ public class AlignmentFile implements Closeable {
         sc.fetchingChrom = "";
         sc.fetchingStart = -1;
         sc.fetchingEnd = -1;
-        sc.fetchingCoverageOnly = false;
       }
       sc.loading = false;
       return Collections.emptyList();
@@ -444,20 +567,6 @@ public class AlignmentFile implements Closeable {
     
     // Check if requested view overlaps with cached region
     boolean hasOverlap = !sc.cachedChrom.isEmpty() && chrom.equals(sc.cachedChrom) && !(end <= sc.cachedStart || start >= sc.cachedEnd);
-    
-    // Invalidate cache if switching from coverageOnly to read mode (need packed reads)
-    if (!coverageOnly && sc.cachedCoverageOnly && !sc.cachedReads.get().isEmpty()) {
-      sc.cachedReads.set(Collections.emptyList());
-      sc.cachedChrom = "";
-      sc.cachedStart = -1;
-      sc.cachedEnd = -1;
-      sc.cachedCoverageOnly = false;
-      // Also clear fetching state to allow new fetch
-      sc.fetchingChrom = "";
-      sc.fetchingStart = -1;
-      sc.fetchingEnd = -1;
-      sc.fetchingCoverageOnly = false;
-    }
 
     // Invalidate cache if signal tag mode changed (cached reads lack the needed tag data)
     {
@@ -517,9 +626,8 @@ public class AlignmentFile implements Closeable {
       if (chrom.equals(sc.cachedChrom) && start >= sc.cachedStart && end <= sc.cachedEnd) {
         return sc.cachedReads.get();
       }
-      // If in-flight fetch covers our region AND has compatible packing mode, wait for it
-      if (chrom.equals(sc.fetchingChrom) && start >= sc.fetchingStart && end <= sc.fetchingEnd
-          && (coverageOnly || !sc.fetchingCoverageOnly)) {
+      // If in-flight fetch covers our region, wait for it
+      if (chrom.equals(sc.fetchingChrom) && start >= sc.fetchingStart && end <= sc.fetchingEnd) {
         return sc.cachedReads.get();
       }
 
@@ -562,23 +670,20 @@ public class AlignmentFile implements Closeable {
       final int fetchEnd = fetchEnd0;
 
       // Only cancel in-flight fetch if it won't cover our new buffered region
-      // or if it's coverageOnly but we now need packed reads
       Future<?> prev = sc.pendingFetch;
       if (prev != null && !prev.isDone()) {
         boolean fetchCoversNewRegion = chrom.equals(sc.fetchingChrom) 
             && fetchStart >= sc.fetchingStart 
             && fetchEnd <= sc.fetchingEnd;
-        boolean packingMismatch = !coverageOnly && sc.fetchingCoverageOnly;
         
-        if (!fetchCoversNewRegion || packingMismatch) {
-          // Stale fetch or wrong packing mode - cancel it and start new one
+        if (!fetchCoversNewRegion) {
+          // Stale fetch - cancel it and start new one
           prev.cancel(true);
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;
-          sc.fetchingCoverageOnly = false;
         } else {
-          // In-flight fetch will cover us with correct packing - keep it running
+          // In-flight fetch will cover us - keep it running
           return sc.cachedReads.get();
         }
       }
@@ -586,13 +691,7 @@ public class AlignmentFile implements Closeable {
       sc.fetchingChrom = chrom;
       sc.fetchingStart = fetchStart;
       sc.fetchingEnd = fetchEnd;
-      sc.fetchingCoverageOnly = coverageOnly;
       sc.loading = true;
-      Platform.runLater(() -> {
-        if (org.baseplayer.MainApp.stage != null && org.baseplayer.MainApp.stage.getScene() != null) {
-          org.baseplayer.MainApp.stage.getScene().setCursor(Cursor.WAIT);
-        }
-      });
 
       // Reset read scroll for this stack panel when fetching a new region
       resetReadScrollOffsets(stack);
@@ -605,7 +704,6 @@ public class AlignmentFile implements Closeable {
         sc.fetchingChrom = "";
         sc.fetchingStart = -1;
         sc.fetchingEnd = -1;
-        sc.fetchingCoverageOnly = false;
         return sc.cachedReads.get();
       }
 
@@ -618,7 +716,6 @@ public class AlignmentFile implements Closeable {
         if (cb != null) Platform.runLater(cb);
       }
 
-      final boolean skipPacking = coverageOnly;
       sc.pendingFetch = fetchPool.submit(() -> {
         FetchManager.FetchTicket ticket = fm.acquire(FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd);
         try {
@@ -638,7 +735,7 @@ public class AlignmentFile implements Closeable {
           Map<String, int[]> splitMateRow = sideBySide ? new LinkedHashMap<>() : null;
           int[] maxRowLocal = {0};
           // Pixel-based gap: 3 pixels converted to genomic coordinates (matches ReadPacker.MIN_PIXEL_GAP)
-          int gap = skipPacking ? 0 : Math.max(1, (int)(3 * stack.scale));
+          int gap = Math.max(1, (int)(3 * stack.scale));
           long[] lastUpdate = {System.nanoTime()};
           boolean[] detectionDone = {methylationDetected || haplotypeDetected || !detectedReadGroups.isEmpty()};
           final int maxReadCoverage = Settings.get().getMaxReadCoverage();
@@ -657,34 +754,32 @@ public class AlignmentFile implements Closeable {
               return false;
             }
             
-            if (!skipPacking) {
-              // Incremental CIGAR-aware packing
-              int[][] exons = ReadPacker.getExonSegments(record);
-              int r = -1;
-              int bridgeFrom = -1;
+            // Incremental CIGAR-aware packing
+            int[][] exons = ReadPacker.getExonSegments(record);
+            int r = -1;
+            int bridgeFrom = -1;
 
-              // In mate-side-by-side mode: prefer same row as the paired mate/split part (all reads).
-              // Bridge segments are only added for non-supplementary mates (to avoid huge range reservation).
-              // Overlap is allowed only with segments that belong to the same readName.
-              if (sideBySide && record.readName != null && splitMateRow != null) {
-                int[] pendingPlacement = ReadPacker.findPendingPlacementAllowOwnOverlap(
-                    record, splitMateRow, rowSegments, rowOwners, exons, gap);
-                if (pendingPlacement != null) {
-                  r = pendingPlacement[0];
-                  bridgeFrom = ReadPacker.calcBridgeFrom(record, pendingPlacement[1]);
-                }
+            // In mate-side-by-side mode: prefer same row as the paired mate/split part (all reads).
+            // Bridge segments are only added for non-supplementary mates (to avoid huge range reservation).
+            // Overlap is allowed only with segments that belong to the same readName.
+            if (sideBySide && record.readName != null && splitMateRow != null) {
+              int[] pendingPlacement = ReadPacker.findPendingPlacementAllowOwnOverlap(
+                  record, splitMateRow, rowSegments, rowOwners, exons, gap);
+              if (pendingPlacement != null) {
+                r = pendingPlacement[0];
+                bridgeFrom = ReadPacker.calcBridgeFrom(record, pendingPlacement[1]);
               }
+            }
 
-              if (r < 0) {
-                r = ReadPacker.findFittingRow(rowSegments, exons, gap);
-              }
+            if (r < 0) {
+              r = ReadPacker.findFittingRow(rowSegments, exons, gap);
+            }
 
-              record.row = ReadPacker.placeRecordInRow(rowSegments, rowOwners, record, r, bridgeFrom, exons);
-              if (record.row > maxRowLocal[0]) maxRowLocal[0] = record.row;
+            record.row = ReadPacker.placeRecordInRow(rowSegments, rowOwners, record, r, bridgeFrom, exons);
+            if (record.row > maxRowLocal[0]) maxRowLocal[0] = record.row;
 
-              if (sideBySide && record.readName != null && splitMateRow != null) {
-                ReadPacker.updatePendingPlacement(splitMateRow, record);
-              }
+            if (sideBySide && record.readName != null && splitMateRow != null) {
+              ReadPacker.updatePendingPlacement(splitMateRow, record);
             }
             reads.add(record);
             
@@ -696,7 +791,8 @@ public class AlignmentFile implements Closeable {
 
             // Progressive display every ~100 ms (but only after detection on first batch)
             long now = System.nanoTime();
-            if (now - lastUpdate[0] > 100_000_000L && (detectionDone[0] || reads.size() > 200)) {
+            if (now - lastUpdate[0] > 100_000_000L
+                && (detectionDone[0] || reads.size() > 200)) {
               sc.maxRow = maxRowLocal[0];
               sc.cachedReads.set(new ArrayList<>(reads));
               sc.cachedSignalTag = signalTag;
@@ -716,7 +812,6 @@ public class AlignmentFile implements Closeable {
             sc.maxRow = maxRowLocal[0];
             sc.lastViewStart = start;
             sc.lastViewEnd = end;
-            sc.cachedCoverageOnly = skipPacking;
             sc.cachedSignalTag = signalTag;
             consecutiveErrors = 0;
             System.out.println("Fetched BAM (" + name + "): " + reads.size() + " reads");
@@ -748,9 +843,7 @@ public class AlignmentFile implements Closeable {
             }, 5000);
             
             // Repack to optimize row usage now that all reads are loaded
-            if (!skipPacking) {
-              repackReads(stack);
-            }
+            repackReads(stack);
           }
         } catch (IOException e) {
           if (consecutiveErrors < MAX_ERROR_LOG) {
@@ -762,13 +855,11 @@ public class AlignmentFile implements Closeable {
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;
-          sc.fetchingCoverageOnly = false;
         } catch (RuntimeException e) {
           System.err.println("Runtime error in BAM fetch (" + name + "): " + e.getMessage());
           sc.fetchingChrom = "";
           sc.fetchingStart = -1;
           sc.fetchingEnd = -1;
-          sc.fetchingCoverageOnly = false;
         } finally {
           fm.release(ticket);
           sc.loading = false;
@@ -781,10 +872,6 @@ public class AlignmentFile implements Closeable {
           }
           Platform.runLater(() -> {
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
-            if (org.baseplayer.MainApp.stage != null && org.baseplayer.MainApp.stage.getScene() != null
-                && !isAnyStackLoading()) {
-              org.baseplayer.MainApp.stage.getScene().setCursor(Cursor.DEFAULT);
-            }
           });
         }
       });
@@ -800,16 +887,6 @@ public class AlignmentFile implements Closeable {
   public boolean isLoading(DrawStack stack) {
     StackCache sc = stackCaches.get(stack);
     return sc != null && sc.loading;
-  }
-
-  /**
-   * Whether any stack in this file is currently loading.
-   */
-  private boolean isAnyStackLoading() {
-    for (StackCache sc : stackCaches.values()) {
-      if (sc.loading) return true;
-    }
-    return false;
   }
 
   /**
@@ -848,6 +925,332 @@ public class AlignmentFile implements Closeable {
   /** Set bottom-half butterfly read scroll offset for the given stack panel (clamped to >= 0). */
   public void setReadScrollOffsetBottom(DrawStack stack, double value) {
     getCache(stack).readScrollOffsetBottom = Math.max(0, value);
+  }
+
+  private static double relativeDifference(double a, double b) {
+    double denom = Math.max(1e-9, Math.max(Math.abs(a), Math.abs(b)));
+    return Math.abs(a - b) / denom;
+  }
+
+  private void computeCoverageCacheAsync(DrawStack stack, CoverageRequest req) {
+    FetchManager fm = FetchManager.get();
+    FetchManager.FetchTicket ticket = fm.acquire(
+        FetchManager.FetchType.READS, AlignmentFile.this, stack, req.chrom, req.fetchStart, req.fetchEnd);
+    ThreadRunner.RunnerTask runnerTask = ThreadRunner.get().track(
+        "Loading coverage: " + name, () -> ticket.cancelled = true);
+
+    try {
+      double[] binCov = new double[req.numBins];
+      double[] mmA = new double[req.numBins];
+      double[] mmC = new double[req.numBins];
+      double[] mmG = new double[req.numBins];
+      double[] mmT = new double[req.numBins];
+      double[] bisulfiteBin = req.methyl ? new double[req.numBins] : null;
+      int[] cgCount = req.methyl ? computeCGBinCounts(req) : null;
+
+      @SuppressWarnings("unchecked")
+      java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[req.numBins];
+
+      List<BAMRecord> detectionReads = new ArrayList<>();
+      boolean[] detectionDone = {methylationDetected || haplotypeDetected || !detectedReadGroups.isEmpty()};
+      long[] lastProgressPublishNs = {System.nanoTime()};
+
+      reader.setActiveSignalTag('\0');
+      reader.queryStreaming(req.chrom, req.fetchStart, req.fetchEnd, record -> {
+        if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) return false;
+        if (!fm.recordRead(ticket)) return false;
+
+        addBinCoverageEvents(record, binCov, req.numBins, req.fetchStart, req.binSize);
+
+        if (!detectionDone[0] && detectionReads.size() < 200) {
+          detectionReads.add(record);
+          if (detectionReads.size() == 200) {
+            runAutoDetection(detectionReads);
+            detectionDone[0] = true;
+          }
+        }
+
+        if (record.mismatches != null) {
+          for (int m = 0; m + 2 < record.mismatches.length; m += 3) {
+            int pos = record.mismatches[m];
+            int bin = (int) ((pos - req.fetchStart) / req.binSize);
+            if (bin < 0 || bin >= req.numBins) continue;
+
+            if (req.methyl && bisulfiteBin != null && record.mismatches[m + 2] > 0) {
+              char readB = Character.toUpperCase((char) record.mismatches[m + 1]);
+              char refB = Character.toUpperCase((char) record.mismatches[m + 2]);
+              if ((refB == 'C' && readB == 'T') || (refB == 'G' && readB == 'A')) {
+                bisulfiteBin[bin]++;
+                continue;
+              }
+            }
+
+            if (posMM[bin] == null) posMM[bin] = new java.util.HashMap<>();
+            int[] c = posMM[bin].computeIfAbsent(pos, k -> new int[4]);
+            switch (Character.toUpperCase((char) record.mismatches[m + 1])) {
+              case 'A' -> {
+                c[0]++;
+                if (c[0] > mmA[bin]) mmA[bin] = c[0];
+              }
+              case 'C' -> {
+                c[1]++;
+                if (c[1] > mmC[bin]) mmC[bin] = c[1];
+              }
+              case 'G' -> {
+                c[2]++;
+                if (c[2] > mmG[bin]) mmG[bin] = c[2];
+              }
+              case 'T' -> {
+                c[3]++;
+                if (c[3] > mmT[bin]) mmT[bin] = c[3];
+              }
+              default -> {
+              }
+            }
+          }
+        }
+
+        long now = System.nanoTime();
+        if (now - lastProgressPublishNs[0] >= COVERAGE_PROGRESS_INTERVAL_NS) {
+          MethylSnapshot partialMethyl = buildMethylSnapshot(req, binCov, bisulfiteBin, cgCount);
+          publishCoverageSnapshot(stack, req, binCov, mmA, mmC, mmG, mmT,
+              partialMethyl.methylRatio(), partialMethyl.smoothedMethylRatio(), false);
+          lastProgressPublishNs[0] = now;
+        }
+        return true;
+      });
+
+      if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) return;
+
+      if (!detectionDone[0] && !detectionReads.isEmpty()) {
+        runAutoDetection(detectionReads);
+      }
+
+      // Publish an immediate near-final snapshot before methylation post-processing.
+      MethylSnapshot partialMethyl = buildMethylSnapshot(req, binCov, bisulfiteBin, cgCount);
+      publishCoverageSnapshot(stack, req, binCov, mmA, mmC, mmG, mmT,
+          partialMethyl.methylRatio(), partialMethyl.smoothedMethylRatio(), false);
+
+      for (int b = 0; b < req.numBins; b++) {
+        if (posMM[b] == null) continue;
+        for (int[] c : posMM[b].values()) {
+          if (c[0] > mmA[b]) mmA[b] = c[0];
+          if (c[1] > mmC[b]) mmC[b] = c[1];
+          if (c[2] > mmG[b]) mmG[b] = c[2];
+          if (c[3] > mmT[b]) mmT[b] = c[3];
+        }
+        posMM[b] = null;
+      }
+
+      MethylSnapshot finalMethyl = buildMethylSnapshot(req, binCov, bisulfiteBin, cgCount);
+      publishCoverageSnapshot(stack, req, binCov, mmA, mmC, mmG, mmT,
+          finalMethyl.methylRatio(), finalMethyl.smoothedMethylRatio(), true);
+    } catch (IOException e) {
+      if (!(e instanceof java.io.IOException && Thread.currentThread().isInterrupted())) {
+        System.err.println("Error computing coverage matrix (" + name + "): " + e.getMessage());
+      }
+    } finally {
+      fm.release(ticket);
+      runnerTask.complete();
+      StackCache sc = stackCaches.get(stack);
+      CoverageRequest currentReq = coverageRequests.get(stack);
+      if (currentReq == req) {
+        coverageRequests.remove(stack);
+        coverageFetches.remove(stack);
+        if (sc != null) {
+          sc.loading = false;
+        }
+      }
+    }
+  }
+
+  private int[] computeCGBinCounts(CoverageRequest req) {
+    if (!req.methyl || !referenceGenomeService.hasGenome()) return null;
+
+    String covRefBases = referenceGenomeService.getBases(req.chrom, Math.max(1, req.viewStart), req.viewEnd);
+    if (covRefBases == null || covRefBases.isEmpty()) return null;
+
+    int[] cgCount = new int[req.numBins];
+    for (int i = 0; i < covRefBases.length(); i++) {
+      char base = Character.toUpperCase(covRefBases.charAt(i));
+      if (base != 'C' && base != 'G') continue;
+
+      int gpos = req.viewStart + i;
+      int bin = (int) ((gpos - req.fetchStart) / req.binSize);
+      if (bin >= 0 && bin < req.numBins) cgCount[bin]++;
+    }
+    return cgCount;
+  }
+
+  private MethylSnapshot buildMethylSnapshot(CoverageRequest req, double[] binCov,
+                                             double[] bisulfiteBin, int[] cgCount) {
+    if (!req.methyl) return MethylSnapshot.EMPTY;
+
+    double[] methylRatio = new double[req.numBins];
+    if (bisulfiteBin == null || cgCount == null) {
+      java.util.Arrays.fill(methylRatio, -1);
+      return new MethylSnapshot(methylRatio, methylRatio.clone());
+    }
+
+    for (int b = 0; b < req.numBins; b++) {
+      if (cgCount[b] > 0 && binCov[b] >= 3) {
+        double expectedCov = cgCount[b] * binCov[b];
+        double ratio = 1.0 - bisulfiteBin[b] / expectedCov;
+        methylRatio[b] = Math.max(0, Math.min(1, ratio));
+      } else {
+        methylRatio[b] = -1;
+      }
+    }
+
+    double[] smoothed = methylRatio.clone();
+    smoothMethylRatio(smoothed);
+    return new MethylSnapshot(methylRatio, smoothed);
+  }
+
+  private record MethylSnapshot(double[] methylRatio, double[] smoothedMethylRatio) {
+    private static final MethylSnapshot EMPTY = new MethylSnapshot(null, null);
+  }
+
+  private void publishCoverageSnapshot(DrawStack stack, CoverageRequest req,
+                                       double[] binCov,
+                                       double[] mmA, double[] mmC, double[] mmG, double[] mmT,
+                                       double[] methylRatio, double[] smoothedMethylRatio,
+                                       boolean finalSnapshot) {
+    CoverageRequest currentReq = coverageRequests.get(stack);
+    if (currentReq != req) return;
+
+    double maxRaw = 0;
+    for (double c : binCov) if (c > maxRaw) maxRaw = c;
+
+    double[] covDisplay = binCov.clone();
+    if (finalSnapshot) {
+      smoothBins(covDisplay);
+    }
+
+    double maxDisplay = 0;
+    for (double c : covDisplay) if (c > maxDisplay) maxDisplay = c;
+
+    CoverageCache cache = new CoverageCache();
+    cache.smoothedCov = covDisplay;
+    cache.rawMmA = mmA.clone();
+    cache.rawMmC = mmC.clone();
+    cache.rawMmG = mmG.clone();
+    cache.rawMmT = mmT.clone();
+    cache.methylRatio = methylRatio != null ? methylRatio.clone() : null;
+    cache.smoothedMethylRatio = smoothedMethylRatio != null ? smoothedMethylRatio.clone() : null;
+    cache.chrom = req.chrom;
+    cache.methyl = req.methyl;
+    cache.genomicStart = req.fetchStart;
+    cache.binSize = req.binSize;
+    cache.numBins = req.numBins;
+    cache.scaleMax = Math.max(maxDisplay, maxRaw);
+
+    coverageCaches.put(stack, cache);
+    Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+  }
+
+  /** In-place Gaussian-like smoothing (3-pass box blur). */
+  private static void smoothBins(double[] bins) {
+    int n = bins.length;
+    if (n < 5) return;
+    int radius = Math.max(1, Math.min(8, n / 80));
+    double[] tmp = new double[n];
+    for (int pass = 0; pass < 3; pass++) {
+      double sum = 0;
+      for (int i = 0; i <= radius && i < n; i++) sum += bins[i];
+      for (int i = 0; i < n; i++) {
+        int right = i + radius;
+        int left = i - radius - 1;
+        if (right < n) sum += bins[right];
+        if (left >= 0) sum -= bins[left];
+        int count = Math.min(right, n - 1) - Math.max(left + 1, 0) + 1;
+        tmp[i] = sum / count;
+      }
+      System.arraycopy(tmp, 0, bins, 0, n);
+    }
+  }
+
+  /** In-place smoothing for methylation ratio arrays, handling -1 (no data) gaps. */
+  private static void smoothMethylRatio(double[] ratios) {
+    int n = ratios.length;
+    if (n < 5) return;
+
+    int maxGap = Math.max(5, Math.min(30, n / 30));
+    int lastValid = -1;
+    for (int i = 0; i < n; i++) {
+      if (ratios[i] >= 0) {
+        if (lastValid >= 0 && i - lastValid <= maxGap) {
+          double v0 = ratios[lastValid], v1 = ratios[i];
+          for (int j = lastValid + 1; j < i; j++) {
+            double t = (double) (j - lastValid) / (i - lastValid);
+            ratios[j] = v0 + t * (v1 - v0);
+          }
+        }
+        lastValid = i;
+      }
+    }
+
+    int radius = Math.max(2, Math.min(15, n / 40));
+    double[] tmp = new double[n];
+    for (int pass = 0; pass < 3; pass++) {
+      for (int i = 0; i < n; i++) {
+        if (ratios[i] < 0) {
+          tmp[i] = -1;
+          continue;
+        }
+        double sum = 0;
+        int cnt = 0;
+        for (int k = Math.max(0, i - radius); k <= Math.min(n - 1, i + radius); k++) {
+          if (ratios[k] >= 0) {
+            sum += ratios[k];
+            cnt++;
+          }
+        }
+        tmp[i] = cnt > 0 ? sum / cnt : -1;
+      }
+      System.arraycopy(tmp, 0, ratios, 0, n);
+    }
+  }
+
+  /** Add bin-level coverage for exonic segments (coverage-only / zoomed-out mode). */
+  private static void addBinCoverageEvents(BAMRecord read, double[] binCov, int numBins,
+                                           int binStart, double binSize) {
+    if (read.cigarOps == null) {
+      addBinEvent(binCov, numBins, binStart, binSize, read.pos, read.end);
+      return;
+    }
+    boolean hasSplice = false;
+    for (int cigarOp : read.cigarOps) {
+      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) {
+        hasSplice = true;
+        break;
+      }
+    }
+    if (!hasSplice) {
+      addBinEvent(binCov, numBins, binStart, binSize, read.pos, read.end);
+      return;
+    }
+    int refPos = read.pos;
+    for (int cigarOp : read.cigarOps) {
+      int op = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X, BAMRecord.CIGAR_D -> {
+          addBinEvent(binCov, numBins, binStart, binSize, refPos, refPos + len);
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_N -> refPos += len;
+        default -> {
+        }
+      }
+    }
+  }
+
+  private static void addBinEvent(double[] binCov, int numBins, int binStart, double binSize,
+                                  int segStart, int segEnd) {
+    int b1 = Math.max(0, (int) ((segStart - binStart) / binSize));
+    int b2 = Math.min(numBins - 1, (int) ((segEnd - binStart) / binSize));
+    for (int b = b1; b <= b2; b++) binCov[b]++;
   }
 
   /** Reset all read scroll offsets for the given stack panel. */
@@ -1133,6 +1536,11 @@ public class AlignmentFile implements Closeable {
               Future<?> f = sc.pendingFetch;
               if (f != null) f.cancel(true);
           }
+            for (Future<?> f : coverageFetches.values()) {
+              if (f != null) f.cancel(true);
+            }
+            coverageFetches.clear();
+            coverageRequests.clear();
           coverageCalculator.cancelSampling();
           stackCaches.clear();
           coverageCaches.clear();

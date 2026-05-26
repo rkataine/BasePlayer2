@@ -213,8 +213,8 @@ public class CoverageDrawer {
     // mismatch count at any single genomic position within the pixel rather
     // than summing across all positions. Summing inflates values when multiple
     // genomic positions land in one pixel (zoom-out within read view), giving
-    // misleading variant counts on the coverage track.  Mirrors the bin-level
-    // logic in computeCoverageCache().
+    // misleading variant counts on the coverage track. Mirrors the bin-level
+    // logic used by AlignmentFile's streamed coverage matrix cache.
     @SuppressWarnings("unchecked")
     java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[numColumns];
 
@@ -354,30 +354,15 @@ public class CoverageDrawer {
     AlignmentFile bamFile = sample.getBamFile();
     if (bamFile == null) return null;
 
-    double cw = numColumns;
-    int viewLen = end - start;
-    if (viewLen <= 0) return null;
-    double binSize = (double) viewLen / cw;
+    AlignmentFile.CoverageCache cache = bamFile.requestCoverageCache(
+        chrom, start, end, drawStack, isHoverStack, isMethyl, numColumns);
+    if (cache == null || cache.chrom == null || !cache.chrom.equals(chrom)) return null;
 
-    List<BAMRecord> reads = bamFile.getReads(chrom, start, end, drawStack, isHoverStack, true);
-    if (reads.isEmpty()) return null;
-
-    // Check if cached data is still valid
-    AlignmentFile.CoverageCache cache = bamFile.getCoverageCache(drawStack);
-    int cacheGenomicEnd = cache != null ? (int)(cache.genomicStart + cache.numBins * cache.binSize) : 0;
-    boolean cacheValid = cache != null
-        && cache.sourceReads == reads
-        && Math.abs(cache.binSize - binSize) / binSize < 0.01
-        && start >= cache.genomicStart
-        && end <= cacheGenomicEnd;
-
-    if (!cacheValid) {
-      cache = computeCoverageCache(reads, start, end, viewLen, binSize, isMethyl, chrom);
-      bamFile.setCoverageCache(drawStack, cache);
-    }
+    int cacheGenomicEnd = (int) (cache.genomicStart + cache.numBins * cache.binSize);
+    if (start < cache.genomicStart || end > cacheGenomicEnd) return null;
 
     // Don't create row if coverage is effectively zero (below rendering threshold)
-    if (cache == null || cache.scaleMax < 0.5) return null;
+    if (cache.scaleMax < 0.5) return null;
 
     // Map cached bins to SampleRow at screen-pixel resolution
     SampleRow row = new SampleRow(sample, sampleIndex, numColumns);
@@ -435,146 +420,6 @@ public class CoverageDrawer {
     }
 
     return row;
-  }
-
-  /**
-   * Compute the CoverageCache for binned viewing (coverage-only mode).
-   * <p>
-   * All arrays are bin-sized (≈ screen width).  Methylation ratios are computed
-   * at bin level using the reference genome and per-bin bisulfite counts, avoiding
-   * the previous regionLen-sized intermediate arrays (up to 48 MB).
-   */
-  private AlignmentFile.CoverageCache computeCoverageCache(List<BAMRecord> reads,
-      int start, int end, int viewLen, double binSize, boolean isMethyl, String chrom) {
-
-    int buffer = viewLen / 2;
-    int binStart = Math.max(0, start - buffer);
-    int binEnd = end + buffer;
-    int numBins = Math.max(1, (int)((binEnd - binStart) / binSize) + 1);
-
-    double[] binCov = new double[numBins];
-    double[] mmA = new double[numBins];
-    double[] mmC = new double[numBins];
-    double[] mmG = new double[numBins];
-    double[] mmT = new double[numBins];
-    double[] bisulfiteBin = new double[numBins];
-
-    // Per-bin: map genomic position → per-allele counts, so we can take the
-    // PEAK mismatch count at any single position instead of summing across all
-    // positions in the bin. Summing inflates values proportionally to binSize,
-    // causing false positives when zoomed out (noise from many positions exceeds
-    // the absolute count threshold). Peak values are zoom-invariant.
-    @SuppressWarnings("unchecked")
-    java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[numBins];
-
-    // Single pass through reads — all accumulation at bin level
-    for (BAMRecord read : reads) {
-      addBinCoverageEvents(read, binCov, numBins, binStart, binSize);
-
-      if (read.mismatches != null) {
-        for (int m = 0; m + 2 < read.mismatches.length; m += 3) {
-          int bin = (int)((read.mismatches[m] - binStart) / binSize);
-          if (bin < 0 || bin >= numBins) continue;
-
-          if (isMethyl && read.mismatches[m + 2] > 0) {
-            char readB = Character.toUpperCase((char) read.mismatches[m + 1]);
-            char refB = Character.toUpperCase((char) read.mismatches[m + 2]);
-            if ((refB == 'C' && readB == 'T') || (refB == 'G' && readB == 'A')) {
-              bisulfiteBin[bin]++;
-              continue;
-            }
-          }
-
-          if (posMM[bin] == null) posMM[bin] = new java.util.HashMap<>();
-          int pos = read.mismatches[m];
-          int[] c = posMM[bin].computeIfAbsent(pos, k -> new int[4]);
-          switch (Character.toUpperCase((char) read.mismatches[m + 1])) {
-            case 'A' -> c[0]++;
-            case 'C' -> c[1]++;
-            case 'G' -> c[2]++;
-            case 'T' -> c[3]++;
-          }
-        }
-      }
-    }
-
-    // Extract per-bin peak: the highest read count supporting any single allele
-    // at any single genomic position within the bin.
-    for (int b = 0; b < numBins; b++) {
-      if (posMM[b] == null) continue;
-      for (int[] c : posMM[b].values()) {
-        if (c[0] > mmA[b]) mmA[b] = c[0];
-        if (c[1] > mmC[b]) mmC[b] = c[1];
-        if (c[2] > mmG[b]) mmG[b] = c[2];
-        if (c[3] > mmT[b]) mmT[b] = c[3];
-      }
-      posMM[b] = null; // release for GC
-    }
-
-    double maxRaw = 0;
-    for (double c : binCov) if (c > maxRaw) maxRaw = c;
-
-    // ── Bin-level methylation ratio (no per-position arrays) ──
-    double[] methylRatio = null;
-    if (isMethyl) {
-      // Fetch reference for the visible region to count C/G sites per bin
-      String covRefBases = null;
-      if (referenceGenomeService.hasGenome()) {
-        covRefBases = referenceGenomeService.getBases(chrom, Math.max(1, start), end);
-        if (covRefBases != null && covRefBases.isEmpty()) covRefBases = null;
-      }
-
-      methylRatio = new double[numBins];
-      if (covRefBases != null) {
-        // Count C/G reference sites per bin
-        int[] cgCount = new int[numBins];
-        for (int i = 0; i < covRefBases.length(); i++) {
-          char base = Character.toUpperCase(covRefBases.charAt(i));
-          if (base != 'C' && base != 'G') continue;
-          int gpos = start + i;
-          int bin = (int)((gpos - binStart) / binSize);
-          if (bin >= 0 && bin < numBins) cgCount[bin]++;
-        }
-        // ratio = 1 - bisConversions / (cgSites × binCoverage)
-        for (int b = 0; b < numBins; b++) {
-          if (cgCount[b] > 0 && binCov[b] >= 3) {
-            double expectedCov = cgCount[b] * binCov[b];
-            methylRatio[b] = 1.0 - bisulfiteBin[b] / expectedCov;
-            methylRatio[b] = Math.max(0, Math.min(1, methylRatio[b]));
-          } else {
-            methylRatio[b] = -1;
-          }
-        }
-      } else {
-        java.util.Arrays.fill(methylRatio, -1);
-      }
-    }
-
-    smoothBins(binCov);
-
-    double maxSmoothed = 0;
-    for (double c : binCov) if (c > maxSmoothed) maxSmoothed = c;
-
-    double[] smoothedMethylRatio = null;
-    if (methylRatio != null) {
-      smoothedMethylRatio = methylRatio.clone();
-      smoothMethylRatio(smoothedMethylRatio);
-    }
-
-    AlignmentFile.CoverageCache cache = new AlignmentFile.CoverageCache();
-    cache.smoothedCov = binCov;
-    cache.rawMmA = mmA;
-    cache.rawMmC = mmC;
-    cache.rawMmG = mmG;
-    cache.rawMmT = mmT;
-    cache.methylRatio = methylRatio;
-    cache.smoothedMethylRatio = smoothedMethylRatio;
-    cache.genomicStart = binStart;
-    cache.binSize = binSize;
-    cache.numBins = numBins;
-    cache.scaleMax = Math.max(maxSmoothed, maxRaw);
-    cache.sourceReads = reads;
-    return cache;
   }
 
   // ── Drawing methods ──
@@ -873,27 +718,6 @@ public class CoverageDrawer {
 
   // ── Static smoothing utilities ──
 
-  /** In-place Gaussian-like smoothing (3-pass box blur). */
-  static void smoothBins(double[] bins) {
-    int n = bins.length;
-    if (n < 5) return;
-    int radius = Math.max(1, Math.min(8, n / 80));
-    double[] tmp = new double[n];
-    for (int pass = 0; pass < 3; pass++) {
-      double sum = 0;
-      for (int i = 0; i <= radius && i < n; i++) sum += bins[i];
-      for (int i = 0; i < n; i++) {
-        int right = i + radius;
-        int left = i - radius - 1;
-        if (right < n) sum += bins[right];
-        if (left >= 0) sum -= bins[left];
-        int count = Math.min(right, n - 1) - Math.max(left + 1, 0) + 1;
-        tmp[i] = sum / count;
-      }
-      System.arraycopy(tmp, 0, bins, 0, n);
-    }
-  }
-
   /** In-place smoothing for methylation ratio arrays, handling -1 (no data) gaps. */
   /**
    * Draws chromosome-level sampled coverage for one sample.
@@ -1114,42 +938,4 @@ public class CoverageDrawer {
     }
   }
 
-  /**
-   * Add bin-level coverage for exonic segments (coverage-only / zoomed-out mode).
-   */
-  private static void addBinCoverageEvents(BAMRecord read, double[] binCov, int numBins,
-                                            int binStart, double binSize) {
-    if (read.cigarOps == null) {
-      addBinEvent(binCov, numBins, binStart, binSize, read.pos, read.end);
-      return;
-    }
-    boolean hasSplice = false;
-    for (int cigarOp : read.cigarOps) {
-      if ((cigarOp & 0xF) == BAMRecord.CIGAR_N) { hasSplice = true; break; }
-    }
-    if (!hasSplice) {
-      addBinEvent(binCov, numBins, binStart, binSize, read.pos, read.end);
-      return;
-    }
-    int refPos = read.pos;
-    for (int cigarOp : read.cigarOps) {
-      int op  = cigarOp & 0xF;
-      int len = cigarOp >>> 4;
-      switch (op) {
-        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X, BAMRecord.CIGAR_D -> {
-          addBinEvent(binCov, numBins, binStart, binSize, refPos, refPos + len);
-          refPos += len;
-        }
-        case BAMRecord.CIGAR_N -> refPos += len;
-        default -> {}
-      }
-    }
-  }
-
-  private static void addBinEvent(double[] binCov, int numBins, int binStart, double binSize,
-                                   int segStart, int segEnd) {
-    int b1 = Math.max(0, (int)((segStart - binStart) / binSize));
-    int b2 = Math.min(numBins - 1, (int)((segEnd - binStart) / binSize));
-    for (int b = b1; b <= b2; b++) binCov[b]++;
-  }
 }

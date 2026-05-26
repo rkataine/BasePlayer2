@@ -58,9 +58,9 @@
   </MenuBar>
   <ToolBar HBox.hgrow="ALWAYS" styleClass="toolBar">
     <items>
-      <Button onAction="#removeStack" text="&lt;" />
+      <Button fx:id="undoButton" />
       <TextField fx:id="geneSearchField" prefHeight="0.0" prefWidth="149.0" promptText="Search gene" />
-      <Button onAction="#addStack" text="&gt;" />
+      <Button fx:id="redoButton" />
       <HBox fx:id="positionBox" styleClass="position-box" prefHeight="20.0" spacing="0">
         <Label fx:id="chromosomeLabel" text="chr1:" styleClass="chromosome-label" />
         <TextField fx:id="positionField" minWidth="140.0" prefHeight="20.0" prefWidth="210.0" promptText="235352 or chr6:23235-235235" styleClass="position-text-field" />

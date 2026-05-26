@@ -4,6 +4,7 @@ import java.io.File;
 import java.util.List;
 
 import org.baseplayer.components.GeneSearchComponent;
+import org.baseplayer.components.NavigationUndoComponent;
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.ViewCommands;
@@ -23,9 +24,12 @@ import org.kordamp.ikonli.javafx.FontIcon;
 import javafx.animation.PauseTransition;
 import javafx.event.ActionEvent;
 import javafx.event.Event;
+import javafx.event.EventHandler;
 import javafx.fxml.FXML;
 import javafx.geometry.Bounds;
 import javafx.geometry.Side;
+import javafx.scene.Node;
+import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
@@ -37,6 +41,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
@@ -53,10 +58,13 @@ public class MenuBarController {
   @FXML private MenuBar menuBar;
   @FXML private Menu recentFilesMenu;
   @FXML private Pane memoryBar;
+  @FXML private Button undoButton;
+  @FXML private Button redoButton;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
   @FXML private Button copyPositionButton;
-  
+  private NavigationUndoComponent navigationUndo;
+
   // Zoom button icons for state updates
   private FontIcon zoomInIcon;
   private FontIcon zoomOutIcon;
@@ -72,6 +80,7 @@ public class MenuBarController {
   private Popup snackbarPopup;
   private Label snackbarLabel;
   private PauseTransition snackbarHideTimer;
+  private final EventHandler<MouseEvent> positionFieldDefocusHandler = this::handleGlobalMousePress;
 
   private record ParsedPosition(String chromosome, int start, Integer end) {
     boolean isRange() { return end != null; }
@@ -92,6 +101,8 @@ public class MenuBarController {
     setupMemoryBar();
     new GeneSearchComponent(geneSearchField, viewportState);
     setupPositionField();
+    installPositionFieldDefocusHandler();
+    navigationUndo = new NavigationUndoComponent(undoButton, redoButton);
     setupZoomButtons();
     refreshRecentFilesMenu();
     
@@ -105,6 +116,7 @@ public class MenuBarController {
         syncPositionFieldFromHoverStack();
       }
       updateViewLengthLabel();
+      if (navigationUndo != null) navigationUndo.updateButtonStates();
       updateZoomButtonStates();
     });
     menuBar.widthProperty().addListener((observable, oldValue, newValue) -> {
@@ -190,6 +202,43 @@ public class MenuBarController {
     }
   }
 
+  private void installPositionFieldDefocusHandler() {
+    if (positionField == null) return;
+
+    positionField.sceneProperty().addListener((obs, oldScene, newScene) -> {
+      if (oldScene != null) {
+        oldScene.removeEventFilter(MouseEvent.MOUSE_PRESSED, positionFieldDefocusHandler);
+      }
+      if (newScene != null) {
+        newScene.addEventFilter(MouseEvent.MOUSE_PRESSED, positionFieldDefocusHandler);
+      }
+    });
+
+    Scene scene = positionField.getScene();
+    if (scene != null) {
+      scene.addEventFilter(MouseEvent.MOUSE_PRESSED, positionFieldDefocusHandler);
+    }
+  }
+
+  private void handleGlobalMousePress(MouseEvent event) {
+    if (positionField == null || !positionField.isFocused()) return;
+    if (isEventInsideNode(event.getTarget(), positionField)) return;
+
+    Node fallbackFocusTarget = menuBar != null ? menuBar : positionField.getParent();
+    if (fallbackFocusTarget != null) {
+      fallbackFocusTarget.requestFocus();
+    }
+  }
+
+  private boolean isEventInsideNode(Object target, Node node) {
+    if (!(target instanceof Node current)) return false;
+    while (current != null) {
+      if (current == node) return true;
+      current = current.getParent();
+    }
+    return false;
+  }
+
   private boolean isEditingPositionField() {
     return positionField != null && positionField.isFocused();
   }
@@ -203,6 +252,8 @@ public class MenuBarController {
   private void navigateFromPositionField() {
     ParsedPosition parsed = parsePositionInput(positionField.getText());
     if (parsed == null) return;
+
+    NavigationUndoComponent.pushCurrentNavigationToUndo();
 
     if (parsed.chromosome != null && !parsed.chromosome.isBlank()) {
       onChromosomeSelected(parsed.chromosome);
@@ -379,6 +430,7 @@ public class MenuBarController {
     zoomOutButton.setText("");
     zoomOutButton.setGraphic(zoomOutIcon);
   }
+
   
   private void updateZoomButtonStates() {
     if (stackManager.getHoverStack() == null || zoomInIcon == null || zoomOutIcon == null) return;
