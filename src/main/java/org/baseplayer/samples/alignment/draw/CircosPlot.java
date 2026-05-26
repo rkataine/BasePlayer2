@@ -397,8 +397,8 @@ public final class CircosPlot {
                 double thick = (maxCount <= 1) ? 1.0
                         : 1.0 + (maxThick - 1.0) * Math.log1p(count - 1) / Math.log1p(maxCount - 1);
 
-                String colorKey = arcA.name.equals(currentChrom) ? arcB.name : arcA.name;
-                Color chord = colorFor(colorKey).deriveColor(0, 1, 1, 0.70);
+                // Color the chord by target chromosome (chrB) instead of source (chrA).
+                Color chord = colorFor(arcB.name).deriveColor(0, 1, 1, 0.70);
                 g.setStroke(chord);
                 g.setLineWidth(thick);
 

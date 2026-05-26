@@ -9,6 +9,7 @@ import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
@@ -371,8 +372,28 @@ public class GenomicCanvas extends Canvas {
     double totalDragPixels = Math.abs(mouseDraggedX - mousePressedX);
     if (!lineZoomer && mouseDraggedX >= mousePressedX) {
       clearReactive();
-      reactiveGc.fillRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight());
-      reactiveGc.strokeRect(mousePressedX, zoomY, mouseDraggedX-mousePressedX, getHeight() + 2);
+      double curtainX = mousePressedX;
+      double curtainW = mouseDraggedX - mousePressedX;
+      reactiveGc.fillRect(curtainX, zoomY, curtainW, getHeight());
+      reactiveGc.strokeRect(curtainX, zoomY, curtainW, getHeight() + 2);
+
+      // Show selected span width while dragging the zoom curtain.
+      long spanBp = Math.max(1L, Math.round(curtainW * drawStack.scale));
+      String spanLabel = BaseUtils.formatNumber(spanBp) + " bp";
+      double labelW = spanLabel.length() * 7.2 + 12;
+      double labelH = 18;
+      double labelX = curtainX + curtainW * 0.5 - labelW * 0.5;
+      if (labelX < 4) labelX = 4;
+      if (labelX + labelW > getWidth() - 4) labelX = getWidth() - labelW - 4;
+      double labelY = 6;
+
+      reactiveGc.setFill(Color.rgb(20, 20, 26, 0.82));
+      reactiveGc.fillRoundRect(labelX, labelY, labelW, labelH, 6, 6);
+      reactiveGc.setStroke(Color.rgb(220, 230, 255, 0.85));
+      reactiveGc.strokeRoundRect(labelX + 0.5, labelY + 0.5, labelW - 1, labelH - 1, 6, 6);
+      reactiveGc.setFill(Color.rgb(242, 246, 255, 0.98));
+      reactiveGc.setFont(Font.font("Segoe UI", 11));
+      reactiveGc.fillText(spanLabel, labelX + 6, labelY + 12.5);
     } else {
       if (totalDragPixels < MIN_ZOOM_DRAG_PIXELS) {
         zoomDrag = false;

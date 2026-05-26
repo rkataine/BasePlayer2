@@ -909,20 +909,40 @@ class DrawReads {
                                      Color fwdFill, Color revFill,
                                      Color fwdStroke, Color revStroke,
                                      String currentChrom) {
+    Color baseFill;
+    Color baseStroke;
+
     int dt = read.getDiscordantType();
     if (dt > 0) {
-      return switch (dt) {
+      switch (dt) {
         case 1 -> {
           int ci = Math.abs(read.mateRefID) % DrawColors.INTERCHROM_FILLS.length;
-          yield new Color[]{ DrawColors.INTERCHROM_FILLS[ci], DrawColors.INTERCHROM_STROKES[ci] };
+          baseFill = DrawColors.INTERCHROM_FILLS[ci];
+          baseStroke = DrawColors.INTERCHROM_STROKES[ci];
         }
-        case 2 -> new Color[]{ DrawColors.DISCORDANT_DELETION,     DrawColors.DISCORDANT_DELETION_STROKE };
-        case 3 -> new Color[]{ DrawColors.DISCORDANT_INVERSION,    DrawColors.DISCORDANT_INVERSION_STROKE };
-        case 4 -> new Color[]{ DrawColors.DISCORDANT_DUPLICATION,  DrawColors.DISCORDANT_DUPLICATION_STROKE };
-        default -> read.isReverseStrand()
-            ? new Color[]{ revFill, revStroke }
-            : new Color[]{ fwdFill, fwdStroke };
-      };
+        case 2 -> {
+          baseFill = DrawColors.DISCORDANT_DELETION;
+          baseStroke = DrawColors.DISCORDANT_DELETION_STROKE;
+        }
+        case 3 -> {
+          baseFill = DrawColors.DISCORDANT_INVERSION;
+          baseStroke = DrawColors.DISCORDANT_INVERSION_STROKE;
+        }
+        case 4 -> {
+          baseFill = DrawColors.DISCORDANT_DUPLICATION;
+          baseStroke = DrawColors.DISCORDANT_DUPLICATION_STROKE;
+        }
+        default -> {
+          if (read.isReverseStrand()) {
+            baseFill = revFill;
+            baseStroke = revStroke;
+          } else {
+            baseFill = fwdFill;
+            baseStroke = fwdStroke;
+          }
+        }
+      }
+      return shadeByMapq(read.mapq, baseFill, baseStroke);
     }
 
     // SA tag: if any split alignment maps to a different chromosome, color by
@@ -931,13 +951,71 @@ class DrawReads {
       String saChrom = parseSaChrom(read.saTag, currentChrom);
       if (saChrom != null) {
         int ci = Math.abs(saChrom.hashCode()) % DrawColors.INTERCHROM_FILLS.length;
-        return new Color[]{ DrawColors.INTERCHROM_FILLS[ci], DrawColors.INTERCHROM_STROKES[ci] };
+        return shadeByMapq(read.mapq, DrawColors.INTERCHROM_FILLS[ci], DrawColors.INTERCHROM_STROKES[ci]);
       }
     }
 
-    return read.isReverseStrand()
-        ? new Color[]{ revFill, revStroke }
-        : new Color[]{ fwdFill, fwdStroke };
+    if (read.isReverseStrand()) {
+      baseFill = revFill;
+      baseStroke = revStroke;
+    } else {
+      baseFill = fwdFill;
+      baseStroke = fwdStroke;
+    }
+    return shadeByMapq(read.mapq, baseFill, baseStroke);
+  }
+
+  /**
+   * MAPQ shading for read-level body colors.
+   * <p>
+   * High MAPQ keeps the original vivid color, while low MAPQ uses milder
+   * bucketed desaturation/dimming and gray blending.
+   */
+  private static final double[] MAPQ_SAT_SCALE = {
+      0.42, // 0-9
+      0.55, // 10-19
+      0.67, // 20-29
+      0.78, // 30-39
+      0.88, // 40-49
+      0.96, // 50-59
+      1.00  // 60+
+  };
+  private static final double[] MAPQ_BRI_SCALE = {
+      0.45, // 0-9
+      0.58, // 10-19
+      0.70, // 20-29
+      0.80, // 30-39
+      0.89, // 40-49
+      0.96, // 50-59
+      1.00  // 60+
+  };
+  private static final double[] MAPQ_BLEND = {
+      0.40, // 0-9
+      0.55, // 10-19
+      0.68, // 20-29
+      0.79, // 30-39
+      0.88, // 40-49
+      0.95, // 50-59
+      1.00  // 60+
+  };
+
+  private static Color[] shadeByMapq(int mapq, Color fill, Color stroke) {
+    return new Color[]{ shadeColorByMapq(mapq, fill), shadeColorByMapq(mapq, stroke) };
+  }
+
+  private static Color shadeColorByMapq(int mapq, Color baseColor) {
+    int mq = Math.max(0, mapq);
+    int bucket = Math.min(MAPQ_SAT_SCALE.length - 1, mq / 10);
+
+    // Lower MAPQ means lower saturation and lower luminance.
+    double saturationScale = MAPQ_SAT_SCALE[bucket];
+    double brightnessScale = MAPQ_BRI_SCALE[bucket];
+    Color toned = baseColor.deriveColor(0, saturationScale, brightnessScale, 1.0);
+
+    // Blend low MAPQ colors toward a visible dark gray (not black).
+    Color darkGray = Color.gray(0.18);
+    Color mixed = darkGray.interpolate(toned, MAPQ_BLEND[bucket]);
+    return new Color(mixed.getRed(), mixed.getGreen(), mixed.getBlue(), baseColor.getOpacity());
   }
 
   /**

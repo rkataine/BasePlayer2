@@ -68,6 +68,8 @@ public class MainController {
   
   // Unified sidebar controller for all horizontal split panes
   private final SidebarController sidebarController = new SidebarController();
+  private boolean updatingVerticalDividers = false;
+  private static final double FEATURE_MIN_HEIGHT_PADDING_PX = 12;
 
   // Shared glasspane over the alignment split area for cross-stack connector arcs.
   private Canvas crossStackOverlayCanvas;
@@ -104,6 +106,7 @@ public class MainController {
       
       addMemUpdateListener();
       eventCoordinator.setupDrawUpdateListener(memoryUsage);
+      setupVerticalDividerBehavior();
       setWindowSizeListener();
       
       // Lock sidebar and chrom pane sizes after window is shown
@@ -270,8 +273,135 @@ public class MainController {
     if (drawStacks.isEmpty()) return;
     double height = drawStacks.get(0).featureTracksCanvas.getPreferredHeight();
     featureTracksPane.setPrefHeight(height);
-    featureTracksPane.setMinHeight(height);
+    // Keep the visual preferred height, but do not hard-lock Region minHeight.
+    // SplitPane applies minHeight before divider listeners run; if minHeight equals
+    // preferred floor, divider 0 can get blocked when feature pane is at floor.
+    // Our custom divider clamping enforces the feature floor explicitly.
+    featureTracksPane.setMinHeight(0);
+    enforceVerticalDividerBounds();
     featureTracksSidebar.draw();
+  }
+
+  private void setupVerticalDividerBehavior() {
+    if (mainSplit == null || mainSplit.getDividers().size() < 2) return;
+
+    SplitPane.Divider divider0 = mainSplit.getDividers().get(0);
+    SplitPane.Divider divider1 = mainSplit.getDividers().get(1);
+
+    divider0.positionProperty().addListener((obs, oldVal, newVal) -> {
+      if (updatingVerticalDividers) return;
+
+      double oldPos0 = oldVal.doubleValue();
+      double requestedPos0 = newVal.doubleValue();
+      double currentPos1 = divider1.getPosition();
+
+      double delta = requestedPos0 - oldPos0;
+      if (Math.abs(delta) < 1e-9) return;
+
+      // Keep feature pane height unchanged while dragging divider 0.
+      double featureSpan = Math.max(0, currentPos1 - oldPos0);
+      double minGeneNorm = toNorm(chromPane != null ? chromPane.getMinHeight() : 0);
+      double minSampleNorm = toNorm(getSamplePaneMinHeight());
+
+      double minPos0 = Math.max(0, minGeneNorm);
+      double maxPos0 = Math.min(1, 1.0 - minSampleNorm - featureSpan);
+      if (maxPos0 < minPos0) maxPos0 = minPos0;
+
+      double clampedPos0 = clamp(requestedPos0, minPos0, maxPos0);
+      double clampedPos1 = clamp(clampedPos0 + featureSpan, clampedPos0, 1);
+
+      if (Math.abs(clampedPos0 - requestedPos0) > 1e-9
+          || Math.abs(clampedPos1 - currentPos1) > 1e-9) {
+        setVerticalDividerPositions(clampedPos0, clampedPos1);
+      }
+    });
+
+    divider1.positionProperty().addListener((obs, oldVal, newVal) -> {
+      if (updatingVerticalDividers) return;
+
+      double pos0 = divider0.getPosition();
+      double requestedPos1 = newVal.doubleValue();
+
+      // Divider 1 controls feature-vs-sample split; keep feature above preferred floor.
+      double minFeatureNorm = toNorm(getFeatureTracksFloorHeight());
+      double minSampleNorm = toNorm(getSamplePaneMinHeight());
+
+      double minPos1 = Math.max(pos0 + minFeatureNorm, pos0);
+      double maxPos1 = Math.min(1, 1.0 - minSampleNorm);
+      if (maxPos1 < minPos1) maxPos1 = minPos1;
+
+      double clampedPos1 = clamp(requestedPos1, minPos1, maxPos1);
+      if (Math.abs(clampedPos1 - requestedPos1) > 1e-9) {
+        setVerticalDividerPositions(pos0, clampedPos1);
+      }
+    });
+
+    mainSplit.heightProperty().addListener((obs, oldVal, newVal) -> enforceVerticalDividerBounds());
+    Platform.runLater(this::enforceVerticalDividerBounds);
+  }
+
+  private void enforceVerticalDividerBounds() {
+    if (mainSplit == null || mainSplit.getDividers().size() < 2) return;
+
+    double pos0 = mainSplit.getDividers().get(0).getPosition();
+    double pos1 = mainSplit.getDividers().get(1).getPosition();
+
+    double minGeneNorm = toNorm(chromPane != null ? chromPane.getMinHeight() : 0);
+    double minFeatureNorm = toNorm(getFeatureTracksFloorHeight());
+    double minSampleNorm = toNorm(getSamplePaneMinHeight());
+
+    double clampedPos0 = clamp(pos0, Math.max(0, minGeneNorm), 1);
+    double clampedPos1 = clamp(pos1, clampedPos0, 1);
+
+    clampedPos1 = Math.max(clampedPos1, clampedPos0 + minFeatureNorm);
+    clampedPos1 = Math.min(clampedPos1, 1.0 - minSampleNorm);
+    clampedPos1 = clamp(clampedPos1, clampedPos0, 1);
+
+    // Re-apply gene minimum if enforcing feature/sample constraints pushed divider 0 too far.
+    clampedPos0 = clamp(clampedPos0, Math.max(0, minGeneNorm), Math.min(clampedPos1, 1));
+
+    if (Math.abs(clampedPos0 - pos0) > 1e-9 || Math.abs(clampedPos1 - pos1) > 1e-9) {
+      setVerticalDividerPositions(clampedPos0, clampedPos1);
+    }
+  }
+
+  private void setVerticalDividerPositions(double pos0, double pos1) {
+    if (mainSplit == null || mainSplit.getDividers().size() < 2) return;
+    updatingVerticalDividers = true;
+    try {
+      mainSplit.setDividerPositions(pos0, pos1);
+    } finally {
+      updatingVerticalDividers = false;
+    }
+  }
+
+  private double toNorm(double px) {
+    double height = mainSplit != null ? mainSplit.getHeight() : 0;
+    if (height <= 1 || px <= 0) return 0;
+    return px / height;
+  }
+
+  private double getFeatureTracksFloorHeight() {
+    double floor = featureTracksPane != null ? featureTracksPane.getMinHeight() : 0;
+    if (!drawStacks.isEmpty() && drawStacks.get(0).featureTracksCanvas != null) {
+      floor = Math.max(floor, drawStacks.get(0).featureTracksCanvas.getPreferredHeight());
+    }
+    // Keep a small safety margin so labels/buttons don't clip under the divider.
+    return Math.max(0, floor + FEATURE_MIN_HEIGHT_PADDING_PX);
+  }
+
+  private double getSamplePaneMinHeight() {
+    if (mainSplit == null || mainSplit.getItems().size() < 3) return 0;
+    Node samplePane = mainSplit.getItems().get(2);
+    if (samplePane instanceof javafx.scene.layout.Region region) {
+      return Math.max(0, region.getMinHeight());
+    }
+    return 0;
+  }
+
+  private static double clamp(double value, double min, double max) {
+    if (max < min) return min;
+    return Math.max(min, Math.min(max, value));
   }
   
   
