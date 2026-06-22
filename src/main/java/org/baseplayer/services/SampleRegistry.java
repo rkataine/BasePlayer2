@@ -1,6 +1,7 @@
 package org.baseplayer.services;
 
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.List;
 
 import org.baseplayer.draw.DrawStack;
@@ -42,6 +43,8 @@ public class SampleRegistry {
     // UI layout state
     private double scrollBarPosition = 0;
     private double sampleHeight = 0;
+    private boolean sampleHeightLocked = false;
+    private String activeSampleFilterQuery = "";
     public static final double DEFAULT_MASTER_TRACK_HEIGHT = 28;
     private final DoubleProperty masterTrackHeight = new SimpleDoubleProperty(DEFAULT_MASTER_TRACK_HEIGHT);
     
@@ -128,7 +131,8 @@ public class SampleRegistry {
      * Set the first visible sample index.
      */
     public void setFirstVisibleSample(int index) {
-        this.firstVisibleSample = Math.max(0, index);
+        int max = Math.max(0, getDisplayedTrackCount() - 1);
+        this.firstVisibleSample = Math.max(0, Math.min(max, index));
     }
     
     /**
@@ -142,7 +146,8 @@ public class SampleRegistry {
      * Set the last visible sample index.
      */
     public void setLastVisibleSample(int index) {
-        this.lastVisibleSample = Math.max(0, index);
+        int max = Math.max(0, getDisplayedTrackCount() - 1);
+        this.lastVisibleSample = Math.max(0, Math.min(max, index));
     }
     
     /**
@@ -167,6 +172,38 @@ public class SampleRegistry {
     public void setScrollBarPosition(double position) {
         this.scrollBarPosition = position;
     }
+
+    /**
+     * Get total vertical content height for sample rows.
+     */
+    public double getTotalSampleContentHeight() {
+        return getDisplayedTrackCount() * sampleHeight;
+    }
+
+    /**
+     * Get max scroll position for a viewport height.
+     */
+    public double getMaxScrollBarPosition(double viewportHeight) {
+        if (getDisplayedTrackCount() <= 0) {
+            return 0;
+        }
+        double safeViewportHeight = Math.max(0, viewportHeight);
+        return Math.max(0, getTotalSampleContentHeight() - safeViewportHeight);
+    }
+
+    /**
+     * Clamp an arbitrary scroll position to valid bounds for a viewport height.
+     */
+    public double clampScrollBarPosition(double position, double viewportHeight) {
+        return Math.max(0, Math.min(position, getMaxScrollBarPosition(viewportHeight)));
+    }
+
+    /**
+     * Clamp current scroll position in place for the given viewport height.
+     */
+    public void clampScrollBarPositionInPlace(double viewportHeight) {
+        scrollBarPosition = clampScrollBarPosition(scrollBarPosition, viewportHeight);
+    }
     
     /**
      * Get the height allocated for each sample row.
@@ -180,6 +217,147 @@ public class SampleRegistry {
      */
     public void setSampleHeight(double height) {
         this.sampleHeight = Math.max(0, height);
+    }
+
+    /**
+     * Prevent automatic sample-height recalculation during animated transitions.
+     */
+    public void lockSampleHeight() {
+        sampleHeightLocked = true;
+    }
+
+    /**
+     * Re-enable automatic sample-height recalculation.
+     */
+    public void unlockSampleHeight() {
+        sampleHeightLocked = false;
+    }
+
+    /**
+     * Whether sample height is currently locked from automatic recalculation.
+     */
+    public boolean isSampleHeightLocked() {
+        return sampleHeightLocked;
+    }
+
+    /**
+     * Current active free-text sample filter query for master track controls.
+     */
+    public String getActiveSampleFilterQuery() {
+        return activeSampleFilterQuery;
+    }
+
+    /**
+     * Set active sample filter query (trimmed). Empty string disables filter mode.
+     */
+    public void setActiveSampleFilterQuery(String query) {
+        this.activeSampleFilterQuery = query == null ? "" : query.trim();
+
+        int displayed = getDisplayedTrackCount();
+        if (displayed <= 0) {
+            firstVisibleSample = 0;
+            lastVisibleSample = 0;
+            scrollBarPosition = 0;
+            return;
+        }
+
+        firstVisibleSample = Math.max(0, Math.min(displayed - 1, firstVisibleSample));
+        lastVisibleSample = Math.max(firstVisibleSample, Math.min(displayed - 1, lastVisibleSample));
+    }
+
+    /**
+     * Clear active sample filter query.
+     */
+    public void clearActiveSampleFilterQuery() {
+        setActiveSampleFilterQuery("");
+    }
+
+    /**
+     * Whether master track is currently in filter label mode.
+     */
+    public boolean hasActiveSampleFilterQuery() {
+        return !activeSampleFilterQuery.isEmpty();
+    }
+
+    /**
+     * Ordered list of track indices currently displayed in the samples view.
+     * With active filter this contains only matching tracks, otherwise all tracks.
+     */
+    public List<Integer> getDisplayedTrackIndices() {
+        List<Integer> indices = new ArrayList<>();
+        if (sampleTracks.isEmpty()) {
+            return indices;
+        }
+
+        String query = activeSampleFilterQuery == null ? "" : activeSampleFilterQuery.trim();
+        if (query.isEmpty()) {
+            for (int i = 0; i < sampleTracks.size(); i++) {
+                indices.add(i);
+            }
+            return indices;
+        }
+
+        String needle = query.toLowerCase(Locale.ROOT);
+        for (int i = 0; i < sampleTracks.size(); i++) {
+            if (matchesSampleFilter(sampleTracks.get(i), needle)) {
+                indices.add(i);
+            }
+        }
+        return indices;
+    }
+
+    /**
+     * Number of tracks shown in the current displayed (possibly filtered) view.
+     */
+    public int getDisplayedTrackCount() {
+        return getDisplayedTrackIndices().size();
+    }
+
+    /**
+     * Resolve a displayed slot index to backing sampleTracks index.
+     */
+    public int getDisplayedTrackIndexBySlot(int slot) {
+        List<Integer> displayed = getDisplayedTrackIndices();
+        if (slot < 0 || slot >= displayed.size()) {
+            return -1;
+        }
+        return displayed.get(slot);
+    }
+
+    /**
+     * Resolve backing sampleTracks index to displayed slot index, or -1 if hidden by filter.
+     */
+    public int getDisplayedSlotForTrackIndex(int trackIndex) {
+        if (trackIndex < 0) {
+            return -1;
+        }
+        List<Integer> displayed = getDisplayedTrackIndices();
+        for (int slot = 0; slot < displayed.size(); slot++) {
+            if (displayed.get(slot) == trackIndex) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
+    private boolean matchesSampleFilter(SampleTrack track, String needle) {
+        String displayName = track.getDisplayName();
+        if (displayName != null && displayName.toLowerCase(Locale.ROOT).contains(needle)) {
+            return true;
+        }
+
+        String trackName = track.getName();
+        if (trackName != null && trackName.toLowerCase(Locale.ROOT).contains(needle)) {
+            return true;
+        }
+
+        for (Sample sample : track.getSamples()) {
+            String sampleName = sample.getName();
+            if (sampleName != null && sampleName.toLowerCase(Locale.ROOT).contains(needle)) {
+                return true;
+            }
+        }
+        return false;
     }
     
     /**

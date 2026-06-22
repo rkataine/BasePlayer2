@@ -264,7 +264,10 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     double masterOffset = sampleRegistry.getMasterTrackHeight();
     double available    = getHeight() - masterOffset;
-    sampleRegistry.setSampleHeight(available / Math.max(1, sampleRegistry.getVisibleSampleCount()));
+    if (!sampleRegistry.isSampleHeightLocked()) {
+      sampleRegistry.setSampleHeight(available / Math.max(1, sampleRegistry.getVisibleSampleCount()));
+    }
+    sampleRegistry.clampScrollBarPositionInPlace(available);
 
     drawBamReads();
     super.draw();
@@ -557,11 +560,13 @@ public class AlignmentCanvas extends GenomicCanvas {
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    for (int i = sampleRegistry.getFirstVisibleSample();
-         i <= sampleRegistry.getLastVisibleSample() && i < sampleRegistry.getSampleTracks().size(); i++) {
+    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+    for (int slot = sampleRegistry.getFirstVisibleSample();
+       slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size(); slot++) {
+      int i = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + i * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
 
       // Skip this track entirely if the mouse is outside its vertical bounds.
       if (my < sampleY || my >= sampleY + sampleH) continue;
@@ -619,11 +624,13 @@ public class AlignmentCanvas extends GenomicCanvas {
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    for (int i = sampleRegistry.getFirstVisibleSample();
-         i <= sampleRegistry.getLastVisibleSample() && i < sampleRegistry.getSampleTracks().size(); i++) {
+    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+    for (int slot = sampleRegistry.getFirstVisibleSample();
+       slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size(); slot++) {
+      int i = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + i * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
@@ -791,12 +798,14 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     CoverageHoverInfo best = null;
     double bestCov = -1;
-    for (int i = sampleRegistry.getFirstVisibleSample();
-         i <= sampleRegistry.getLastVisibleSample() && i < sampleRegistry.getSampleTracks().size(); i++) {
+     List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+     for (int slot = sampleRegistry.getFirstVisibleSample();
+        slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size(); slot++) {
+      int i = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
 
-      double sampleY = masterOffset + i * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
       if (my < sampleY || my >= sampleY + covH) continue;
 
       for (Sample sample : track.getSamples()) {
@@ -1030,12 +1039,14 @@ public class AlignmentCanvas extends GenomicCanvas {
     double bestSampleY = 0;
     double bestDist = Double.MAX_VALUE;
 
-    for (int i = targetCanvas.sampleRegistry.getFirstVisibleSample();
-         i <= targetCanvas.sampleRegistry.getLastVisibleSample()
-             && i < targetCanvas.sampleRegistry.getSampleTracks().size(); i++) {
+    List<Integer> targetDisplayedTrackIndices = targetCanvas.sampleRegistry.getDisplayedTrackIndices();
+    for (int slot = targetCanvas.sampleRegistry.getFirstVisibleSample();
+       slot <= targetCanvas.sampleRegistry.getLastVisibleSample()
+         && slot < targetDisplayedTrackIndices.size(); slot++) {
+      int i = targetDisplayedTrackIndices.get(slot);
       SampleTrack track = targetCanvas.sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + i * sampleH - targetCanvas.sampleRegistry.getScrollBarPosition();
+      double sampleY = masterOffset + slot * sampleH - targetCanvas.sampleRegistry.getScrollBarPosition();
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
@@ -1242,11 +1253,13 @@ public class AlignmentCanvas extends GenomicCanvas {
   private interface SampleConsumer { void accept(double sampleY, Sample sample); }
 
   private void forEachVisibleSample(double masterOffset, double sampleH, SampleConsumer consumer) {
-    for (int i = sampleRegistry.getFirstVisibleSample();
-         i <= sampleRegistry.getLastVisibleSample() && i < sampleRegistry.getSampleTracks().size(); i++) {
+    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+    for (int slot = sampleRegistry.getFirstVisibleSample();
+         slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size(); slot++) {
+      int i = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + i * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
       for (Sample sample : track.getSamples()) {
         if (sample.visible) consumer.accept(sampleY, sample);
       }

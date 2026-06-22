@@ -118,6 +118,11 @@ public class SampleDataManager {
     SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     
     if (index < 0 || index >= sampleRegistry.getSampleTracks().size()) return;
+
+    int oldFirst = sampleRegistry.getFirstVisibleSample();
+    int oldLast = sampleRegistry.getLastVisibleSample();
+    int oldWindow = Math.max(1, oldLast - oldFirst + 1);
+    int removedSlot = sampleRegistry.getDisplayedSlotForTrackIndex(index);
     
     try {
       sampleRegistry.getSampleTracks().get(index).close();
@@ -130,13 +135,31 @@ public class SampleDataManager {
     }
     
     // Adjust visible range
-    if (sampleRegistry.getSampleList().isEmpty()) {
+    int newCount = sampleRegistry.getDisplayedTrackCount();
+    if (sampleRegistry.getSampleTracks().isEmpty() || newCount <= 0) {
       sampleRegistry.setFirstVisibleSample(0);
       sampleRegistry.setLastVisibleSample(0);
       sampleRegistry.setScrollBarPosition(0);
     } else {
-      sampleRegistry.setLastVisibleSample(Math.min(sampleRegistry.getLastVisibleSample(), sampleRegistry.getSampleList().size() - 1));
-      sampleRegistry.setFirstVisibleSample(Math.min(sampleRegistry.getFirstVisibleSample(), sampleRegistry.getLastVisibleSample()));
+      int newWindow = Math.min(oldWindow, newCount);
+
+      int newFirst = oldFirst;
+      if (removedSlot >= 0 && removedSlot < oldFirst) {
+        // Removed before viewport in displayed order: shift one slot up.
+        newFirst = oldFirst - 1;
+      }
+
+      int maxFirst = Math.max(0, newCount - newWindow);
+      newFirst = Math.max(0, Math.min(maxFirst, newFirst));
+      int newLast = newFirst + newWindow - 1;
+
+      sampleRegistry.setFirstVisibleSample(newFirst);
+      sampleRegistry.setLastVisibleSample(newLast);
+
+      double viewportHeight = sampleRegistry.getSampleHeight() * Math.max(1, newWindow);
+      double targetScroll = newFirst * sampleRegistry.getSampleHeight();
+      sampleRegistry.setScrollBarPosition(
+          sampleRegistry.clampScrollBarPosition(targetScroll, viewportHeight));
     }
     
     GenomicCanvas.update.set(!GenomicCanvas.update.get());

@@ -149,8 +149,10 @@ public class CoverageDrawer {
     // Build one SampleRow per visible BAM file
     java.util.List<SampleRow> rowList = new java.util.ArrayList<>();
     java.util.Set<Sample> processedFiles = new java.util.HashSet<>();
-    for (int sIdx = 0; sIdx < sampleRegistry.getSampleTracks().size(); sIdx++) {
-      if (sIdx < sampleRegistry.getFirstVisibleSample() || sIdx > sampleRegistry.getLastVisibleSample()) continue;
+    java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+    for (int slot = sampleRegistry.getFirstVisibleSample();
+         slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size(); slot++) {
+      int sIdx = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
 
       for (Sample sf : track.getSamples()) {
@@ -168,8 +170,11 @@ public class CoverageDrawer {
     }
 
     // Also build rows for non-visible methylation samples (master track only)
-    for (int sIdx = 0; sIdx < sampleRegistry.getSampleTracks().size(); sIdx++) {
-      if (sIdx >= sampleRegistry.getFirstVisibleSample() && sIdx <= sampleRegistry.getLastVisibleSample()) continue;
+    for (int slot = 0; slot < displayedTrackIndices.size(); slot++) {
+      if (slot >= sampleRegistry.getFirstVisibleSample() && slot <= sampleRegistry.getLastVisibleSample()) {
+        continue;
+      }
+      int sIdx = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
 
       for (Sample sf : track.getSamples()) {
@@ -856,13 +861,15 @@ public class CoverageDrawer {
     double viewStart = drawStack.start;
     double viewEnd = drawStack.end;
 
-    for (int sIdx = sampleRegistry.getFirstVisibleSample();
-         sIdx <= sampleRegistry.getLastVisibleSample() && sIdx < sampleRegistry.getSampleTracks().size();
-         sIdx++) {
+     java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+     for (int slot = sampleRegistry.getFirstVisibleSample();
+        slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size();
+        slot++) {
+      int sIdx = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
       if (track == null || !track.isVisible()) continue;
 
-      double sampleY = masterTrackHeight + sIdx * sampleHeight - scrollBarPosition;
+      double sampleY = masterTrackHeight + slot * sampleHeight - scrollBarPosition;
       // Keep BED rendering anchored exactly like the < maxReadViewLength layout
       // regardless of current zoom level.
       double covH = coverageFractionH;

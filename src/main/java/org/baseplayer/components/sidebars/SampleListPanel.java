@@ -25,6 +25,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.Cursor;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -32,6 +33,8 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
+import javafx.animation.AnimationTimer;
+import java.util.List;
 
 /**
  * Canvas panel that renders individual sample track rows in the samples sidebar.
@@ -48,10 +51,50 @@ public class SampleListPanel extends SidebarContentPanel {
   private static final double ICON_MARGIN = 4;
   private static final Font   ICON_FONT   = Font.font("Segoe UI Symbol", 12);
   private static final Font   NAME_FONT   = Font.font("Segoe UI", 12);
+  private static final double TRACK_SCROLLBAR_WIDTH = 8;
+  private static final double TRACK_SCROLLBAR_MARGIN = 3;
+  private static final double TRACK_SCROLLBAR_MIN_THUMB_HEIGHT = 18;
 
   private final SampleRegistry sampleRegistry;
+  private AnimationTimer scrollAnimation;
+  private long scrollAnimStartNanos;
+  private int animationTargetFirst = -1;
+  private int animationTargetLast = -1;
+  private int animationWindowSize = -1;
+  private boolean trackScrollbarVisible = false;
+  private ScrollbarDragMode scrollbarDragMode = ScrollbarDragMode.NONE;
+  private boolean suppressClickFromScrollbar = false;
+  private double trackScrollbarX = 0;
+  private double trackScrollbarTop = 0;
+  private double trackScrollbarHeight = 0;
+  private double trackScrollbarThumbY = 0;
+  private double trackScrollbarThumbHeight = 0;
+  private int trackScrollbarMaxFirst = 0;
+  private double trackScrollbarDragOffsetY = 0;
+  private int dragScrollbarWindow = 1;
+  private double dragScrollbarLockedSampleHeight = 0;
+  private static final long SCROLL_ANIM_DURATION_NS = 180_000_000L;
+  private static final java.util.function.DoubleUnaryOperator EASE_OUT_CUBIC =
+      t -> 1 - Math.pow(1 - t, 3);
   private static final DrawStackManager stackManager =
       ServiceRegistry.getInstance().getDrawStackManager();
+
+  private enum ScrollbarDragMode {
+    NONE,
+    MOVE
+  }
+
+  private boolean isScrollbarDragActive() {
+    return scrollbarDragMode != ScrollbarDragMode.NONE;
+  }
+
+  private void cancelTransientScrollState() {
+    if (scrollAnimation != null) {
+      scrollAnimation.stop();
+      scrollAnimation = null;
+    }
+    clearAnimationTargets();
+  }
 
   public SampleListPanel(StackPane parent) {
     super(parent);
@@ -70,21 +113,158 @@ public class SampleListPanel extends SidebarContentPanel {
   }
 
   private void setupScrollAndClickHandlers() {
+    reactiveCanvas.addEventHandler(MouseEvent.MOUSE_MOVED, event -> {
+      if (!trackScrollbarVisible) {
+        if (scrollbarDragMode == ScrollbarDragMode.NONE) {
+          reactiveCanvas.setCursor(Cursor.DEFAULT);
+        }
+        return;
+      }
+      if (scrollbarDragMode == ScrollbarDragMode.MOVE) {
+        reactiveCanvas.setCursor(Cursor.CLOSED_HAND);
+        return;
+      }
+      if (isPointInTrackScrollbarThumb(event.getX(), event.getY())) {
+        reactiveCanvas.setCursor(Cursor.OPEN_HAND);
+      } else if (isPointInTrackScrollbar(event.getX(), event.getY())) {
+        reactiveCanvas.setCursor(Cursor.HAND);
+      } else {
+        reactiveCanvas.setCursor(Cursor.DEFAULT);
+      }
+    });
+
+    reactiveCanvas.addEventHandler(MouseEvent.MOUSE_EXITED, event -> {
+      if (scrollbarDragMode == ScrollbarDragMode.NONE) {
+        reactiveCanvas.setCursor(Cursor.DEFAULT);
+      }
+    });
+
+    reactiveCanvas.setOnMousePressed(event -> {
+      if (isScrollbarDragActive()) {
+        event.consume();
+        return;
+      }
+
+      if (!isPointInTrackScrollbar(event.getX(), event.getY())) {
+        return;
+      }
+
+      event.consume();
+      suppressClickFromScrollbar = true;
+
+      if (isPointInTrackScrollbarThumb(event.getX(), event.getY())) {
+        scrollbarDragMode = ScrollbarDragMode.MOVE;
+        trackScrollbarDragOffsetY = event.getY() - trackScrollbarThumbY;
+        int[] base = getBaseRange();
+        dragScrollbarWindow = Math.max(1, base[1] - base[0] + 1);
+        dragScrollbarLockedSampleHeight = sampleRegistry.getSampleHeight();
+        cancelTransientScrollState();
+        sampleRegistry.lockSampleHeight();
+        sampleRegistry.setSampleHeight(dragScrollbarLockedSampleHeight);
+        reactiveCanvas.setCursor(Cursor.CLOSED_HAND);
+      } else {
+        int nextFirst = firstFromScrollbarThumbTop(event.getY() - trackScrollbarThumbHeight * 0.5);
+        applyIntervalAtFirst(nextFirst, true);
+      }
+    });
+
+    reactiveCanvas.setOnMouseDragged(event -> {
+      if (scrollbarDragMode != ScrollbarDragMode.MOVE) {
+        return;
+      }
+
+      event.consume();
+      double nextFirstPos = firstPositionFromScrollbarThumbTop(event.getY() - trackScrollbarDragOffsetY);
+      previewIntervalAtFirst(nextFirstPos);
+    });
+
+    reactiveCanvas.setOnMouseReleased(event -> {
+      if (scrollbarDragMode == ScrollbarDragMode.MOVE) {
+        finishContinuousScrollbarDrag();
+      }
+      scrollbarDragMode = ScrollbarDragMode.NONE;
+      trackScrollbarDragOffsetY = 0;
+      if (isPointInTrackScrollbarThumb(event.getX(), event.getY())) {
+        reactiveCanvas.setCursor(Cursor.OPEN_HAND);
+      } else if (isPointInTrackScrollbar(event.getX(), event.getY())) {
+        reactiveCanvas.setCursor(Cursor.HAND);
+      } else {
+        reactiveCanvas.setCursor(Cursor.DEFAULT);
+      }
+    });
+
     reactiveCanvas.setOnScroll(event -> {
-      double newPos = sampleRegistry.getScrollBarPosition() - event.getDeltaY();
-      double maxPos = (sampleRegistry.getSampleTracks().size() - 1) * sampleRegistry.getSampleHeight();
-      sampleRegistry.setScrollBarPosition(Math.max(0, Math.min(newPos, maxPos)));
-      sampleRegistry.setFirstVisibleSample(Math.max(0,
-          (int) (sampleRegistry.getScrollBarPosition() / sampleRegistry.getSampleHeight())));
-      sampleRegistry.setLastVisibleSample(Math.min(
-          sampleRegistry.getSampleTracks().size() - 1,
-          (int) ((sampleRegistry.getScrollBarPosition() + canvas.getHeight()) / sampleRegistry.getSampleHeight())));
-      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      event.consume();
+
+      // Exclusive interaction mode: when dragging/expanding/shrinking with the scrollbar,
+      // ignore wheel paging to prevent competing state updates.
+      if (isScrollbarDragActive()) {
+        return;
+      }
+
+      int trackCount = sampleRegistry.getDisplayedTrackCount();
+      double sampleH = sampleRegistry.getSampleHeight();
+      if (trackCount <= 0 || sampleH <= 0) {
+        return;
+      }
+
+      int stepDir = event.getDeltaY() < 0 ? 1 : (event.getDeltaY() > 0 ? -1 : 0);
+      if (stepDir == 0) {
+        return;
+      }
+
+      int baseFirst;
+      int baseLast;
+      int window;
+      if (scrollAnimation != null && animationTargetFirst >= 0 && animationTargetLast >= 0) {
+        baseFirst = animationTargetFirst;
+        baseLast = animationTargetLast;
+        window = Math.max(1, Math.min(trackCount, animationWindowSize));
+      } else {
+        baseFirst = Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+        baseLast = Math.max(baseFirst, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+        if (baseFirst != sampleRegistry.getFirstVisibleSample()
+            || baseLast != sampleRegistry.getLastVisibleSample()) {
+          sampleRegistry.setFirstVisibleSample(baseFirst);
+          sampleRegistry.setLastVisibleSample(baseLast);
+        }
+        window = Math.max(1, Math.min(trackCount, baseLast - baseFirst + 1));
+      }
+
+      int maxFirst = Math.max(0, trackCount - window);
+
+      // When already at an edge, settle to a canonical boundary state and do not animate further.
+      if ((stepDir < 0 && baseFirst <= 0) || (stepDir > 0 && baseFirst >= maxFirst)) {
+        settleScrollBoundary(baseFirst, window, sampleH, trackCount);
+        return;
+      }
+
+      int nextFirst = Math.max(0, Math.min(maxFirst, baseFirst + stepDir * window));
+      int nextLast = Math.min(trackCount - 1, nextFirst + window - 1);
+
+      if (nextFirst != baseFirst || nextLast != baseLast) {
+        animatePagedScroll(nextFirst, nextLast, sampleH, window);
+      }
     });
 
     reactiveCanvas.setOnMouseClicked(event -> {
+      if (isScrollbarDragActive()) {
+        event.consume();
+        return;
+      }
+
+      if (suppressClickFromScrollbar) {
+        suppressClickFromScrollbar = false;
+        return;
+      }
+
       double x   = event.getX();
       double y   = event.getY();
+
+      if (isPointInTrackScrollbar(x, y)) {
+        return;
+      }
+
       int idx = findRowAt(y);
 
       if (idx >= 0 && idx < sampleRegistry.getSampleTracks().size()) {
@@ -120,21 +300,330 @@ public class SampleListPanel extends SidebarContentPanel {
 
       // Double-click: zoom to single sample or zoom back out
       if (event.getClickCount() == 2) {
+        double viewportHeight = getSampleViewportHeight();
+        int displayedCount = sampleRegistry.getDisplayedTrackCount();
+        if (displayedCount <= 0) {
+          return;
+        }
         if (sampleRegistry.getFirstVisibleSample() == sampleRegistry.getLastVisibleSample()) {
           sampleRegistry.setFirstVisibleSample(0);
-          sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleTracks().size() - 1);
+          sampleRegistry.setLastVisibleSample(displayedCount - 1);
         } else {
-          int hovered = sampleRegistry.hoverSampleProperty().get();
-          sampleRegistry.setFirstVisibleSample(hovered);
-          sampleRegistry.setLastVisibleSample(hovered);
+          int hoveredTrackIndex = sampleRegistry.hoverSampleProperty().get();
+          int hoveredSlot = sampleRegistry.getDisplayedSlotForTrackIndex(hoveredTrackIndex);
+          if (hoveredSlot >= 0) {
+            sampleRegistry.setFirstVisibleSample(hoveredSlot);
+            sampleRegistry.setLastVisibleSample(hoveredSlot);
+          }
         }
         int visible = sampleRegistry.getVisibleSampleCount();
-        sampleRegistry.setSampleHeight(canvas.getHeight() / Math.max(1, visible));
+        sampleRegistry.setSampleHeight(viewportHeight / Math.max(1, visible));
+        double targetScroll = sampleRegistry.getFirstVisibleSample() * sampleRegistry.getSampleHeight();
         sampleRegistry.setScrollBarPosition(
-            sampleRegistry.getFirstVisibleSample() * sampleRegistry.getSampleHeight());
+            sampleRegistry.clampScrollBarPosition(targetScroll, viewportHeight));
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     });
+  }
+
+  private void animatePagedScroll(int nextFirst, int nextLast, double lockedSampleHeight, int windowSize) {
+    if (scrollAnimation != null) {
+      scrollAnimation.stop();
+      scrollAnimation = null;
+    }
+
+    animationTargetFirst = nextFirst;
+    animationTargetLast = nextLast;
+    animationWindowSize = Math.max(1, windowSize);
+
+    sampleRegistry.setFirstVisibleSample(nextFirst);
+    sampleRegistry.setLastVisibleSample(nextLast);
+    sampleRegistry.lockSampleHeight();
+    sampleRegistry.setSampleHeight(lockedSampleHeight);
+
+    double viewportHeight = getSampleViewportHeight();
+    double startScroll = sampleRegistry.getScrollBarPosition();
+    double targetScroll = sampleRegistry.clampScrollBarPosition(nextFirst * lockedSampleHeight, viewportHeight);
+    if (Math.abs(targetScroll - startScroll) < 0.5) {
+      sampleRegistry.setScrollBarPosition(targetScroll);
+      sampleRegistry.unlockSampleHeight();
+      clearAnimationTargets();
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      return;
+    }
+
+    scrollAnimStartNanos = System.nanoTime();
+    scrollAnimation = new AnimationTimer() {
+      @Override
+      public void handle(long now) {
+        double t = (double) (now - scrollAnimStartNanos) / SCROLL_ANIM_DURATION_NS;
+        if (t >= 1.0) {
+          sampleRegistry.setScrollBarPosition(targetScroll);
+          sampleRegistry.unlockSampleHeight();
+          clearAnimationTargets();
+          stop();
+          scrollAnimation = null;
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          return;
+        }
+
+        double eased = EASE_OUT_CUBIC.applyAsDouble(Math.max(0.0, t));
+        double current = startScroll + (targetScroll - startScroll) * eased;
+        sampleRegistry.setScrollBarPosition(current);
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      }
+    };
+    scrollAnimation.start();
+  }
+
+  private void clearAnimationTargets() {
+    animationTargetFirst = -1;
+    animationTargetLast = -1;
+    animationWindowSize = -1;
+  }
+
+  private void settleScrollBoundary(int requestedFirst, int window, double sampleH, int trackCount) {
+    if (trackCount <= 0 || sampleH <= 0) {
+      return;
+    }
+
+    int normalizedWindow = Math.max(1, Math.min(trackCount, window));
+    int maxFirst = Math.max(0, trackCount - normalizedWindow);
+    int clampedFirst = Math.max(0, Math.min(maxFirst, requestedFirst));
+    int clampedLast = Math.min(trackCount - 1, clampedFirst + normalizedWindow - 1);
+
+    int prevFirst = sampleRegistry.getFirstVisibleSample();
+    int prevLast = sampleRegistry.getLastVisibleSample();
+    double prevScroll = sampleRegistry.getScrollBarPosition();
+    boolean hadTransientState = scrollAnimation != null
+        || animationTargetFirst >= 0
+        || animationTargetLast >= 0
+        || sampleRegistry.isSampleHeightLocked();
+
+    if (scrollAnimation != null) {
+      scrollAnimation.stop();
+      scrollAnimation = null;
+    }
+    clearAnimationTargets();
+    sampleRegistry.unlockSampleHeight();
+
+    sampleRegistry.setFirstVisibleSample(clampedFirst);
+    sampleRegistry.setLastVisibleSample(clampedLast);
+
+    double viewportHeight = sampleH * normalizedWindow;
+    double snappedScroll = sampleRegistry.clampScrollBarPosition(clampedFirst * sampleH, viewportHeight);
+    sampleRegistry.setScrollBarPosition(snappedScroll);
+
+    if (hadTransientState
+        || prevFirst != clampedFirst
+        || prevLast != clampedLast
+        || Math.abs(prevScroll - snappedScroll) > 0.5) {
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    }
+  }
+
+  private void applyIntervalAtFirst(int requestedFirst, boolean animated) {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    double sampleH = sampleRegistry.getSampleHeight();
+    if (trackCount <= 0 || sampleH <= 0) {
+      return;
+    }
+
+    int baseFirst;
+    int baseLast;
+    int window;
+    int[] base = getBaseRange();
+    baseFirst = base[0];
+    baseLast = base[1];
+    window = Math.max(1, Math.min(trackCount, baseLast - baseFirst + 1));
+
+    int maxFirst = Math.max(0, trackCount - window);
+    int nextFirst = Math.max(0, Math.min(maxFirst, requestedFirst));
+    int nextLast = Math.min(trackCount - 1, nextFirst + window - 1);
+
+    if (nextFirst == baseFirst && nextLast == baseLast) {
+      return;
+    }
+
+    if (animated) {
+      animatePagedScroll(nextFirst, nextLast, sampleH, window);
+      return;
+    }
+
+    if (scrollAnimation != null) {
+      scrollAnimation.stop();
+      scrollAnimation = null;
+    }
+    clearAnimationTargets();
+
+    sampleRegistry.unlockSampleHeight();
+    sampleRegistry.setFirstVisibleSample(nextFirst);
+    sampleRegistry.setLastVisibleSample(nextLast);
+    double viewportHeight = getSampleViewportHeight();
+    double targetScroll = sampleRegistry.clampScrollBarPosition(nextFirst * sampleH, viewportHeight);
+    sampleRegistry.setScrollBarPosition(targetScroll);
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  private int[] getBaseRange() {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount <= 0) {
+      return new int[] {0, 0};
+    }
+    if (scrollAnimation != null && animationTargetFirst >= 0 && animationTargetLast >= 0) {
+      int first = Math.max(0, Math.min(trackCount - 1, animationTargetFirst));
+      int last = Math.max(first, Math.min(trackCount - 1, animationTargetLast));
+      return new int[] {first, last};
+    }
+    int first = Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+    int last = Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+    return new int[] {first, last};
+  }
+
+  private boolean isPointInTrackScrollbar(double x, double y) {
+    return trackScrollbarVisible
+        && x >= trackScrollbarX - 1
+        && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + 1
+        && y >= trackScrollbarTop
+        && y <= trackScrollbarTop + trackScrollbarHeight;
+  }
+
+  private boolean isPointInTrackScrollbarThumb(double x, double y) {
+    return trackScrollbarVisible
+        && x >= trackScrollbarX - 1
+        && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + 1
+        && y >= trackScrollbarThumbY
+        && y <= trackScrollbarThumbY + trackScrollbarThumbHeight;
+  }
+
+  private int firstFromScrollbarThumbTop(double thumbTopY) {
+    return (int) Math.round(firstPositionFromScrollbarThumbTop(thumbTopY));
+  }
+
+  private double firstPositionFromScrollbarThumbTop(double thumbTopY) {
+    if (!trackScrollbarVisible || trackScrollbarMaxFirst <= 0) {
+      return Math.max(0, Math.min(sampleRegistry.getDisplayedTrackCount() - 1,
+          sampleRegistry.getFirstVisibleSample()));
+    }
+
+    double travel = Math.max(1, trackScrollbarHeight - trackScrollbarThumbHeight);
+    double clampedTop = Math.max(trackScrollbarTop,
+        Math.min(trackScrollbarTop + travel, thumbTopY));
+    double t = (clampedTop - trackScrollbarTop) / travel;
+    return t * trackScrollbarMaxFirst;
+  }
+
+  private void previewIntervalAtFirst(double requestedFirstPosition) {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    double sampleH = dragScrollbarLockedSampleHeight > 0
+        ? dragScrollbarLockedSampleHeight
+        : sampleRegistry.getSampleHeight();
+    if (trackCount <= 0 || sampleH <= 0) {
+      return;
+    }
+
+    int window = Math.max(1, Math.min(trackCount, dragScrollbarWindow));
+    int maxFirst = Math.max(0, trackCount - window);
+    double firstPos = Math.max(0.0, Math.min(maxFirst, requestedFirstPosition));
+
+    int previewFirst = (int) Math.floor(firstPos);
+    int previewLast = previewFirst + window - 1;
+    previewLast = Math.max(previewFirst, Math.min(trackCount - 1, previewLast));
+
+    sampleRegistry.setSampleHeight(sampleH);
+    sampleRegistry.setFirstVisibleSample(previewFirst);
+    sampleRegistry.setLastVisibleSample(previewLast);
+
+    double viewportHeight = sampleH * window;
+    double targetScroll = sampleRegistry.clampScrollBarPosition(firstPos * sampleH, viewportHeight);
+    sampleRegistry.setScrollBarPosition(targetScroll);
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  private void finishContinuousScrollbarDrag() {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    double sampleH = dragScrollbarLockedSampleHeight > 0
+        ? dragScrollbarLockedSampleHeight
+        : sampleRegistry.getSampleHeight();
+    if (trackCount <= 0 || sampleH <= 0) {
+      sampleRegistry.unlockSampleHeight();
+      return;
+    }
+
+    int window = Math.max(1, Math.min(trackCount, dragScrollbarWindow));
+    int maxFirst = Math.max(0, trackCount - window);
+    double rawFirstPos = sampleRegistry.getScrollBarPosition() / sampleH;
+    int snappedFirst = (int) Math.round(rawFirstPos);
+    snappedFirst = Math.max(0, Math.min(maxFirst, snappedFirst));
+
+    applyIntervalAtFirst(snappedFirst, false);
+    dragScrollbarWindow = 1;
+    dragScrollbarLockedSampleHeight = 0;
+  }
+
+  private void updateTrackScrollbarGeometry(double canvasWidth, double canvasHeight) {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount <= 0) {
+      trackScrollbarVisible = false;
+      return;
+    }
+
+    int first = Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+    int last = Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+    int window = Math.max(1, Math.min(trackCount, last - first + 1));
+    trackScrollbarMaxFirst = Math.max(0, trackCount - window);
+
+    trackScrollbarVisible = window < trackCount;
+    if (!trackScrollbarVisible) {
+      return;
+    }
+
+    trackScrollbarX = canvasWidth - TRACK_SCROLLBAR_WIDTH - TRACK_SCROLLBAR_MARGIN;
+    trackScrollbarTop = 0;
+    trackScrollbarHeight = Math.max(0, canvasHeight);
+
+    trackScrollbarThumbHeight = Math.max(TRACK_SCROLLBAR_MIN_THUMB_HEIGHT,
+        trackScrollbarHeight * (window / (double) trackCount));
+    trackScrollbarThumbHeight = Math.min(trackScrollbarHeight, trackScrollbarThumbHeight);
+
+    double travel = Math.max(1, trackScrollbarHeight - trackScrollbarThumbHeight);
+    double t = trackScrollbarMaxFirst > 0 ? first / (double) trackScrollbarMaxFirst : 0;
+    trackScrollbarThumbY = trackScrollbarTop + t * travel;
+  }
+
+  private void drawTrackScrollbar() {
+    if (!trackScrollbarVisible) {
+      return;
+    }
+
+    gc.setFill(Color.rgb(120, 120, 120, 0.26));
+    gc.fillRoundRect(trackScrollbarX, trackScrollbarTop,
+        TRACK_SCROLLBAR_WIDTH, trackScrollbarHeight, 4, 4);
+
+    gc.setFill(Color.rgb(225, 225, 225, 0.82));
+    gc.fillRoundRect(trackScrollbarX, trackScrollbarThumbY,
+        TRACK_SCROLLBAR_WIDTH, trackScrollbarThumbHeight, 4, 4);
+
+    double cx = trackScrollbarX + TRACK_SCROLLBAR_WIDTH * 0.5;
+    double midY = trackScrollbarThumbY + trackScrollbarThumbHeight * 0.5;
+    gc.setStroke(Color.rgb(60, 60, 60, 0.82));
+    gc.strokeLine(cx - 2, midY - 3, cx + 2, midY - 3);
+    gc.strokeLine(cx - 2, midY, cx + 2, midY);
+    gc.strokeLine(cx - 2, midY + 3, cx + 2, midY + 3);
+  }
+
+  private double getRightUiInset() {
+    return trackScrollbarVisible ? (TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN + 2) : 0;
+  }
+
+  private double getSampleViewportHeight() {
+    double sampleH = sampleRegistry.getSampleHeight();
+    int visible = Math.max(1, sampleRegistry.getVisibleSampleCount());
+    double derived = sampleH * visible;
+    if (derived > 0) {
+      return derived;
+    }
+    return Math.max(0, canvas.getHeight());
   }
 
   // ── Rendering ─────────────────────────────────────────────────────────────
@@ -149,14 +638,19 @@ public class SampleListPanel extends SidebarContentPanel {
     gc.setStroke(DrawColors.BORDER);
     clearIconRegions();
 
-    if (sampleRegistry.getSampleTracks().isEmpty()) return;
+    updateTrackScrollbarGeometry(w, h);
+    double rightInset = getRightUiInset();
 
-    for (int i = sampleRegistry.getFirstVisibleSample();
-         i <= sampleRegistry.getLastVisibleSample() && i < sampleRegistry.getSampleTracks().size();
-         i++) {
+     List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+     if (displayedTrackIndices.isEmpty()) return;
+
+     for (int slot = sampleRegistry.getFirstVisibleSample();
+        slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size();
+        slot++) {
+      int i = displayedTrackIndices.get(slot);
 
       // Y is relative to this panel's top — no master track offset
-      double sampleY = i * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
+      double sampleY = slot * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
       boolean hasTrack  = (i < sampleRegistry.getSampleTracks().size());
       boolean isVisible = !hasTrack || sampleRegistry.getSampleTracks().get(i).isVisible();
 
@@ -233,7 +727,7 @@ public class SampleListPanel extends SidebarContentPanel {
 
         // Always-visible reload button at bottom-right when any file is suspended
         if (hasSuspended) {
-          double reloadX = w - ICON_SIZE - ICON_MARGIN;
+          double reloadX = w - rightInset - ICON_SIZE - ICON_MARGIN;
           double reloadBtnY = sampleY + sampleRegistry.getSampleHeight() - ICON_SIZE - ICON_MARGIN;
           gc.setFont(ICON_FONT);
           gc.setFill(Color.web("#ff9944"));
@@ -244,10 +738,12 @@ public class SampleListPanel extends SidebarContentPanel {
         // Action buttons — drawn on the static canvas for the hovered row so the
         // reactive overlay can add a clean glow on top (same pattern as SidebarBase).
         if (i == hoverIndex) {
-          drawSampleButtons(i, sampleY, w, isVisible, hasSuspended);
+          drawSampleButtons(i, sampleY, w - rightInset, isVisible, hasSuspended);
         }
       }
     }
+
+    drawTrackScrollbar();
   }
 
   // ── Reactive overlay ──────────────────────────────────────────────────────
@@ -260,7 +756,10 @@ public class SampleListPanel extends SidebarContentPanel {
 
     if (hoverIndex < 0 || hoverIndex >= sampleRegistry.getSampleTracks().size()) return;
 
-    double sampleY = hoverIndex * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
+    int hoverSlot = sampleRegistry.getDisplayedSlotForTrackIndex(hoverIndex);
+    if (hoverSlot < 0) return;
+
+    double sampleY = hoverSlot * sampleRegistry.getSampleHeight() - sampleRegistry.getScrollBarPosition();
     if (sampleY + sampleRegistry.getSampleHeight() < 0 || sampleY > h) return;
 
     // Subtle row highlight (exactly like FeatureTracksPanel)
@@ -337,10 +836,12 @@ public class SampleListPanel extends SidebarContentPanel {
 
   @Override
   protected int findRowAt(double y) {
-    if (sampleRegistry.getSampleHeight() <= 0 || sampleRegistry.getSampleTracks().isEmpty()) return -1;
-    int idx = (int) ((y + sampleRegistry.getScrollBarPosition()) / sampleRegistry.getSampleHeight());
-    if (idx < 0 || idx >= sampleRegistry.getSampleTracks().size()) return -1;
-    return idx;
+    if (sampleRegistry.getSampleHeight() <= 0) return -1;
+    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+    if (displayedTrackIndices.isEmpty()) return -1;
+    int slot = (int) ((y + sampleRegistry.getScrollBarPosition()) / sampleRegistry.getSampleHeight());
+    if (slot < 0 || slot >= displayedTrackIndices.size()) return -1;
+    return displayedTrackIndices.get(slot);
   }
 
   // ── Per-sample menus ──────────────────────────────────────────────────────

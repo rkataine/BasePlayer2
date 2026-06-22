@@ -19,6 +19,7 @@ import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.samples.alignment.draw.CircosPlot;
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
 
@@ -70,9 +71,27 @@ public class MasterTrackCanvas extends GenomicCanvas {
   private boolean settingsHovered = false;
   private boolean addHovered      = false;
   private boolean reloadHovered   = false;
+  private boolean expandHovered   = false;
+  private boolean draggingRangeStart = false;
+  private boolean draggingRangeEnd = false;
+  private boolean pendingSingleHandleResolve = false;
+  private int pendingSingleHandleAnchor = -1;
+
+  private HitBox rangeStartHandleHit = null;
+  private HitBox rangeEndHandleHit = null;
+  private HitBox rangeLabelHit = null;
+  private ContextMenu rangeInputMenu = null;
+
+  private static final double EXPANDED_MASTER_HEIGHT = 82;
 
   private static final double HEADER_BTN_SIZE = 18;
   private static final double HEADER_BTN_LEFT_X = 4;
+
+  private record HitBox(double x, double y, double w, double h) {
+    private boolean contains(double px, double py) {
+      return px >= x && px <= x + w && py >= y && py <= y + h;
+    }
+  }
 
   public MasterTrackCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack initialDrawStack) {
     super(reactiveCanvas, parent, initialDrawStack);
@@ -116,35 +135,50 @@ public class MasterTrackCanvas extends GenomicCanvas {
     reactiveCanvas.setOnMouseMoved(event -> {
       double edgeZone = getHeight() - 4;
       boolean inResizeZone = event.getY() >= edgeZone;
-      reactiveCanvas.setCursor(inResizeZone ? Cursor.V_RESIZE : Cursor.DEFAULT);
+      boolean overRangeHandle = isControlsExpanded() && isOverRangeHandle(event.getX(), event.getY());
+      reactiveCanvas.setCursor(inResizeZone ? Cursor.V_RESIZE : (overRangeHandle ? Cursor.H_RESIZE : Cursor.DEFAULT));
+      double headerBarH = getHeaderBarHeight();
 
       boolean prevSettings = settingsHovered;
       boolean prevAdd = addHovered;
       boolean prevReload = reloadHovered;
+      boolean prevExpand = expandHovered;
 
       if (inResizeZone) {
         settingsHovered = false;
         addHovered = false;
         reloadHovered = false;
-      } else {
-        double sy = (getHeight() - HEADER_BTN_SIZE) / 2;
+        expandHovered = false;
+      } else if (event.getY() <= headerBarH) {
+        double sy = (headerBarH - HEADER_BTN_SIZE) / 2;
         settingsHovered = inHeaderBtn(event.getX(), event.getY(), HEADER_BTN_LEFT_X, sy);
         reloadHovered = hasAnySuspended() &&
             inHeaderBtn(event.getX(), event.getY(), reloadBtnX(getWidth()), sy);
+        expandHovered = sampleRegistry.getSampleTracks().size() > 1
+            && inHeaderBtn(event.getX(), event.getY(), expandBtnX(getWidth()), sy);
         addHovered = inHeaderBtn(event.getX(), event.getY(), getWidth() - HEADER_BTN_SIZE - 4, sy);
+      } else {
+        settingsHovered = false;
+        addHovered = false;
+        reloadHovered = false;
+        expandHovered = false;
       }
 
-      if (prevSettings != settingsHovered || prevAdd != addHovered || prevReload != reloadHovered) {
+      if (prevSettings != settingsHovered
+          || prevAdd != addHovered
+          || prevReload != reloadHovered
+          || prevExpand != expandHovered) {
         drawHeaderHover();
       }
     });
 
     reactiveCanvas.setOnMouseExited(event -> {
       reactiveCanvas.setCursor(Cursor.DEFAULT);
-      if (settingsHovered || addHovered || reloadHovered) {
+      if (settingsHovered || addHovered || reloadHovered || expandHovered) {
         settingsHovered = false;
         addHovered = false;
         reloadHovered = false;
+        expandHovered = false;
         drawHeaderHover();
       }
     });
@@ -154,6 +188,8 @@ public class MasterTrackCanvas extends GenomicCanvas {
         isDraggingResize = true;
         dragStartScreenY = event.getScreenY();
         dragStartHeight = sampleRegistry.getMasterTrackHeight();
+      } else if (isControlsExpanded() && beginRangeHandleDrag(event.getX(), event.getY())) {
+        mouseDragged = false;
       } else {
         // Header body: clicks are allowed, drag-navigation is intentionally disabled.
         mousePressedX = event.getX();
@@ -168,6 +204,9 @@ public class MasterTrackCanvas extends GenomicCanvas {
         double delta = event.getScreenY() - dragStartScreenY;
         sampleRegistry.setMasterTrackHeight(Math.max(20, Math.min(200, dragStartHeight + delta)));
         update.set(!update.get());
+      } else if (draggingRangeStart || draggingRangeEnd || pendingSingleHandleResolve) {
+        updateRangeFromHandleDrag(event.getX());
+        mouseDragged = true;
       } else {
         // Suppress click after drag movement, but do not pan/zoom from header body.
         mouseDragged = true;
@@ -179,6 +218,10 @@ public class MasterTrackCanvas extends GenomicCanvas {
         isDraggingResize = false;
         reactiveCanvas.setCursor(Cursor.DEFAULT);
       }
+      draggingRangeStart = false;
+      draggingRangeEnd = false;
+      pendingSingleHandleResolve = false;
+      pendingSingleHandleAnchor = -1;
     });
 
     reactiveCanvas.setOnScroll(event -> {
@@ -217,19 +260,118 @@ public class MasterTrackCanvas extends GenomicCanvas {
     double h = getHeight();
     if (w <= 0 || h <= 0) return;
 
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+
+    if (trackCount > 1 && !isControlsExpanded()) {
+      sampleRegistry.setMasterTrackHeight(EXPANDED_MASTER_HEIGHT);
+      h = getHeight();
+    }
+
     GraphicsContext gc = getGraphicsContext2D();
-    SidebarBase.drawStandardHeader(gc, w, h, "Tracks", sampleRegistry.getSampleTracks().size());
+    double headerBarH = getHeaderBarHeight();
+    SidebarBase.drawStandardHeader(gc, w, headerBarH, "Tracks", trackCount);
+    double sy = (headerBarH - HEADER_BTN_SIZE) / 2;
 
     // Reload (↺) button — shown when any sample has suspended reads
     if (hasAnySuspended()) {
-      double sy = (h - HEADER_BTN_SIZE) / 2;
       double reloadX = reloadBtnX(w);
       gc.setFont(Font.font("Segoe UI Symbol", 14));
       gc.setFill(Color.web("#ff9944"));
       gc.fillText("\u21ba", reloadX + 1, sy + HEADER_BTN_SIZE - 3);
     }
 
+    if (trackCount > 1) {
+      double ex = expandBtnX(w);
+      gc.setFill(Color.web("#3c3c3c"));
+      gc.fillRoundRect(ex, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
+      gc.setStroke(Color.web("#555555"));
+      gc.strokeRoundRect(ex, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
+      gc.setFont(Font.font("Segoe UI Symbol", 12));
+      gc.setFill(Color.web("#cccccc"));
+      gc.fillText(isControlsExpanded() ? "▾" : "▸", ex + 4, sy + HEADER_BTN_SIZE - 5);
+    }
+
+    if (isControlsExpanded()) {
+      drawExpandedControls(gc, w, h, headerBarH);
+    } else {
+      rangeStartHandleHit = null;
+      rangeEndHandleHit = null;
+      rangeLabelHit = null;
+    }
+
     drawHeaderHover();
+  }
+
+  private void drawExpandedControls(GraphicsContext gc, double w, double h, double headerBarH) {
+    if (h <= headerBarH + 2) {
+      rangeStartHandleHit = null;
+      rangeEndHandleHit = null;
+      rangeLabelHit = null;
+      return;
+    }
+
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount <= 0) {
+      rangeStartHandleHit = null;
+      rangeEndHandleHit = null;
+      rangeLabelHit = null;
+      return;
+    }
+
+    int first = Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+    int last = Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+
+    gc.setFill(Color.web("#202327"));
+    gc.fillRect(0, headerBarH, w, h - headerBarH);
+    gc.setStroke(Color.web("#3e444d"));
+    gc.strokeLine(0, headerBarH, w, headerBarH);
+
+    gc.setFont(Font.font("Segoe UI", 10));
+    gc.setFill(Color.web("#9ea7b3"));
+    gc.fillText("Visible samples", 8, headerBarH + 14);
+    gc.setFill(Color.web("#7f8791"));
+    String label;
+    if (sampleRegistry.hasActiveSampleFilterQuery()) {
+      label = "Filter";
+    } else {
+      String rangeText = first == last
+          ? String.valueOf(first + 1)
+          : (first + 1) + "-" + (last + 1);
+      label = rangeText + " / " + trackCount;
+    }
+    double labelX = 96;
+    double labelY = headerBarH + 14;
+    gc.fillText(label, labelX, labelY);
+    rangeLabelHit = new HitBox(labelX - 4, headerBarH + 3, Math.max(48, label.length() * 7.0), 14);
+
+    double railX = 12;
+    double railW = Math.max(10, w - 24);
+    double railY = headerBarH + 29;
+    double railH = 8;
+
+    gc.setFill(Color.web("#2f353e"));
+    gc.fillRoundRect(railX, railY, railW, railH, 4, 4);
+
+    double startX = railX + (trackCount <= 1 ? 0 : (first / (double) (trackCount - 1)) * railW);
+    double endX = railX + (trackCount <= 1 ? railW : (last / (double) (trackCount - 1)) * railW);
+    if (trackCount == 1) {
+      startX = railX;
+      endX = railX + railW;
+    }
+
+    gc.setFill(Color.web("#4b5f7f"));
+    gc.fillRoundRect(startX, railY, Math.max(2, endX - startX), railH, 4, 4);
+
+    double handleW = 8;
+    double handleH = 16;
+    double handleY = railY - 4;
+    gc.setFill(Color.web("#d8e3f5"));
+    gc.fillRoundRect(startX - handleW / 2, handleY, handleW, handleH, 3, 3);
+    gc.fillRoundRect(endX - handleW / 2, handleY, handleW, handleH, 3, 3);
+
+    rangeStartHandleHit = new HitBox(startX - handleW / 2 - 2, handleY - 2, handleW + 4, handleH + 4);
+    rangeEndHandleHit = new HitBox(endX - handleW / 2 - 2, handleY - 2, handleW + 4, handleH + 4);
+
   }
 
   private void drawHeaderHover() {
@@ -238,10 +380,15 @@ public class MasterTrackCanvas extends GenomicCanvas {
     double h = getReactiveCanvas().getHeight();
     reactiveGc.clearRect(0, 0, w, h);
 
-    double sy = (h - HEADER_BTN_SIZE) / 2;
+    double sy = (getHeaderBarHeight() - HEADER_BTN_SIZE) / 2;
     if (settingsHovered) {
       reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
       reactiveGc.fillRoundRect(HEADER_BTN_LEFT_X, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
+    }
+    if (expandHovered && sampleRegistry.getSampleTracks().size() > 1) {
+      double ex = expandBtnX(w);
+      reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
+      reactiveGc.fillRoundRect(ex, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
     }
     if (reloadHovered && hasAnySuspended()) {
       double rx = reloadBtnX(w);
@@ -258,12 +405,25 @@ public class MasterTrackCanvas extends GenomicCanvas {
   // ── Click handling ────────────────────────────────────────────────────────
 
   private void handleMasterClick(double x, double y, double screenX, double screenY) {
-    double h = getHeight();
-    double sy = (h - HEADER_BTN_SIZE) / 2;
+    if (isControlsExpanded() && rangeLabelHit != null && rangeLabelHit.contains(x, y)) {
+      showRangeInputMenu(screenX, screenY);
+      return;
+    }
+
+    double sy = (getHeaderBarHeight() - HEADER_BTN_SIZE) / 2;
 
     // Settings (⚙)
     if (inHeaderBtn(x, y, HEADER_BTN_LEFT_X, sy)) {
       showGlobalSettingsMenu(screenX, screenY);
+      return;
+    }
+
+    // Expand/collapse master controls
+    if (sampleRegistry.getSampleTracks().size() > 1 && inHeaderBtn(x, y, expandBtnX(getWidth()), sy)) {
+      sampleRegistry.setMasterTrackHeight(isControlsExpanded()
+          ? SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT
+          : EXPANDED_MASTER_HEIGHT);
+      update.set(!update.get());
       return;
     }
 
@@ -291,6 +451,252 @@ public class MasterTrackCanvas extends GenomicCanvas {
 
   private double reloadBtnX(double canvasWidth) {
     return canvasWidth - 2 * (HEADER_BTN_SIZE + 4);
+  }
+
+  private double expandBtnX(double canvasWidth) {
+    return hasAnySuspended()
+        ? canvasWidth - 3 * (HEADER_BTN_SIZE + 4)
+        : canvasWidth - 2 * (HEADER_BTN_SIZE + 4);
+  }
+
+  private double getHeaderBarHeight() {
+    return Math.min(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT, getHeight());
+  }
+
+  private boolean isControlsExpanded() {
+    return sampleRegistry.getMasterTrackHeight() > SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT + 1;
+  }
+
+  private boolean isOverRangeHandle(double x, double y) {
+    return (rangeStartHandleHit != null && rangeStartHandleHit.contains(x, y))
+        || (rangeEndHandleHit != null && rangeEndHandleHit.contains(x, y));
+  }
+
+  private boolean beginRangeHandleDrag(double x, double y) {
+    boolean startHit = rangeStartHandleHit != null && rangeStartHandleHit.contains(x, y);
+    boolean endHit = rangeEndHandleHit != null && rangeEndHandleHit.contains(x, y);
+
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    int first = trackCount <= 0 ? 0 : Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+    int last = trackCount <= 0 ? 0 : Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+
+    if (startHit && endHit && first == last) {
+      // Handles overlap in single-sample mode. Resolve intent on first drag direction:
+      // right chooses end-handle, left chooses start-handle.
+      draggingRangeStart = false;
+      draggingRangeEnd = false;
+      pendingSingleHandleResolve = true;
+      pendingSingleHandleAnchor = first;
+      return true;
+    }
+
+    pendingSingleHandleResolve = false;
+    pendingSingleHandleAnchor = -1;
+
+    if (startHit) {
+      draggingRangeStart = true;
+      draggingRangeEnd = false;
+      return true;
+    }
+    if (endHit) {
+      draggingRangeStart = false;
+      draggingRangeEnd = true;
+      return true;
+    }
+    return false;
+  }
+
+  private void updateRangeFromHandleDrag(double mouseX) {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount <= 0) return;
+    double railX = 12;
+    double railW = Math.max(10, getWidth() - 24);
+
+    int mapped = mapMouseXToSampleIndex(mouseX, railX, railW, trackCount);
+
+    if (pendingSingleHandleResolve) {
+      if (mapped > pendingSingleHandleAnchor) {
+        draggingRangeStart = false;
+        draggingRangeEnd = true;
+        pendingSingleHandleResolve = false;
+      } else if (mapped < pendingSingleHandleAnchor) {
+        draggingRangeStart = true;
+        draggingRangeEnd = false;
+        pendingSingleHandleResolve = false;
+      } else {
+        return;
+      }
+    }
+
+    int first = Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+    int last = Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+    if (draggingRangeStart) {
+      first = Math.min(mapped, last);
+    } else if (draggingRangeEnd) {
+      last = Math.max(mapped, first);
+    }
+
+    applyVisibleRange(first, last);
+  }
+
+  private int mapMouseXToSampleIndex(double x, double railX, double railW, int trackCount) {
+    if (trackCount <= 1) return 0;
+    double t = (x - railX) / railW;
+    t = Math.max(0.0, Math.min(1.0, t));
+    return (int) Math.round(t * (trackCount - 1));
+  }
+
+  private void showRangeInputMenu(double screenX, double screenY) {
+    if (rangeInputMenu != null && rangeInputMenu.isShowing()) {
+      rangeInputMenu.hide();
+    }
+
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount <= 0) return;
+
+    int first = Math.max(0, Math.min(trackCount - 1, sampleRegistry.getFirstVisibleSample()));
+    int last = Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
+
+    ContextMenu menu = new ContextMenu();
+    menu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+
+    HBox row = new HBox(6);
+    row.setPadding(new Insets(6));
+    Label fromLabel = new Label("From");
+    fromLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    TextField fromField = new TextField(String.valueOf(first + 1));
+    fromField.setPrefWidth(52);
+    fromField.setStyle("-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+    Label toLabel = new Label("To");
+    toLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    TextField toField = new TextField(String.valueOf(last + 1));
+    toField.setPrefWidth(52);
+    toField.setStyle("-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+
+    HBox filterRow = new HBox(6);
+    filterRow.setPadding(new Insets(0, 6, 6, 6));
+    Label filterLabel = new Label("Filter");
+    filterLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    TextField filterField = new TextField(sampleRegistry.getActiveSampleFilterQuery());
+    filterField.setPromptText("sample name contains...");
+    filterField.setPrefWidth(170);
+    filterField.setStyle("-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+
+    Button applyBtn = new Button("Apply");
+    applyBtn.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11;"
+        + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+
+    Button clearBtn = new Button("Clear");
+    clearBtn.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: #bbbbbb; -fx-font-size: 11;"
+        + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+
+    Runnable applyRange = () -> {
+      int displayedCount = sampleRegistry.getDisplayedTrackCount();
+      if (displayedCount <= 0) {
+        return;
+      }
+
+      Integer parsedStart = parseOneBasedIndex(fromField.getText(), displayedCount);
+      Integer parsedEnd = parseOneBasedIndex(toField.getText(), displayedCount);
+      if (parsedStart == null || parsedEnd == null) {
+        fromField.setText(String.valueOf(sampleRegistry.getFirstVisibleSample() + 1));
+        toField.setText(String.valueOf(sampleRegistry.getLastVisibleSample() + 1));
+        return;
+      }
+
+      int s = Math.min(parsedStart, parsedEnd);
+      int e = Math.max(parsedStart, parsedEnd);
+      s = Math.max(0, Math.min(displayedCount - 1, s));
+      e = Math.max(s, Math.min(displayedCount - 1, e));
+      applyVisibleRange(s, e);
+      menu.hide();
+    };
+
+    Runnable applyFilterLive = () -> {
+      String filterQuery = filterField.getText() == null ? "" : filterField.getText().trim();
+      if (!filterQuery.isEmpty()) {
+        sampleRegistry.setActiveSampleFilterQuery(filterQuery);
+        int filteredCount = sampleRegistry.getDisplayedTrackCount();
+        if (filteredCount > 0) {
+          applyVisibleRange(0, filteredCount - 1);
+        } else {
+          applyVisibleRange(0, 0);
+        }
+        return;
+      }
+
+      int prevFirst = sampleRegistry.getFirstVisibleSample();
+      int prevLast = sampleRegistry.getLastVisibleSample();
+      sampleRegistry.clearActiveSampleFilterQuery();
+      applyVisibleRange(prevFirst, prevLast);
+    };
+
+    applyBtn.setOnAction(e -> applyRange.run());
+    fromField.setOnAction(e -> applyRange.run());
+    toField.setOnAction(e -> applyRange.run());
+    filterField.textProperty().addListener((obs, oldValue, newValue) -> applyFilterLive.run());
+    filterField.setOnAction(e -> applyFilterLive.run());
+    clearBtn.setOnAction(e -> {
+      filterField.clear();
+      applyFilterLive.run();
+      menu.hide();
+    });
+
+    row.getChildren().addAll(fromLabel, fromField, toLabel, toField, applyBtn, clearBtn);
+    filterRow.getChildren().addAll(filterLabel, filterField);
+    VBox panel = new VBox(4, row, filterRow);
+    menu.getItems().add(new CustomMenuItem(panel, false));
+    menu.show(this, screenX, screenY);
+    rangeInputMenu = menu;
+    Platform.runLater(filterField::requestFocus);
+  }
+
+  private Integer parseOneBasedIndex(String value, int trackCount) {
+    try {
+      int parsed = Integer.parseInt(value.trim());
+      if (parsed < 1) parsed = 1;
+      if (parsed > trackCount) parsed = trackCount;
+      return parsed - 1;
+    } catch (NumberFormatException e) {
+      return null;
+    }
+  }
+
+  private void applyVisibleRange(int first, int last) {
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount <= 0) {
+      sampleRegistry.setFirstVisibleSample(0);
+      sampleRegistry.setLastVisibleSample(0);
+      sampleRegistry.setScrollBarPosition(0);
+      update.set(!update.get());
+      return;
+    }
+
+    int clampedFirst = Math.max(0, Math.min(trackCount - 1, first));
+    int clampedLast = Math.max(clampedFirst, Math.min(trackCount - 1, last));
+    sampleRegistry.setFirstVisibleSample(clampedFirst);
+    sampleRegistry.setLastVisibleSample(clampedLast);
+
+    double viewportHeight = estimateSampleViewportHeight();
+    int visibleCount = clampedLast - clampedFirst + 1;
+    if (viewportHeight > 0) {
+      sampleRegistry.setSampleHeight(viewportHeight / Math.max(1, visibleCount));
+      double targetScroll = clampedFirst * sampleRegistry.getSampleHeight();
+      sampleRegistry.setScrollBarPosition(
+          sampleRegistry.clampScrollBarPosition(targetScroll, viewportHeight));
+    }
+
+    update.set(!update.get());
+  }
+
+  private double estimateSampleViewportHeight() {
+    double derived = sampleRegistry.getSampleHeight() * Math.max(1, sampleRegistry.getVisibleSampleCount());
+    if (derived > 0) return derived;
+    if (!stackManager.isEmpty() && stackManager.getFirst().alignmentCanvas != null) {
+      double fromCanvas = stackManager.getFirst().alignmentCanvas.getHeight() - sampleRegistry.getMasterTrackHeight();
+      if (fromCanvas > 0) return fromCanvas;
+    }
+    return 0;
   }
 
   private boolean hasAnySuspended() {
