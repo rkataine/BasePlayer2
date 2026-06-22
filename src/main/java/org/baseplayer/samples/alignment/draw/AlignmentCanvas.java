@@ -120,7 +120,13 @@ public class AlignmentCanvas extends GenomicCanvas {
                                    double mmA,
                                    double mmC,
                                    double mmG,
-                                   double mmT) {}
+                                   double mmT,
+                                   double signalAvg,
+                                   double signalMin,
+                                   double signalMax,
+                                   int signalCount,
+                                   java.util.Map<Character, Double> modTypeCounts,
+                                   java.util.Map<Character, Double> modTypeAvgProbs) {}
 
   private record AltCount(char altBase, double count) {}
 
@@ -807,6 +813,31 @@ public class AlignmentCanvas extends GenomicCanvas {
         double covBarTop = covBottom - covBarH;
         if (my < covBarTop || my > covBottom) continue;
 
+        // Collect signal data if available
+        double signalAvg = 0, signalMin = 0, signalMax = 0;
+        int signalCount = row.signalCount != null ? row.signalCount[px] : 0;
+        if (signalCount > 0) {
+          signalAvg = row.signalSum[px] / signalCount;
+          signalMin = row.signalMin[px];
+          signalMax = row.signalMax[px];
+        }
+
+        // Collect modification data if available
+        java.util.Map<Character, Double> modCounts = new java.util.HashMap<>();
+        java.util.Map<Character, Double> modAvgProbs = new java.util.HashMap<>();
+        if (row.modTypeCounts != null) {
+          for (java.util.Map.Entry<Character, double[]> entry : row.modTypeCounts.entrySet()) {
+            char modKey = entry.getKey();
+            double count = entry.getValue()[px];
+            if (count > 0) {
+              modCounts.put(modKey, count);
+              double[] probSums = row.modTypeProbSums.get(modKey);
+              double avgProb = probSums[px] / count;
+              modAvgProbs.put(modKey, avgProb);
+            }
+          }
+        }
+
         CoverageHoverInfo info = new CoverageHoverInfo(
             row,
             sampleY,
@@ -818,7 +849,13 @@ public class AlignmentCanvas extends GenomicCanvas {
             row.mmA[px],
             row.mmC[px],
             row.mmG[px],
-            row.mmT[px]);
+            row.mmT[px],
+            signalAvg,
+            signalMin,
+            signalMax,
+            signalCount,
+            modCounts,
+            modAvgProbs);
         if (best == null || cov > bestCov) {
           best = info;
           bestCov = cov;
@@ -856,6 +893,12 @@ public class AlignmentCanvas extends GenomicCanvas {
     String chrom = drawStack.chromosome != null ? drawStack.chromosome : "";
     lines.add(chrom + ":" + hover.genomicPos() + " cov=" + (int) Math.round(hover.coverage()));
 
+    // Determine active color mode and data type
+    ReadColorMode colorMode = hover.row().sample.getBamFile() != null 
+        ? hover.row().sample.getBamFile().getReadColorMode() 
+        : ReadColorMode.STRAND;
+    CoverageDataType dataType = colorMode.getDataType();
+
     char refBase = '?';
     ReferenceGenomeService refSvc = ServiceRegistry.getInstance().getReferenceGenomeService();
     if (refSvc.hasGenome()) {
@@ -866,29 +909,54 @@ public class AlignmentCanvas extends GenomicCanvas {
       }
     }
 
-    double cov = Math.max(0.0, hover.coverage());
-    List<AltCount> alts = new ArrayList<>(4);
-    if (hover.mmA() > 0) alts.add(new AltCount('A', hover.mmA()));
-    if (hover.mmC() > 0) alts.add(new AltCount('C', hover.mmC()));
-    if (hover.mmG() > 0) alts.add(new AltCount('G', hover.mmG()));
-    if (hover.mmT() > 0) alts.add(new AltCount('T', hover.mmT()));
-    alts.sort(Comparator.comparingDouble(AltCount::count).reversed());
-
-    if (alts.isEmpty()) {
-      lines.add("No mismatches");
-    } else {
-      char dominantAlt = alts.get(0).altBase();
-      for (AltCount alt : alts) {
-        double af = cov > 0 ? alt.count() / cov : 0;
-        String change = (refBase == '?')
-            ? ("alt " + alt.altBase())
-            : (refBase + ">" + alt.altBase());
-        lines.add(String.format(Locale.ROOT, "%s %.0f (%.1f%%)",
-            change, alt.count(), af * 100.0));
+    if ((dataType == CoverageDataType.SIGNAL || dataType == CoverageDataType.QUALITY) 
+        && hover.signalCount() > 0) {
+      // Display numeric data statistics (signal tags or quality)
+      String modeLabel = colorMode.getLabel();
+      lines.add(String.format(Locale.ROOT, "%s avg: %.1f", modeLabel, hover.signalAvg()));
+      lines.add(String.format(Locale.ROOT, "min: %.1f, max: %.1f", hover.signalMin(), hover.signalMax()));
+      lines.add(String.format(Locale.ROOT, "samples: %d", hover.signalCount()));
+    } else if (dataType == CoverageDataType.MODIFICATION && !hover.modTypeCounts().isEmpty()) {
+      // Display base modification statistics
+      lines.add("Base modifications:");
+      List<java.util.Map.Entry<Character, Double>> modEntries = new ArrayList<>(hover.modTypeCounts().entrySet());
+      modEntries.sort(Comparator.comparingDouble(java.util.Map.Entry<Character, Double>::getValue).reversed());
+      
+      for (java.util.Map.Entry<Character, Double> entry : modEntries) {
+        char modKey = entry.getKey();
+        double count = entry.getValue();
+        double avgProb = hover.modTypeAvgProbs().getOrDefault(modKey, 0.0);
+        String modName = getModificationName(modKey);
+        double af = hover.coverage() > 0 ? count / hover.coverage() : 0;
+        lines.add(String.format(Locale.ROOT, "%s: %.0f (%.1f%%, p=%.2f)", 
+            modName, count, af * 100.0, avgProb));
       }
-      String aaChange = computeAaChangeAtPosition(hover.genomicPos(), dominantAlt);
-      if (aaChange != null) {
-        lines.add("AA: " + aaChange);
+    } else {
+      // Display mismatches (default)
+      double cov = Math.max(0.0, hover.coverage());
+      List<AltCount> alts = new ArrayList<>(4);
+      if (hover.mmA() > 0) alts.add(new AltCount('A', hover.mmA()));
+      if (hover.mmC() > 0) alts.add(new AltCount('C', hover.mmC()));
+      if (hover.mmG() > 0) alts.add(new AltCount('G', hover.mmG()));
+      if (hover.mmT() > 0) alts.add(new AltCount('T', hover.mmT()));
+      alts.sort(Comparator.comparingDouble(AltCount::count).reversed());
+
+      if (alts.isEmpty()) {
+        lines.add("No mismatches");
+      } else {
+        char dominantAlt = alts.get(0).altBase();
+        for (AltCount alt : alts) {
+          double af = cov > 0 ? alt.count() / cov : 0;
+          String change = (refBase == '?')
+              ? ("alt " + alt.altBase())
+              : (refBase + ">" + alt.altBase());
+          lines.add(String.format(Locale.ROOT, "%s %.0f (%.1f%%)",
+              change, alt.count(), af * 100.0));
+        }
+        String aaChange = computeAaChangeAtPosition(hover.genomicPos(), dominantAlt);
+        if (aaChange != null) {
+          lines.add("AA: " + aaChange);
+        }
       }
     }
 
@@ -1439,5 +1507,24 @@ public class AlignmentCanvas extends GenomicCanvas {
     StringBuilder sb = new StringBuilder(s.length());
     for (int i = s.length() - 1; i >= 0; i--) sb.append(complementBase(s.charAt(i)));
     return sb.toString();
+  }
+
+  /**
+   * Get human-readable name for a modification code.
+   */
+  private String getModificationName(char modCode) {
+    return switch (modCode) {
+      case 'm' -> "5mC";
+      case 'h' -> "5hmC";
+      case 'f' -> "5fC";
+      case 'c' -> "5caC";
+      case 'g' -> "5hmU";
+      case 'e' -> "5fU";
+      case 'b' -> "5caU";
+      case 'a' -> "6mA";
+      case 'o' -> "8oxoG";
+      case 'n' -> "Xanthosine";
+      default -> String.valueOf(modCode);
+    };
   }
 }

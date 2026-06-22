@@ -1,6 +1,9 @@
 package org.baseplayer.io.readers;
 
 import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.samples.alignment.BaseModification;
+
+import java.util.List;
 
 /**
  * Common auxiliary tag processor for BAM and CRAM readers.
@@ -51,12 +54,16 @@ public class TagProcessor {
       // Methylation tags: MM:Z, Mm:Z, XM:Z
       if (((t1 == 'M' && (t2 == 'M' || t2 == 'm')) || (t1 == 'X' && t2 == 'M')) && type == 'Z') {
         rec.hasMethylTag = true;
-        if (t1 == 'X' && t2 == 'M') {
+        if (t1 == 'M' && (t2 == 'M' || t2 == 'm')) {
+          // Parse MM:Z or Mm:Z tag
+          int start = pos;
+          while (pos < data.length && data[pos] != 0) pos++;
+          String mmTagValue = new String(data, start, pos - start);
+          rec.baseModifications = BaseModification.parseMMTag(mmTagValue);
+        } else if (t1 == 'X' && t2 == 'M') {
           int start = pos;
           while (pos < data.length && data[pos] != 0) pos++;
           rec.methylString = new String(data, start, pos - start);
-        } else {
-          while (pos < data.length && data[pos] != 0) pos++;
         }
         pos++;
         continue;
@@ -65,8 +72,20 @@ public class TagProcessor {
       // ML:B:C or Ml:B:C — methylation likelihoods
       if (t1 == 'M' && (t2 == 'L' || t2 == 'l') && type == 'B') {
         rec.hasMethylTag = true;
-        pos = skipTagValue(data, pos, type);
-        if (pos < 0) break;
+        // Parse ML:B:C array
+        if (pos + 4 < data.length && (char) data[pos] == 'C') {
+          pos++; // skip element type 'C'
+          int count = readIntLE(data, pos);
+          pos += 4;
+          if (pos + count <= data.length && rec.baseModifications != null) {
+            // Read probabilities and attach to BaseModification objects
+            attachMLProbabilities(rec.baseModifications, data, pos, count);
+          }
+          pos += count;
+        } else {
+          pos = skipTagValue(data, pos, type);
+          if (pos < 0) break;
+        }
         continue;
       }
 
@@ -208,7 +227,13 @@ public class TagProcessor {
     // Methylation tags: MM:Z, Mm:Z, XM:Z
     if (((c1 == 'M' && (c2 == 'M' || c2 == 'm')) || (c1 == 'X' && c2 == 'M')) && type == 'Z') {
       rec.hasMethylTag = true;
-      if (c1 == 'X' && c2 == 'M') {
+      if (c1 == 'M' && (c2 == 'M' || c2 == 'm')) {
+        // Parse MM:Z or Mm:Z tag
+        int len = data.length;
+        if (len > 0 && data[len - 1] == 0) len--;
+        String mmTagValue = new String(data, 0, len);
+        rec.baseModifications = BaseModification.parseMMTag(mmTagValue);
+      } else if (c1 == 'X' && c2 == 'M') {
         int len = data.length;
         if (len > 0 && data[len - 1] == 0) len--;
         rec.methylString = new String(data, 0, len);
@@ -219,6 +244,14 @@ public class TagProcessor {
     // ML:B:C or Ml:B:C — methylation likelihoods
     if (c1 == 'M' && (c2 == 'L' || c2 == 'l') && type == 'B') {
       rec.hasMethylTag = true;
+      // Parse ML:B:C array
+      if (data.length >= 5 && (char) data[0] == 'C') {
+        int count = readIntLE(data, 1);
+        if (5 + count <= data.length && rec.baseModifications != null) {
+          // Read probabilities and attach to BaseModification objects
+          attachMLProbabilities(rec.baseModifications, data, 5, count);
+        }
+      }
       return;
     }
 
@@ -401,5 +434,69 @@ public class TagProcessor {
       }
       default -> { return -1; }
     }
+  }
+
+  /**
+   * Attach ML:B:C probabilities to BaseModification objects.
+   * The ML tag contains a byte array of probabilities (0-255) corresponding
+   * to modification positions in the MM tag, in the order they appear.
+   * 
+   * For multi-modification forms (e.g., "C+mh"), probabilities are interleaved
+   * in the order presented in the modification code.
+   * 
+   * @param modifications list of BaseModification objects from MM tag
+   * @param data byte array containing ML values
+   * @param pos starting position in data array
+   * @param count number of probability values
+   */
+  private static void attachMLProbabilities(List<BaseModification> modifications, byte[] data, int pos, int count) {
+    if (modifications == null || modifications.isEmpty()) return;
+    
+    int probIdx = 0;
+    for (BaseModification mod : modifications) {
+      if (mod.deltaPositions == null) continue;
+      
+      // For multi-modification forms (e.g., "mh"), each position has multiple probabilities
+      int modCodeCount = countModificationCodes(mod.modCode);
+      int positionCount = mod.deltaPositions.length;
+      int totalProbsForMod = positionCount * modCodeCount;
+      
+      if (probIdx + totalProbsForMod > count) {
+        // Not enough probabilities in ML tag
+        System.err.println("Warning: ML tag has insufficient probabilities for MM tag");
+        break;
+      }
+      
+      // Allocate probability array for this modification
+      mod.probabilities = new byte[totalProbsForMod];
+      
+      // Copy probabilities
+      for (int i = 0; i < totalProbsForMod && probIdx < count && pos + probIdx < data.length; i++) {
+        mod.probabilities[i] = data[pos + probIdx];
+        probIdx++;
+      }
+    }
+  }
+  
+  /**
+   * Count the number of individual modification codes in a modification string.
+   * For single modifications like "m", returns 1.
+   * For multi-modifications like "mh", returns 2.
+   * For numeric ChEBI codes, returns 1.
+   */
+  private static int countModificationCodes(String modCode) {
+    if (modCode == null || modCode.isEmpty()) return 0;
+    
+    // If it's a numeric ChEBI code, it's a single modification
+    if (modCode.matches("\\d+")) return 1;
+    
+    // Otherwise, count the number of letter codes
+    // Each letter represents one modification type
+    int count = 0;
+    for (int i = 0; i < modCode.length(); i++) {
+      char ch = modCode.charAt(i);
+      if (Character.isLetter(ch)) count++;
+    }
+    return count > 0 ? count : 1;
   }
 }

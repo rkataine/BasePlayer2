@@ -470,7 +470,8 @@ public class MasterTrackCanvas extends GenomicCanvas {
       Label colorLabel = new Label("Read color:");
       colorLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
       ComboBox<ReadColorMode> colorCombo = new ComboBox<>();
-      colorCombo.getItems().setAll(ReadColorMode.values());
+      // Use available modes from first BAM (filters out modes for missing tags)
+      colorCombo.getItems().setAll(bamFiles.get(0).getAvailableColorModes());
       colorCombo.setValue(bamFiles.get(0).getReadColorMode());
       colorCombo.setPrefWidth(200);
       styleDarkComboBox(colorCombo, settingsMenu);

@@ -1,5 +1,7 @@
 package org.baseplayer.samples.alignment;
 
+import java.util.List;
+
 /**
  * Lightweight BAM alignment record.
  * Only stores the fields needed for display: position, end, flags, mapping quality.
@@ -43,6 +45,7 @@ public class BAMRecord {
   // Data type tags
   public boolean hasMethylTag = false;  // MM/ML/XM tags detected (methylation data)
   public String methylString = null;    // XM:Z tag value (bisulfite methylation call string)
+  public List<BaseModification> baseModifications = null; // Parsed MM:Z and ML:B:C tag data (base modifications)
   public int haplotype = 0;             // HP:i tag value (0=unphased, 1=HP1, 2=HP2)
   public int phaseSet = 0;              // PS:i tag value (phase set identifier)
   public String readGroup = null;       // RG:Z tag value (read group identifier)
@@ -218,6 +221,13 @@ public class BAMRecord {
     System.out.println("  pos=" + pos + " end=" + end + " mapq=" + mapq + " flag=" + flag);
     System.out.println("  reverse=" + isReverseStrand() + " paired=" + isPaired());
     System.out.println("  hasMethylTag=" + hasMethylTag + " haplotype=" + haplotype + " phaseSet=" + phaseSet + " readGroup=" + readGroup);
+    
+    if (baseModifications != null && !baseModifications.isEmpty()) {
+      System.out.println("  baseModifications (" + baseModifications.size() + "):");
+      for (BaseModification mod : baseModifications) {
+        System.out.println("    " + mod.toString());
+      }
+    }
     
     if (mismatches != null && mismatches.length > 0) {
       System.out.print("  mismatches (" + (mismatches.length / 3) + "): ");

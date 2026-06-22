@@ -413,7 +413,8 @@ public class SampleListPanel extends SidebarContentPanel {
       Label colorLabel = new Label("Read color:");
       colorLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
       ComboBox<ReadColorMode> colorCombo = new ComboBox<>();
-      colorCombo.getItems().setAll(ReadColorMode.values());
+      // Use available modes from primary BAM (filters out modes for missing tags)
+      colorCombo.getItems().setAll(primaryBam.getAvailableColorModes());
       colorCombo.setValue(primaryBam.getReadColorMode());
       colorCombo.setPrefWidth(190);
       styleDarkComboBox(colorCombo, settingsMenu);

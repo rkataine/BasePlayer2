@@ -3,6 +3,7 @@ package org.baseplayer.io;
 import java.util.prefs.Preferences;
 
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
+import org.baseplayer.samples.alignment.draw.ModificationColorScheme;
 
 /**
  * Application-wide settings with persistence via java.util.prefs.
@@ -41,6 +42,7 @@ public final class Settings {
   private static final String KEY_MISMATCH_MIN_FRACTION   = "mismatchMinFraction";
   private static final String KEY_MISMATCH_MIN_COUNT      = "mismatchMinCount";
   private static final String KEY_READ_COLOR_MODE         = "readColorMode";
+  private static final String KEY_MODIFICATION_COLOR_SCHEME = "modificationColorScheme";
   private static final String KEY_READ_INFO_POPUP_POSITION = "readInfoPopupPosition";
   private static final String KEY_MAX_READ_COVERAGE        = "maxReadCoverage";
   private static final String KEY_LAST_GENOME              = "lastGenome";
@@ -59,6 +61,7 @@ public final class Settings {
   public static final double DEF_MISMATCH_MIN_FRACTION    = 0.10;
   public static final int    DEF_MISMATCH_MIN_COUNT       = 2;
   public static final ReadColorMode DEF_READ_COLOR_MODE   = ReadColorMode.STRAND;
+  public static final ModificationColorScheme DEF_MODIFICATION_COLOR_SCHEME = ModificationColorScheme.BY_TYPE;
   public static final ReadInfoPopupPosition DEF_READ_INFO_POPUP_POSITION = ReadInfoPopupPosition.TOP_RIGHT;
   public static final int    DEF_MAX_READ_COVERAGE        = 1000;
 
@@ -77,6 +80,7 @@ public final class Settings {
   private double mismatchMinFraction;
   private int    mismatchMinCount;
   private ReadColorMode readColorMode;
+  private ModificationColorScheme modificationColorScheme;
   private ReadInfoPopupPosition readInfoPopupPosition;
   private int    maxReadCoverage;
   private String  lastGenome;
@@ -104,6 +108,12 @@ public final class Settings {
       readColorMode = ReadColorMode.valueOf(prefs.get(KEY_READ_COLOR_MODE, DEF_READ_COLOR_MODE.name()));
     } catch (IllegalArgumentException e) {
       readColorMode = DEF_READ_COLOR_MODE;
+    }
+    try {
+      modificationColorScheme = ModificationColorScheme.valueOf(
+          prefs.get(KEY_MODIFICATION_COLOR_SCHEME, DEF_MODIFICATION_COLOR_SCHEME.name()));
+    } catch (IllegalArgumentException e) {
+      modificationColorScheme = DEF_MODIFICATION_COLOR_SCHEME;
     }
     try {
       readInfoPopupPosition = ReadInfoPopupPosition.valueOf(
@@ -151,6 +161,9 @@ public final class Settings {
   /** How reads are colored: STRAND (default) or UC_TAG. */
   public ReadColorMode getReadColorMode() { return readColorMode; }
 
+  /** Color scheme for base modifications (MM/ML tags). */
+  public ModificationColorScheme getModificationColorScheme() { return modificationColorScheme; }
+
   /** Where the read info popup is shown. */
   public ReadInfoPopupPosition getReadInfoPopupPosition() { return readInfoPopupPosition; }
 
@@ -176,6 +189,10 @@ public final class Settings {
   public void setMismatchMinFraction(double f)         { this.mismatchMinFraction = f; prefs.putDouble(KEY_MISMATCH_MIN_FRACTION, f); }
   public void setMismatchMinCount(int n)               { this.mismatchMinCount = n; prefs.putInt(KEY_MISMATCH_MIN_COUNT, n); }
   public void setReadColorMode(ReadColorMode mode)     { this.readColorMode = mode; prefs.put(KEY_READ_COLOR_MODE, mode.name()); }
+  public void setModificationColorScheme(ModificationColorScheme scheme) {
+    this.modificationColorScheme = scheme;
+    prefs.put(KEY_MODIFICATION_COLOR_SCHEME, scheme.name());
+  }
   public void setReadInfoPopupPosition(ReadInfoPopupPosition position) {
     this.readInfoPopupPosition = position;
     prefs.put(KEY_READ_INFO_POPUP_POSITION, position.name());
@@ -197,6 +214,7 @@ public final class Settings {
     setMismatchMinFraction(DEF_MISMATCH_MIN_FRACTION);
     setMismatchMinCount(DEF_MISMATCH_MIN_COUNT);
     setReadColorMode(DEF_READ_COLOR_MODE);
+    setModificationColorScheme(DEF_MODIFICATION_COLOR_SCHEME);
     setReadInfoPopupPosition(DEF_READ_INFO_POPUP_POSITION);
     setMaxReadCoverage(DEF_MAX_READ_COVERAGE);
   }

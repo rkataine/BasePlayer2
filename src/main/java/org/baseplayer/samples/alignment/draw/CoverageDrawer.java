@@ -12,6 +12,7 @@ import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.samples.alignment.BaseModification;
 import org.baseplayer.samples.alignment.CoverageCalculator;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -46,8 +47,29 @@ public class CoverageDrawer {
     public final double[] methylRatio;
     /** Smoothed methylation ratio for line drawing */
     public final double[] smoothedMethylRatio;
+    
+    // Generic numeric data per pixel column (signal tags, quality, etc.)
+    /** Sum of numeric values per pixel (for signal/quality modes) */
+    public final double[] signalSum;
+    /** Count of numeric values per pixel (for averaging) */
+    public final int[] signalCount;
+    /** Min numeric value per pixel */
+    public final double[] signalMin;
+    /** Max numeric value per pixel */
+    public final double[] signalMax;
+    
+    // Base modification data per pixel column (when BASE_MODIFICATION mode active)
+    /** Count of each modification type per pixel: index by modCode char */
+    public final java.util.HashMap<Character, double[]> modTypeCounts;
+    /** Sum of probabilities for each modification type per pixel */
+    public final java.util.HashMap<Character, double[]> modTypeProbSums;
+    
     /** Max coverage value (for scale) */
     public double maxCoverage;
+    /** Max numeric value (for signal/quality scale) */
+    public double maxSignal;
+    /** Min numeric value (for signal/quality scale) */
+    public double minSignal;
     /** Color index for master track */
     public int methylColorIndex;
     /** True if this row is only for the master track (sample not in visible range) */
@@ -63,8 +85,18 @@ public class CoverageDrawer {
       this.mmT = new double[numColumns];
       this.methylRatio = new double[numColumns];
       this.smoothedMethylRatio = new double[numColumns];
+      this.signalSum = new double[numColumns];
+      this.signalCount = new int[numColumns];
+      this.signalMin = new double[numColumns];
+      this.signalMax = new double[numColumns];
+      this.modTypeCounts = new java.util.HashMap<>();
+      this.modTypeProbSums = new java.util.HashMap<>();
       java.util.Arrays.fill(methylRatio, -1);
       java.util.Arrays.fill(smoothedMethylRatio, -1);
+      java.util.Arrays.fill(signalMin, Double.MAX_VALUE);
+      java.util.Arrays.fill(signalMax, Double.MIN_VALUE);
+      this.maxSignal = Double.MIN_VALUE;
+      this.minSignal = Double.MAX_VALUE;
     }
   }
 
@@ -201,6 +233,10 @@ public class CoverageDrawer {
     if (regionLen <= 0 || regionLen > 200_000) return null;
 
     SampleRow row = new SampleRow(sample, sampleIndex, numColumns);
+    
+    // Determine what type of coverage data to collect based on active color mode
+    ReadColorMode colorMode = bamFile.getReadColorMode();
+    CoverageDataType dataType = colorMode.getDataType();
 
     // ── Pixel-level coverage sweep-line (replaces regionLen-sized events[]) ──
     int[] pixEvents = new int[numColumns + 2];
@@ -256,6 +292,92 @@ public class CoverageDrawer {
           }
         }
       }
+
+      // Generic numeric data collection based on coverage data type
+      // Handles signal tags (UC/UD/UL), base quality, or any other numeric per-base data
+      if (dataType == CoverageDataType.SIGNAL && read.signalTag != null && read.signalTag.length > 0) {
+        // Signal tags: accumulate values per pixel
+        // Map signal array indices to reference positions using urTag if available
+        int sigRefStart = read.pos;
+        int sigRefEnd = read.end;
+        if (read.urTag != null && read.urTag.length >= 2) {
+          sigRefStart = read.urTag[0];
+          sigRefEnd = read.urTag[1];
+        }
+        int sigLen = read.signalTag.length;
+        double sigPerBase = sigLen > 1 ? (double)(sigRefEnd - sigRefStart) / (sigLen - 1) : 0;
+
+        for (int i = 0; i < sigLen; i++) {
+          int refPos = sigRefStart + (int)(i * sigPerBase);
+          int px = (int)(double) chromPosToScreenPos.apply((double) refPos);
+          if (px >= 0 && px < numColumns) {
+            double val = read.signalTag[i];
+            row.signalSum[px] += val;
+            row.signalCount[px]++;
+            if (val < row.signalMin[px]) row.signalMin[px] = val;
+            if (val > row.signalMax[px]) row.signalMax[px] = val;
+          }
+        }
+      } else if (dataType == CoverageDataType.QUALITY && read.qualities != null && read.qualities.length > 0) {
+        // Base quality: accumulate quality scores per pixel
+        // Map each base position to reference position using CIGAR
+        for (int readIdx = 0; readIdx < Math.min(read.readLength, read.qualities.length); readIdx++) {
+          int refPos = mapReadIndexToRefPos(read, readIdx);
+          if (refPos < 0) continue;
+          
+          int px = (int)(double) chromPosToScreenPos.apply((double) refPos);
+          if (px >= 0 && px < numColumns) {
+            double qualVal = read.qualities[readIdx];
+            row.signalSum[px] += qualVal;
+            row.signalCount[px]++;
+            if (qualVal < row.signalMin[px]) row.signalMin[px] = qualVal;
+            if (qualVal > row.signalMax[px]) row.signalMax[px] = qualVal;
+          }
+        }
+      }
+
+      // Base modifications: accumulate per modification type per pixel
+      if (dataType == CoverageDataType.MODIFICATION 
+          && read.baseModifications != null && !read.baseModifications.isEmpty()) {
+        char[] sequence = null;
+        if (read.seq != null) {
+          sequence = read.seq;
+        } else if (read.packedBases != null) {
+          sequence = new char[read.readLength];
+          for (int i = 0; i < read.readLength; i++) {
+            sequence[i] = read.getBaseAtReadIndex(i);
+          }
+        }
+        
+        if (sequence != null) {
+          for (BaseModification mod : read.baseModifications) {
+            char modKey = mod.modCode.length() > 0 ? mod.modCode.charAt(0) : '?';
+            if (!row.modTypeCounts.containsKey(modKey)) {
+              row.modTypeCounts.put(modKey, new double[numColumns]);
+              row.modTypeProbSums.put(modKey, new double[numColumns]);
+            }
+            double[] counts = row.modTypeCounts.get(modKey);
+            double[] probSums = row.modTypeProbSums.get(modKey);
+            
+            int[] readIndices = mod.mapToReadIndices(sequence, read.isReverseStrand());
+            for (int i = 0; i < readIndices.length; i++) {
+              int readIdx = readIndices[i];
+              // Map read index to reference position using CIGAR
+              int refPos = mapReadIndexToRefPos(read, readIdx);
+              if (refPos < 0) continue;
+              
+              int px = (int)(double) chromPosToScreenPos.apply((double) refPos);
+              if (px >= 0 && px < numColumns) {
+                double prob = mod.getProbability(i);
+                if (prob >= 0) {
+                  counts[px]++;
+                  probSums[px] += prob;
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // Extract per-pixel peak: highest read count supporting any single allele
@@ -282,6 +404,21 @@ public class CoverageDrawer {
     // Don't create row if coverage is effectively zero (below rendering threshold)
     if (maxCov < 0.5) return null;
     row.maxCoverage = maxCov;
+
+    // Finalize signal min/max across all pixels
+    for (int px = 0; px < numColumns; px++) {
+      if (row.signalCount[px] > 0) {
+        if (row.signalMin[px] < row.minSignal) row.minSignal = row.signalMin[px];
+        if (row.signalMax[px] > row.maxSignal) row.maxSignal = row.signalMax[px];
+      } else {
+        // Reset unused pixels
+        row.signalMin[px] = 0;
+        row.signalMax[px] = 0;
+      }
+    }
+    // If no signal data, reset to defaults
+    if (row.minSignal == Double.MAX_VALUE) row.minSignal = 0;
+    if (row.maxSignal == Double.MIN_VALUE) row.maxSignal = 0;
 
     // ── Methylation: per-position ratios binned to pixels ──
     if (isMethyl) {
@@ -527,53 +664,107 @@ public class CoverageDrawer {
         gc.fillRect(px, yBottom - h, 1, h);
       }
 
-      // Draw mismatches with thresholds
-      int lastMmPx = -1;
-      for (int px = 0; px < numColumns; px++) {
-        double totalMM = row.mmA[px] + row.mmC[px] + row.mmG[px] + row.mmT[px];
-        if (totalMM < 0.5) continue;
-        if (px == lastMmPx) continue;
-        lastMmPx = px;
+      // Get active color mode for this sample to determine what to draw on coverage
+      ReadColorMode colorMode = row.sample.getBamFile() != null 
+          ? row.sample.getBamFile().getReadColorMode() 
+          : ReadColorMode.STRAND;
+      CoverageDataType dataType = colorMode.getDataType();
 
-        double cov = row.coverage[px];
-        // Top of the coverage bar at this pixel — mismatch bars must not exceed it.
-        double covBarH = cov * scale;
-        if (covBarH <= 0) continue;
-        double covBarTop = yBottom - covBarH; // bars are capped to this y
+      // Draw numeric data bars (signal/quality), modification bars, or mismatches based on data type
+      if ((dataType == CoverageDataType.SIGNAL || dataType == CoverageDataType.QUALITY) 
+          && (row.maxSignal - row.minSignal) > 0) {
+        // Numeric data mode: draw average values as colored bars
+        // Works for any signal tag (UC, UD, UL, etc.) or base quality
+        double signalRange = row.maxSignal - row.minSignal;
+        for (int px = 0; px < numColumns; px++) {
+          if (row.signalCount[px] == 0) continue;
+          double avgSignal = row.signalSum[px] / row.signalCount[px];
+          double normalized = (avgSignal - row.minSignal) / signalRange; // 0-1
+          
+          double cov = row.coverage[px];
+          double covBarH = cov * scale;
+          if (covBarH <= 0) continue;
+          
+          // Map normalized value to color (0=blue, 1=red)
+          Color signalColor = Color.color(normalized, 0.3 * (1 - normalized), 1.0 - normalized);
+          double h = Math.min(Math.max(2, covBarH * 0.6), covBarH);
+          gc.setFill(signalColor);
+          gc.fillRect(px, yBottom - h, barW, h);
+        }
+      } else if (dataType == CoverageDataType.MODIFICATION && !row.modTypeCounts.isEmpty()) {
+        // Base modification mode: draw modification bars by type
+        ModificationColorScheme modScheme = Settings.get().getModificationColorScheme();
+        for (java.util.Map.Entry<Character, double[]> entry : row.modTypeCounts.entrySet()) {
+          char modKey = entry.getKey();
+          double[] counts = entry.getValue();
+          double[] probSums = row.modTypeProbSums.get(modKey);
+          
+          for (int px = 0; px < numColumns; px++) {
+            if (counts[px] < 0.5) continue;
+            double avgProb = probSums[px] / counts[px];
+            
+            double cov = row.coverage[px];
+            double covBarH = cov * scale;
+            if (covBarH <= 0) continue;
+            
+            // Get color from modification scheme
+            Color modColor = modScheme.getColor(String.valueOf(modKey), avgProb, '?');
+            double modHeight = Math.min(counts[px] * scale, covBarH);
+            if (modHeight > 0) {
+              gc.setFill(modColor);
+              gc.fillRect(px, yBottom - modHeight, barW, modHeight);
+            }
+          }
+        }
+      } else {
+        // Default: draw mismatches with thresholds
+        int lastMmPx = -1;
+        for (int px = 0; px < numColumns; px++) {
+          double totalMM = row.mmA[px] + row.mmC[px] + row.mmG[px] + row.mmT[px];
+          if (totalMM < 0.5) continue;
+          if (px == lastMmPx) continue;
+          lastMmPx = px;
 
-        double baseY = yBottom;
-        if (row.mmT[px] >= mmMinCount && (cov == 0 || row.mmT[px] / cov >= mmMinFrac)) {
-          double h = Math.min(row.mmT[px] * scale, baseY - covBarTop);
-          if (h > 0) {
+          double cov = row.coverage[px];
+          // Top of the coverage bar at this pixel — mismatch bars must not exceed it.
+          double covBarH = cov * scale;
+          if (covBarH <= 0) continue;
+          double covBarTop = yBottom - covBarH; // bars are capped to this y
+
+          double baseY = yBottom;
+          if (row.mmT[px] >= mmMinCount && (cov == 0 || row.mmT[px] / cov >= mmMinFrac)) {
+            double h = Math.min(row.mmT[px] * scale, baseY - covBarTop);
+            if (h > 0) {
             gc.setFill(DrawColors.MISMATCH_T);
             gc.fillRect(px, baseY - h, barW, h);
             baseY -= h;
+            }
           }
-        }
-        if (baseY <= covBarTop) continue;
-        if (row.mmG[px] >= mmMinCount && (cov == 0 || row.mmG[px] / cov >= mmMinFrac)) {
-          double h = Math.min(row.mmG[px] * scale, baseY - covBarTop);
-          if (h > 0) {
-            gc.setFill(DrawColors.MISMATCH_G);
-            gc.fillRect(px, baseY - h, barW, h);
-            baseY -= h;
+          if (baseY <= covBarTop) continue;
+          if (row.mmG[px] >= mmMinCount && (cov == 0 || row.mmG[px] / cov >= mmMinFrac)) {
+            double h = Math.min(row.mmG[px] * scale, baseY - covBarTop);
+            if (h > 0) {
+              gc.setFill(DrawColors.MISMATCH_G);
+              gc.fillRect(px, baseY - h, barW, h);
+              baseY -= h;
+            }
           }
-        }
-        if (baseY <= covBarTop) continue;
-        if (row.mmC[px] >= mmMinCount && (cov == 0 || row.mmC[px] / cov >= mmMinFrac)) {
-          double h = Math.min(row.mmC[px] * scale, baseY - covBarTop);
-          if (h > 0) {
-            gc.setFill(DrawColors.MISMATCH_C);
-            gc.fillRect(px, baseY - h, barW, h);
-            baseY -= h;
+          if (baseY <= covBarTop) continue;
+          if (row.mmC[px] >= mmMinCount && (cov == 0 || row.mmC[px] / cov >= mmMinFrac)) {
+            double h = Math.min(row.mmC[px] * scale, baseY - covBarTop);
+            if (h > 0) {
+              gc.setFill(DrawColors.MISMATCH_C);
+              gc.fillRect(px, baseY - h, barW, h);
+              baseY -= h;
+            }
           }
-        }
-        if (baseY <= covBarTop) continue;
-        if (row.mmA[px] >= mmMinCount && (cov == 0 || row.mmA[px] / cov >= mmMinFrac)) {
-          double h = Math.min(row.mmA[px] * scale, baseY - covBarTop);
-          if (h > 0) {
-            gc.setFill(DrawColors.MISMATCH_A);
-            gc.fillRect(px, baseY - h, barW, h);
+          if (baseY <= covBarTop) continue;
+          if (row.mmA[px] >= mmMinCount && (cov == 0 || row.mmA[px] / cov >= mmMinFrac)) {
+            double h = Math.min(row.mmA[px] * scale, baseY - covBarTop);
+            if (h > 0) {
+              gc.setFill(DrawColors.MISMATCH_A);
+              gc.fillRect(px, baseY - h, barW, h);
+            }
           }
         }
       }
@@ -977,6 +1168,53 @@ public class CoverageDrawer {
       baseEvents[r1]++;
       if (r2 + 1 <= regionLen) baseEvents[r2 + 1]--;
     }
+  }
+
+  /**
+   * Map a read index (0-based position in read sequence) to a reference position
+   * using CIGAR operations.
+   * Returns -1 if the read index is in an insertion or soft clip (not aligned to reference).
+   */
+  private static int mapReadIndexToRefPos(BAMRecord read, int readIdx) {
+    if (read.cigarOps == null) {
+      // No CIGAR: assume entire read matches
+      if (readIdx < read.readLength) {
+        return read.pos + readIdx;
+      }
+      return -1;
+    }
+
+    int refPos = read.pos;
+    int readPos = 0;
+
+    for (int cigarOp : read.cigarOps) {
+      int op = cigarOp & 0xF;
+      int len = cigarOp >>> 4;
+
+      switch (op) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X -> {
+          if (readIdx >= readPos && readIdx < readPos + len) {
+            return refPos + (readIdx - readPos);
+          }
+          refPos += len;
+          readPos += len;
+        }
+        case BAMRecord.CIGAR_I, BAMRecord.CIGAR_S -> {
+          if (readIdx >= readPos && readIdx < readPos + len) {
+            return -1; // Read index is in an insertion/soft clip
+          }
+          readPos += len;
+        }
+        case BAMRecord.CIGAR_D, BAMRecord.CIGAR_N -> {
+          refPos += len;
+        }
+        case BAMRecord.CIGAR_H, BAMRecord.CIGAR_P -> {
+          // Hard clip and padding don't consume read or reference
+        }
+      }
+    }
+
+    return -1; // Read index beyond the aligned portion
   }
 
 }

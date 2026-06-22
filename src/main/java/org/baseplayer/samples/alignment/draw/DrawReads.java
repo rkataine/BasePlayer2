@@ -153,6 +153,8 @@ class DrawReads {
       // UC/UD/UL tag coloring: draw per-base colors from signal values
       if (signalMode && read.signalTag != null) {
         drawUcTagRead(gc, read, read.signalTag, drawY, drawH, readHeight, canvasWidth, signalCenter, signalHalfRange, colorMode == ReadColorMode.UL_TAG);
+      } else if (colorMode == ReadColorMode.BASE_MODIFICATION && read.baseModifications != null && !read.baseModifications.isEmpty()) {
+        drawBaseModificationRead(gc, read, drawY, drawH, readHeight, canvasWidth);
       } else if (colorMode == ReadColorMode.BASE_QUALITY && read.qualities != null && read.qualities.length > 0) {
         drawBaseQualityRead(gc, read, read.qualities, drawY, drawH, readHeight, canvasWidth);
       } else {
@@ -172,7 +174,7 @@ class DrawReads {
       MismatchRenderer.drawMismatches(gc, read.mismatches, drawY, drawH, canvasWidth,
           drawStack.start, drawStack.pixelSize, isMethylData, read.isReverseStrand(),
           signalMode && read.signalTag != null, colorMode == ReadColorMode.BASE_QUALITY,
-          colorMode == ReadColorMode.BASE_QUALITY);
+          colorMode == ReadColorMode.BASE_QUALITY || colorMode == ReadColorMode.BASE_MODIFICATION);
 
       // Selected-read outline (and its visible mate) drawn in the main pass so
       // they stay locked to read geometry during panning/scrolling.
@@ -781,6 +783,111 @@ class DrawReads {
       gc.setStroke(Color.gray(0.3));
       ArrowShape.strokeArrow(gc, x1, y, Math.max(1, x2 - x1), h, read.isReverseStrand(), Color.gray(0.3));
     }
+  }
+
+  /**
+   * Draw a read with per-base modification coloring from MM/ML tags.
+   * Colors are based on modification type and probability using the configured color scheme.
+   */
+  private void drawBaseModificationRead(GraphicsContext gc, BAMRecord read,
+                                        double y, double h, double readHeight, double canvasWidth) {
+    if (read.cigarOps == null || read.baseModifications == null || read.baseModifications.isEmpty()) return;
+
+    // Get color scheme from settings
+    org.baseplayer.samples.alignment.draw.ModificationColorScheme colorScheme = 
+        org.baseplayer.io.Settings.get().getModificationColorScheme();
+
+    // First, draw the base read shape with a neutral gray
+    double x1 = toScreenX(read.pos);
+    double x2 = toScreenX(read.end);
+    double width = Math.max(1, x2 - x1);
+    gc.setFill(Color.gray(0.5));
+    ArrowShape.fillArrow(gc, x1, y, width, h, read.isReverseStrand(), Color.gray(0.5));
+
+    // Get the read sequence for mapping modifications
+    char[] sequence = null;
+    if (read.seq != null) {
+      sequence = read.seq;
+    } else if (read.packedBases != null) {
+      // Unpack bases if needed
+      sequence = new char[read.readLength];
+      for (int i = 0; i < read.readLength; i++) {
+        sequence[i] = read.getBaseAtReadIndex(i);
+      }
+    }
+
+    if (sequence == null) return;
+
+    // Process each modification type
+    for (org.baseplayer.samples.alignment.BaseModification mod : read.baseModifications) {
+      // Map modification positions to read indices
+      int[] readIndices = mod.mapToReadIndices(sequence, read.isReverseStrand());
+      
+      // Draw colored rectangles for each modified base
+      int refPos = read.pos;
+      int readIdx = 0;
+
+      for (int cigarOp : read.cigarOps) {
+        int op = cigarOp & 0xF;
+        int len = cigarOp >>> 4;
+
+        switch (op) {
+          case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X -> {
+            // Check each base in this segment
+            for (int j = 0; j < len; j++) {
+              int currentReadIdx = readIdx + j;
+              
+              // Check if this read index has a modification
+              int modIndex = findModificationIndex(readIndices, currentReadIdx);
+              if (modIndex >= 0) {
+                // Get probability for this modification
+                double prob = mod.getProbability(modIndex);
+                if (prob >= 0) {
+                  // Get color based on modification type and probability
+                  Color modColor = colorScheme.getColor(mod.modCode, prob, mod.baseType);
+                  
+                  // Draw colored rectangle for this base
+                  double bx = toScreenX(refPos + j);
+                  double bx2 = toScreenX(refPos + j + 1);
+                  if (bx < canvasWidth && bx2 > 0) {
+                    double bw = Math.max(1, bx2 - bx);
+                    gc.setFill(modColor);
+                    gc.fillRect(bx, y, bw, h);
+                  }
+                }
+              }
+            }
+            refPos += len;
+            readIdx += len;
+          }
+          case BAMRecord.CIGAR_I, BAMRecord.CIGAR_S -> {
+            readIdx += len;
+          }
+          case BAMRecord.CIGAR_D, BAMRecord.CIGAR_N -> {
+            refPos += len;
+          }
+        }
+      }
+    }
+
+    // Draw outline
+    if (readHeight >= 3) {
+      x1 = toScreenX(read.pos);
+      x2 = toScreenX(read.end);
+      gc.setStroke(Color.gray(0.3));
+      ArrowShape.strokeArrow(gc, x1, y, Math.max(1, x2 - x1), h, read.isReverseStrand(), Color.gray(0.3));
+    }
+  }
+
+  /**
+   * Find the index in readIndices array that matches the given read position.
+   * Returns -1 if not found.
+   */
+  private int findModificationIndex(int[] readIndices, int readPos) {
+    for (int i = 0; i < readIndices.length; i++) {
+      if (readIndices[i] == readPos) return i;
+    }
+    return -1;
   }
 
   private static void fillMergedRunWithArrowCap(GraphicsContext gc, Color fill,

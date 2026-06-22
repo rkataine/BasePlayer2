@@ -4,6 +4,7 @@ import org.baseplayer.MainApp;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
+import org.baseplayer.samples.alignment.draw.ModificationColorScheme;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -12,6 +13,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
@@ -43,6 +45,7 @@ public class SettingsDialog {
   private final Spinner<Double>  mismatchMinFractionSpinner;
   private final Spinner<Integer> mismatchMinCountSpinner;
   private final ComboBox<ReadColorMode> readColorModeCombo;
+  private final ComboBox<ModificationColorScheme> modificationColorSchemeCombo;
   private final ComboBox<Settings.ReadInfoPopupPosition> readInfoPopupPositionCombo;
   private final Spinner<Integer> maxReadCoverageSpinner;
 
@@ -68,9 +71,15 @@ public class SettingsDialog {
     readColorModeCombo = new ComboBox<>();
     readColorModeCombo.getItems().addAll(ReadColorMode.values());
     readColorModeCombo.setValue(settings.getReadColorMode());
+    styleComboBox(readColorModeCombo);
+    modificationColorSchemeCombo = new ComboBox<>();
+    modificationColorSchemeCombo.getItems().addAll(ModificationColorScheme.values());
+    modificationColorSchemeCombo.setValue(settings.getModificationColorScheme());
+    styleComboBox(modificationColorSchemeCombo);
     readInfoPopupPositionCombo = new ComboBox<>();
     readInfoPopupPositionCombo.getItems().addAll(Settings.ReadInfoPopupPosition.values());
     readInfoPopupPositionCombo.setValue(settings.getReadInfoPopupPosition());
+    styleComboBox(readInfoPopupPositionCombo);
     maxReadCoverageSpinner        = intSpinner(100, 100_000, settings.getMaxReadCoverage(), 100);
 
     // ── Layout ──────────────────────────────────────────────────────────
@@ -115,6 +124,8 @@ public class SettingsDialog {
         "Height of individual reads in pixels");
     addRow(readGrid, row++, "Read coloring:", readColorModeCombo,
         "How to color reads (Strand = strand direction, UC tag = Uncalled signal values)");
+    addRow(readGrid, row++, "Modification colors:", modificationColorSchemeCombo,
+        "Color scheme for base modifications: BY_TYPE uses distinct colors per modification type");
     addRow(readGrid, row++, "Max read coverage:", maxReadCoverageSpinner,
         "Skip individual reads when coverage exceeds this depth (show coverage only)");
     root.getChildren().add(readGrid);
@@ -190,6 +201,7 @@ public class SettingsDialog {
     settings.setMismatchMinFraction(mismatchMinFractionSpinner.getValue());
     settings.setMismatchMinCount(mismatchMinCountSpinner.getValue());
     settings.setReadColorMode(readColorModeCombo.getValue());
+    settings.setModificationColorScheme(modificationColorSchemeCombo.getValue());
     settings.setReadInfoPopupPosition(readInfoPopupPositionCombo.getValue());
     settings.setMaxReadCoverage(maxReadCoverageSpinner.getValue());
 
@@ -209,6 +221,7 @@ public class SettingsDialog {
     mismatchMinFractionSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_FRACTION);
     mismatchMinCountSpinner.getValueFactory().setValue(Settings.DEF_MISMATCH_MIN_COUNT);
     readColorModeCombo.setValue(Settings.DEF_READ_COLOR_MODE);
+    modificationColorSchemeCombo.setValue(Settings.DEF_MODIFICATION_COLOR_SCHEME);
     readInfoPopupPositionCombo.setValue(Settings.DEF_READ_INFO_POPUP_POSITION);
     maxReadCoverageSpinner.getValueFactory().setValue(Settings.DEF_MAX_READ_COVERAGE);
   }
@@ -271,5 +284,36 @@ public class SettingsDialog {
       // revert to current value on parse error
       spinner.getEditor().setText(spinner.getValueFactory().getConverter().toString(spinner.getValue()));
     }
+  }
+
+  /** Apply dark-mode styling to combo boxes for visibility. */
+  private static <T> void styleComboBox(ComboBox<T> comboBox) {
+    comboBox.setStyle(
+        "-fx-background-color: #333333;"
+            + "-fx-control-inner-background: #333333;"
+            + "-fx-text-fill: #dddddd;"
+            + "-fx-prompt-text-fill: #bbbbbb;"
+            + "-fx-mark-color: #dddddd;");
+    
+    // Set dark-themed cells for dropdown items
+    comboBox.setButtonCell(createDarkComboCell());
+    comboBox.setCellFactory(listView -> createDarkComboCell());
+  }
+
+  /** Create a dark-themed list cell for combo box items. */
+  private static <T> ListCell<T> createDarkComboCell() {
+    return new ListCell<>() {
+      @Override
+      protected void updateItem(T item, boolean empty) {
+        super.updateItem(item, empty);
+        if (empty || item == null) {
+          setText(null);
+          setStyle("-fx-text-fill: #dddddd;");
+          return;
+        }
+        setText(item.toString());
+        setStyle("-fx-text-fill: #dddddd;");
+      }
+    };
   }
 }

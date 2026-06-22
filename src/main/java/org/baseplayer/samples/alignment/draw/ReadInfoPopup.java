@@ -222,14 +222,56 @@ public class ReadInfoPopup {
 
     // Tags — show all known tags plus any extras collected during parsing
     boolean hasTags = read.hasMethylTag || read.haplotype > 0 || read.readGroup != null
-        || read.extraTagsLine != null;
+        || read.extraTagsLine != null || (read.baseModifications != null && !read.baseModifications.isEmpty());
     if (hasTags) {
       c.separator();
       c.section("Tags");
       if (read.haplotype > 0) c.row("HP", String.valueOf(read.haplotype));
       if (read.phaseSet > 0)  c.row("PS", String.valueOf(read.phaseSet));
       if (read.readGroup != null) c.row("RG", read.readGroup);
-      if (read.hasMethylTag)  c.row("Methylation", "Yes", Color.web("#88cccc"));
+      
+      // Show detailed base modification information
+      if (read.baseModifications != null && !read.baseModifications.isEmpty()) {
+        for (org.baseplayer.samples.alignment.BaseModification mod : read.baseModifications) {
+          String modName = mod.getModificationName();
+          
+          // Count modifications and calculate average probability
+          int modCount = mod.deltaPositions != null ? mod.deltaPositions.length : 0;
+          double totalProb = 0.0;
+          int countWithProb = 0;
+          
+          if (modCount > 0) {
+            for (int i = 0; i < modCount; i++) {
+              double prob = mod.getProbability(i);
+              if (prob >= 0) {
+                countWithProb++;
+                totalProb += prob;
+              }
+            }
+          }
+          
+          if (modCount > 0) {
+            String label = String.format("%c%s%s (%s)", 
+                mod.baseType, mod.strand, mod.modCode, modName);
+            
+            if (countWithProb > 0) {
+              double avgProb = totalProb / countWithProb;
+              String value = String.format("%d site%s, avg %.2f", 
+                  modCount, modCount == 1 ? "" : "s", avgProb);
+              c.row(label, value, Color.web("#88cccc"));
+            } else {
+              // No probabilities available
+              String value = String.format("%d site%s", 
+                  modCount, modCount == 1 ? "" : "s");
+              c.row(label, value, Color.web("#88cccc"));
+            }
+          }
+        }
+      } else if (read.hasMethylTag) {
+        // Fallback for old methylation tag without MM/ML
+        c.row("Methylation", "Yes", Color.web("#88cccc"));
+      }
+      
       if (read.extraTagsLine != null) {
         for (String entry : read.extraTagsLine.split(";")) {
           int eq = entry.indexOf('=');

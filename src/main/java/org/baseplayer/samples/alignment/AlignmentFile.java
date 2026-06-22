@@ -101,6 +101,10 @@ public class AlignmentFile implements Closeable {
   // Data type detection (auto-detected from first batch of reads)
   private volatile boolean methylationDetected = false;
   private volatile boolean haplotypeDetected = false;
+  private volatile boolean baseModificationsDetected = false; // MM/ML tags present
+  private volatile boolean ucTagDetected = false;  // uc:B:s signal tag present
+  private volatile boolean udTagDetected = false;  // ud:B:s signal tag present
+  private volatile boolean ulTagDetected = false;  // ul:B:s signal tag present
   /** User can override: true = suppress methyl mismatches, null = auto (use methylationDetected). */
   private volatile Boolean suppressMethylMismatches = null;
   
@@ -1403,6 +1407,32 @@ public class AlignmentFile implements Closeable {
     this.readColorMode = mode != null ? mode : Settings.get().getReadColorMode();
   }
 
+  /**
+   * Get available color modes for this file based on detected data types.
+   * Filters out modes that require tags not present in the data.
+   * 
+   * @return list of ReadColorMode values that can be used with this file
+   */
+  public java.util.List<ReadColorMode> getAvailableColorModes() {
+    java.util.List<ReadColorMode> modes = new java.util.ArrayList<>();
+    
+    // Always available modes
+    modes.add(ReadColorMode.STRAND);
+    modes.add(ReadColorMode.BASE_QUALITY);
+    
+    // Signal tag modes - only show if detected in data
+    if (ucTagDetected) modes.add(ReadColorMode.UC_TAG);
+    if (udTagDetected) modes.add(ReadColorMode.UD_TAG);
+    if (ulTagDetected) modes.add(ReadColorMode.UL_TAG);
+    
+    // Base modification mode - only show if MM/ML tags were detected
+    if (baseModificationsDetected) {
+      modes.add(ReadColorMode.BASE_MODIFICATION);
+    }
+    
+    return modes;
+  }
+
   /** Get the read group boundary rows for a given stack. */
   public java.util.Map<String, Integer> getReadGroupStartRows(DrawStack stack) {
     StackCache sc = stackCaches.get(stack);
@@ -1410,11 +1440,12 @@ public class AlignmentFile implements Closeable {
   }
 
   /**
-   * Auto-detect methylation, haplotype, and read group data from a sample of reads.
+   * Auto-detect methylation, haplotype, base modifications, and read group data from a sample of reads.
    * Called once on the first 200 reads, before any UI updates.
    */
   private void runAutoDetection(List<BAMRecord> reads) {
     int methylTagCount = 0, hpCount = 0;
+    int baseModCount = 0;
     int totalMismatches = 0, bisulfiteMismatches = 0;
     int xmBisulfiteCount = 0; // Count XM:Z bisulfite signatures
     java.util.Set<String> rgSet = new java.util.LinkedHashSet<>();
@@ -1425,6 +1456,9 @@ public class AlignmentFile implements Closeable {
       
       // Check for methylation tags
       if (r.hasMethylTag) methylTagCount++;
+      
+      // Check for base modification tags (MM/ML)
+      if (r.baseModifications != null && !r.baseModifications.isEmpty()) baseModCount++;
       
       // Check XM:Z string for bisulfite signature (faster than mismatch analysis)
       // XM:Z format: '.'=match, 'x'=mismatch, 'h'/'z'/'Z'=methylation calls
@@ -1476,6 +1510,12 @@ public class AlignmentFile implements Closeable {
                          " = " + (100 * bisulfiteMismatches / totalMismatches) + "% are C→T/G→A bisulfite conversions)");
     }
     
+    // Detect base modifications (MM/ML tags) - distinct from bisulfite methylation
+    if (baseModCount > sampleSize * 0.1) {
+      baseModificationsDetected = true;
+      System.out.println("  → Base modifications detected (MM/ML tags: " + baseModCount + "/" + sampleSize + " reads)");
+    }
+    
     if (hpCount > 0) {
       haplotypeDetected = true;
       System.out.println("  → Haplotype data detected (" + hpCount + "/" + sampleSize + " reads with HP tags)");
@@ -1489,6 +1529,64 @@ public class AlignmentFile implements Closeable {
       detectedReadGroups = new ArrayList<>(rgSet);
       System.out.println("  → Single read group: " + rgSet.iterator().next());
     }
+    
+    // Detect signal tags (UC, UD, UL) by checking a small sample
+    detectSignalTags();
+  }
+
+  /**
+   * Detect which signal tags (uc, ud, ul) are present in the data.
+   * This requires fetching a few reads with each signal tag type enabled.
+   */
+  private void detectSignalTags() {
+    if (reader == null) return;
+    
+    // Get first chromosome name
+    String[] refNames = reader.getRefNames();
+    if (refNames == null || refNames.length == 0) return;
+    String testChrom = refNames[0];
+    
+    // Test each signal tag type on a small sample
+    char[] tagsToTest = {'c', 'd', 'l'}; // uc, ud, ul
+    
+    for (char tag : tagsToTest) {
+      try {
+        // Enable this signal tag
+        reader.setActiveSignalTag(tag);
+        
+        // Try to fetch a few reads from the beginning of the first chromosome
+        boolean[] found = {false};
+        reader.queryStreaming(testChrom, 0, 100000, record -> {
+          if (record.signalTag != null && record.signalTag.length > 0) {
+            found[0] = true;
+            return false; // Stop after finding first read with signal tag
+          }
+          return found[0] == false; // Continue only if not found yet
+        });
+        
+        if (found[0]) {
+          switch (tag) {
+            case 'c' -> {
+              ucTagDetected = true;
+              System.out.println("  → UC signal tag detected");
+            }
+            case 'd' -> {
+              udTagDetected = true;
+              System.out.println("  → UD signal tag detected");
+            }
+            case 'l' -> {
+              ulTagDetected = true;
+              System.out.println("  → UL signal tag detected");
+            }
+          }
+        }
+      } catch (Exception e) {
+        // Silently ignore errors during signal tag detection
+      }
+    }
+    
+    // Reset signal tag to none after detection
+    reader.setActiveSignalTag('\0');
   }
 
   /**
