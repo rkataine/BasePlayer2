@@ -23,7 +23,8 @@ public class FileCommands {
       case "BAM" -> SampleDataManager.addBamFiles();
       case "BED" -> SampleDataManager.addBedSampleFile();
       case "BIGWIG" -> SampleDataManager.addBigWigFile();
-      case "VCF", "CTRL", "SES" -> {
+      case "VCF" -> SampleDataManager.addVcfFile();
+      case "CTRL", "SES" -> {
         System.out.println("File menu action not implemented yet: " + fileType);
       }
       default -> {

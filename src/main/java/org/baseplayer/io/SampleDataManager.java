@@ -416,4 +416,81 @@ public class SampleDataManager {
           System.out.println("Loaded BigWig file: " + file.getName());
         });
   }
+  
+  /**
+   * Open a VCF file chooser and load variants from one or more files.
+   * VCF files must be bgzipped with tabix or csi index.
+   * If multiple files are selected, they are loaded sequentially
+   * (each file replaces the previous one in the viewer).
+   */
+  public static void addVcfFile() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open VCF File(s)");
+    File lastDir = UserPreferences.getLastDirectory("VCF");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+      new ExtensionFilter("VCF files", "*.vcf.gz"),
+      new ExtensionFilter("All files", "*.*")
+    );
+    
+    List<File> files = fileChooser.showOpenMultipleDialog(MainApp.stage);
+    if (files == null || files.isEmpty()) return;
+    UserPreferences.setLastDirectory("VCF", files.get(0).getParentFile());
+    addVcfFiles(files);
+  }
+  
+  /**
+   * Load one or more VCF files directly without showing a chooser.
+   * Files are loaded sequentially to prevent concurrent access to shared data structures.
+   * 
+   * @param files List of VCF files to load
+   */
+  public static void addVcfFiles(List<File> files) {
+    if (files == null || files.isEmpty()) return;
+    
+    // Load files sequentially using a callback chain
+    System.out.println("Starting sequential load of " + files.size() + " VCF file(s)");
+    loadVcfFilesSequentially(files, 0);
+  }
+  
+  /**
+   * Recursively load VCF files sequentially.
+   * Each file is loaded only after the previous one completes.
+   */
+  private static void loadVcfFilesSequentially(List<File> files, int index) {
+    if (index >= files.size()) {
+      System.out.println("All VCF files loaded successfully");
+      return;
+    }
+    
+    File file = files.get(index);
+    if (file == null || !file.exists()) {
+      // Skip invalid files and continue to next
+      loadVcfFilesSequentially(files, index + 1);
+      return;
+    }
+    
+    final int nextIndex = index + 1;
+    // Load this file with a callback to load the next one when done
+    VcfManager.getInstance().loadVcfFileWithCallback(file, () -> {
+      loadVcfFilesSequentially(files, nextIndex);
+    });
+  }
+  
+  /**
+   * Load a single VCF file directly without showing a chooser.
+   */
+  public static void addVcfFile(File file) {
+    if (file == null) return;
+    UserPreferences.setLastDirectory("VCF", file.getParentFile());
+    
+    VcfManager.getInstance().loadVcfFile(file);
+  }
 }
+

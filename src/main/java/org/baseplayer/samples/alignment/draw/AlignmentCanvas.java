@@ -23,6 +23,8 @@ import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
+import org.baseplayer.variant.VariantList;
+import org.baseplayer.variant.draw.VariantDrawer;
 
 import javafx.application.Platform;
 import javafx.geometry.Point2D;
@@ -45,6 +47,12 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   /** Unified read rendering, hit-testing, and reactive highlighting. */
   private final DrawReads drawReads;
+  
+  /** Variant drawing and index management. */
+  private final VariantDrawer variantDrawer = new VariantDrawer();
+  
+  /** Variant list for the current genomic region. */
+  private VariantList variantList;
 
   private static final double MIN_COVERAGE_HEIGHT = 30;
   private static final double MAX_COVERAGE_HEIGHT = 60;
@@ -318,6 +326,11 @@ public class AlignmentCanvas extends GenomicCanvas {
     String chrom        = drawStack.chromosome;
     int    start        = Math.max(0, (int) drawStack.start);
     int    end          = (int) drawStack.end;
+
+    // ── Draw variants at all zoom levels (before zoom checks) ──
+    if (variantList != null && !variantList.isEmpty()) {
+      variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), masterOffset);
+    }
 
     // ── Beyond coverage threshold: show zoom message or sampled coverage ──
     if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) {
@@ -1539,5 +1552,48 @@ public class AlignmentCanvas extends GenomicCanvas {
       case 'n' -> "Xanthosine";
       default -> String.valueOf(modCode);
     };
+  }
+  
+  // ── Variant Management ────────────────────────────────────────────────────────
+  
+  /**
+   * Set the variant list for this canvas.
+   * This should be called when VCF data is loaded for the current genomic region.
+   */
+  public void setVariantList(VariantList variantList) {
+    this.variantList = variantList;
+    variantDrawer.markIndexDirty();
+  }
+  
+  /**
+   * Get the current variant list.
+   */
+  public VariantList getVariantList() {
+    return variantList;
+  }
+  
+  /**
+   * Clear the variant list (e.g., when navigating to a new region).
+   */
+  public void clearVariantList() {
+    if (variantList != null) {
+      variantList.clear();
+    }
+    variantList = null;
+  }
+  
+  /**
+   * Mark the variant drawing index as dirty.
+   * Call this when sample visibility changes (filtering, scrolling).
+   */
+  public void invalidateVariantIndex() {
+    variantDrawer.markIndexDirty();
+  }
+  
+  /**
+   * Get the variant drawer (for testing/debugging).
+   */
+  public VariantDrawer getVariantDrawer() {
+    return variantDrawer;
   }
 }

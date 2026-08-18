@@ -188,6 +188,12 @@ public class MasterTrackCanvas extends GenomicCanvas {
         isDraggingResize = true;
         dragStartScreenY = event.getScreenY();
         dragStartHeight = sampleRegistry.getMasterTrackHeight();
+      } else if (isControlsExpanded() && rangeLabelHit != null && rangeLabelHit.contains(event.getX(), event.getY())) {
+        // Click on filter label - don't start range drag, let it open the menu in onMouseClicked
+        mousePressedX = event.getX();
+        mousePressedY = event.getY();
+        mouseDraggedX = 0;
+        mouseDragged = false;
       } else if (isControlsExpanded() && beginRangeHandleDrag(event.getX(), event.getY())) {
         mouseDragged = false;
       } else {
@@ -342,7 +348,9 @@ public class MasterTrackCanvas extends GenomicCanvas {
     double labelX = 96;
     double labelY = headerBarH + 14;
     gc.fillText(label, labelX, labelY);
-    rangeLabelHit = new HitBox(labelX - 4, headerBarH + 3, Math.max(48, label.length() * 7.0), 14);
+    // Make clickable area larger for easier interaction - covers entire label region
+    double labelWidth = Math.max(80, label.length() * 8.5);
+    rangeLabelHit = new HitBox(labelX - 6, headerBarH + 1, labelWidth, 18);
 
     double railX = 12;
     double railW = Math.max(10, w - 24);
@@ -418,11 +426,13 @@ public class MasterTrackCanvas extends GenomicCanvas {
       return;
     }
 
-    // Expand/collapse master controls
+    // Expand/collapse arrow toggles master track controls visibility
     if (sampleRegistry.getSampleTracks().size() > 1 && inHeaderBtn(x, y, expandBtnX(getWidth()), sy)) {
-      sampleRegistry.setMasterTrackHeight(isControlsExpanded()
-          ? SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT
-          : EXPANDED_MASTER_HEIGHT);
+      if (isControlsExpanded()) {
+        sampleRegistry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
+      } else {
+        sampleRegistry.setMasterTrackHeight(EXPANDED_MASTER_HEIGHT);
+      }
       update.set(!update.get());
       return;
     }
@@ -558,6 +568,7 @@ public class MasterTrackCanvas extends GenomicCanvas {
     int last = Math.max(first, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
 
     ContextMenu menu = new ContextMenu();
+    menu.setAutoHide(true);
     menu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
 
     HBox row = new HBox(6);
@@ -646,6 +657,7 @@ public class MasterTrackCanvas extends GenomicCanvas {
     filterRow.getChildren().addAll(filterLabel, filterField);
     VBox panel = new VBox(4, row, filterRow);
     menu.getItems().add(new CustomMenuItem(panel, false));
+    
     menu.show(this, screenX, screenY);
     rangeInputMenu = menu;
     Platform.runLater(filterField::requestFocus);
@@ -690,12 +702,20 @@ public class MasterTrackCanvas extends GenomicCanvas {
   }
 
   private double estimateSampleViewportHeight() {
-    double derived = sampleRegistry.getSampleHeight() * Math.max(1, sampleRegistry.getVisibleSampleCount());
-    if (derived > 0) return derived;
+    // Always get actual canvas height, not derived from old sampleHeight
     if (!stackManager.isEmpty() && stackManager.getFirst().alignmentCanvas != null) {
       double fromCanvas = stackManager.getFirst().alignmentCanvas.getHeight() - sampleRegistry.getMasterTrackHeight();
-      if (fromCanvas > 0) return fromCanvas;
+      if (fromCanvas > 0) {
+        return fromCanvas;
+      }
     }
+    
+    // Fallback: use derived height only if canvas not available
+    double derived = sampleRegistry.getSampleHeight() * Math.max(1, sampleRegistry.getVisibleSampleCount());
+    if (derived > 0) {
+      return derived;
+    }
+    
     return 0;
   }
 
@@ -721,7 +741,7 @@ public class MasterTrackCanvas extends GenomicCanvas {
     bamItem.setOnAction(e -> SampleDataManager.addBamFiles());
 
     MenuItem vcfItem = new MenuItem("VCF");
-    vcfItem.setDisable(true);
+    vcfItem.setOnAction(e -> SampleDataManager.addVcfFile());
 
     MenuItem bedItem = new MenuItem("BED");
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());

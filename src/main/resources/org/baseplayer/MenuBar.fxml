@@ -26,7 +26,7 @@
             <MenuItem id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM/CRAM file(s)" />
             <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open BED track file(s)" />
             <MenuItem id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig track file(s)" />
-            <MenuItem id="LOAD_VCF" disable="true" text="Open VCF file(s) (coming soon)" />
+            <MenuItem id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF file(s)" />
             <Menu fx:id="recentFilesMenu" text="Open Recent" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />
             <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open session" />

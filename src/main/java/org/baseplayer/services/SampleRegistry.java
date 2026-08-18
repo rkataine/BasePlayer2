@@ -132,7 +132,14 @@ public class SampleRegistry {
      */
     public void setFirstVisibleSample(int index) {
         int max = Math.max(0, getDisplayedTrackCount() - 1);
-        this.firstVisibleSample = Math.max(0, Math.min(max, index));
+        int newFirst = Math.max(0, Math.min(max, index));
+        
+        // Notify variant index to rebuild whenever the range changes
+        if (newFirst != this.firstVisibleSample) {
+            notifyVariantIndexDirty();
+        }
+        
+        this.firstVisibleSample = newFirst;
     }
     
     /**
@@ -147,7 +154,14 @@ public class SampleRegistry {
      */
     public void setLastVisibleSample(int index) {
         int max = Math.max(0, getDisplayedTrackCount() - 1);
-        this.lastVisibleSample = Math.max(0, Math.min(max, index));
+        int newLast = Math.max(0, Math.min(max, index));
+        
+        // Notify variant index to rebuild whenever the range changes
+        if (newLast != this.lastVisibleSample) {
+            notifyVariantIndexDirty();
+        }
+        
+        this.lastVisibleSample = newLast;
     }
     
     /**
@@ -251,6 +265,7 @@ public class SampleRegistry {
      * Set active sample filter query (trimmed). Empty string disables filter mode.
      */
     public void setActiveSampleFilterQuery(String query) {
+        String oldQuery = this.activeSampleFilterQuery;
         this.activeSampleFilterQuery = query == null ? "" : query.trim();
 
         int displayed = getDisplayedTrackCount();
@@ -258,11 +273,17 @@ public class SampleRegistry {
             firstVisibleSample = 0;
             lastVisibleSample = 0;
             scrollBarPosition = 0;
+            notifyVariantIndexDirty();
             return;
         }
 
         firstVisibleSample = Math.max(0, Math.min(displayed - 1, firstVisibleSample));
         lastVisibleSample = Math.max(firstVisibleSample, Math.min(displayed - 1, lastVisibleSample));
+        
+        // Notify if filter actually changed
+        if (!oldQuery.equals(this.activeSampleFilterQuery)) {
+            notifyVariantIndexDirty();
+        }
     }
 
     /**
@@ -375,6 +396,29 @@ public class SampleRegistry {
      * Set the height of the master track.
      */
     public void setMasterTrackHeight(double height) {
+        this.masterTrackHeight.set(Math.max(0, height));
+        // Mark variant index as dirty since master track height affects variant Y positions
+        notifyVariantIndexDirty();
+    }
+    
+    // ── Operations ─────────────────────────────────────────────────────────
+    
+    /**
+     * Notify all alignment canvases to invalidate their variant drawing indices.
+     * Called when sample visibility changes (filter, significant scroll).
+     */
+    private void notifyVariantIndexDirty() {
+        // Get all DrawStacks and invalidate their variant indices
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (org.baseplayer.draw.DrawStack stack : stackManager.getStacks()) {
+            if (stack.alignmentCanvas != null) {
+                stack.alignmentCanvas.invalidateVariantIndex();
+            }
+        }
+    }
+    
+    /**
+     * lic void setMasterTrackHeight(double height) {
         this.masterTrackHeight.set(Math.max(0, height));
     }
     

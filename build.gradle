@@ -5,6 +5,8 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
+import java.util.Locale
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(23)
@@ -65,58 +67,211 @@ dependencies {
     implementation 'org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1'
 }
 
-// ── jpackage app-image ──────────────────────────────────────────────────────
+// ── jpackage packaging (cross-platform + macOS-specific knobs) ─────────────
+
+def packageAppName = 'BasePlayer2'
+def packageMainClass = 'org.baseplayer.Launcher'
+def packageOutputDirProvider = layout.buildDirectory.dir('jpackage')
+def isMacOs = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('mac')
+
+def packageIconPath = project.findProperty('packageIcon')?.toString()
+def packageAppVersion = (project.findProperty('appVersion') ?: '1.0.0').toString()
+
+// macOS packaging/signing parameters (override via -P...)
+def macPackageName = (project.findProperty('macPackageName') ?: packageAppName).toString()
+def macPackageIdentifier = (project.findProperty('macPackageIdentifier') ?: 'org.baseplayer.baseplayer2').toString()
+def macSignEnabled = (project.findProperty('macSign') ?: System.getenv('MAC_SIGN') ?: 'false').toString().toBoolean()
+def macSigningIdentity = (project.findProperty('macSigningIdentity') ?: System.getenv('MAC_SIGNING_IDENTITY'))?.toString()
+def macSigningKeychain = (project.findProperty('macKeychain') ?: System.getenv('MAC_KEYCHAIN'))?.toString()
+
+def buildCommonJpackageArgs = { String type, File shadowFile, File outputDir ->
+    List<String> args = [
+        'jpackage',
+        '--type', type,
+        '--name', packageAppName,
+        '--input', shadowFile.parentFile.absolutePath,
+        '--main-jar', shadowFile.name,
+        '--main-class', packageMainClass,
+        '--dest', outputDir.absolutePath,
+        '--app-version', packageAppVersion,
+        '--vendor', 'BasePlayer',
+        '--java-options', '--add-opens=javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
+        '--java-options', '--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
+        '--java-options', '--add-exports=javafx.base/com.sun.javafx.event=ALL-UNNAMED',
+        '--java-options', '-Xmx4g'
+    ]
+
+    if (packageIconPath) {
+        File iconFile = file(packageIconPath)
+        if (iconFile.exists()) {
+            args.addAll(['--icon', iconFile.absolutePath])
+        }
+    }
+
+    return args
+}
+
+def addMacPackagingArgs = { List<String> args ->
+    args.addAll(['--mac-package-name', macPackageName])
+    args.addAll(['--mac-package-identifier', macPackageIdentifier])
+
+    if (macSignEnabled) {
+        args.add('--mac-sign')
+        if (macSigningIdentity) {
+            args.addAll(['--mac-signing-key-user-name', macSigningIdentity])
+        }
+        if (macSigningKeychain) {
+            args.addAll(['--mac-signing-keychain', macSigningKeychain])
+        }
+    }
+}
+
+def resolveAppContentDir = { File outputDir ->
+    if (isMacOs) {
+        return new File(outputDir, "${packageAppName}.app/Contents/app")
+    }
+    return new File(outputDir, packageAppName)
+}
+
+def copyBundledDataFolders = { File appContentDir ->
+    copy {
+        from 'genomes'
+        into new File(appContentDir, 'genomes')
+    }
+    copy {
+        from 'additions'
+        into new File(appContentDir, 'additions')
+    }
+}
+
+def createLinuxWrapperLauncher = { File appDir ->
+    if (isMacOs) return
+    def launcher = new File(appDir, 'run.sh')
+    launcher.text = """\
+#!/bin/bash
+cd "\$(dirname "\$0")"
+exec bin/${packageAppName} "\$@"
+"""
+    launcher.setExecutable(true)
+}
 
 task jpackageImage(dependsOn: shadowJar) {
     group = 'distribution'
     description = 'Create a self-contained app image with bundled JRE using jpackage'
 
-    def outputDir = layout.buildDirectory.dir('jpackage')
-    def appName = 'BasePlayer2'
-
     doLast {
-        def shadowFile = shadowJar.archiveFile.get().asFile
-        def jpackageOut = outputDir.get().asFile
-        def appDir = new File(jpackageOut, appName)
+        File shadowFile = shadowJar.archiveFile.get().asFile
+        File outputDir = packageOutputDirProvider.get().asFile
 
-        // Clean previous output
-        delete jpackageOut
+        delete outputDir
+
+        List<String> cmd = buildCommonJpackageArgs('app-image', shadowFile, outputDir)
+        if (isMacOs) {
+            addMacPackagingArgs(cmd)
+        }
 
         exec {
-            commandLine 'jpackage',
-                '--type', 'app-image',
-                '--name', appName,
-                '--input', shadowFile.parentFile.absolutePath,
-                '--main-jar', shadowFile.name,
-                '--main-class', 'org.baseplayer.Launcher',
-                '--dest', jpackageOut.absolutePath,
-                '--java-options', '--add-opens=javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
-                '--java-options', '--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
-                '--java-options', '--add-exports=javafx.base/com.sun.javafx.event=ALL-UNNAMED',
-                '--java-options', '-Xmx4g'
+            commandLine cmd
         }
 
-        // Copy data folders into the app image root (next to bin/ and lib/)
-        copy {
-            from 'genomes'
-            into new File(appDir, 'genomes')
-        }
-        copy {
-            from 'additions'
-            into new File(appDir, 'additions')
+        File appContentDir = resolveAppContentDir(outputDir)
+        if (!appContentDir.exists()) {
+            throw new GradleException("jpackage app content directory not found: ${appContentDir.absolutePath}")
         }
 
-        // Create a wrapper launch script that sets cwd to the app directory
-        // so relative Path.of("genomes") resolves correctly
-        def launcher = new File(appDir, 'run.sh')
-        launcher.text = """\
-#!/bin/bash
-cd "\$(dirname "\$0")"
-exec bin/${appName} "\$@"
-"""
-        launcher.setExecutable(true)
+        copyBundledDataFolders(appContentDir)
 
-        println "\n✓ App image created at: ${appDir.absolutePath}"
-        println "  Run with: ${appDir.absolutePath}/run.sh"
+        if (isMacOs) {
+            File appBundle = new File(outputDir, "${packageAppName}.app")
+            println "\n✓ macOS app image created at: ${appBundle.absolutePath}"
+            println "  Run with: open ${appBundle.absolutePath}"
+        } else {
+            File appDir = new File(outputDir, packageAppName)
+            createLinuxWrapperLauncher(appDir)
+            println "\n✓ App image created at: ${appDir.absolutePath}"
+            println "  Run with: ${appDir.absolutePath}/run.sh"
+        }
+    }
+}
+
+task jpackageMacDmg(dependsOn: jpackageImage) {
+    group = 'distribution'
+    description = 'Create macOS DMG from the prepared app-image (run on macOS)'
+
+    doLast {
+        if (!isMacOs) {
+            throw new GradleException('jpackageMacDmg must be run on macOS')
+        }
+
+        File outputDir = packageOutputDirProvider.get().asFile
+        File appImage = new File(outputDir, "${packageAppName}.app")
+        if (!appImage.exists()) {
+            throw new GradleException("macOS app-image not found: ${appImage.absolutePath}")
+        }
+
+        List<String> cmd = [
+            'jpackage',
+            '--type', 'dmg',
+            '--name', packageAppName,
+            '--dest', outputDir.absolutePath,
+            '--app-image', appImage.absolutePath,
+            '--app-version', packageAppVersion,
+            '--vendor', 'BasePlayer'
+        ]
+        addMacPackagingArgs(cmd)
+
+        if (packageIconPath) {
+            File iconFile = file(packageIconPath)
+            if (iconFile.exists()) {
+                cmd.addAll(['--icon', iconFile.absolutePath])
+            }
+        }
+
+        exec {
+            commandLine cmd
+        }
+
+        println "\n✓ macOS DMG created in: ${outputDir.absolutePath}"
+    }
+}
+
+task jpackageMacPkg(dependsOn: jpackageImage) {
+    group = 'distribution'
+    description = 'Create macOS PKG from the prepared app-image (run on macOS)'
+
+    doLast {
+        if (!isMacOs) {
+            throw new GradleException('jpackageMacPkg must be run on macOS')
+        }
+
+        File outputDir = packageOutputDirProvider.get().asFile
+        File appImage = new File(outputDir, "${packageAppName}.app")
+        if (!appImage.exists()) {
+            throw new GradleException("macOS app-image not found: ${appImage.absolutePath}")
+        }
+
+        List<String> cmd = [
+            'jpackage',
+            '--type', 'pkg',
+            '--name', packageAppName,
+            '--dest', outputDir.absolutePath,
+            '--app-image', appImage.absolutePath,
+            '--app-version', packageAppVersion,
+            '--vendor', 'BasePlayer'
+        ]
+        addMacPackagingArgs(cmd)
+
+        if (packageIconPath) {
+            File iconFile = file(packageIconPath)
+            if (iconFile.exists()) {
+                cmd.addAll(['--icon', iconFile.absolutePath])
+            }
+        }
+
+        exec {
+            commandLine cmd
+        }
+
+        println "\n✓ macOS PKG created in: ${outputDir.absolutePath}"
     }
 }
