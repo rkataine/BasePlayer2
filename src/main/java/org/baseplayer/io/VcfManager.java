@@ -4,12 +4,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Collection;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
@@ -19,11 +16,14 @@ import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.services.ViewportState;
+import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantLoader;
-import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.annotation.VariantAnnotator;
 
 import javafx.application.Platform;
+import javafx.stage.Window;
 
 /**
  * Singleton manager for VCF variant files.
@@ -45,14 +45,38 @@ public class VcfManager {
     // Last loaded chromosome (to avoid redundant loads)
     private String lastLoadedChromosome;
     
-    // Cache of chromosome-level merged variant lists
-    private final Map<String, VariantList> chromosomeVariantCache = new HashMap<>();
-    
-    // Track chromosomes currently being loaded to prevent concurrent loads
-    private final Set<String> chromosomesLoading = new HashSet<>();
-    
+    // Single variant list for the currently active chromosome (cleared on chromosome change)
+    private VariantList currentVariants;
+
+    // How many VcfData objects from loadedVcfs are already in currentVariants
+    private int loadedVcfCountForCurrentChromosome = 0;
+
+    // Whether a background load is in progress
+    private boolean loading = false;
+
+    // Whether the current chromosome's variants have been annotated
+    private boolean currentAnnotated = false;
+
+    // Current active filter (pass-all by default)
+    private VariantFilter currentFilter = new VariantFilter();
+
+    // Variant manager dialog reference to avoid opening it twice
+    private boolean variantManagerOpen = false;
+
+    // One-shot callback fired on the FX thread after chromosome variants are cached
+    private Runnable onChromosomeVariantsReady;
+
+    // Callback fired when new VCF is added (for dialog refresh)
+    private Runnable onVcfAdded;
+
     // Track whether we've set up the update listener
     private boolean updateListenerInitialized = false;
+
+    // Suppresses auto variant loading during bulk sample registration
+    private boolean suppressVariantLoading = false;
+
+    // Incremented on every filter change; stale threads discard results when generation has advanced
+    private final AtomicLong filterGeneration = new AtomicLong(0);
     
     private VcfManager() {
         // Singleton
@@ -63,39 +87,48 @@ public class VcfManager {
     }
     
     /**
+     * Register a loaded VCF (used by batch loading to add VcfData to the registry).
+     * The reader should already have been opened and parsed.
+     * Returns the VcfData so the caller can manage reader lifecycle (close + null).
+     */
+    public VcfData registerLoadedVcf(VcfReader reader, VariantLoader loader, File file) {
+        VcfData vcfData = new VcfData(reader, loader, file);
+        loadedVcfs.add(vcfData);
+        initializeUpdateListener();
+        return vcfData;
+    }
+    
+    /**
      * Initialize the update listener to automatically reload variants on navigation.
      * Called once during application startup or first VCF load.
      */
     private void initializeUpdateListener() {
         if (updateListenerInitialized) return;
         updateListenerInitialized = true;
-        
-        // Listen for GenomicCanvas updates and check if we need to reload variants
-        GenomicCanvas.update.addListener((obs, oldVal, newVal) -> {
-            if (!loadedVcfs.isEmpty()) {
-                // Defer check slightly to let navigation settle
-                Platform.runLater(this::checkAndUpdateVariants);
+
+        ViewportState viewport = ServiceRegistry.getInstance().getViewportState();
+        viewport.currentChromosomeProperty().addListener((obs, oldChrom, newChrom) -> {
+            if (!loadedVcfs.isEmpty() && !suppressVariantLoading) {
+                loadChromosomeVariants(newChrom);
             }
         });
     }
     
     /**
-     * Check if the chromosome has changed and load variants if needed.
-     * Called automatically on GenomicCanvas updates.
+     * Called after all VCF samples are registered; loads variants for the current chromosome.
      */
     private void checkAndUpdateVariants() {
+        if (suppressVariantLoading) return;
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty()) return;
-        
         DrawStack firstStack = stackManager.getFirst();
-        if (firstStack.alignmentCanvas == null) return;
-        
-        String chromosome = firstStack.chromosome;
-        
-        // Only load if we've switched to a different chromosome
-        if (!chromosome.equals(lastLoadedChromosome)) {
-            loadChromosomeVariants(chromosome);
+        if (firstStack.alignmentCanvas != null) {
+            loadChromosomeVariants(firstStack.chromosome);
         }
+    }
+
+    public void setSuppressVariantLoading(boolean suppress) {
+        this.suppressVariantLoading = suppress;
     }
     
     /**
@@ -110,26 +143,33 @@ public class VcfManager {
     
     /**
      * Load a VCF file with a completion callback.
-     * This version allows sequential loading of multiple VCF files by chaining callbacks.
-     * Multiple VCF files can be loaded concurrently; variants are merged.
+     * Phase 1: Opens VCF and creates sample tracks (fast)
+     * Phase 2: Loads variants for current chromosome (slow, separate thread)
      * 
      * @param file VCF file (.vcf.gz with index)
-     * @param onComplete Callback invoked when the VCF file is fully loaded and ready
+     * @param onComplete Callback invoked when sample tracks are created (before variants load)
      */
     public void loadVcfFileWithCallback(File file, Runnable onComplete) {
+        loadVcfFileWithCallback(file, onComplete, false);
+    }
+
+    /**
+     * @param suppressUiUpdates when true, skips canvas update and variant manager open;
+     *                          caller is responsible for triggering those once all files are loaded.
+     */
+    public void loadVcfFileWithCallback(File file, Runnable onComplete, boolean suppressUiUpdates) {
         if (file == null || !file.exists()) {
             System.err.println("VCF file not found: " + file);
             if (onComplete != null) onComplete.run();
             return;
         }
         
-        ThreadRunner.get().submit("Loading VCF: " + file.getName() + "\u2026",
+        ThreadRunner.get().submit("Opening VCF: " + file.getName() + "\u2026",
             () -> {
                 try {
                     Path vcfPath = file.toPath();
                     VcfReader reader = new VcfReader(vcfPath);
                     VariantLoader loader = new VariantLoader(reader);
-                    
                     return new VcfData(reader, loader, file);
                 } catch (IOException e) {
                     System.err.println("Failed to open VCF: " + file + " - " + e.getMessage());
@@ -143,152 +183,133 @@ public class VcfManager {
                     return;
                 }
                 
-                // Add this VCF to the list (don't replace, append for multi-VCF support)
                 loadedVcfs.add(vcfData);
-                
-                // Initialize update listener on first load
                 initializeUpdateListener();
                 
-                // Create sample tracks for unmapped VCF samples
                 List<String> unmappedSamples = vcfData.loader.getUnmappedSamples();
                 if (!unmappedSamples.isEmpty()) {
                     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-                    
                     for (String sampleName : unmappedSamples) {
                         SampleTrack track = new SampleTrack(sampleName);
                         registry.getSampleTracks().add(track);
                         registry.getSampleList().add(sampleName);
                     }
-                    
-                    // Update visible range to include new samples
                     registry.setLastVisibleSample(registry.getSampleList().size() - 1);
-                    
-                    // Update the loader's mapping with the newly created tracks
                     vcfData.loader.updateMapping();
-                    
-                    // Trigger UI update to show new tracks
-                    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+                    if (!suppressUiUpdates) {
+                        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+                    }
                 }
                 
                 if (vcfData.loader.getMappedSampleCount() == 0) {
                     System.err.println("Warning: Could not create or map any VCF samples.");
                 }
+
+                // Header fully parsed; close reader and release from loader to free VCFHeader and tabix index
+                try { vcfData.reader.close(); } catch (IOException ignored) {}
+                vcfData.reader = null;
+                vcfData.loader.setVcfReader(null);
                 
                 UserPreferences.addRecentFile("VCF", file);
                 
-                // Reload cached variants to include the newly added VCF's data
-                if (lastLoadedChromosome != null) {
-                    chromosomeVariantCache.remove(lastLoadedChromosome);
-                }
-                
-                // Load variants for current chromosome to include all VCFs
-                DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-                if (!stackManager.isEmpty()) {
-                    DrawStack firstStack = stackManager.getFirst();
-                    if (firstStack.alignmentCanvas != null) {
-                        loadChromosomeVariants(firstStack.chromosome);
-                    }
-                }
-                
-                // Invoke completion callback
                 if (onComplete != null) {
                     Platform.runLater(onComplete);
                 }
             });
     }
-    
-    /**
-     * Load all variants for an entire chromosome from all loaded VCFs.
-     * Results are cached to avoid reloading the same chromosome.
-     * Variants from multiple VCFs are merged into a single VariantList.
-     * 
-     * @param chromosome Chromosome name
-     */
+
+    /** Trigger incremental variant load for the current view chromosome when a new VCF is added. */
+    void loadVariantsForCurrentView() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        if (stackManager.isEmpty()) return;
+        DrawStack firstStack = stackManager.getFirst();
+        if (firstStack.alignmentCanvas != null) {
+            currentAnnotated = false;
+            loadChromosomeVariants(firstStack.chromosome);
+        }
+    }
+
     private void loadChromosomeVariants(String chromosome) {
-        if (loadedVcfs.isEmpty()) {
-            return; // No VCFs loaded
-        }
-        
-        // Check if already loading this chromosome
-        if (chromosomesLoading.contains(chromosome)) {
-            return;
-        }
-        
-        // Check cache first
-        if (chromosomeVariantCache.containsKey(chromosome)) {
-            VariantList cachedList = chromosomeVariantCache.get(chromosome);
-            updateCanvasesWithVariants(cachedList);
+        if (loadedVcfs.isEmpty()) return;
+        if (loading) return;
+
+        if (!chromosome.equals(lastLoadedChromosome)) {
+            // Release old variant list from canvases immediately so it can be GC'd before the new one loads
+            DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
+            for (DrawStack stack : sm.getStacks()) {
+                if (stack.alignmentCanvas != null) stack.alignmentCanvas.clearVariantList();
+            }
+            currentVariants = new VariantList(chromosome);
+            loadedVcfCountForCurrentChromosome = 0;
+            currentAnnotated = false;
             lastLoadedChromosome = chromosome;
+        }
+
+        if (loadedVcfCountForCurrentChromosome >= loadedVcfs.size()) {
+            updateCanvasesWithVariants(currentVariants);
             return;
         }
-        
-        // Mark as loading
-        chromosomesLoading.add(chromosome);
-        
-        String taskDescription = loadedVcfs.size() == 1 
-            ? "Loading variants for " + chromosome 
-            : "Loading variants for " + chromosome + " from " + loadedVcfs.size() + " files";
-        
-        ThreadRunner.get().submit(taskDescription,
+
+        final int fromIndex = loadedVcfCountForCurrentChromosome;
+        final List<VcfData> vcfsToLoad = List.copyOf(loadedVcfs.subList(fromIndex, loadedVcfs.size()));
+        final VariantList mergedList = currentVariants;
+        loading = true;
+        final int vcfCountBefore = loadedVcfs.size();
+
+        String taskDesc = vcfsToLoad.size() == 1
+            ? "Loading variants for " + chromosome
+            : "Loading variants for " + chromosome + " from " + vcfsToLoad.size() + " files";
+
+        ThreadRunner.get().submit(taskDesc,
             () -> {
                 try {
-                    // Merge variants from all loaded VCFs with incremental updates
-                    return mergeVariantsFromAllVcfsWithProgress(chromosome);
-                } catch (IOException e) {
-                    System.err.println("Failed to load variants for chromosome " + chromosome + ": " + e.getMessage());
-                    e.printStackTrace();
+                    for (VcfData vcfData : vcfsToLoad) {
+                        if (Thread.currentThread().isInterrupted())
+                            throw new InterruptedException("Variant loading cancelled");
+                        try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
+                            vcfData.loader.setVcfReader(reader);
+                            vcfData.loader.streamChromosomeVariantsToList(chromosome, mergedList, null);
+                        } catch (IOException e) {
+                            System.err.println("Skipping variants for " + vcfData.file.getName() + ": " + e.getMessage());
+                        } finally {
+                            vcfData.loader.setVcfReader(null);
+                        }
+                        if (hasVisibleSamples(vcfData)) {
+                            final VariantList snapshot = mergedList;
+                            Platform.runLater(() -> {
+                                updateCanvasesWithVariants(snapshot);
+                                if (onVcfAdded != null) onVcfAdded.run();
+                            });
+                        }
+                    }
+                    return mergedList;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     return null;
                 }
             },
-            mergedVariantList -> {
-                // Always remove from loading set when done (success or failure)
-                chromosomesLoading.remove(chromosome);
-                
-                if (mergedVariantList == null) return;
-                
-                // Cache the merged results
-                chromosomeVariantCache.put(chromosome, mergedVariantList);
-                lastLoadedChromosome = chromosome;
-                
-                GenomicCanvas.update.set(!GenomicCanvas.update.get());
-            });
-    }
-    
-    /**
-     * Merge variants from all loaded VCF files for a specific chromosome,
-     * with incremental canvas updates to show progress.
-     */
-    private VariantList mergeVariantsFromAllVcfsWithProgress(String chromosome) throws IOException {
-        VariantList mergedList = new VariantList(chromosome);
-        
-        for (VcfData vcfData : loadedVcfs) {
-            // Load variants from this VCF for this chromosome
-            VariantList vcfVariants = vcfData.loader.loadChromosomeVariants(chromosome);
-            
-            if (vcfVariants == null || vcfVariants.isEmpty()) {
-                continue;
-            }
-            
-            
-            // Merge each variant from this VCF into the merged list
-            VariantNode node = vcfVariants.getFirst();
-            while (node != null) {
-                BitSet sampleIndices = node.getSamplePresence();
-                for (int i = sampleIndices.nextSetBit(0); i >= 0; i = sampleIndices.nextSetBit(i + 1)) {
-                    VariantNode.GenotypeInfo genoInfo = node.getGenotype(i);
-                    mergedList.addVariant(node.position, node.ref, node.alt, 
-                                        node.type, i, genoInfo);
+            result -> {
+                loading = false;
+                if (result == null) return;
+
+                loadedVcfCountForCurrentChromosome = loadedVcfs.size();
+
+                if (loadedVcfs.size() > vcfCountBefore) {
+                    loadChromosomeVariants(chromosome);
+                    return;
                 }
-                node = node.next;
-            }
-            
-            final VariantList partialList = mergedList;
-            javafx.application.Platform.runLater(() -> {
-                updateCanvasesWithVariants(partialList);
+
+                updateCanvasesWithVariants(result);
+                // Reset so the dialog re-annotates the full dataset (partial annotation may have run earlier)
+                currentAnnotated = false;
+                GenomicCanvas.update.set(!GenomicCanvas.update.get());
+
+                Runnable cb = onChromosomeVariantsReady;
+                if (cb != null) {
+                    onChromosomeVariantsReady = null;
+                    Platform.runLater(cb);
+                }
             });
-        }
-        
-        return mergedList;
     }
     
     /**
@@ -296,15 +317,26 @@ public class VcfManager {
      */
     private void updateCanvasesWithVariants(VariantList variantList) {
         if (variantList == null) return;
-        
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.alignmentCanvas != null) {
                 stack.alignmentCanvas.setVariantList(variantList);
-                // Trigger canvas redraw to display variants
-                Platform.runLater(() -> stack.alignmentCanvas.draw());
+                stack.alignmentCanvas.draw();
             }
         }
+    }
+
+    /** Returns true if any of this VCF's samples are currently in the visible track range. */
+    private boolean hasVisibleSamples(VcfData vcfData) {
+        SampleRegistry reg = ServiceRegistry.getInstance().getSampleRegistry();
+        int first = reg.getFirstVisibleSample();
+        int last  = reg.getLastVisibleSample();
+        List<Integer> displayed = reg.getDisplayedTrackIndices();
+        Collection<Integer> trackIndices = vcfData.loader.getTrackIndices();
+        for (int slot = first; slot <= last && slot < displayed.size(); slot++) {
+            if (trackIndices.contains(displayed.get(slot))) return true;
+        }
+        return false;
     }
     
     /**
@@ -323,15 +355,20 @@ public class VcfManager {
     public void closeCurrentVcf() {
         for (VcfData vcfData : loadedVcfs) {
             try {
-                vcfData.reader.close();
+                if (vcfData.reader != null) vcfData.reader.close();
             } catch (IOException e) {
                 System.err.println("Error closing VCF: " + e.getMessage());
             }
         }
         loadedVcfs.clear();
         lastLoadedChromosome = null;
-        chromosomeVariantCache.clear();
-        chromosomesLoading.clear();
+        currentVariants = null;
+        loadedVcfCountForCurrentChromosome = 0;
+        loading = false;
+        currentAnnotated = false;
+        currentFilter = new VariantFilter();
+        variantManagerOpen = false;
+        onChromosomeVariantsReady = null;
         
         // Clear variants from all canvases
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
@@ -367,6 +404,103 @@ public class VcfManager {
         return files;
     }
     
+    // ── Annotation and filtering API ─────────────────────────────────────────
+
+    /** Annotate all variants for the chromosome if not already done; call from a background thread. */
+    public void ensureAnnotated(String chromosome) {
+        if (currentAnnotated) return;
+        if (currentVariants == null || !chromosome.equals(lastLoadedChromosome)) return;
+
+        VariantAnnotator annotator = new VariantAnnotator(
+            ServiceRegistry.getInstance().getReferenceGenomeService());
+        annotator.annotate(currentVariants, chromosome);
+        currentAnnotated = true;
+    }
+
+    /** Returns true if variants for this chromosome have already been annotated. */
+    public boolean isAnnotated(String chromosome) {
+        return currentAnnotated && chromosome.equals(lastLoadedChromosome);
+    }
+
+    /**
+     * Apply a filter, update canvases, and cache the filter for future chromosome loads.
+     * If chromosome is provided, filter variants for that chromosome specifically.
+     * Otherwise, filters the last loaded chromosome.
+     * Safe to call from any thread.
+     */
+    public void applyFilter(VariantFilter filter, String chromosome) {
+        this.currentFilter = filter;
+        filterGeneration.incrementAndGet();
+        // The filter is applied at draw-time in VariantDrawer; just trigger a redraw.
+        Platform.runLater(() -> {
+            DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+            for (DrawStack stack : stackManager.getStacks()) {
+                if (stack.alignmentCanvas != null) stack.alignmentCanvas.draw();
+            }
+        });
+    }
+
+    /**
+     * Apply a filter to the last loaded chromosome variants.
+     * Safe to call from any thread.
+     */
+    public void applyFilter(VariantFilter filter) {
+        applyFilter(filter, lastLoadedChromosome);
+    }
+
+    /** Reset to no filter and restore the full variant list on canvases. */
+    public void clearFilter() {
+        applyFilter(new VariantFilter());
+    }
+
+    public VariantFilter getCurrentFilter() {
+        return currentFilter;
+    }
+
+    public String getLastLoadedChromosome() {
+        return lastLoadedChromosome;
+    }
+
+    public VariantList getCachedVariants(String chromosome) {
+        return chromosome.equals(lastLoadedChromosome) ? currentVariants : null;
+    }
+
+    public boolean hasLoadedVcf() {
+        return !loadedVcfs.isEmpty();
+    }
+
+    /** Register a one-shot callback invoked on the FX thread once chromosome variants are cached. */
+    public void setOnChromosomeVariantsReady(Runnable callback) {
+        this.onChromosomeVariantsReady = callback;
+    }
+
+    /** Register a callback invoked when a new VCF is added while dialog is already open. */
+    public void setOnVcfAdded(Runnable callback) {
+        this.onVcfAdded = callback;
+    }
+
+    /** Open the Variant Manager dialog; no-op if already open or no VCF loaded. */
+    public void openVariantManager(Window owner) {
+        if (loadedVcfs.isEmpty() || variantManagerOpen) return;
+        variantManagerOpen = true;
+        org.baseplayer.variant.ui.VariantManagerWindow.show(owner, this,
+            () -> variantManagerOpen = false);
+    }
+
+    /** Auto-open the Variant Manager using the window from the active DrawStack. */
+    public void autoOpenVariantManager() {
+        if (variantManagerOpen) return;
+        DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
+        if (sm.isEmpty()) return;
+        DrawStack stack = sm.getFirst();
+        if (stack.alignmentCanvas == null) return;
+        javafx.scene.Scene scene = stack.alignmentCanvas.getScene();
+        if (scene == null) return;
+        Window window = scene.getWindow();
+        if (window == null) return;
+        openVariantManager(window);
+    }
+
     /**
      * Get the first loaded VCF file, or null if none loaded.
      * Kept for backward compatibility.
@@ -386,12 +520,12 @@ public class VcfManager {
     /**
      * Helper class to bundle VCF data.
      */
-    private static class VcfData {
-        final VcfReader reader;
+    public static class VcfData {
+        public VcfReader reader; // public: closed after header parse, null thereafter
         final VariantLoader loader;
         final File file;
         
-        VcfData(VcfReader reader, VariantLoader loader, File file) {
+        public VcfData(VcfReader reader, VariantLoader loader, File file) {
             this.reader = reader;
             this.loader = loader;
             this.file = file;

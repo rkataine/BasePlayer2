@@ -1,0 +1,65 @@
+/* =============================================================================
+   BasePlayer 2 - Light Theme
+   JavaFX compatible styles (no CSS variables)
+   ============================================================================= */
+
+.root {
+    -fx-base: #f0f0f0;
+    -fx-background: #ffffff;
+    -fx-control-inner-background: #ffffff;
+    -fx-accent: #0078d4;
+    -fx-default-button: #0078d4;
+    -fx-focus-color: #0078d4;
+    -fx-faint-focus-color: #0078d433;
+    -fx-selection-bar: #cce8ff;
+    -fx-selection-bar-non-focused: #e0e0e0;
+    -fx-text-fill: #1e1e1e;
+    -fx-text-background-color: #ffffff;
+}
+
+    --color-blue-muted: #5c7a9e;
+    --color-orange: #c85424;
+    
+    /* Border colors */
+    --border-primary: #cccccc;
+    --border-secondary: #dddddd;
+    --border-subtle: #bbbbbb;
+    --border-focus: #0078d4;
+    
+    /* Hover states */
+    --hover-overlay: rgba(0, 0, 0, 0.05);
+    --hover-overlay-light: rgba(0, 0, 0, 0.03);
+    --hover-overlay-medium: rgba(0, 0, 0, 0.08);
+    --hover-bg: #e1e1e1;
+    --hover-bg-light: #eeeeee;
+    --hover-bg-dark: #c2dbf1;
+    
+    /* Table specific */
+    --table-bg-primary: #ffffff;
+    --table-bg-alternate: #f9f9f9;
+    --table-header-bg: #f3f3f3;
+    --table-border: #e0e0e0;
+    
+    /* Scrollbar */
+    --scrollbar-bg: #f5f5f5;
+    --scrollbar-thumb: #c1c1c1;
+    --scrollbar-thumb-hover: #a8a8a8;
+    
+    /* Transparent backgrounds */
+    --bg-transparent: transparent;
+    
+    /* Selection */
+    --selection-bg: rgba(0, 120, 212, 0.2);
+    --selection-bg-focused: #cce4f7;
+    
+    /* JavaFX standard color properties */
+    -fx-base: #ffffff;
+    -fx-background: #ffffff;
+    -fx-control-inner-background: #f3f3f3;
+    -fx-accent: #0078d4;
+    -fx-default-button: #0078d4;
+    -fx-focus-color: #0078d4;
+    -fx-faint-focus-color: #0078d422;
+    -fx-selection-bar: #b3d9ff;
+    -fx-selection-bar-non-focused: #e6e6e6;
+}

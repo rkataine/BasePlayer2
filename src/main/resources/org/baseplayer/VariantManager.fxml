@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<VBox xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" 
+      fx:controller="org.baseplayer.variant.ui.VariantManagerController"
+      styleClass="root-pane">
+    
+    <!-- Filter Panel with Tabs -->
+    <TabPane fx:id="filterTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="filter-tabs">
+        
+        <!-- Variant Filters Tab -->
+        <Tab text="Variant Filters">
+            <HBox spacing="20" styleClass="filter-panel">
+                <padding>
+                    <Insets top="15" right="15" bottom="15" left="15"/>
+                </padding>
+                
+                <!-- Left Panel: Quality Filters -->
+                <VBox spacing="15" HBox.hgrow="ALWAYS">
+                    <Label text="Quality Filters" styleClass="panel-title"/>
+                    <Separator/>
+                    
+                    <!-- Quality Filter Section -->
+                    <VBox spacing="8">
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <Label text="Minimum Genotype Quality (GQ)" styleClass="section-header"/>
+                            <Label fx:id="qualityValueLabel" text="0" styleClass="value-label"/>
+                        </HBox>
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <Slider fx:id="qualitySlider" min="0" max="99" value="0" 
+                                    showTickLabels="true" showTickMarks="true" 
+                                    majorTickUnit="20" minorTickCount="4"
+                                    blockIncrement="5" prefWidth="350" HBox.hgrow="ALWAYS"/>
+                            <TextField fx:id="qualityField" text="0" prefWidth="60" styleClass="filter-field"/>
+                        </HBox>
+                    </VBox>
+                    
+                    <!-- Coverage Filter Section -->
+                    <VBox spacing="8">
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <Label text="Minimum Read Depth" styleClass="section-header"/>
+                            <Label fx:id="coverageValueLabel" text="0" styleClass="value-label"/>
+                        </HBox>
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <Slider fx:id="coverageSlider" min="0" max="200" value="0" 
+                                    showTickLabels="true" showTickMarks="true" 
+                                    majorTickUnit="50" minorTickCount="4"
+                                    blockIncrement="10" prefWidth="350" HBox.hgrow="ALWAYS"/>
+                            <TextField fx:id="coverageField" text="0" prefWidth="60" styleClass="filter-field"/>
+                        </HBox>
+                    </VBox>
+                    
+                    <!-- Allele Frequency Filter Section -->
+                    <VBox spacing="8">
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <Label text="Minimum Allele Frequency" styleClass="section-header"/>
+                            <Label fx:id="alleleFreqValueLabel" text="0.0" styleClass="value-label"/>
+                        </HBox>
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <Slider fx:id="alleleFreqSlider" min="0" max="1.0" value="0" 
+                                    showTickLabels="true" showTickMarks="true" 
+                                    majorTickUnit="0.25" minorTickCount="4"
+                                    blockIncrement="0.05" prefWidth="350" HBox.hgrow="ALWAYS"/>
+                            <TextField fx:id="alleleFreqField" text="0.0" prefWidth="60" styleClass="filter-field"/>
+                        </HBox>
+                    </VBox>
+                </VBox>
+                
+                <!-- Vertical Separator -->
+                <Separator orientation="VERTICAL"/>
+                
+                <!-- Right Panel: Variant Type Filters -->
+                <VBox spacing="15" HBox.hgrow="ALWAYS">
+                    <Label text="Variant Filters" styleClass="panel-title"/>
+                    <Separator/>
+                    
+                    <!-- Variant Types Section -->
+                    <VBox spacing="10">
+                        <Label text="Variant Types" styleClass="section-header"/>
+                        <VBox spacing="8">
+                            <CheckBox fx:id="snvCheckBox" text="SNV" selected="true" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="indelCheckBox" text="Indel" selected="true" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="mnvCheckBox" text="MNV" selected="true" styleClass="filter-checkbox"/>
+                        </VBox>
+                    </VBox>
+                    
+                    <!-- Effect Categories Section -->
+                    <VBox spacing="10">
+                        <Label text="Effect Categories" styleClass="section-header"/>
+                        <VBox spacing="8">
+                            <CheckBox fx:id="codingCheckBox" text="Coding" selected="true" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="intronicCheckBox" text="Intronic" selected="true" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="intergenicCheckBox" text="Intergenic" selected="true" styleClass="filter-checkbox"/>
+                        </VBox>
+                    </VBox>
+                    
+                    <!-- Cancer Genes Filter -->
+                    <VBox spacing="10">
+                        <Label text="Special Filters" styleClass="section-header"/>
+                        <CheckBox fx:id="cancerOnlyCheckBox" text="Cancer genes only (COSMIC Census)" styleClass="filter-checkbox"/>
+                    </VBox>
+                    
+                    <!-- Action Buttons -->
+                    <HBox spacing="10" alignment="CENTER_RIGHT" VBox.vgrow="ALWAYS">
+                        <padding>
+                            <Insets top="10"/>
+                        </padding>
+                        <Button fx:id="resetFiltersButton" text="Reset All" styleClass="secondary-button" onAction="#handleResetFilters"/>
+                        <Button fx:id="applyFiltersButton" text="Apply Filters" styleClass="primary-button" onAction="#handleApplyFilters"/>
+                    </HBox>
+                </VBox>
+            </HBox>
+        </Tab>
+        
+        <!-- Sample Comparison Tab -->
+        <Tab text="Sample Comparison">
+            <VBox spacing="15" styleClass="filter-panel">
+                <padding>
+                    <Insets top="15" right="15" bottom="15" left="15"/>
+                </padding>
+                
+                <!-- Comparison Mode Section -->
+                <VBox spacing="8">
+                    <Label text="Comparison Mode" styleClass="section-header"/>
+                    <VBox spacing="5">
+                        <RadioButton fx:id="showAllSamplesRadio" text="Show all samples" selected="true" styleClass="filter-radio"/>
+                        <RadioButton fx:id="sharedVariantsRadio" text="Variants shared across all samples" styleClass="filter-radio"/>
+                        <RadioButton fx:id="uniqueVariantsRadio" text="Variants unique to selected samples" styleClass="filter-radio"/>
+                        <RadioButton fx:id="differentialRadio" text="Differential variants (present in A, absent in B)" styleClass="filter-radio"/>
+                    </VBox>
+                </VBox>
+                
+                <!-- Sample Selection Section -->
+                <VBox spacing="8">
+                    <Label text="Sample Selection" styleClass="section-header"/>
+                    <HBox spacing="15">
+                        <VBox spacing="5" HBox.hgrow="ALWAYS">
+                            <Label text="Group A (Include)" styleClass="subsection-label"/>
+                            <ListView fx:id="groupASampleList" prefHeight="150" styleClass="sample-list"/>
+                        </VBox>
+                        <VBox spacing="5" HBox.hgrow="ALWAYS">
+                            <Label text="Group B (Exclude)" styleClass="subsection-label"/>
+                            <ListView fx:id="groupBSampleList" prefHeight="150" styleClass="sample-list"/>
+                        </VBox>
+                    </HBox>
+                </VBox>
+                
+                <!-- Zygosity Filter -->
+                <VBox spacing="8">
+                    <Label text="Zygosity Filter" styleClass="section-header"/>
+                    <HBox spacing="15" alignment="CENTER_LEFT">
+                        <CheckBox fx:id="homozygousCheckBox" text="Homozygous" selected="true" styleClass="filter-checkbox"/>
+                        <CheckBox fx:id="heterozygousCheckBox" text="Heterozygous" selected="true" styleClass="filter-checkbox"/>
+                    </HBox>
+                </VBox>
+                
+                <!-- Action Buttons -->
+                <HBox spacing="10" alignment="CENTER_RIGHT">
+                    <padding>
+                        <Insets top="10"/>
+                    </padding>
+                    <Button text="Apply Comparison" styleClass="primary-button" onAction="#handleApplyComparison"/>
+                </HBox>
+            </VBox>
+        </Tab>
+        
+        <!-- Control Files Tab -->
+        <Tab text="Control Files">
+            <VBox spacing="15" styleClass="filter-panel">
+                <padding>
+                    <Insets top="15" right="15" bottom="15" left="15"/>
+                </padding>
+                
+                <!-- Population Frequency Databases -->
+                <VBox spacing="8">
+                    <Label text="Population Frequency Databases" styleClass="section-header"/>
+                    <VBox spacing="5">
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <CheckBox fx:id="filterByPopFreqCheckBox" text="Filter by population frequency" styleClass="filter-checkbox"/>
+                            <Label text="Max frequency:" styleClass="subsection-label"/>
+                            <TextField fx:id="maxPopFreqField" text="0.01" prefWidth="80" styleClass="filter-field"/>
+                        </HBox>
+                        <HBox spacing="10" alignment="CENTER_LEFT">
+                            <CheckBox fx:id="useGnomadCheckBox" text="gnomAD" selected="false" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="use1000GenomesCheckBox" text="1000 Genomes" selected="false" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="useExacCheckBox" text="ExAC" selected="false" styleClass="filter-checkbox"/>
+                        </HBox>
+                    </VBox>
+                </VBox>
+                
+                <!-- ClinVar Integration -->
+                <VBox spacing="8">
+                    <Label text="ClinVar Pathogenicity" styleClass="section-header"/>
+                    <VBox spacing="5">
+                        <CheckBox fx:id="showPathogenicCheckBox" text="Show only pathogenic/likely pathogenic variants" styleClass="filter-checkbox"/>
+                        <CheckBox fx:id="hideBenignCheckBox" text="Hide benign/likely benign variants" styleClass="filter-checkbox"/>
+                    </VBox>
+                </VBox>
+                
+                <!-- Custom Control Files -->
+                <VBox spacing="8">
+                    <Label text="Custom Control Files" styleClass="section-header"/>
+                    <TableView fx:id="controlFilesTable" prefHeight="150" styleClass="control-files-table">
+                        <columns>
+                            <TableColumn fx:id="controlFileEnabledColumn" text="Enabled" prefWidth="70"/>
+                            <TableColumn fx:id="controlFileNameColumn" text="File Name" prefWidth="250"/>
+                            <TableColumn fx:id="controlFileTypeColumn" text="Type" prefWidth="100"/>
+                            <TableColumn fx:id="controlFileActionsColumn" text="Actions" prefWidth="100"/>
+                        </columns>
+                    </TableView>
+                    <HBox spacing="10">
+                        <Button text="Add VCF" styleClass="secondary-button" onAction="#handleAddControlVcf"/>
+                        <Button text="Add BED" styleClass="secondary-button" onAction="#handleAddControlBed"/>
+                        <Button text="Remove Selected" styleClass="secondary-button" onAction="#handleRemoveControlFile"/>
+                    </HBox>
+                </VBox>
+                
+                <!-- Action Buttons -->
+                <HBox spacing="10" alignment="CENTER_RIGHT">
+                    <padding>
+                        <Insets top="10"/>
+                    </padding>
+                    <Button text="Apply Settings" styleClass="primary-button" onAction="#handleApplyControlSettings"/>
+                </HBox>
+            </VBox>
+        </Tab>
+    </TabPane>
+    
+    <!-- Results Tables TabPane -->
+    <TabPane fx:id="resultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs" VBox.vgrow="ALWAYS">
+        
+        <!-- Coding Variants Table -->
+            <Tab fx:id="codingTab" text="Coding">
+                <StackPane styleClass="table-container">
+                    <TableView fx:id="codingTable" styleClass="variant-table">
+                        <columns>
+                            <TableColumn fx:id="codingGeneColumn" text="Gene" prefWidth="130"/>
+                            <TableColumn fx:id="codingPositionColumn" text="Position" prefWidth="150"/>
+                            <TableColumn fx:id="codingRefAltColumn" text="Ref → Alt" prefWidth="90"/>
+                            <TableColumn fx:id="codingTypeColumn" text="Type" prefWidth="65"/>
+                            <TableColumn fx:id="codingEffectColumn" text="Effect" prefWidth="120"/>
+                            <TableColumn fx:id="codingAaChangeColumn" text="AA Change" prefWidth="120"/>
+                            <TableColumn fx:id="codingCodonChangeColumn" text="Codon Change" prefWidth="110"/>
+                            <TableColumn fx:id="codingSamplesColumn" text="Samples" prefWidth="70"/>
+                            <TableColumn fx:id="codingQualityColumn" text="Max GQ" prefWidth="70"/>
+                        </columns>
+                    </TableView>
+                </StackPane>
+            </Tab>
+            
+            <!-- Intronic Variants Table -->
+            <Tab fx:id="intronicTab" text="Intronic">
+                <StackPane styleClass="table-container">
+                    <TableView fx:id="intronicTable" styleClass="variant-table">
+                        <columns>
+                            <TableColumn fx:id="intronicGeneColumn" text="Gene" prefWidth="130"/>
+                            <TableColumn fx:id="intronicPositionColumn" text="Position" prefWidth="150"/>
+                            <TableColumn fx:id="intronicRefAltColumn" text="Ref → Alt" prefWidth="90"/>
+                            <TableColumn fx:id="intronicTypeColumn" text="Type" prefWidth="65"/>
+                            <TableColumn fx:id="intronicSamplesColumn" text="Samples" prefWidth="70"/>
+                            <TableColumn fx:id="intronicQualityColumn" text="Max GQ" prefWidth="70"/>
+                        </columns>
+                    </TableView>
+                </StackPane>
+            </Tab>
+            
+            <!-- Intergenic Variants Table -->
+            <Tab fx:id="intergenicTab" text="Intergenic">
+                <StackPane styleClass="table-container">
+                    <TableView fx:id="intergenicTable" styleClass="variant-table">
+                        <columns>
+                            <TableColumn fx:id="intergenicGeneColumn" text="Gene" prefWidth="130"/>
+                            <TableColumn fx:id="intergenicPositionColumn" text="Position" prefWidth="150"/>
+                            <TableColumn fx:id="intergenicRefAltColumn" text="Ref → Alt" prefWidth="90"/>
+                            <TableColumn fx:id="intergenicTypeColumn" text="Type" prefWidth="65"/>
+                            <TableColumn fx:id="intergenicSamplesColumn" text="Samples" prefWidth="70"/>
+                            <TableColumn fx:id="intergenicQualityColumn" text="Max GQ" prefWidth="70"/>
+                        </columns>
+                    </TableView>
+                </StackPane>
+            </Tab>
+    </TabPane>
+</VBox>

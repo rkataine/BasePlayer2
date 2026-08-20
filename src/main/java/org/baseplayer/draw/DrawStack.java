@@ -217,6 +217,9 @@ public class DrawStack {
     updateChromosomeSize();
     alignmentCanvas.setStartEnd(1.0, chromSize + 1);
     chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
+    
+    // Update ViewportState to trigger variant loading
+    ServiceRegistry.getInstance().getViewportState().setCurrentChromosome(selected);
   }
 
   /**
@@ -232,6 +235,9 @@ public class DrawStack {
     chromosomeDropdown.setValue(chrom);
     alignmentCanvas.setStartEnd(1.0, chromSize + 1);
     chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
+    
+    // Update ViewportState to trigger variant loading
+    ServiceRegistry.getInstance().getViewportState().setCurrentChromosome(chrom);
   }
 
   private void updateChromosomeDropdownWidthByLongestContig() {

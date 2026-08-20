@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import org.baseplayer.variant.VcfSnvIndel;
@@ -210,7 +211,39 @@ public class VcfReader implements AutoCloseable {
         
         return variants;
     }
-    
+
+    /**
+     * Stream all variants for a chromosome, yielding each record to the appropriate consumer.
+     * Avoids materialising an intermediate List – variants are processed as they are read.
+     */
+    public void iterateChromosomeVariants(String chromosome,
+            Consumer<VcfSnvIndel> snvConsumer,
+            Consumer<VcfStructuralVariant> svConsumer) throws IOException {
+        String normalizedChrom = normalizeChromosomeName(chromosome);
+        try (var iterator = reader.iterator()) {
+            boolean foundChromosome = false;
+            while (iterator.hasNext()) {
+                VariantContext ctx = iterator.next();
+                if (ctx.getContig().equals(normalizedChrom)) {
+                    foundChromosome = true;
+                    if (isStructuralVariant(ctx)) {
+                        if (svConsumer != null) {
+                            svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
+                        }
+                    } else {
+                        if (snvConsumer != null) {
+                            snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
+                        }
+                    }
+                } else if (foundChromosome) {
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed to iterate VCF: " + e.getMessage(), e);
+        }
+    }
+
     /**
      * Query structural variants in a genomic region.
      * For loading entire chromosomes, use queryStructuralVariantsForChromosome() instead.

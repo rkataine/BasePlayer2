@@ -743,13 +743,17 @@ public class MasterTrackCanvas extends GenomicCanvas {
     MenuItem vcfItem = new MenuItem("VCF");
     vcfItem.setOnAction(e -> SampleDataManager.addVcfFile());
 
+    MenuItem variantManagerItem = new MenuItem("Variant Manager…");
+    variantManagerItem.setOnAction(e ->
+        org.baseplayer.io.VcfManager.getInstance().openVariantManager(getScene().getWindow()));
+
     MenuItem bedItem = new MenuItem("BED");
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
 
     MenuItem bigwigItem = new MenuItem("BigWig");
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
 
-    menu.getItems().addAll(bamItem, vcfItem, bedItem, bigwigItem);
+    menu.getItems().addAll(bamItem, vcfItem, variantManagerItem, new SeparatorMenuItem(), bedItem, bigwigItem);
     return menu;
   }
 

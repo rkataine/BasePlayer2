@@ -2,6 +2,7 @@ package org.baseplayer.io;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -12,12 +13,15 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.features.FeatureTracksCanvas;
+import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.VariantLoader;
 
+import javafx.application.Platform;
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
 
@@ -447,40 +451,118 @@ public class SampleDataManager {
   
   /**
    * Load one or more VCF files directly without showing a chooser.
-   * Files are loaded sequentially to prevent concurrent access to shared data structures.
+   * Files are loaded sequentially in a single ThreadRunner task to prevent modal flashing.
+   * Tracks appear progressively as each file is loaded.
    * 
    * @param files List of VCF files to load
    */
   public static void addVcfFiles(List<File> files) {
     if (files == null || files.isEmpty()) return;
     
-    // Load files sequentially using a callback chain
     System.out.println("Starting sequential load of " + files.size() + " VCF file(s)");
-    loadVcfFilesSequentially(files, 0);
+    
+    // Suppress variant loading until all tracks are registered
+    VcfManager.getInstance().setSuppressVariantLoading(true);
+
+    // Single ThreadRunner task that wraps the entire batch load to prevent modal flashing
+    ThreadRunner.get().submit(
+        "Loading " + files.size() + " VCF file(s)...",
+        () -> loadVcfFilesBatch(files),
+        result -> {
+            VcfManager.getInstance().setSuppressVariantLoading(false);
+            VcfManager.getInstance().loadVariantsForCurrentView();
+            VcfManager.getInstance().autoOpenVariantManager();
+        }
+    );
   }
   
   /**
-   * Recursively load VCF files sequentially.
-   * Each file is loaded only after the previous one completes.
+   * Load all files in the batch sequentially on the background thread.
+   * Fires canvas updates after each file for progressive track appearance.
+   * Called from within a single ThreadRunner.submit() task.
+   * 
+   * Separation of concerns:
+   * - Background thread: Opens VCF, parses header, creates VariantLoader
+   * - FX thread: Creates SampleTrack objects, updates registry, fires canvas update
    */
-  private static void loadVcfFilesSequentially(List<File> files, int index) {
-    if (index >= files.size()) {
-      System.out.println("All VCF files loaded successfully");
-      return;
+  private static Void loadVcfFilesBatch(List<File> files) {
+    for (int index = 0; index < files.size(); index++) {
+      File file = files.get(index);
+      if (file == null || !file.exists()) {
+        System.err.println("Skipping missing file: " + file);
+        continue;
+      }
+      
+      try {
+        loadVcfFileSynchronously(file);
+      } catch (Exception e) {
+        System.err.println("Failed to load VCF: " + file + " - " + e.getMessage());
+        e.printStackTrace();
+      }
+
+      // Redraw every 10 files to allow the spinner to animate between bursts
+      if ((index + 1) % 10 == 0) {
+        Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+      }
     }
     
-    File file = files.get(index);
+    System.out.println("All VCF files loaded successfully");
+    return null;
+  }
+  
+  /**
+   * Load a single VCF file synchronously (on the calling thread, which is a ThreadRunner background thread).
+   * This is a blocking operation that:
+   * 1. Parses the VCF header on background thread
+   * 2. Pushes sample track registration to FX thread
+   * 3. Closes reader to free VCFHeader memory
+   * 4. Fires canvas update to progressively display tracks
+   */
+  private static void loadVcfFileSynchronously(File file) throws IOException {
     if (file == null || !file.exists()) {
-      // Skip invalid files and continue to next
-      loadVcfFilesSequentially(files, index + 1);
-      return;
+      throw new IOException("VCF file not found: " + file);
     }
     
-    final int nextIndex = index + 1;
-    // Load this file with a callback to load the next one when done
-    VcfManager.getInstance().loadVcfFileWithCallback(file, () -> {
-      loadVcfFilesSequentially(files, nextIndex);
+    Path vcfPath = file.toPath();
+    VcfReader reader = new VcfReader(vcfPath);
+    VariantLoader loader = new VariantLoader(reader);
+    
+    // Parse header and prepare sample mappings on background thread
+    List<String> unmappedSamples = loader.getUnmappedSamples();
+    int mappedSampleCount = loader.getMappedSampleCount();
+    
+    // Register the VCF in VcfManager and get the VcfData reference
+    VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
+    
+    // Now push UI updates to FX thread
+    Platform.runLater(() -> {
+      // Create SampleTrack objects and add to registry on FX thread
+      if (!unmappedSamples.isEmpty()) {
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        for (String sampleName : unmappedSamples) {
+          SampleTrack track = new SampleTrack(sampleName);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(sampleName);
+        }
+        registry.setLastVisibleSample(registry.getSampleList().size() - 1);
+        registry.setSampleHeight(0);
+        loader.updateMapping();
+      }
+
+      if (loader.getMappedSampleCount() == 0) {
+        System.err.println("Warning: Could not create or map any VCF samples from: " + file);
+      }
+      
+      // Fire canvas update to render the new track progressively
+      // (batch-level updates are fired every 10 files in loadVcfFilesBatch)
     });
+    
+    // Close reader on background thread to free VCFHeader and tabix index immediately
+    try { reader.close(); } catch (IOException ignored) {}
+    vcfData.reader = null;  // Null out reader in VcfData
+    loader.setVcfReader(null);  // Release loader's reference too
+    
+    UserPreferences.addRecentFile("VCF", file);
   }
   
   /**
@@ -491,6 +573,37 @@ public class SampleDataManager {
     UserPreferences.setLastDirectory("VCF", file.getParentFile());
     
     VcfManager.getInstance().loadVcfFile(file);
+  }
+
+  /** Remove all samples, tracks, and VCF data — restores initial empty state. */
+  public static void clearAllData() {
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+
+    for (var track : new ArrayList<>(registry.getSampleTracks())) {
+      try { track.close(); } catch (IOException e) {
+        System.err.println("Error closing track: " + e.getMessage());
+      }
+    }
+    registry.getSampleTracks().clear();
+    registry.getSampleList().clear();
+    registry.setFirstVisibleSample(0);
+    registry.setLastVisibleSample(0);
+    registry.setScrollBarPosition(0);
+
+    VcfManager.getInstance().closeCurrentVcf();
+
+    var stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+    for (var stack : stackManager.getStacks()) {
+      if (stack.featureTracksCanvas != null) {
+        for (var t : new ArrayList<>(stack.featureTracksCanvas.getTracks())) {
+          if (t instanceof BedTrack || t instanceof BigWigTrack) {
+            stack.featureTracksCanvas.removeTrack(t);
+          }
+        }
+      }
+    }
+
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 }
 

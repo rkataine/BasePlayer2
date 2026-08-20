@@ -2,6 +2,7 @@ package org.baseplayer.variant;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,24 +18,23 @@ import org.baseplayer.services.ServiceRegistry;
  */
 public class VariantLoader {
     
-    private final VcfReader vcfReader;
+    private VcfReader vcfReader; // non-final: released after header parse, set again for variant loading
     private final Map<String, Integer> vcfSampleToTrackIndex;
     private final List<String> unmappedSamples;
+    private final int totalVcfSampleCount; // cached so reader can be released after construction
     private String detectedNormalSample = null;
     
-    /**
-     * Create a variant loader.
-     * 
-     * @param vcfReader VCF reader for querying variants
-     */
     public VariantLoader(VcfReader vcfReader) {
         this.vcfReader = vcfReader;
         this.unmappedSamples = new ArrayList<>();
-        
-        // Detect somatic VCF and identify normal sample before building mapping
         detectSomaticVcf();
-        
         this.vcfSampleToTrackIndex = buildSampleMapping();
+        this.totalVcfSampleCount = vcfReader.getSampleNames().size();
+    }
+
+    /** Set a fresh reader for variant loading; set to null again when done. */
+    public void setVcfReader(VcfReader reader) {
+        this.vcfReader = reader;
     }
     
     /**
@@ -58,15 +58,19 @@ public class VariantLoader {
         String sample2Lower = sample2.toLowerCase();
         
         // Pattern 1: Explicit normal/tumor markers
-        boolean sample1IsNormal = sample1Lower.contains("normal") || sample1Lower.contains("_n_") || 
-                                 sample1Lower.contains("-n-") || sample1Lower.contains("germline");
-        boolean sample2IsNormal = sample2Lower.contains("normal") || sample2Lower.contains("_n_") || 
-                                 sample2Lower.contains("-n-") || sample2Lower.contains("germline");
+        boolean sample1IsNormal = sample1Lower.contains("normal") || sample1Lower.contains("_n_") ||
+                                 sample1Lower.contains("-n-") || sample1Lower.contains("germline") ||
+                                 sample1Lower.endsWith("_n") || sample1Lower.endsWith("-n");
+        boolean sample2IsNormal = sample2Lower.contains("normal") || sample2Lower.contains("_n_") ||
+                                 sample2Lower.contains("-n-") || sample2Lower.contains("germline") ||
+                                 sample2Lower.endsWith("_n") || sample2Lower.endsWith("-n");
         
-        boolean sample1IsTumor = sample1Lower.contains("tumor") || sample1Lower.contains("_t_") || 
-                                sample1Lower.contains("-t-") || sample1Lower.contains("somatic");
-        boolean sample2IsTumor = sample2Lower.contains("tumor") || sample2Lower.contains("_t_") || 
-                                sample2Lower.contains("-t-") || sample2Lower.contains("somatic");
+        boolean sample1IsTumor = sample1Lower.contains("tumor") || sample1Lower.contains("_t_") ||
+                                sample1Lower.contains("-t-") || sample1Lower.contains("somatic") ||
+                                sample1Lower.endsWith("_t") || sample1Lower.endsWith("-t");
+        boolean sample2IsTumor = sample2Lower.contains("tumor") || sample2Lower.contains("_t_") ||
+                                sample2Lower.contains("-t-") || sample2Lower.contains("somatic") ||
+                                sample2Lower.endsWith("_t") || sample2Lower.endsWith("-t");
         
         if (sample1IsNormal && !sample2IsNormal) {
             detectedNormalSample = sample1;
@@ -161,6 +165,47 @@ public class VariantLoader {
     }
     
     /**
+     * Stream variants for a chromosome directly into {@code target}, using a forward cursor to
+     * avoid scanning the list from head on every insertion.
+     *
+     * @param startCursor hint node to begin scanning from (null = scan from head)
+     * @return the last inserted/updated node – pass it as startCursor for the next VCF
+     */
+    public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
+            VariantNode startCursor) throws IOException {
+        VariantNode[] cursor = {startCursor};
+        vcfReader.iterateChromosomeVariants(chromosome,
+            snv -> {
+                List<String> alts = snv.getAlt();
+                for (String alt : alts) {
+                    for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
+                        VariantNode.SampleCall call = getSampleCallForAllele(
+                            snv, entry.getKey(), entry.getValue(), alt);
+                        if (call != null) {
+                            cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
+                                snv.getRef(), alt, snv.getType(), entry.getValue(), call);
+                        }
+                    }
+                }
+            },
+            sv -> {
+                List<String> alts = sv.getAlt();
+                for (String alt : alts) {
+                    for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
+                        VariantNode.SampleCall call = getSampleCallForAllele(
+                            sv, entry.getKey(), entry.getValue(), alt);
+                        if (call != null) {
+                            cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
+                                sv.getRef(), alt, sv.getType(), entry.getValue(), call);
+                        }
+                    }
+                }
+            }
+        );
+        return cursor[0];
+    }
+
+    /**
      * Load variants for a genomic region and build a VariantList.
      * @deprecated Use loadChromosomeVariants() for whole-chromosome loading
      * 
@@ -180,50 +225,49 @@ public class VariantLoader {
      * Add a variant to the VariantList with genotype information for matched samples.
      */
     private void addVariantToList(VariantList variantList, long position, String ref,
-                                  List<String> alt, VcfVariantType type, Object variant) {
-        // For each VCF sample, check if we have genotype data and a matching track
-        for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
-            String vcfSample = entry.getKey();
-            int trackIndex = entry.getValue();
-            
-            // Get genotype for this sample
-            VariantNode.GenotypeInfo genotype = getGenotypeForSample(variant, vcfSample);
-            
-            // Only add if variant is present in this sample (not 0/0 or ./.)
-            if (genotype != null) {
-                variantList.addVariant(position, ref, alt, type, trackIndex, genotype);
+                                  List<String> alts, VcfVariantType type, Object variant) {
+        for (String alt : alts) {
+            for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
+                VariantNode.SampleCall call = getSampleCallForAllele(
+                    variant, entry.getKey(), entry.getValue(), alt);
+                if (call != null) {
+                    variantList.addVariant(position, ref, alt, type, entry.getValue(), call);
+                }
             }
         }
     }
     
-    /**
-     * Extract genotype information for a specific sample from a variant.
-     * Returns null if the sample has reference genotype (0/0) or missing genotype (./.).
-     */
-    private VariantNode.GenotypeInfo getGenotypeForSample(Object variant, String sampleName) {
+    private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,
+                                                           int trackIndex, String altAllele) {
         Map<String, Object> gtMap = null;
-        
+
         if (variant instanceof VcfSnvIndel snvIndel) {
             gtMap = snvIndel.getGenotype(sampleName);
         } else if (variant instanceof VcfStructuralVariant sv) {
             gtMap = sv.getGenotype(sampleName);
         }
-        
-        if (gtMap == null) {
-            return null;
-        }
-        
-        // Check genotype type flags from htsjdk
+
+        if (gtMap == null) return null;
+
         Boolean isHomRef = (Boolean) gtMap.get("isHomRef");
         Boolean isNoCall = (Boolean) gtMap.get("isNoCall");
-        
-        // Filter out homozygous reference (e.g., C/C, G/G, or 0/0) and missing genotypes (./.)
-        if (Boolean.TRUE.equals(isHomRef) || Boolean.TRUE.equals(isNoCall)) {
-            return null;
+        if (Boolean.TRUE.equals(isHomRef) || Boolean.TRUE.equals(isNoCall)) return null;
+
+        String gt = (String) gtMap.get("GT");
+        // GT contains allele bases (e.g. "G/A"); skip if this alt is not present
+        if (gt != null && !gtContainsAlt(gt, altAllele)) return null;
+
+        double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
+        int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : -1;
+        return new VariantNode.SampleCall(trackIndex, gt, gq, dp);
+    }
+
+    /** Returns true if the GT string (allele-base form, e.g. "G/A") contains the given alt allele. */
+    private static boolean gtContainsAlt(String gt, String altAllele) {
+        for (String a : gt.split("[/|]")) {
+            if (a.equals(altAllele)) return true;
         }
-        
-        // Convert VCF genotype map to GenotypeInfo (this is a variant genotype)
-        return VariantNode.GenotypeInfo.fromMap(gtMap);
+        return false;
     }
     
     /**
@@ -237,7 +281,7 @@ public class VariantLoader {
      * Get the total number of VCF samples.
      */
     public int getTotalVcfSampleCount() {
-        return vcfReader.getSampleNames().size();
+        return totalVcfSampleCount;
     }
     
     /**
@@ -303,5 +347,10 @@ public class VariantLoader {
      */
     public Map<String, Integer> getSampleMapping() {
         return Map.copyOf(vcfSampleToTrackIndex);
+    }
+
+    /** Returns the track indices this VCF maps to (no copy — read-only view). */
+    public Collection<Integer> getTrackIndices() {
+        return vcfSampleToTrackIndex.values();
     }
 }

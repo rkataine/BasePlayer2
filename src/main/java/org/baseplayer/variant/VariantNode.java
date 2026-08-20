@@ -1,148 +1,112 @@
 package org.baseplayer.variant;
 
+import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
-/**
- * A node in a linked list of variants at a specific genomic position.
- * Memory-efficient design: one node per position, shared across all samples.
- * 
- * Uses BitSet for sample presence to minimize memory when many samples share variants.
- * For rare variants affecting few samples, the BitSet is still space-efficient.
- */
+import org.baseplayer.variant.annotation.VariantAnnotation;
+
+/** One node per unique (position, ref, alt) in the variant linked list, shared across samples. */
 public class VariantNode {
-    
-    /** Genomic position (1-based) */
+
     public final long position;
-    
-    /** Reference allele */
     public final String ref;
-    
-    /** Alternate alleles (typically 1-2, but can be more for multi-allelic sites) */
-    public final List<String> alt;
-    
-    /** Variant type (SNV, INSERTION, DELETION, etc.) */
+    /** Single alt allele; multi-allelic sites are split into separate nodes at load time. */
+    public final String alt;
     public final VcfVariantType type;
-    
-    /** Which sample track indices have this variant (set bits = present) */
-    private final BitSet samplePresence;
-    
-    /** Optional: genotype info per sample index (only populated if needed) */
-    private Map<Integer, GenotypeInfo> genotypeMap;
-    
-    /** Link to next variant node (for linked list) */
-    public VariantNode next;
-    
-    /**
-     * Compact genotype information for one sample at this variant.
-     */
-    public static class GenotypeInfo {
-        public final String gt;          // Genotype string (e.g., "0/1", "1|1")
-        public final double quality;     // Genotype quality (GQ) or -1 if not available
-        public final int depth;          // Read depth (DP) or -1 if not available
-        public final boolean isPhased;   // Whether genotype is phased (|) vs unphased (/)
-        
-        public GenotypeInfo(String gt, double quality, int depth) {
+
+    private final BitSet samplePresence;  // O(1) presence check for drawing
+    private List<SampleCall> samples;     // null until first sample added
+
+    public volatile VariantNode next;
+
+    /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
+    public VariantAnnotation annotation;
+
+    /** VCF call data for one sample at this allele. */
+    public static class SampleCall {
+        public final int trackIndex;
+        public final String gt;
+        public final double quality;
+        public final int depth;
+        public final boolean isPhased;
+
+        public SampleCall(int trackIndex, String gt, double quality, int depth) {
+            this.trackIndex = trackIndex;
             this.gt = gt;
             this.quality = quality;
             this.depth = depth;
             this.isPhased = gt != null && gt.contains("|");
         }
-        
-        public static GenotypeInfo fromMap(Map<String, Object> gtMap) {
-            if (gtMap == null) return null;
-            String gt = (String) gtMap.get("GT");
-            double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
-            int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : -1;
-            return new GenotypeInfo(gt, gq, dp);
-        }
     }
-    
-    public VariantNode(long position, String ref, List<String> alt, VcfVariantType type) {
+
+    public VariantNode(long position, String ref, String alt, VcfVariantType type) {
         this.position = position;
         this.ref = ref;
         this.alt = alt;
         this.type = type;
         this.samplePresence = new BitSet();
-        this.next = null;
     }
-    
-    /**
-     * Mark that a sample has this variant.
-     * @param sampleTrackIndex Index in the SampleRegistry's track list
-     */
-    public void addSample(int sampleTrackIndex) {
-        samplePresence.set(sampleTrackIndex);
-    }
-    
-    /**
-     * Add sample with genotype information.
-     */
-    public void addSample(int sampleTrackIndex, GenotypeInfo genotype) {
-        samplePresence.set(sampleTrackIndex);
-        if (genotype != null) {
-            if (genotypeMap == null) {
-                genotypeMap = new HashMap<>();
-            }
-            genotypeMap.put(sampleTrackIndex, genotype);
+
+    /** Mark a sample as present; call may be null if no FORMAT data is available. */
+    public void addSample(int trackIndex, SampleCall call) {
+        samplePresence.set(trackIndex);
+        if (call != null) {
+            if (samples == null) samples = new ArrayList<>();
+            samples.add(call);
         }
     }
-    
-    /**
-     * Check if a specific sample has this variant.
-     */
-    public boolean hasSample(int sampleTrackIndex) {
-        return samplePresence.get(sampleTrackIndex);
+
+    public boolean hasSample(int trackIndex) {
+        return samplePresence.get(trackIndex);
     }
-    
-    /**
-     * Get all sample indices that have this variant.
-     */
+
+    /** Returns a snapshot BitSet for drawing iteration over all present samples. */
     public BitSet getSamplePresence() {
         return (BitSet) samplePresence.clone();
     }
-    
-    /**
-     * Get genotype info for a specific sample, or null if not stored.
-     */
-    public GenotypeInfo getGenotype(int sampleTrackIndex) {
-        return genotypeMap != null ? genotypeMap.get(sampleTrackIndex) : null;
+
+    /** Returns the SampleCall for trackIndex, or null if not present or no call data stored. */
+    public SampleCall getSampleCall(int trackIndex) {
+        if (samples == null) return null;
+        for (SampleCall call : samples) {
+            if (call.trackIndex == trackIndex) return call;
+        }
+        return null;
     }
-    
-    /**
-     * Count how many samples have this variant.
-     */
+
+    /** Returns all sample calls for table/annotation iteration. */
+    public List<SampleCall> getSamples() {
+        return samples == null ? Collections.emptyList() : Collections.unmodifiableList(samples);
+    }
+
     public int getSampleCount() {
         return samplePresence.cardinality();
     }
-    
-    /**
-     * Check if this is a heterozygous variant for the given sample.
-     */
-    public boolean isHeterozygous(int sampleTrackIndex) {
-        GenotypeInfo gt = getGenotype(sampleTrackIndex);
-        if (gt == null || gt.gt == null) return false;
-        // Simple heuristic: het if GT contains both 0 and non-0 alleles
-        return gt.gt.matches(".*[01].*[/|].*[01].*") && 
-               gt.gt.contains("0") && 
-               (gt.gt.contains("1") || gt.gt.contains("2"));
+
+    public boolean isHeterozygous(int trackIndex) {
+        SampleCall call = getSampleCall(trackIndex);
+        if (call == null || call.gt == null) return false;
+        return isHetGt(call.gt);
     }
-    
-    /**
-     * Check if this is a homozygous alternate variant for the given sample.
-     */
-    public boolean isHomozygousAlt(int sampleTrackIndex) {
-        GenotypeInfo gt = getGenotype(sampleTrackIndex);
-        if (gt == null || gt.gt == null) return false;
-        // Hom alt: both alleles are non-reference (e.g., "1/1", "1|1", "2|2")
-        return gt.gt.matches("[1-9][/|][1-9]");
+
+    public boolean isHomozygousAlt(int trackIndex) {
+        SampleCall call = getSampleCall(trackIndex);
+        if (call == null || call.gt == null) return false;
+        String[] a = call.gt.split("[/|]");
+        return a.length >= 2 && a[0].equals(alt) && a[1].equals(alt);
     }
-    
+
+    /** GT uses allele bases (e.g. "G/A"); het = both alleles present and differ. */
+    public static boolean isHetGt(String gt) {
+        String[] a = gt.split("[/|]");
+        return a.length >= 2 && !a[0].equals(".") && !a[1].equals(".") && !a[0].equals(a[1]);
+    }
+
     @Override
     public String toString() {
-        return String.format("VariantNode{pos=%d, %s>%s, type=%s, samples=%d}", 
+        return String.format("VariantNode{pos=%d, %s>%s, type=%s, samples=%d}",
             position, ref, alt, type, getSampleCount());
     }
 }

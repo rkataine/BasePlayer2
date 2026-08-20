@@ -32,6 +32,8 @@
             <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open session" />
             <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save session" />
             <SeparatorMenuItem />
+            <MenuItem text="Clear all data" onAction="#clearAllData" />
+            <SeparatorMenuItem />
           <MenuItem text="Close" />
         </items>
       </Menu>
@@ -71,6 +73,11 @@
       <Button fx:id="zoomOutButton" text="−" onAction="#zoomOut" styleClass="zoom-button" />
       <Region HBox.hgrow="ALWAYS" />
       <Pane fx:id="memoryBar" prefWidth="80" prefHeight="10" styleClass="memory-bar" />
+      <Button fx:id="themeToggleButton" onAction="#toggleTheme" styleClass="icon-button" prefHeight="22.0" prefWidth="22.0" focusTraversable="false">
+        <tooltip>
+          <Tooltip text="Toggle light/dark mode" />
+        </tooltip>
+      </Button>
       <Button fx:id="minimizeButton" text=" _ " onAction="#minimizeWindow" />
       <Button fx:id="maximizeButton" text="[  ]" onAction="#maximizeWindow" />
       <Button fx:id="closeButton" text=" X " onAction="#closeWindow" />

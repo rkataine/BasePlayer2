@@ -24,7 +24,7 @@ import javafx.util.Duration;
 public class MainApp extends Application {
     public static Stage stage;
     static Scene scene;
-    public static boolean darkMode = false;
+    public static boolean darkMode = true; // Start in dark mode by default
     public static Image icon;
     private static javafx.application.HostServices hostServices;
     private SplashScreen splashScreen;
@@ -43,8 +43,8 @@ public class MainApp extends Application {
                 stage = primaryStage;
                 scene = new Scene(root);
                 scene.setFill(Color.BLACK);
-                scene.getStylesheets().add(getResource("styles.css").toExternalForm());
-                setDarkMode();       
+                // Load theme first, then application styles
+                applyTheme();
                 stage.initStyle(StageStyle.UNDECORATED);
                 stage.getIcons().add(icon);
                 stage.setTitle("BasePlayer 2");
@@ -98,11 +98,31 @@ public class MainApp extends Application {
         FXMLLoader fxmlLoader = new FXMLLoader(getResource(fxml + ".fxml"));
         return fxmlLoader.load();
     }
-    public static void setDarkMode() {        
-        if (darkMode) scene.getStylesheets().remove(getResource("darkmode.css").toExternalForm());
-        else scene.getStylesheets().add(getResource("darkmode.css").toExternalForm());
-        DrawColors.lineColor = darkMode ? DrawColors.lineColor = new Color(0.3, 0.6, 0.6, 0.5) : new Color(0.5, 0.8, 0.8, 0.5);
+    /**
+     * Apply the current theme and application styles to the scene.
+     */
+    private static void applyTheme() {
+        scene.getStylesheets().clear();
+        // Load theme first (defines CSS variables)
+        if (darkMode) {
+            scene.getStylesheets().add(getResource("theme-dark.css").toExternalForm());
+        } else {
+            scene.getStylesheets().add(getResource("theme-light.css").toExternalForm());
+        }
+        // Then load application styles that use those variables
+        scene.getStylesheets().add(getResource("application.css").toExternalForm());
+    }
+    
+    /**
+     * Toggle between dark and light mode.
+     */
+    public static void setDarkMode() {
         darkMode = !darkMode;
+        applyTheme();
+        // Update draw colors based on theme
+        DrawColors.lineColor = darkMode 
+            ? new Color(0.3, 0.6, 0.6, 0.5) 
+            : new Color(0.5, 0.8, 0.8, 0.5);
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
     public static URL getResource(String string) {

@@ -11,6 +11,7 @@ import org.baseplayer.controllers.commands.ViewCommands;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
+import org.baseplayer.MainApp;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.services.DrawStackManager;
@@ -63,11 +64,13 @@ public class MenuBarController {
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
   @FXML private Button copyPositionButton;
+  @FXML private Button themeToggleButton;
   private NavigationUndoComponent navigationUndo;
 
   // Zoom button icons for state updates
   private FontIcon zoomInIcon;
   private FontIcon zoomOutIcon;
+  private FontIcon themeToggleIcon;
   private static final Color ZOOM_IN_ACTIVE = Color.web("#709076");  // Slight green
   private static final Color ZOOM_OUT_ACTIVE = Color.web("#b68454"); // Slight orange
   private static final Color ZOOM_DISABLED = Color.web("#555555");   // Gray
@@ -104,6 +107,7 @@ public class MenuBarController {
     installPositionFieldDefocusHandler();
     navigationUndo = new NavigationUndoComponent(undoButton, redoButton);
     setupZoomButtons();
+    setupThemeToggleButton();
     refreshRecentFilesMenu();
     
     AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
@@ -431,6 +435,24 @@ public class MenuBarController {
     zoomOutButton.setGraphic(zoomOutIcon);
   }
 
+  private void setupThemeToggleButton() {
+    updateThemeIcon();
+  }
+  
+  private void updateThemeIcon() {
+    // Show sun icon in dark mode (click to get light mode)
+    // Show moon icon in light mode (click to get dark mode)
+    if (MainApp.darkMode) {
+      themeToggleIcon = new FontIcon(FontAwesomeSolid.SUN);
+    } else {
+      themeToggleIcon = new FontIcon(FontAwesomeSolid.MOON);
+    }
+    themeToggleIcon.setIconSize(14);
+    themeToggleIcon.setIconColor(Color.web("#cccccc"));
+    themeToggleButton.setText("");
+    themeToggleButton.setGraphic(themeToggleIcon);
+  }
+
   
   private void updateZoomButtonStates() {
     if (stackManager.getHoverStack() == null || zoomInIcon == null || zoomOutIcon == null) return;
@@ -582,6 +604,7 @@ public class MenuBarController {
   public void removeStack(ActionEvent event) { ViewCommands.removeStack(); }
   public void setDarkMode(ActionEvent event) { ViewCommands.toggleDarkMode(); }
   public void cleanMemory(ActionEvent event) { ViewCommands.cleanMemory(); }
+  public void clearAllData(ActionEvent event) { FileCommands.clearAllData(); }
 
   @FXML
   public void openSettings(ActionEvent event) {
@@ -624,6 +647,11 @@ public class MenuBarController {
     ViewCommands.closeWindow();
   }
   
+  @FXML
+  private void toggleTheme() {
+    MainApp.setDarkMode();
+    updateThemeIcon();
+  }
 
   
   private static int getChromOrder(String name) {

@@ -23,6 +23,7 @@ import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
+import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.draw.VariantDrawer;
 
@@ -273,7 +274,18 @@ public class AlignmentCanvas extends GenomicCanvas {
     double masterOffset = sampleRegistry.getMasterTrackHeight();
     double available    = getHeight() - masterOffset;
     if (!sampleRegistry.isSampleHeightLocked()) {
-      sampleRegistry.setSampleHeight(available / Math.max(1, sampleRegistry.getVisibleSampleCount()));
+      int visibleCount = sampleRegistry.getVisibleSampleCount();
+      double rawHeight = available / Math.max(1, visibleCount);
+      if (rawHeight < 20) {
+        // Window is too large; shrink it to what fits at the minimum height
+        int tracksFit = Math.max(1, (int) (available / 20));
+        int firstVis = sampleRegistry.getFirstVisibleSample();
+        int totalTracks = sampleRegistry.getDisplayedTrackCount();
+        sampleRegistry.setLastVisibleSample(Math.min(firstVis + tracksFit - 1, totalTracks - 1));
+        sampleRegistry.setSampleHeight(20);
+      } else {
+        sampleRegistry.setSampleHeight(rawHeight);
+      }
     }
     sampleRegistry.clampScrollBarPositionInPlace(available);
 
@@ -329,7 +341,8 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     // ── Draw variants at all zoom levels (before zoom checks) ──
     if (variantList != null && !variantList.isEmpty()) {
-      variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), masterOffset);
+      VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
+      variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), masterOffset, activeFilter);
     }
 
     // ── Beyond coverage threshold: show zoom message or sampled coverage ──

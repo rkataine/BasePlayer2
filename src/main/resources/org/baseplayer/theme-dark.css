@@ -1,0 +1,19 @@
+/* =============================================================================
+   BasePlayer 2 - Dark Theme
+   JavaFX compatible styles (no CSS variables)
+   ============================================================================= */
+
+.root {
+    -fx-base: #1e1e1e;
+    -fx-background: #1e1e1e;
+    -fx-control-inner-background: #3c3c3c;
+    -fx-accent: #0e639c;
+    -fx-default-button: #0e639c;
+    -fx-focus-color: #007acc;
+    -fx-faint-focus-color: #007acc22;
+    -fx-selection-bar: #094771;
+    -fx-selection-bar-non-focused: #37373d;
+    -fx-text-fill: #cccccc;
+    -fx-text-background-color: #1e1e1e;
+}
+

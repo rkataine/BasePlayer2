@@ -32,75 +32,114 @@ public class VariantList {
         this.endPosition = Long.MIN_VALUE;
     }
     
-    /**
-     * Add a variant to the list, maintaining sorted order by position.
-     * If a variant already exists at this position with matching ref/alt, 
-     * add the sample to that node instead of creating a new one.
-     * 
-     * @return The VariantNode that was added or updated
-     */
-    public VariantNode addVariant(long position, String ref, List<String> alt, 
+    public VariantNode addVariant(long position, String ref, String alt,
                                    VcfVariantType type, int sampleTrackIndex) {
         return addVariant(position, ref, alt, type, sampleTrackIndex, null);
     }
-    
-    /**
-     * Add a variant with genotype information.
-     */
-    public VariantNode addVariant(long position, String ref, List<String> alt, 
+
+    public VariantNode addVariant(long position, String ref, String alt,
                                    VcfVariantType type, int sampleTrackIndex,
-                                   VariantNode.GenotypeInfo genotype) {
-        // Update bounds
+                                   VariantNode.SampleCall call) {
         if (position < startPosition) startPosition = position;
         if (position > endPosition) endPosition = position;
-        
-        // Empty list case
+
         if (head == null) {
             head = new VariantNode(position, ref, alt, type);
-            head.addSample(sampleTrackIndex, genotype);
+            head.addSample(sampleTrackIndex, call);
             tail = head;
             size = 1;
             return head;
         }
-        
-        // Search for existing node or insertion point
+
         VariantNode prev = null;
         VariantNode current = head;
-        
+
         while (current != null && current.position < position) {
             prev = current;
             current = current.next;
         }
-        
-        // Check if we found an exact match (same position, ref, and alt)
-        if (current != null && current.position == position && 
+
+        if (current != null && current.position == position &&
             current.ref.equals(ref) && current.alt.equals(alt)) {
-            // Add sample to existing node
-            current.addSample(sampleTrackIndex, genotype);
+            current.addSample(sampleTrackIndex, call);
             return current;
         }
-        
-        // Create new node
+
         VariantNode newNode = new VariantNode(position, ref, alt, type);
-        newNode.addSample(sampleTrackIndex, genotype);
-        
-        // Insert at beginning
+        newNode.addSample(sampleTrackIndex, call);
+
         if (prev == null) {
             newNode.next = head;
             head = newNode;
         } else {
-            // Insert in middle or at end
             newNode.next = current;
             prev.next = newNode;
             if (current == null) {
                 tail = newNode;
             }
         }
-        
+
         size++;
         return newNode;
     }
-    
+
+    /**
+     * Like addVariant, but starts scanning from {@code cursor} instead of from the list head.
+     * Since VCF records arrive in position-sorted order, passing the previously returned node
+     * as the cursor reduces each insertion from O(n) to O(1) amortised.
+     *
+     * @param cursor last node returned by a previous call (null = start from head)
+     * @return the inserted or updated node – pass it as cursor to the next call
+     */
+    public VariantNode addVariantWithCursor(VariantNode cursor, long position, String ref,
+            String alt, VcfVariantType type, int sampleTrackIndex,
+            VariantNode.SampleCall call) {
+        if (position < startPosition) startPosition = position;
+        if (position > endPosition) endPosition = position;
+
+        if (head == null) {
+            head = new VariantNode(position, ref, alt, type);
+            head.addSample(sampleTrackIndex, call);
+            tail = head;
+            size = 1;
+            return head;
+        }
+
+        VariantNode prev;
+        VariantNode current;
+        if (cursor != null && cursor.position <= position) {
+            prev = cursor;
+            current = cursor.next;
+        } else {
+            prev = null;
+            current = head;
+        }
+
+        while (current != null && current.position < position) {
+            prev = current;
+            current = current.next;
+        }
+
+        if (current != null && current.position == position
+                && current.ref.equals(ref) && current.alt.equals(alt)) {
+            current.addSample(sampleTrackIndex, call);
+            return current;
+        }
+
+        VariantNode newNode = new VariantNode(position, ref, alt, type);
+        newNode.addSample(sampleTrackIndex, call);
+        if (prev == null) {
+            newNode.next = head;
+            head = newNode;
+        } else {
+            newNode.next = current;
+            prev.next = newNode;
+            if (current == null) tail = newNode;
+        }
+        size++;
+        return newNode;
+    }
+
     /**
      * Get the first variant node in the list.
      */

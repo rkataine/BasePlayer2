@@ -55,6 +55,13 @@ public class SampleListPanel extends SidebarContentPanel {
   private static final double TRACK_SCROLLBAR_MARGIN = 3;
   private static final double TRACK_SCROLLBAR_MIN_THUMB_HEIGHT = 18;
 
+  private static final Color TAG_BAM        = Color.web("#6699cc");
+  private static final Color TAG_BED        = Color.web("#cc9966");
+  private static final Color TAG_VCF        = Color.web("#99cc66");
+  private static final Color NAME_VISIBLE   = Color.web("#aaaaaa");
+  private static final Color NAME_DIM       = Color.web("#555555");
+  private static final Color OVERLAY_DOT    = Color.color(0.6, 0.8, 0.6);
+
   private final SampleRegistry sampleRegistry;
   private AnimationTimer scrollAnimation;
   private long scrollAnimStartNanos;
@@ -657,10 +664,11 @@ public class SampleListPanel extends SidebarContentPanel {
       // Skip rows that scrolled above the panel top
       if (sampleY + sampleRegistry.getSampleHeight() < 0) continue;
 
-      // Divider line
+      // Divider line (snap to integer Y for crisp, non-blurred rendering)
       if (sampleY >= 0) {
+        double snappedY = Math.round(sampleY);
         gc.setStroke(DrawColors.BORDER);
-        gc.strokeLine(0, sampleY, w, sampleY);
+        gc.strokeLine(0, snappedY, w, snappedY);
       }
 
       // Mirror divider line onto each alignment canvas
@@ -668,9 +676,9 @@ public class SampleListPanel extends SidebarContentPanel {
         GraphicsContext alignGc = stack.alignmentCanvas.getGraphicsContext2D();
         // The Y in the alignment canvas includes the master track offset
         double alignY = sampleRegistry.getMasterTrackHeight() + sampleY;
-        alignGc.setStroke(
-            sampleRegistry.hoverSampleProperty().get() == i ? Color.WHITE : DrawColors.BORDER);
-        alignGc.strokeLine(0, alignY, stack.alignmentCanvas.getWidth(), alignY);
+        double snappedAlignY = Math.round(alignY);
+        alignGc.setStroke(DrawColors.BORDER);
+        alignGc.strokeLine(0, snappedAlignY, stack.alignmentCanvas.getWidth(), snappedAlignY);
       }
 
       // Track name
@@ -698,27 +706,31 @@ public class SampleListPanel extends SidebarContentPanel {
 
           String tag = sf.getDataType().name();
           Color tagColor = switch (sf.getDataType()) {
-            case BAM -> Color.web("#6699cc");
-            case BED -> Color.web("#cc9966");
-            case VCF -> Color.web("#99cc66");
+            case BAM -> TAG_BAM;
+            case BED -> TAG_BED;
+            case VCF -> TAG_VCF;
           };
           double alpha = sf.visible ? 1.0 : 0.35;
-          gc.setFill(new Color(tagColor.getRed(), tagColor.getGreen(), tagColor.getBlue(), alpha));
+          gc.setFill(tagColor);
+          if (alpha != 1.0) gc.setGlobalAlpha(alpha);
           gc.fillText("[" + tag + "]", 14, fileY);
+          if (alpha != 1.0) gc.setGlobalAlpha(1.0);
 
-          Color nameColor = sf.visible ? Color.web("#aaaaaa") : Color.web("#555555");
-          if (sf.overlay)
-            nameColor = new Color(nameColor.getRed(), nameColor.getGreen(), nameColor.getBlue(), 0.7);
-          gc.setFill(nameColor);
+          gc.setFill(sf.visible ? NAME_VISIBLE : NAME_DIM);
+          if (sf.overlay) gc.setGlobalAlpha(0.7);
           gc.fillText(sf.getName(), 44, fileY);
+          if (sf.overlay) gc.setGlobalAlpha(1.0);
 
           if (sf.isSuspended()) {
-            // Greyed-out indicator — full reload button drawn below
-            gc.setFill(new Color(tagColor.getRed(), tagColor.getGreen(), tagColor.getBlue(), 0.4));
+            gc.setFill(tagColor);
+            gc.setGlobalAlpha(0.4);
             gc.fillText("[" + tag + "]", 14, fileY);
+            gc.setGlobalAlpha(1.0);
           } else if (sf.overlay) {
-            gc.setFill(new Color(0.6, 0.8, 0.6, alpha * 0.8));
+            gc.setFill(OVERLAY_DOT);
+            gc.setGlobalAlpha(alpha * 0.8);
             gc.fillText("\u25CB", 6, fileY);
+            gc.setGlobalAlpha(1.0);
           }
         }
 

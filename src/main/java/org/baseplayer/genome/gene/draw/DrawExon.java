@@ -175,6 +175,9 @@ class DrawExon {
 
     double exonY      = Math.round(rowY + GENE_LABEL_HEIGHT);
     int    frameOffset = (int) ((3 - (cdsOffset % 3)) % 3);
+    
+    // Track last drawn pixel to avoid overdraw when zoomed out
+    int lastDrawnPixelX = -1;
 
     for (int i = frameOffset; i + 2 < bases.length(); i += 3) {
       char aminoAcid = AminoAcids.translateCodon(bases.substring(i, i + 3));
@@ -191,6 +194,10 @@ class DrawExon {
       double cx1 = Math.max(0,           ((codonGenomicStart - viewStart) / viewLength) * canvasWidth);
       double cx2 = Math.min(canvasWidth, ((codonGenomicEnd   - viewStart) / viewLength) * canvasWidth);
       if (cx2 <= cx1) continue;
+      
+      int pixelX = (int) cx1;
+      if (pixelX == lastDrawnPixelX) continue;
+      lastDrawnPixelX = pixelX;
 
       gc.setFill(AminoAcids.getPropertyColor(aminoAcid));
       gc.fillRect(cx1, exonY, Math.max(1, cx2 - cx1), GENE_HEIGHT);
@@ -217,6 +224,9 @@ class DrawExon {
 
     double exonY      = Math.round(rowY + GENE_LABEL_HEIGHT);
     int    frameOffset = (int) ((3 - (cdsOffset % 3)) % 3);
+    
+    // Track last drawn pixel to avoid overdraw when zoomed out
+    int lastDrawnPixelX = -1;
 
     gc.setTextAlign(TextAlignment.CENTER);
 
@@ -241,6 +251,9 @@ class DrawExon {
       double cx2 = Math.min(canvasWidth, ((codonEnd   - viewStart) / viewLength) * canvasWidth);
 
       if (cx2 > cx1) {
+        int pixelX = (int) cx1;
+        if (pixelX == lastDrawnPixelX) continue;
+        lastDrawnPixelX = pixelX;
         double codonWidth = cx2 - cx1;
         double codonX     = cx1 + codonWidth / 2;
         double ovalHeight = GENE_HEIGHT - 2;

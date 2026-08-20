@@ -34,6 +34,10 @@ public class FileCommands {
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
+  public static void clearAllData() {
+    SampleDataManager.clearAllData();
+  }
+
   /**
    * Open a file directly from the recent-files menu.
    */
