@@ -114,19 +114,6 @@ public class VcfManager {
         });
     }
     
-    /**
-     * Called after all VCF samples are registered; loads variants for the current chromosome.
-     */
-    private void checkAndUpdateVariants() {
-        if (suppressVariantLoading) return;
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        if (stackManager.isEmpty()) return;
-        DrawStack firstStack = stackManager.getFirst();
-        if (firstStack.alignmentCanvas != null) {
-            loadChromosomeVariants(firstStack.chromosome);
-        }
-    }
-
     public void setSuppressVariantLoading(boolean suppress) {
         this.suppressVariantLoading = suppress;
     }
@@ -194,6 +181,9 @@ public class VcfManager {
                         registry.getSampleTracks().add(track);
                         registry.getSampleList().add(sampleName);
                     }
+                    if (registry.getFirstVisibleSample() < 0) {
+                        registry.setFirstVisibleSample(0);
+                    }
                     registry.setLastVisibleSample(registry.getSampleList().size() - 1);
                     vcfData.loader.updateMapping();
                     if (!suppressUiUpdates) {
@@ -252,28 +242,48 @@ public class VcfManager {
 
         final int fromIndex = loadedVcfCountForCurrentChromosome;
         final List<VcfData> vcfsToLoad = List.copyOf(loadedVcfs.subList(fromIndex, loadedVcfs.size()));
+        final List<Integer> mappedSamplesPerVcf = vcfsToLoad.stream()
+            .map(vcfData -> Math.max(1, vcfData.loader.getMappedSampleCount()))
+            .toList();
+        final int totalMappedSamples = Math.max(1,
+            mappedSamplesPerVcf.stream().mapToInt(Integer::intValue).sum());
         final VariantList mergedList = currentVariants;
         loading = true;
+        org.baseplayer.services.LoadingManager.get().setProgress(-1.0);
         final int vcfCountBefore = loadedVcfs.size();
 
-        String taskDesc = vcfsToLoad.size() == 1
-            ? "Loading variants for " + chromosome
-            : "Loading variants for " + chromosome + " from " + vcfsToLoad.size() + " files";
-
-        ThreadRunner.get().submit(taskDesc,
+        ThreadRunner.get().submit("Loading variants…",
             () -> {
                 try {
-                    for (VcfData vcfData : vcfsToLoad) {
+                    int[] completedSamples = {0};
+                    org.baseplayer.services.LoadingManager.get().setProgress(0, totalMappedSamples);
+                    for (int i = 0; i < vcfsToLoad.size(); i++) {
+                        VcfData vcfData = vcfsToLoad.get(i);
+                        int vcfSampleTotal = mappedSamplesPerVcf.get(i);
                         if (Thread.currentThread().isInterrupted())
                             throw new InterruptedException("Variant loading cancelled");
                         try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
                             vcfData.loader.setVcfReader(reader);
-                            vcfData.loader.streamChromosomeVariantsToList(chromosome, mergedList, null);
+                            // Progress callback: aggregate per-VCF sample progress into one continuous batch bar.
+                            vcfData.loader.streamChromosomeVariantsToList(chromosome, mergedList, null,
+                                (current, ignoredTotal) -> {
+                                    int boundedCurrent = Math.max(0, Math.min(vcfSampleTotal, current));
+                                    int overallCurrent = Math.min(totalMappedSamples,
+                                        completedSamples[0] + boundedCurrent);
+                                    org.baseplayer.services.LoadingManager.get()
+                                        .setProgress(overallCurrent, totalMappedSamples);
+                                });
                         } catch (IOException e) {
                             System.err.println("Skipping variants for " + vcfData.file.getName() + ": " + e.getMessage());
                         } finally {
                             vcfData.loader.setVcfReader(null);
                         }
+
+                        completedSamples[0] = Math.min(totalMappedSamples,
+                            completedSamples[0] + vcfSampleTotal);
+                        org.baseplayer.services.LoadingManager.get()
+                            .setProgress(completedSamples[0], totalMappedSamples);
+
                         if (hasVisibleSamples(vcfData)) {
                             final VariantList snapshot = mergedList;
                             Platform.runLater(() -> {
@@ -294,12 +304,15 @@ public class VcfManager {
 
                 loadedVcfCountForCurrentChromosome = loadedVcfs.size();
 
+                // If new VCFs were added during loading, schedule a reload
                 if (loadedVcfs.size() > vcfCountBefore) {
-                    loadChromosomeVariants(chromosome);
+                    Platform.runLater(() -> loadChromosomeVariants(chromosome));
                     return;
                 }
 
                 updateCanvasesWithVariants(result);
+                // Calculate density immediately after variants are loaded
+                calculateDensityOnAllCanvases();
                 // Reset so the dialog re-annotates the full dataset (partial annotation may have run earlier)
                 currentAnnotated = false;
                 GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -326,14 +339,28 @@ public class VcfManager {
         }
     }
 
+    /**
+     * Force immediate density calculation on all canvases.
+     * Called after variants are fully loaded for a chromosome.
+     */
+    private void calculateDensityOnAllCanvases() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack.alignmentCanvas != null) {
+                stack.alignmentCanvas.forceCalculateDensity();
+            }
+        }
+    }
+
     /** Returns true if any of this VCF's samples are currently in the visible track range. */
     private boolean hasVisibleSamples(VcfData vcfData) {
         SampleRegistry reg = ServiceRegistry.getInstance().getSampleRegistry();
         int first = reg.getFirstVisibleSample();
         int last  = reg.getLastVisibleSample();
+        if (first < 0 || last < 0) return false;
         List<Integer> displayed = reg.getDisplayedTrackIndices();
         Collection<Integer> trackIndices = vcfData.loader.getTrackIndices();
-        for (int slot = first; slot <= last && slot < displayed.size(); slot++) {
+        for (int slot = Math.max(0, first); slot <= last && slot < displayed.size(); slot++) {
             if (trackIndices.contains(displayed.get(slot))) return true;
         }
         return false;
@@ -365,6 +392,7 @@ public class VcfManager {
         currentVariants = null;
         loadedVcfCountForCurrentChromosome = 0;
         loading = false;
+        suppressVariantLoading = false;
         currentAnnotated = false;
         currentFilter = new VariantFilter();
         variantManagerOpen = false;

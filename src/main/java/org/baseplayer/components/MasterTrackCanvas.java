@@ -195,6 +195,7 @@ public class MasterTrackCanvas extends GenomicCanvas {
         mouseDraggedX = 0;
         mouseDragged = false;
       } else if (isControlsExpanded() && beginRangeHandleDrag(event.getX(), event.getY())) {
+        sampleRegistry.lockSampleHeight(); // prevent AlignmentCanvas from overriding visible range during drag
         mouseDragged = false;
       } else {
         // Header body: clicks are allowed, drag-navigation is intentionally disabled.
@@ -223,6 +224,9 @@ public class MasterTrackCanvas extends GenomicCanvas {
       if (isDraggingResize) {
         isDraggingResize = false;
         reactiveCanvas.setCursor(Cursor.DEFAULT);
+      }
+      if (draggingRangeStart || draggingRangeEnd || pendingSingleHandleResolve) {
+        sampleRegistry.unlockSampleHeight();
       }
       draggingRangeStart = false;
       draggingRangeEnd = false;
@@ -267,6 +271,12 @@ public class MasterTrackCanvas extends GenomicCanvas {
     if (w <= 0 || h <= 0) return;
 
     int trackCount = sampleRegistry.getDisplayedTrackCount();
+
+    // Empty state: collapse controls so stale visible-range slider is never shown.
+    if (trackCount <= 0 && isControlsExpanded()) {
+      sampleRegistry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
+      h = getHeight();
+    }
 
     if (trackCount > 1 && !isControlsExpanded()) {
       sampleRegistry.setMasterTrackHeight(EXPANDED_MASTER_HEIGHT);
@@ -318,6 +328,10 @@ public class MasterTrackCanvas extends GenomicCanvas {
 
     int trackCount = sampleRegistry.getDisplayedTrackCount();
     if (trackCount <= 0) {
+      gc.setFill(Color.web("#202327"));
+      gc.fillRect(0, headerBarH, w, Math.max(0, h - headerBarH));
+      gc.setStroke(Color.web("#3e444d"));
+      gc.strokeLine(0, headerBarH, w, headerBarH);
       rangeStartHandleHit = null;
       rangeEndHandleHit = null;
       rangeLabelHit = null;
@@ -677,9 +691,10 @@ public class MasterTrackCanvas extends GenomicCanvas {
   private void applyVisibleRange(int first, int last) {
     int trackCount = sampleRegistry.getDisplayedTrackCount();
     if (trackCount <= 0) {
-      sampleRegistry.setFirstVisibleSample(0);
-      sampleRegistry.setLastVisibleSample(0);
+      sampleRegistry.setFirstVisibleSample(-1);
+      sampleRegistry.setLastVisibleSample(-1);
       sampleRegistry.setScrollBarPosition(0);
+      sampleRegistry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
       update.set(!update.get());
       return;
     }

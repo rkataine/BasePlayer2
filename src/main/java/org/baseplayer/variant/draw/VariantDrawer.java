@@ -36,6 +36,14 @@ public class VariantDrawer {
     private static final Color COLOR_COMPLEX = Color.web("#B8E986");       // Light green
     private static final Color COLOR_LOW_QUALITY = Color.web("#666666", 0.3); // Gray semi-transparent
     
+    // SV colors (match master track)
+    private static final Color COLOR_SV_DELETION = Color.web("#00cc44");      // Green
+    private static final Color COLOR_SV_INVERSION = Color.web("#4488ff");     // Blue
+    private static final Color COLOR_SV_DUPLICATION = Color.web("#c0c0d0");   // Grayish white
+    private static final Color COLOR_SV_INSERTION = Color.web("#33cc66");     // Light green
+    private static final Color COLOR_SV_TRANSLOCATION = Color.web("#ffdd00"); // Yellow
+    private static final Color COLOR_SV_BREAKEND = Color.web("#ffdd00");      // Yellow
+    
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;
     
@@ -102,9 +110,14 @@ public class VariantDrawer {
         long screenStart = Math.max(0, (long) drawStack.start);
         long screenEnd = (long) drawStack.end;
         
-        VariantNode node = variantList.findFirstAfter(screenStart);
+        // For SVs with spans, we need to start earlier to catch variants that start before
+        // the screen but span into it. Use a generous lookback (e.g., 10x view length).
+        long lookbackDistance = Math.min(screenStart, (screenEnd - screenStart) * 10);
+        long searchStart = screenStart - lookbackDistance;
         
-        // Draw variants in screen range
+        VariantNode node = variantList.findFirstAfter(searchStart);
+        
+        // Draw variants in screen range (or spanning into it)
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
         
@@ -117,8 +130,14 @@ public class VariantDrawer {
         while (node != null && node.position <= screenEnd) {
             double x = chromPosToScreenPos.apply((double) node.position);
             
-            // Skip if off-screen horizontally
-            if (x >= 0 && x <= canvasWidth) {
+            // For SVs with spans, check if span overlaps screen even if start is off-screen
+            boolean isVisible = (x >= 0 && x <= canvasWidth);
+            if (!isVisible && isSvWithSpan(node)) {
+                // Check if SV span overlaps the screen
+                isVisible = node.svEnd >= screenStart && node.position <= screenEnd;
+            }
+            
+            if (isVisible) {
                 int xPixel = (int) x;
                 
                 for (int i = 0; i < visibleTrackIndices.length; i++) {
@@ -130,7 +149,14 @@ public class VariantDrawer {
                         if (xPixel == lastDrawnPixelX[i]) continue;
                         
                         double y = yPositions[i];
-                        drawVariantLine(gc, node, trackIndex, x, y, sampleHeight);
+                        
+                        // Check if this is an SV with a span
+                        if (isSvWithSpan(node)) {
+                            drawSvSpan(gc, node, trackIndex, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
+                        } else {
+                            drawVariantLine(gc, node, trackIndex, x, y, sampleHeight);
+                        }
+                        
                         lastDrawnPixelX[i] = xPixel;
                     }
                 }
@@ -172,6 +198,55 @@ public class VariantDrawer {
     }
     
     /**
+     * Check if this variant is an SV with a defined span (has svEnd).
+     */
+    private boolean isSvWithSpan(VariantNode variant) {
+        return variant.svEnd > variant.position && 
+               (variant.type == VcfVariantType.SV_DELETION ||
+                variant.type == VcfVariantType.SV_DUPLICATION ||
+                variant.type == VcfVariantType.SV_INVERSION ||
+                variant.type == VcfVariantType.SV_INSERTION);
+    }
+    
+    /**
+     * Draw an SV span as a rectangle spanning start to end positions.
+     */
+    private void drawSvSpan(GraphicsContext gc, VariantNode variant, int sampleTrackIndex,
+                           Function<Double, Double> chromPosToScreenPos, double canvasWidth,
+                           double startX, double y, double sampleHeight) {
+        VariantNode.SampleCall call = variant.getSampleCall(sampleTrackIndex);
+        Color baseColor = getVariantColor(variant.type);
+        double opacity = 0.7;  // Slightly transparent for overlapping spans
+
+        if (call != null) {
+            if (call.gt != null && VariantNode.isHetGt(call.gt)) opacity = 0.5;
+            if (call.quality >= 0 && call.quality < MIN_QUALITY_FULL_OPACITY) {
+                opacity *= (call.quality / MIN_QUALITY_FULL_OPACITY);
+            }
+        }
+
+        // Calculate end position
+        double endX = chromPosToScreenPos.apply((double) variant.svEnd);
+        
+        // Clamp to canvas bounds
+        double x1 = Math.max(0, startX);
+        double x2 = Math.min(canvasWidth, endX);
+        double width = x2 - x1;
+        
+        // Ensure minimum visibility (1 pixel)
+        if (width < 1) width = 1;
+        
+        // Draw span as filled rectangle
+        gc.setFill(baseColor);
+        if (opacity != 1.0) gc.setGlobalAlpha(opacity);
+        
+        double rectHeight = sampleHeight >= 4 ? sampleHeight - 1 : sampleHeight;
+        gc.fillRect(x1, y, width, rectHeight);
+        
+        if (opacity != 1.0) gc.setGlobalAlpha(1.0);
+    }
+    
+    /**
      * Get color for a variant type.
      */
     private Color getVariantColor(VcfVariantType type) {
@@ -185,6 +260,22 @@ public class VariantDrawer {
             case MNV:
                 return COLOR_MNV;
             case COMPLEX:
+                return COLOR_COMPLEX;
+            
+            // SV colors
+            case SV_DELETION:
+                return COLOR_SV_DELETION;
+            case SV_INVERSION:
+                return COLOR_SV_INVERSION;
+            case SV_DUPLICATION:
+                return COLOR_SV_DUPLICATION;
+            case SV_INSERTION:
+                return COLOR_SV_INSERTION;
+            case SV_TRANSLOCATION:
+                return COLOR_SV_TRANSLOCATION;
+            case SV_BREAKEND:
+                return COLOR_SV_BREAKEND;
+            
             default:
                 return COLOR_COMPLEX;
         }

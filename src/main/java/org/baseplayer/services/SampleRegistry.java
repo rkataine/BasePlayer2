@@ -37,8 +37,8 @@ public class SampleRegistry {
     private final IntegerProperty hoverSample = new SimpleIntegerProperty(-1);
     
     // Visible sample range in the viewport
-    private int firstVisibleSample = 0;
-    private int lastVisibleSample = 0;
+    private int firstVisibleSample = -1;
+    private int lastVisibleSample = -1;
     
     // UI layout state
     private double scrollBarPosition = 0;
@@ -84,6 +84,10 @@ public class SampleRegistry {
     public void clearSampleTracks() {
         sampleTracks.clear();
         sampleList.clear();
+        firstVisibleSample = -1;
+        lastVisibleSample = -1;
+        scrollBarPosition = 0;
+        hoverSample.set(-1);
     }
     
     // ── Sample List (Legacy) ───────────────────────────────────────────────
@@ -129,10 +133,17 @@ public class SampleRegistry {
     
     /**
      * Set the first visible sample index.
+     * Use -1 to indicate no samples are visible (empty state).
      */
     public void setFirstVisibleSample(int index) {
-        int max = Math.max(0, getDisplayedTrackCount() - 1);
-        int newFirst = Math.max(0, Math.min(max, index));
+        // Allow -1 for empty state, otherwise clamp to valid range
+        int newFirst;
+        if (index == -1) {
+            newFirst = -1;
+        } else {
+            int max = Math.max(0, getDisplayedTrackCount() - 1);
+            newFirst = Math.max(0, Math.min(max, index));
+        }
         
         // Notify variant index to rebuild whenever the range changes
         if (newFirst != this.firstVisibleSample) {
@@ -151,10 +162,17 @@ public class SampleRegistry {
     
     /**
      * Set the last visible sample index.
+     * Use -1 to indicate no samples are visible (empty state).
      */
     public void setLastVisibleSample(int index) {
-        int max = Math.max(0, getDisplayedTrackCount() - 1);
-        int newLast = Math.max(0, Math.min(max, index));
+        // Allow -1 for empty state, otherwise clamp to valid range
+        int newLast;
+        if (index == -1) {
+            newLast = -1;
+        } else {
+            int max = Math.max(0, getDisplayedTrackCount() - 1);
+            newLast = Math.max(0, Math.min(max, index));
+        }
         
         // Notify variant index to rebuild whenever the range changes
         if (newLast != this.lastVisibleSample) {
@@ -168,6 +186,10 @@ public class SampleRegistry {
      * Get the number of currently visible samples.
      */
     public int getVisibleSampleCount() {
+        // Return 0 if in empty state (-1 to -1)
+        if (firstVisibleSample < 0 || lastVisibleSample < 0) {
+            return 0;
+        }
         return Math.max(0, lastVisibleSample - firstVisibleSample + 1);
     }
     
@@ -270,8 +292,8 @@ public class SampleRegistry {
 
         int displayed = getDisplayedTrackCount();
         if (displayed <= 0) {
-            firstVisibleSample = 0;
-            lastVisibleSample = 0;
+            firstVisibleSample = -1;
+            lastVisibleSample = -1;
             scrollBarPosition = 0;
             notifyVariantIndexDirty();
             return;

@@ -27,9 +27,11 @@ public class VariantLoader {
     public VariantLoader(VcfReader vcfReader) {
         this.vcfReader = vcfReader;
         this.unmappedSamples = new ArrayList<>();
+        // System.err.println("[VariantLoader] Created with " + vcfReader.getSampleNames().size() + " samples");
         detectSomaticVcf();
         this.vcfSampleToTrackIndex = buildSampleMapping();
         this.totalVcfSampleCount = vcfReader.getSampleNames().size();
+        // System.err.println("[VariantLoader] Sample mapping: " + vcfSampleToTrackIndex);
     }
 
     /** Set a fresh reader for variant loading; set to null again when done. */
@@ -44,9 +46,11 @@ public class VariantLoader {
      */
     private void detectSomaticVcf() {
         List<String> vcfSamples = vcfReader.getSampleNames();
+        // System.err.println("[VariantLoader.detectSomaticVcf] Checking " + vcfSamples.size() + " samples: " + vcfSamples);
         
         // Only check if we have exactly 2 samples (typical for somatic calling)
         if (vcfSamples.size() != 2) {
+            // System.err.println("[VariantLoader.detectSomaticVcf] Not exactly 2 samples, skipping somatic detection");
             return;
         }
         
@@ -72,15 +76,24 @@ public class VariantLoader {
                                 sample2Lower.contains("-t-") || sample2Lower.contains("somatic") ||
                                 sample2Lower.endsWith("_t") || sample2Lower.endsWith("-t");
         
+        // System.err.println("[VariantLoader.detectSomaticVcf] Sample1: " + sample1 + " (isNormal=" + sample1IsNormal + ", isTumor=" + sample1IsTumor + ")");
+        // System.err.println("[VariantLoader.detectSomaticVcf] Sample2: " + sample2 + " (isNormal=" + sample2IsNormal + ", isTumor=" + sample2IsTumor + ")");
+        
         if (sample1IsNormal && !sample2IsNormal) {
             detectedNormalSample = sample1;
+            // System.err.println("[VariantLoader.detectSomaticVcf] Detected normal sample: " + detectedNormalSample);
         } else if (sample2IsNormal && !sample1IsNormal) {
             detectedNormalSample = sample2;
+            // System.err.println("[VariantLoader.detectSomaticVcf] Detected normal sample: " + detectedNormalSample);
         } else if (sample1IsTumor && !sample2IsTumor) {
             // If only one is explicitly marked as tumor, the other is probably normal
             detectedNormalSample = sample2;
+            // System.err.println("[VariantLoader.detectSomaticVcf] Detected normal sample (by tumor exclusion): " + detectedNormalSample);
         } else if (sample2IsTumor && !sample1IsTumor) {
             detectedNormalSample = sample1;
+            // System.err.println("[VariantLoader.detectSomaticVcf] Detected normal sample (by tumor exclusion): " + detectedNormalSample);
+        } else {
+            // System.err.println("[VariantLoader.detectSomaticVcf] Could not identify normal/tumor - treating as non-somatic");
         }
     }
     
@@ -91,13 +104,17 @@ public class VariantLoader {
      * Automatically excludes detected normal samples in somatic VCFs.
      */
     private Map<String, Integer> buildSampleMapping() {
+        // System.err.println("[VariantLoader.buildSampleMapping] Building sample mapping (normal=" + detectedNormalSample + ")");
         Map<String, Integer> mapping = new HashMap<>();
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
         List<String> vcfSamples = vcfReader.getSampleNames();
+        // System.err.println("[VariantLoader.buildSampleMapping] VCF samples: " + vcfSamples);
+        // System.err.println("[VariantLoader.buildSampleMapping] Registry tracks: " + registry.getSampleTracks().size());
         
         for (String vcfSample : vcfSamples) {
             // Skip normal sample in somatic VCF
             if (detectedNormalSample != null && vcfSample.equals(detectedNormalSample)) {
+                // System.err.println("[VariantLoader.buildSampleMapping] Skipping normal sample: " + vcfSample);
                 continue;
             }
             
@@ -111,6 +128,7 @@ public class VariantLoader {
                 // Match by exact name or if track name contains VCF sample name
                 if (trackName.equals(vcfSample) || trackName.contains(vcfSample)) {
                     mapping.put(vcfSample, i);
+                    // System.err.println("[VariantLoader.buildSampleMapping] Mapped '" + vcfSample + "' -> track index " + i + " (track name: " + trackName + ")");
                     found = true;
                     break;
                 }
@@ -119,6 +137,7 @@ public class VariantLoader {
                 for (var sample : track.getSamples()) {
                     if (sample.getName().equals(vcfSample) || sample.getName().contains(vcfSample)) {
                         mapping.put(vcfSample, i);
+                        // System.err.println("[VariantLoader.buildSampleMapping] Mapped '" + vcfSample + "' -> track index " + i + " (sample name in track: " + sample.getName() + ")");
                         found = true;
                         break;
                     }
@@ -130,9 +149,11 @@ public class VariantLoader {
             // Track unmapped samples (but not the skipped normal)
             if (!found) {
                 unmappedSamples.add(vcfSample);
+                // System.err.println("[VariantLoader.buildSampleMapping] Unmapped sample: " + vcfSample);
             }
         }
         
+        // System.err.println("[VariantLoader.buildSampleMapping] Final mapping: " + mapping);
         return mapping;
     }
     
@@ -167,13 +188,47 @@ public class VariantLoader {
     /**
      * Stream variants for a chromosome directly into {@code target}, using a forward cursor to
      * avoid scanning the list from head on every insertion.
+     * Convenience overload without progress callback.
      *
      * @param startCursor hint node to begin scanning from (null = scan from head)
      * @return the last inserted/updated node – pass it as startCursor for the next VCF
      */
     public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
             VariantNode startCursor) throws IOException {
+        return streamChromosomeVariantsToList(chromosome, target, startCursor, null);
+    }
+
+    /**
+     * Stream variants for a chromosome directly into {@code target}, using a forward cursor to
+     * avoid scanning the list from head on every insertion.
+     *
+     * @param startCursor hint node to begin scanning from (null = scan from head)
+     * @param onProgress optional callback called with (currentCount, totalSamples) as variants are processed
+     * @return the last inserted/updated node – pass it as startCursor for the next VCF
+     */
+    public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
+            VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress) throws IOException {
+        // System.err.println("[VariantLoader.streamChromosomeVariantsToList] Loading variants for chromosome: " + chromosome);
+        // System.err.println("[VariantLoader.streamChromosomeVariantsToList] Sample mapping: " + vcfSampleToTrackIndex);
+        
         VariantNode[] cursor = {startCursor};
+        int[] svProcessed = {0};
+        java.util.Set<Integer> samplesWithVariants = new java.util.HashSet<>();
+        int[] variantCount = {0};  // Count all variants processed for real-time progress feedback
+        int[] lastProgressCount = {0};
+        int[] maxTrackRankSeen = {0};
+        // Use per-VCF mapped sample count so progress is independent of UI filter/visibility state.
+        int totalSamples = Math.max(1, getMappedSampleCount());
+        java.util.Map<Integer, Integer> progressRankByTrackIndex = new java.util.HashMap<>();
+        int rank = 1;
+        for (Integer trackIndex : new java.util.TreeSet<>(vcfSampleToTrackIndex.values())) {
+            progressRankByTrackIndex.put(trackIndex, rank++);
+        }
+
+        if (onProgress != null) {
+            onProgress.accept(0, totalSamples);
+        }
+        
         vcfReader.iterateChromosomeVariants(chromosome,
             snv -> {
                 List<String> alts = snv.getAlt();
@@ -182,26 +237,97 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             snv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
+                            int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
-                                snv.getRef(), alt, snv.getType(), entry.getValue(), call);
+                                snv.getRef(), alt, snv.getType(), trackIdx, call);
+                            variantCount[0]++;
+                            
+                            // Update highest mapped track rank seen for continuous progress
+                            Integer mappedRank = progressRankByTrackIndex.get(trackIdx);
+                            if (mappedRank != null && mappedRank > maxTrackRankSeen[0]) {
+                                maxTrackRankSeen[0] = mappedRank;
+                            }
+                            
+                            // Track unique samples and report progress frequently for UI feedback
+                            if (samplesWithVariants.add(trackIdx)) {
+                                int count = samplesWithVariants.size();
+                                if (onProgress != null) {
+                                // Report every sample, or at least every 10 samples for large datasets
+                                if (totalSamples <= 100 || count == 1 || count % 10 == 0 || count == totalSamples) {
+                                    onProgress.accept(count, totalSamples);
+                                    lastProgressCount[0] = count;
+                                }
+                                }
+                            }
+                            // Also report progress based on track scanning for continuous activity
+                            else if (onProgress != null && variantCount[0] % 50 == 0) {
+                                int progressValue = Math.min(maxTrackRankSeen[0], totalSamples);
+                                if (progressValue > lastProgressCount[0]) {
+                                    onProgress.accept(progressValue, totalSamples);
+                                    lastProgressCount[0] = progressValue;
+                                }
+                            }
                         }
                     }
                 }
             },
             sv -> {
+                svProcessed[0]++;
+                // System.err.println("[VariantLoader.streamChromosomeVariantsToList] Processing SV #" + svProcessed[0] + ": pos=" + sv.getPosition() + ", type=" + sv.getType() + ", end=" + sv.getEnd());
+                
                 List<String> alts = sv.getAlt();
+                // System.err.println("[VariantLoader.streamChromosomeVariantsToList]   Alts: " + alts);
+                Long svEnd = sv.getEnd();
                 for (String alt : alts) {
+                    // System.err.println("[VariantLoader.streamChromosomeVariantsToList]   Processing alt: " + alt);
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
+                        // System.err.println("[VariantLoader.streamChromosomeVariantsToList]     Checking sample '" + entry.getKey() + "' (track " + entry.getValue() + ")");
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             sv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
+                            int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
-                                sv.getRef(), alt, sv.getType(), entry.getValue(), call);
+                                sv.getRef(), alt, sv.getType(), trackIdx, call);
+                            if (svEnd != null && cursor[0].svEnd < 0) cursor[0].svEnd = svEnd;
+                            variantCount[0]++;
+                            
+                            // Update highest mapped track rank seen for continuous progress
+                            Integer mappedRank = progressRankByTrackIndex.get(trackIdx);
+                            if (mappedRank != null && mappedRank > maxTrackRankSeen[0]) {
+                                maxTrackRankSeen[0] = mappedRank;
+                            }
+                            
+                            // Track unique samples and report progress frequently for UI feedback
+                            if (samplesWithVariants.add(trackIdx)) {
+                                int count = samplesWithVariants.size();
+                                if (onProgress != null) {
+                                // Report every sample, or at least every 10 samples for large datasets
+                                if (totalSamples <= 100 || count == 1 || count % 10 == 0 || count == totalSamples) {
+                                    onProgress.accept(count, totalSamples);
+                                    lastProgressCount[0] = count;
+                                }
+                                }
+                            }
+                            // Also report progress based on track scanning for continuous activity
+                            else if (onProgress != null && variantCount[0] % 50 == 0) {
+                                int progressValue = Math.min(maxTrackRankSeen[0], totalSamples);
+                                if (progressValue > lastProgressCount[0]) {
+                                    onProgress.accept(progressValue, totalSamples);
+                                    lastProgressCount[0] = progressValue;
+                                }
+                            }
+                        } else {
+                            // System.err.println("[VariantLoader.streamChromosomeVariantsToList]     Skipped (getSampleCallForAllele returned null)");
                         }
                     }
                 }
             }
         );
+        // System.err.println("[VariantLoader.streamChromosomeVariantsToList] Processed " + svProcessed[0] + " structural variants");
+        // Final progress update: force completion for deterministic bar finish.
+        if (onProgress != null && lastProgressCount[0] < totalSamples) {
+            onProgress.accept(totalSamples, totalSamples);
+        }
         return cursor[0];
     }
 
@@ -226,12 +352,15 @@ public class VariantLoader {
      */
     private void addVariantToList(VariantList variantList, long position, String ref,
                                   List<String> alts, VcfVariantType type, Object variant) {
+        Long svEndPos = (variant instanceof VcfStructuralVariant sv && sv.getEnd() != null)
+            ? sv.getEnd() : null;
         for (String alt : alts) {
             for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                 VariantNode.SampleCall call = getSampleCallForAllele(
                     variant, entry.getKey(), entry.getValue(), alt);
                 if (call != null) {
-                    variantList.addVariant(position, ref, alt, type, entry.getValue(), call);
+                    VariantNode node = variantList.addVariant(position, ref, alt, type, entry.getValue(), call);
+                    if (svEndPos != null && node.svEnd < 0) node.svEnd = svEndPos;
                 }
             }
         }
@@ -247,26 +376,82 @@ public class VariantLoader {
             gtMap = sv.getGenotype(sampleName);
         }
 
-        if (gtMap == null) return null;
+        if (gtMap == null) {
+            // System.err.println("[VariantLoader.getSampleCallForAllele] No genotype map for sample '" + sampleName + "', alt=" + altAllele);
+            return null;
+        }
 
         Boolean isHomRef = (Boolean) gtMap.get("isHomRef");
         Boolean isNoCall = (Boolean) gtMap.get("isNoCall");
-        if (Boolean.TRUE.equals(isHomRef) || Boolean.TRUE.equals(isNoCall)) return null;
+        
+        // Skip if HomRef or NoCall
+        if (Boolean.TRUE.equals(isNoCall)) {
+            // System.err.println("[VariantLoader.getSampleCallForAllele] Sample '" + sampleName + "' is NoCall");
+            return null;
+        }
+        
+        if (Boolean.TRUE.equals(isHomRef)) {
+            // System.err.println("[VariantLoader.getSampleCallForAllele] Sample '" + sampleName + "' is HomRef");
+            return null;
+        }
 
         String gt = (String) gtMap.get("GT");
-        // GT contains allele bases (e.g. "G/A"); skip if this alt is not present
-        if (gt != null && !gtContainsAlt(gt, altAllele)) return null;
+        // System.err.println("[VariantLoader.getSampleCallForAllele] Sample '" + sampleName + "', GT=" + gt + ", altAllele=" + altAllele);
+        
+        // For SV breakends with GT=NA, accept them as present (NA = variant found)
+        if ("NA".equalsIgnoreCase(gt)) {
+            // System.err.println("[VariantLoader.getSampleCallForAllele]   GT=NA (breakend with no explicit genotype) -> ACCEPT");
+            double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
+            int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : -1;
+            // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp);
+            return new VariantNode.SampleCall(trackIndex, gt, gq, dp);
+        }
+        
+        // GT contains allele bases (e.g. "G/A") or indices (e.g. "0/1"); skip if this alt is not present
+        if (gt != null && !gtContainsAlt(gt, altAllele)) {
+            // System.err.println("[VariantLoader.getSampleCallForAllele]   Alt not in GT, skipping");
+            return null;
+        }
 
         double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
         int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : -1;
+        // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp);
         return new VariantNode.SampleCall(trackIndex, gt, gq, dp);
     }
 
     /** Returns true if the GT string (allele-base form, e.g. "G/A") contains the given alt allele. */
     private static boolean gtContainsAlt(String gt, String altAllele) {
-        for (String a : gt.split("[/|]")) {
-            if (a.equals(altAllele)) return true;
+        // System.err.println("[VariantLoader.gtContainsAlt] Checking if GT=" + gt + " contains altAllele=" + altAllele);
+        
+        // Handle NA/missing GT - for SVs, assume present if NA
+        if (gt == null || "NA".equalsIgnoreCase(gt) || gt.equals(".") || gt.equals("./.")) {
+            boolean isSvAlt = (altAllele != null && 
+                (altAllele.startsWith("<") || altAllele.contains("[") || altAllele.contains("]")));
+            if (isSvAlt) {
+                // System.err.println("[VariantLoader.gtContainsAlt]   SV with NA/missing GT -> PRESENT");
+                return true;
+            }
+            // System.err.println("[VariantLoader.gtContainsAlt]   Non-SV with NA/missing GT -> ABSENT");
+            return false;
         }
+        
+        // For symbolic alleles (e.g., <DEL>) or breakends (e.g., C[chr6:123[), GT is in numeric form (0/1, 1/1, etc.)
+        if (altAllele != null && (altAllele.startsWith("<") || altAllele.contains("[") || altAllele.contains("]"))) {
+            // SV/Breakend - GT should be in numeric form
+            // Any non-homozygous-ref GT means variant is present
+            boolean hasVariant = !gt.equals("0/0");
+            // System.err.println("[VariantLoader.gtContainsAlt]   SV/breakend allele -> " + (hasVariant ? "PRESENT" : "ABSENT"));
+            return hasVariant;
+        }
+        
+        // For regular alleles (SNVs/indels), check if altAllele is in the GT string
+        for (String a : gt.split("[/|]")) {
+            if (a.equals(altAllele)) {
+                // System.err.println("[VariantLoader.gtContainsAlt]   Regular allele -> PRESENT");
+                return true;
+            }
+        }
+        // System.err.println("[VariantLoader.gtContainsAlt]   Regular allele -> ABSENT");
         return false;
     }
     

@@ -227,6 +227,50 @@
                 </HBox>
             </VBox>
         </Tab>
+
+        <!-- Agent (AI Analysis) Tab -->
+        <Tab fx:id="agentTab" text="Agent">
+            <VBox spacing="12" styleClass="filter-panel">
+                <padding>
+                    <Insets top="15" right="15" bottom="15" left="15"/>
+                </padding>
+
+                <!-- API Key + Model -->
+                <Label text="Google AI Studio" styleClass="panel-title"/>
+                <HBox spacing="12" alignment="CENTER_LEFT">
+                    <VBox spacing="4" HBox.hgrow="ALWAYS">
+                        <Label text="API Key" styleClass="section-header"/>
+                        <PasswordField fx:id="apiKeyField" promptText="Paste your key from aistudio.google.com"
+                                      styleClass="filter-field"/>
+                    </VBox>
+                    <VBox spacing="4" prefWidth="230">
+                        <Label text="Model" styleClass="section-header"/>
+                        <TextField fx:id="agentModelField" text="gemini-2.0-flash" styleClass="filter-field"/>
+                    </VBox>
+                </HBox>
+
+                <Separator/>
+
+                <!-- Prompt -->
+                <Label text="Prompt" styleClass="panel-title"/>
+                <TextArea fx:id="agentPromptArea"
+                          promptText="Ask a question about the loaded variants. The current variant list will be included automatically as context."
+                          wrapText="true" prefRowCount="5" styleClass="agent-text-area"/>
+
+                <HBox spacing="10" alignment="CENTER_LEFT">
+                    <Label fx:id="agentStatusLabel" text="" styleClass="value-label" HBox.hgrow="ALWAYS"/>
+                    <Button fx:id="agentSubmitButton" text="Analyze Variants" styleClass="primary-button"
+                            onAction="#handleAgentSubmit"/>
+                </HBox>
+
+                <Separator/>
+
+                <!-- Response -->
+                <Label text="Response" styleClass="panel-title"/>
+                <TextArea fx:id="agentResponseArea" editable="false" wrapText="true"
+                          VBox.vgrow="ALWAYS" prefRowCount="12" styleClass="agent-text-area"/>
+            </VBox>
+        </Tab>
     </TabPane>
     
     <!-- Results Tables TabPane -->

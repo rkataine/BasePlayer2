@@ -9,6 +9,7 @@ import java.util.List;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.controllers.MainController;
+import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
@@ -16,6 +17,7 @@ import org.baseplayer.features.FeatureTracksCanvas;
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
@@ -71,37 +73,40 @@ public class SampleDataManager {
     SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     ThreadRunner runner = ThreadRunner.get();
     List<String> addedSamples = new ArrayList<>();
+    
+    final int totalFiles = files.size();
+    addedSamples.addAll(files.stream().map(File::getName).toList());
 
-    for (File file : files) {
-      if (file == null) continue;
-      addedSamples.add(file.getName());
-      runner.submit("Opening " + file.getName() + "\u2026",
-          () -> {
-            try { return new Sample(file.toPath()); }
-            catch (IOException e) {
-              System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
-              return null;
+    runner.submit("Loading BAM/CRAM files",
+        () -> {
+            final java.util.concurrent.atomic.AtomicInteger fileIndex = new java.util.concurrent.atomic.AtomicInteger(0);
+            for (File file : files) {
+              if (file == null) continue;
+              int currentIndex = fileIndex.incrementAndGet();
+              
+              // Update progress bar
+              org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
+              
+              try {
+                Sample sample = new Sample(file.toPath());
+                SampleTrack track = new SampleTrack(sample);
+                sampleRegistry.getSampleTracks().add(track);
+              } catch (IOException e) {
+                System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
+              }
             }
-          },
-          sample -> {
-            if (sample == null) return;
-            SampleTrack track = new SampleTrack(sample);
-            sampleRegistry.getSampleTracks().add(track);
-            sampleRegistry.getSampleList().add(sample.getName());
-            sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
-            sampleRegistry.setSampleHeight(0);
-            UserPreferences.addRecentFile("BAM", file);
-            System.out.println("Loaded BAM: " + sample.getName() + " (" + file.getName() + ")");
+            return null;
+        },
+        result -> {
+            // All BAM files loaded; update visible range and redraw
+            int trackCount = sampleRegistry.getDisplayedTrackCount();
+            if (trackCount > 0) {
+              sampleRegistry.setFirstVisibleSample(0);
+              sampleRegistry.setLastVisibleSample(trackCount - 1);
+              sampleRegistry.setSampleHeight(0);
+            }
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
-            // Phase 2: only create a "Loading reads" task when a fetch is actually
-            // submitted — if zoomed out no fetch ever starts and no task is created.
-            sample.setOnFirstFetchStarted(() -> {
-              ThreadRunner.RunnerTask readTask =
-                  runner.track("Loading reads: " + sample.getName(), sample::cancelAndSuspend);
-              sample.setOnFirstLoadComplete(readTask::complete);
-            });
-          });
-    }
+        });
 
     return addedSamples;
   }
@@ -138,11 +143,24 @@ public class SampleDataManager {
       sampleRegistry.getSampleList().remove(index);
     }
     
+    // Remove variants for this track from all variant lists
+    DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+    for (DrawStack stack : stackManager.getStacks()) {
+      if (stack.alignmentCanvas != null) {
+        org.baseplayer.variant.VariantList variantList = stack.alignmentCanvas.getVariantList();
+        if (variantList != null) {
+          int nodesRemoved = variantList.removeTrackIndex(index);
+          System.err.println("[SampleDataManager.removeSample] Removed " + nodesRemoved + 
+                           " variant nodes from " + stack.chromosome + " after removing track " + index);
+        }
+      }
+    }
+    
     // Adjust visible range
     int newCount = sampleRegistry.getDisplayedTrackCount();
     if (sampleRegistry.getSampleTracks().isEmpty() || newCount <= 0) {
-      sampleRegistry.setFirstVisibleSample(0);
-      sampleRegistry.setLastVisibleSample(0);
+      sampleRegistry.setFirstVisibleSample(-1);
+      sampleRegistry.setLastVisibleSample(-1);
       sampleRegistry.setScrollBarPosition(0);
     } else {
       int newWindow = Math.min(oldWindow, newCount);
@@ -210,7 +228,6 @@ public class SampleDataManager {
           if (newSample == null) return;
           track.addSample(newSample);
           UserPreferences.addRecentFile("BAM", file);
-          System.out.println("Added BAM: " + newSample.getName() + " to " + track.getDisplayName());
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
           newSample.setOnFirstFetchStarted(() -> {
             ThreadRunner.RunnerTask readTask =
@@ -262,7 +279,6 @@ public class SampleDataManager {
           if (newSample == null) return;
           track.addSample(newSample);
           UserPreferences.addRecentFile("BED", file);
-          System.out.println("Added BED: " + newSample.getName() + " to " + track.getDisplayName());
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
         });
   }
@@ -315,10 +331,12 @@ public class SampleDataManager {
           SampleTrack track = new SampleTrack(newSample);
           sampleRegistry.getSampleTracks().add(track);
           sampleRegistry.getSampleList().add(newSample.getName());
+          if (sampleRegistry.getFirstVisibleSample() < 0) {
+            sampleRegistry.setFirstVisibleSample(0);
+          }
           sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
           sampleRegistry.setSampleHeight(0);
           UserPreferences.addRecentFile("BED", file);
-          System.out.println("Loaded BED as sample track: " + newSample.getName());
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
         });
   }
@@ -368,7 +386,6 @@ public class SampleDataManager {
           featureCanvas.addTrack(bedTrack);
           featureCanvas.setCollapsed(false);
           UserPreferences.addRecentFile("BED", file);
-          System.out.println("Loaded BED file: " + file.getName());
         });
   }
   
@@ -417,7 +434,6 @@ public class SampleDataManager {
           featureCanvas.addTrack(bigWigTrack);
           featureCanvas.setCollapsed(false);
           UserPreferences.addRecentFile("BIGWIG", file);
-          System.out.println("Loaded BigWig file: " + file.getName());
         });
   }
   
@@ -459,19 +475,29 @@ public class SampleDataManager {
   public static void addVcfFiles(List<File> files) {
     if (files == null || files.isEmpty()) return;
     
-    System.out.println("Starting sequential load of " + files.size() + " VCF file(s)");
+
     
     // Suppress variant loading until all tracks are registered
     VcfManager.getInstance().setSuppressVariantLoading(true);
 
     // Single ThreadRunner task that wraps the entire batch load to prevent modal flashing
+    final int totalFiles = files.size();
     ThreadRunner.get().submit(
-        "Loading " + files.size() + " VCF file(s)...",
-        () -> loadVcfFilesBatch(files),
+        "Loading VCF files",
+      () -> {
+        try {
+          return loadVcfFilesBatchWithProgress(files, totalFiles);
+        } finally {
+          VcfManager.getInstance().setSuppressVariantLoading(false);
+        }
+      },
         result -> {
-            VcfManager.getInstance().setSuppressVariantLoading(false);
-            VcfManager.getInstance().loadVariantsForCurrentView();
-            VcfManager.getInstance().autoOpenVariantManager();
+            // Defer to the next FX pulse so the current RunnerTask can complete first.
+            // This prevents the popup from sticking to the previous "Loading VCF files" task.
+            Platform.runLater(() -> {
+              VcfManager.getInstance().loadVariantsForCurrentView();
+              VcfManager.getInstance().autoOpenVariantManager();
+            });
         }
     );
   }
@@ -485,6 +511,45 @@ public class SampleDataManager {
    * - Background thread: Opens VCF, parses header, creates VariantLoader
    * - FX thread: Creates SampleTrack objects, updates registry, fires canvas update
    */
+  private static Void loadVcfFilesBatchWithProgress(List<File> files, int totalFiles) {
+    for (int index = 0; index < files.size(); index++) {
+      if (Thread.currentThread().isInterrupted()) {
+        return null;
+      }
+
+      File file = files.get(index);
+      if (file == null || !file.exists()) {
+        System.err.println("Skipping missing file: " + file);
+        continue;
+      }
+      
+      // Update progress bar
+      final int currentIndex = index + 1;
+      org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
+      
+      try {
+        loadVcfFileSynchronously(file);
+      } catch (Exception e) {
+        if (Thread.currentThread().isInterrupted()) {
+          return null;
+        }
+        System.err.println("Failed to load VCF: " + file + " - " + e.getMessage());
+        e.printStackTrace();
+      }
+
+      // Redraw every 10 files to allow the spinner to animate between bursts
+      if (currentIndex % 10 == 0) {
+        Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+      }
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Load all files in the batch sequentially (deprecated - use loadVcfFilesBatchWithProgress).
+   */
+  @Deprecated
   private static Void loadVcfFilesBatch(List<File> files) {
     for (int index = 0; index < files.size(); index++) {
       File file = files.get(index);
@@ -506,7 +571,6 @@ public class SampleDataManager {
       }
     }
     
-    System.out.println("All VCF files loaded successfully");
     return null;
   }
   
@@ -529,7 +593,6 @@ public class SampleDataManager {
     
     // Parse header and prepare sample mappings on background thread
     List<String> unmappedSamples = loader.getUnmappedSamples();
-    int mappedSampleCount = loader.getMappedSampleCount();
     
     // Register the VCF in VcfManager and get the VcfData reference
     VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
@@ -543,6 +606,9 @@ public class SampleDataManager {
           SampleTrack track = new SampleTrack(sampleName);
           registry.getSampleTracks().add(track);
           registry.getSampleList().add(sampleName);
+        }
+        if (registry.getFirstVisibleSample() < 0) {
+          registry.setFirstVisibleSample(0);
         }
         registry.setLastVisibleSample(registry.getSampleList().size() - 1);
         registry.setSampleHeight(0);
@@ -579,6 +645,10 @@ public class SampleDataManager {
   public static void clearAllData() {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
 
+    // Hard reset: stop all active background tasks immediately.
+    ThreadRunner.get().cancelAll();
+    VcfManager.getInstance().setSuppressVariantLoading(false);
+
     for (var track : new ArrayList<>(registry.getSampleTracks())) {
       try { track.close(); } catch (IOException e) {
         System.err.println("Error closing track: " + e.getMessage());
@@ -586,9 +656,15 @@ public class SampleDataManager {
     }
     registry.getSampleTracks().clear();
     registry.getSampleList().clear();
-    registry.setFirstVisibleSample(0);
-    registry.setLastVisibleSample(0);
+    
+    // Reset all visibility and UI state to empty
+    registry.clearActiveSampleFilterQuery();
+    registry.setFirstVisibleSample(-1);
+    registry.setLastVisibleSample(-1);
     registry.setScrollBarPosition(0);
+    registry.setSampleHeight(0);
+    registry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
+    registry.setHoverSample(-1);  // Clear any hover state
 
     VcfManager.getInstance().closeCurrentVcf();
 

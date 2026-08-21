@@ -94,12 +94,24 @@ public final class ThreadRunner {
       }
       final T finalResult = result;
       if (!task.isCancelled()) {
-        Platform.runLater(() -> {
-          if (!task.isCancelled()) {
-            onSuccess.accept(finalResult);
-          }
+        try {
+          Platform.runLater(() -> {
+            try {
+              if (!task.isCancelled()) {
+                onSuccess.accept(finalResult);
+              }
+            } catch (Exception e) {
+              System.err.println("ThreadRunner [" + description + "] onSuccess callback failed: " + e.getMessage());
+              e.printStackTrace();
+            } finally {
+              task.complete();
+            }
+          });
+        } catch (Exception e) {
+          System.err.println("ThreadRunner [" + description + "] failed to schedule onSuccess: " + e.getMessage());
+          e.printStackTrace();
           task.complete();
-        });
+        }
       } else {
         task.complete();
       }
@@ -147,13 +159,24 @@ public final class ThreadRunner {
     }
   }
 
+  /**
+   * Notify that a task's description has been updated (progress changed).
+   * Can be called from any thread; triggers LoadingManager update.
+   */
+  public void notifyDescriptionChanged() {
+    notifyChanged();
+  }
+
   // ── Private ────────────────────────────────────────────────────────────────
 
   private void register(RunnerTask task) {
+    System.err.println("[ThreadRunner] Task registered: " + task.getDescription() + " (id: " + task.getId().substring(0, 8) + "...)");
     activeTasks.add(task);
     notifyChanged();
     task.setOnComplete(() -> {
+      System.err.println("[ThreadRunner] Task removed from active list: " + task.getDescription() + " (id: " + task.getId().substring(0, 8) + "...)");
       activeTasks.remove(task);
+      System.err.println("[ThreadRunner] Active tasks remaining: " + activeTasks.size());
       notifyChanged();
     });
   }
@@ -175,6 +198,7 @@ public final class ThreadRunner {
 
     private final String id = UUID.randomUUID().toString();
     private final String description;
+    private volatile String progressSuffix = ""; // Updated dynamically by tasks for progress display
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     private final AtomicBoolean completed = new AtomicBoolean(false);
     private volatile Future<?> future;
@@ -186,9 +210,20 @@ public final class ThreadRunner {
     }
 
     public String getId()          { return id; }
-    public String getDescription() { return description; }
+    public String getDescription() { 
+      String suffix = progressSuffix;
+      return suffix.isEmpty() ? description : description + " " + suffix;
+    }
     public boolean isCancelled()   { return cancelled.get(); }
     public boolean isCompleted()   { return completed.get(); }
+    
+    /**
+     * Update progress display suffix (shown after description).
+     * Thread-safe; can be called from any thread.
+     */
+    public void setProgressSuffix(String suffix) {
+      this.progressSuffix = suffix;
+    }
 
     /** Cancel this task. Interrupts the pool thread (if any) and calls the extra cancel action. Thread-safe. */
     public void cancel() {
@@ -207,6 +242,7 @@ public final class ThreadRunner {
      */
     public void complete() {
       if (completed.compareAndSet(false, true)) {
+        System.err.println("[ThreadRunner] Task completing: " + description + " (id: " + id.substring(0, 8) + "...)");
         Runnable cb = onComplete;
         if (cb != null) cb.run();
       }

@@ -30,16 +30,39 @@ public final class LoadingManager {
     ThreadRunner.get().setOnTasksChanged(this::onTasksChanged);
   }
 
+  /**
+   * Update the progress bar in the loading popup.
+   * Safe to call from any thread.
+   */
+  public void setProgress(int current, int total) {
+    ensurePopup();
+    popup.setProgress(current, total);
+  }
+
+  /**
+   * Update the progress bar directly.
+   * Safe to call from any thread.
+   */
+  public void setProgress(double progress) {
+    ensurePopup();
+    popup.setProgress(progress);
+  }
+
   // ── Private ────────────────────────────────────────────────────────────────
 
   /** Called on the FX thread whenever the ThreadRunner active-task list changes. */
   private void onTasksChanged() {
     List<ThreadRunner.RunnerTask> tasks = ThreadRunner.get().getActiveTasks();
+    System.err.println("[LoadingManager] onTasksChanged: " + tasks.size() + " active tasks");
     if (tasks.isEmpty()) {
-      if (popup != null) popup.hide();
+      System.err.println("[LoadingManager] Hiding popup (no active tasks)");
+      if (popup != null) {
+        popup.hide();
+      }
     } else {
       ensurePopup();
       String message = buildMessage(tasks);
+      System.err.println("[LoadingManager] Showing popup: " + message);
       if (!popup.isShowing()) {
         popup.show(message, MainApp.stage, ThreadRunner.get()::cancelAll);
       } else {
@@ -58,6 +81,7 @@ public final class LoadingManager {
     if (tasks.size() == 1) {
       return tasks.get(0).getDescription();
     }
-    return tasks.get(0).getDescription() + " (+" + (tasks.size() - 1) + " more)";
+    ThreadRunner.RunnerTask latest = tasks.get(tasks.size() - 1);
+    return latest.getDescription() + " (+" + (tasks.size() - 1) + " more)";
   }
 }

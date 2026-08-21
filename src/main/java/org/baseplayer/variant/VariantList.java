@@ -198,6 +198,47 @@ public class VariantList {
     }
     
     /**
+     * Remove all variants for a specific track index.
+     * If a variant has no more samples after removal, it's removed from the list.
+     * @param trackIndex The track index to remove
+     * @return The number of variant nodes removed
+     */
+    public int removeTrackIndex(int trackIndex) {
+        if (head == null) return 0;
+        
+        int nodesRemoved = 0;
+        VariantNode prev = null;
+        VariantNode current = head;
+        
+        while (current != null) {
+            VariantNode next = current.next;
+            boolean isEmpty = current.removeSample(trackIndex);
+            
+            if (isEmpty) {
+                // Remove this node from the list
+                if (prev == null) {
+                    head = next;
+                } else {
+                    prev.next = next;
+                }
+                
+                if (current == tail) {
+                    tail = prev;
+                }
+                
+                size--;
+                nodesRemoved++;
+            } else {
+                prev = current;
+            }
+            
+            current = next;
+        }
+        
+        return nodesRemoved;
+    }
+    
+    /**
      * Clear all variants from the list.
      */
     public void clear() {

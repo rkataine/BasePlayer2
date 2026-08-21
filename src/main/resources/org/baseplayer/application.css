@@ -564,3 +564,24 @@ VBox {
 .control-files-table .table-cell {
     -fx-text-fill: white;
 }
+
+/* =============================================================================
+   AGENT TAB
+   ============================================================================= */
+
+.agent-text-area {
+    -fx-control-inner-background: #252526;
+    -fx-text-fill: white;
+    -fx-prompt-text-fill: #6a6a6a;
+    -fx-border-color: #3c3c3c;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+}
+
+.agent-text-area .content {
+    -fx-background-color: #252526;
+}
+
+.agent-text-area:focused {
+    -fx-border-color: #007acc;
+}

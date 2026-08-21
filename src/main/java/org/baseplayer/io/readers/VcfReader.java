@@ -40,11 +40,13 @@ public class VcfReader implements AutoCloseable {
      */
     public VcfReader(Path vcfPath) throws IOException {
         this.vcfPath = vcfPath;
+        // System.err.println("[VcfReader] Opening VCF file: " + vcfPath);
         
         // Validate that file exists and is bgzipped
         if (!Files.exists(vcfPath)) {
             throw new IOException("VCF file not found: " + vcfPath);
         }
+        // System.err.println("[VcfReader] File exists: " + vcfPath);
         
         // Check for index (.tbi or .csi)
         Path tbiPath = Path.of(vcfPath.toString() + ".tbi");
@@ -53,6 +55,7 @@ public class VcfReader implements AutoCloseable {
         if (!Files.exists(tbiPath) && !Files.exists(csiPath)) {
             throw new IOException("VCF index not found (.tbi or .csi): " + vcfPath);
         }
+        // System.err.println("[VcfReader] Index found (tbi=" + Files.exists(tbiPath) + ", csi=" + Files.exists(csiPath) + ")");
         
         // Open with htsjdk
         this.reader = AbstractFeatureReader.getFeatureReader(
@@ -60,9 +63,11 @@ public class VcfReader implements AutoCloseable {
             new VCFCodec(),
             true  // require index
         );
+        // System.err.println("[VcfReader] Reader opened successfully");
         
         this.header = (VCFHeader) reader.getHeader();
         this.sampleNames = header.getSampleNamesInOrder();
+        // System.err.println("[VcfReader] VCF has " + sampleNames.size() + " samples: " + sampleNames);
     }
 
     /**
@@ -119,8 +124,8 @@ public class VcfReader implements AutoCloseable {
                 }
             }
         } catch (Exception e) {
-            System.err.println("VCF iteration error for " + chromosome);
-            System.err.println("  Error: " + e.getMessage());
+            // System.err.println("VCF iteration error for " + chromosome);
+            // System.err.println("  Error: " + e.getMessage());
             throw new IOException("Failed to iterate VCF: " + e.getMessage(), e);
         }
         
@@ -162,7 +167,7 @@ public class VcfReader implements AutoCloseable {
                 variants.add(variant);
             }
         } catch (Exception e) {
-            System.err.println("VCF query error for " + chromosome + ":" + start + "-" + end);
+            // System.err.println("VCF query error for " + chromosome + ":" + start + "-" + end);
             throw new IOException("Failed to query VCF: " + e.getMessage(), e);
         }
         
@@ -180,17 +185,22 @@ public class VcfReader implements AutoCloseable {
      */
     public List<VcfStructuralVariant> queryStructuralVariantsForChromosome(String chromosome) 
             throws IOException {
+        // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Querying SVs for: " + chromosome);
         List<VcfStructuralVariant> variants = new ArrayList<>();
         
         // Normalize chromosome name to match VCF file
         String normalizedChrom = normalizeChromosomeName(chromosome);
+        // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Normalized chrom: " + normalizedChrom);
         
         // Iterate through entire VCF and collect structural variants for this chromosome
         try (var iterator = reader.iterator()) {
             boolean foundChromosome = false;
+            int totalVariants = 0;
+            int svCount = 0;
             
             while (iterator.hasNext()) {
                 VariantContext ctx = iterator.next();
+                totalVariants++;
                 
                 // Check if we're on the target chromosome
                 if (ctx.getContig().equals(normalizedChrom)) {
@@ -198,17 +208,22 @@ public class VcfReader implements AutoCloseable {
                     
                     // Only include structural variants
                     if (isStructuralVariant(ctx)) {
+                        svCount++;
+                        // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Found SV #" + svCount + ": pos=" + ctx.getStart() + ", alt=" + ctx.getAlternateAlleles() + ", SVTYPE=" + ctx.getAttributeAsString("SVTYPE", "?"));
                         VcfVariantType type = classifyStructuralVariant(ctx);
                         VcfStructuralVariant variant = parseStructuralVariant(ctx, type);
                         variants.add(variant);
                     }
                 } else if (foundChromosome) {
                     // We've passed the target chromosome (VCF is sorted), stop
+                    // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Passed chromosome, stopping iteration");
                     break;
                 }
             }
+            // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Scanned " + totalVariants + " total variants, found " + svCount + " SVs for " + normalizedChrom);
         }
         
+        // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Returning " + variants.size() + " structural variants");
         return variants;
     }
 
@@ -219,23 +234,35 @@ public class VcfReader implements AutoCloseable {
     public void iterateChromosomeVariants(String chromosome,
             Consumer<VcfSnvIndel> snvConsumer,
             Consumer<VcfStructuralVariant> svConsumer) throws IOException {
+        // System.err.println("[VcfReader.iterateChromosomeVariants] Starting iteration for chromosome: " + chromosome);
         String normalizedChrom = normalizeChromosomeName(chromosome);
+        // System.err.println("[VcfReader.iterateChromosomeVariants] Normalized: " + normalizedChrom);
+        
+        int totalVariants = 0, svCount = 0, snvCount = 0;
+        
         try (var iterator = reader.iterator()) {
             boolean foundChromosome = false;
             while (iterator.hasNext()) {
                 VariantContext ctx = iterator.next();
+                totalVariants++;
+                
                 if (ctx.getContig().equals(normalizedChrom)) {
                     foundChromosome = true;
                     if (isStructuralVariant(ctx)) {
+                        svCount++;
+                        String svType = ctx.getAttributeAsString("SVTYPE", "?");
+                        // System.err.println("[VcfReader.iterateChromosomeVariants] SV #" + svCount + ": pos=" + ctx.getStart() + ", SVTYPE=" + svType + ", END=" + ctx.getAttributeAsInt("END", -1));
                         if (svConsumer != null) {
                             svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
                         }
                     } else {
+                        snvCount++;
                         if (snvConsumer != null) {
                             snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
                         }
                     }
                 } else if (foundChromosome) {
+                    // System.err.println("[VcfReader.iterateChromosomeVariants] Passed chromosome, stopping");
                     break;
                 }
             }
@@ -384,15 +411,28 @@ public class VcfReader implements AutoCloseable {
      */
     private VcfVariantType classifyStructuralVariant(VariantContext ctx) {
         String svType = ctx.getAttributeAsString("SVTYPE", null);
+        // System.err.println("[VcfReader.classifyStructuralVariant] pos=" + ctx.getStart() + ", SVTYPE=" + svType);
         
         if (svType != null) {
             switch (svType.toUpperCase()) {
-                case "DEL": return VcfVariantType.SV_DELETION;
-                case "INS": return VcfVariantType.SV_INSERTION;
-                case "DUP": return VcfVariantType.SV_DUPLICATION;
-                case "INV": return VcfVariantType.SV_INVERSION;
-                case "BND": return VcfVariantType.SV_BREAKEND;
-                case "TRA": case "CTX": return VcfVariantType.SV_TRANSLOCATION;
+                case "DEL": 
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DELETION");
+                    return VcfVariantType.SV_DELETION;
+                case "INS": 
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INSERTION");
+                    return VcfVariantType.SV_INSERTION;
+                case "DUP": 
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DUPLICATION");
+                    return VcfVariantType.SV_DUPLICATION;
+                case "INV": 
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION");
+                    return VcfVariantType.SV_INVERSION;
+                case "BND": 
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_BREAKEND");
+                    return VcfVariantType.SV_BREAKEND;
+                case "TRA": case "CTX": 
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_TRANSLOCATION");
+                    return VcfVariantType.SV_TRANSLOCATION;
             }
         }
         
@@ -401,14 +441,27 @@ public class VcfReader implements AutoCloseable {
             String alt = allele.getDisplayString();
             if (alt.startsWith("<")) {
                 String symbolic = alt.substring(1, alt.length() - 1).toUpperCase();
-                if (symbolic.startsWith("DEL")) return VcfVariantType.SV_DELETION;
-                if (symbolic.startsWith("INS")) return VcfVariantType.SV_INSERTION;
-                if (symbolic.startsWith("DUP")) return VcfVariantType.SV_DUPLICATION;
-                if (symbolic.startsWith("INV")) return VcfVariantType.SV_INVERSION;
+                if (symbolic.startsWith("DEL")) {
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DELETION (from ALT)");
+                    return VcfVariantType.SV_DELETION;
+                }
+                if (symbolic.startsWith("INS")) {
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INSERTION (from ALT)");
+                    return VcfVariantType.SV_INSERTION;
+                }
+                if (symbolic.startsWith("DUP")) {
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DUPLICATION (from ALT)");
+                    return VcfVariantType.SV_DUPLICATION;
+                }
+                if (symbolic.startsWith("INV")) {
+                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION (from ALT)");
+                    return VcfVariantType.SV_INVERSION;
+                }
             }
             
             // Breakend notation
             if (alt.contains("[") || alt.contains("]")) {
+                // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_BREAKEND (from breakend)");
                 return VcfVariantType.SV_BREAKEND;
             }
         }

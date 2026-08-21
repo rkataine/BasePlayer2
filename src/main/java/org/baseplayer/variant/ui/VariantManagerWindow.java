@@ -12,12 +12,22 @@ import org.baseplayer.io.VcfManager;
 import java.io.IOException;
 
 /**
- * Utility class to show the FXML-based Variant Manager dialog.
+ * Singleton Variant Manager window. Only one instance can be open at a time.
  * Uses the unified CSS system with theme support.
  */
 public class VariantManagerWindow {
+    private static Stage currentStage = null;
+    private static VariantManagerController currentController = null;
 
     public static void show(Window owner, VcfManager vcfManager, Runnable onClose) {
+        // If already open, bring to front and update VcfManager reference
+        if (currentStage != null && currentStage.isShowing()) {
+            currentStage.toFront();
+            if (currentController != null) {
+                currentController.updateVcfManager(vcfManager);
+            }
+            return;
+        }
         try {
             FXMLLoader loader = new FXMLLoader(MainApp.getResource("VariantManager.fxml"));
             Parent root = loader.load();
@@ -46,8 +56,16 @@ public class VariantManagerWindow {
             // Set up controller with stage reference
             controller.setup(stage, vcfManager, onClose);
             
-            // Handle window close
-            stage.setOnHidden(e -> controller.cleanup());
+            // Store singleton references
+            currentStage = stage;
+            currentController = controller;
+            
+            // Handle window close — clear singleton references
+            stage.setOnHidden(e -> {
+                controller.cleanup();
+                currentStage = null;
+                currentController = null;
+            });
             
             stage.show();
             
@@ -55,5 +73,10 @@ public class VariantManagerWindow {
             System.err.println("Error loading Variant Manager FXML: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    /** Check if the Variant Manager window is currently open. */
+    public static boolean isOpen() {
+        return currentStage != null && currentStage.isShowing();
     }
 }

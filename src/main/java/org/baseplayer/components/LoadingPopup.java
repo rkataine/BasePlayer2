@@ -1,18 +1,17 @@
 package org.baseplayer.components;
 
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Popup;
 import javafx.stage.Window;
-import javafx.util.Duration;
 
 /**
  * A lightweight popup that shows loading progress with a cancel button.
@@ -35,10 +34,7 @@ public class LoadingPopup {
 
     /** Approximate popup dimensions used for immediate centering. */
     private static final double POPUP_W = 310;
-    private static final double POPUP_H = 115;
-
-    /** Popup is guaranteed to stay visible for at least this many milliseconds. */
-    private static final long MIN_SHOW_MS = 400;
+    private static final double POPUP_H = 180;  // Increased for progress bar with more breathing room
 
     private static final String POPUP_STYLE =
             "-fx-background-color: rgba(30, 30, 30, 0.98);" +
@@ -49,16 +45,17 @@ public class LoadingPopup {
 
     private final Popup popup;
     private final Label messageLabel;
+    private final ProgressBar progressBar;
     private Runnable onCancel;
-    private long showTimeMs;
+    private static final double PROGRESS_EPSILON = 1e-9;
 
     public LoadingPopup() {
         popup = new Popup();
         popup.setAutoHide(false);
         popup.setHideOnEscape(false);
 
-        VBox root = new VBox(14);
-        root.setPadding(new Insets(18, 24, 18, 24));
+        VBox root = new VBox(8);
+        root.setPadding(new Insets(16, 24, 16, 24));
         root.setAlignment(Pos.CENTER);
         root.setStyle(POPUP_STYLE);
         root.setPrefWidth(POPUP_W);
@@ -76,6 +73,20 @@ public class LoadingPopup {
 
         HBox msgRow = new HBox(10, spinner, messageLabel);
         msgRow.setAlignment(Pos.CENTER_LEFT);
+
+        // ── Progress bar ───────────────────────────────────────────────────
+        progressBar = new ProgressBar(0.0);
+        progressBar.setMinHeight(16);  // Minimum visible height
+        // Bright lime green fill with darker track background
+        progressBar.setStyle(
+            "-fx-accent: #00ff00;" +
+            "-fx-control-inner-background: #222222;" +
+            "-fx-padding: 0;" +
+            "-fx-background-radius: 0;" +
+            "-fx-border-color: #00ff00;" +
+            "-fx-border-width: 1;"
+        );
+        progressBar.setMaxWidth(Double.MAX_VALUE);
 
         // ── Cancel button ──────────────────────────────────────────────────
         Button cancelBtn = new Button("Cancel");
@@ -99,7 +110,10 @@ public class LoadingPopup {
         cancelBtn.setOnMouseExited(e -> cancelBtn.setStyle(cancelNormal));
         cancelBtn.setOnAction(e -> cancel());
 
-        root.getChildren().addAll(msgRow, cancelBtn);
+        root.getChildren().addAll(msgRow, progressBar, cancelBtn);
+        VBox.setVgrow(msgRow, Priority.NEVER);
+        VBox.setVgrow(progressBar, Priority.ALWAYS);
+        VBox.setVgrow(cancelBtn, Priority.NEVER);
         popup.getContent().add(root);
     }
 
@@ -115,7 +129,7 @@ public class LoadingPopup {
     public void show(String message, Window owner, Runnable onCancel) {
         this.onCancel = onCancel;
         messageLabel.setText(message);
-        showTimeMs = System.currentTimeMillis();
+        progressBar.setProgress(-1.0);  // Start in indeterminate mode until determinate progress arrives
         // Centre immediately using fixed dimensions so the popup never flashes at (0,0)
         double x = owner.getX() + (owner.getWidth()  - POPUP_W) / 2;
         double y = owner.getY() + (owner.getHeight() - POPUP_H) / 2;
@@ -143,23 +157,47 @@ public class LoadingPopup {
     }
 
     /**
-     * Hide the popup, respecting the minimum display time.
-     * Safe to call from any thread.
+     * Update the progress bar. Safe to call from any thread.
+     * 
+     * @param current current progress value (0-current)
+     * @param total   total progress value
      */
-    public void hide() {
+    public void setProgress(int current, int total) {
+        if (total <= 0) {
+            setProgress(-1.0);
+            return;
+        }
+        double progress = Math.min(1.0, (double) current / total);
+        setProgress(progress);
+    }
+
+    /**
+     * Update the progress bar directly. Safe to call from any thread.
+     * 
+     * @param progress value between 0.0 and 1.0, or negative for indeterminate
+     */
+    public void setProgress(double progress) {
         if (Platform.isFxApplicationThread()) {
-            hideAfterMinTime();
+            if (Math.abs(progressBar.getProgress() - progress) < PROGRESS_EPSILON) {
+                return;
+            }
+            progressBar.setProgress(progress);
         } else {
-            Platform.runLater(this::hideAfterMinTime);
+            Platform.runLater(() -> {
+                if (Math.abs(progressBar.getProgress() - progress) < PROGRESS_EPSILON) {
+                    return;
+                }
+                progressBar.setProgress(progress);
+            });
         }
     }
 
-    private void hideAfterMinTime() {
-        long remaining = MIN_SHOW_MS - (System.currentTimeMillis() - showTimeMs);
-        if (remaining > 0) {
-            new Timeline(new KeyFrame(Duration.millis(remaining), e -> popup.hide())).play();
-        } else {
+    /** Hide the popup immediately. Safe to call from any thread. */
+    public void hide() {
+        if (Platform.isFxApplicationThread()) {
             popup.hide();
+        } else {
+            Platform.runLater(popup::hide);
         }
     }
 

@@ -22,11 +22,21 @@ import javafx.fxml.Initializable;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.net.URI;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.*;
+import java.util.prefs.Preferences;
 
 /**
  * Controller for the FXML-based Variant Manager dialog.
@@ -84,6 +94,17 @@ public class VariantManagerController implements Initializable {
     @FXML private TableColumn<AnnotationRow, String> intergenicPositionColumn, intergenicRefAltColumn, intergenicTypeColumn;
     @FXML private TableColumn<AnnotationRow, String> intergenicSamplesColumn, intergenicQualityColumn;
 
+    // Filter & Results tab panes
+    @FXML private TabPane filterTabPane, resultsTabPane;
+
+    // Agent Tab
+    @FXML private Tab agentTab;
+    @FXML private PasswordField apiKeyField;
+    @FXML private TextField agentModelField;
+    @FXML private TextArea agentPromptArea, agentResponseArea;
+    @FXML private Label agentStatusLabel;
+    @FXML private Button agentSubmitButton;
+
     // ── State ─────────────────────────────────────────────────────────────────
 
     private VcfManager vcfManager;
@@ -99,6 +120,9 @@ public class VariantManagerController implements Initializable {
     private int lastBuiltSize = -1;
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
+    private static final String PREF_API_KEY   = "gemini_api_key";
+    private static final String PREF_API_MODEL = "gemini_model";
+    private volatile boolean agentRunning = false;
 
     // ── Initialization ────────────────────────────────────────────────────────
 
@@ -119,6 +143,8 @@ public class VariantManagerController implements Initializable {
 
         // Apply filters automatically on checkbox change
         setupAutoFilterListeners();
+
+        setupAgentTab();
     }
 
     /**
@@ -139,6 +165,15 @@ public class VariantManagerController implements Initializable {
         GenomicCanvas.update.addListener(updateListener);
 
         // Load initial data
+        loadData();
+    }
+
+    /**
+     * Update VcfManager reference when window is reused (singleton behavior).
+     */
+    public void updateVcfManager(VcfManager vcfManager) {
+        this.vcfManager = vcfManager;
+        vcfManager.setOnVcfAdded(this::loadData);
         loadData();
     }
 
@@ -383,6 +418,158 @@ public class VariantManagerController implements Initializable {
     private void handleRemoveControlFile() {
         // TODO: Implement remove control file
         System.out.println("Remove control file not yet implemented");
+    }
+
+    // ── Agent (AI Analysis) ───────────────────────────────────────────────────
+
+    private void setupAgentTab() {
+        Preferences prefs = Preferences.userNodeForPackage(VariantManagerController.class);
+        apiKeyField.setText(prefs.get(PREF_API_KEY, ""));
+        agentModelField.setText(prefs.get(PREF_API_MODEL, "gemini-2.0-flash"));
+
+        filterTabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+            boolean isAgent = (newTab == agentTab);
+            resultsTabPane.setVisible(!isAgent);
+            resultsTabPane.setManaged(!isAgent);
+            VBox.setVgrow(filterTabPane, isAgent ? Priority.ALWAYS : Priority.NEVER);
+        });
+    }
+
+    @FXML
+    private void handleAgentSubmit() {
+        String apiKey = apiKeyField.getText().trim();
+        if (apiKey.isEmpty()) {
+            agentStatusLabel.setText("Please enter an AI Studio API key.");
+            return;
+        }
+        String model = agentModelField.getText().trim();
+        if (model.isEmpty()) model = "gemini-2.0-flash";
+        String prompt = agentPromptArea.getText().trim();
+        if (prompt.isEmpty()) {
+            agentStatusLabel.setText("Please enter a prompt.");
+            return;
+        }
+        if (agentRunning) return;
+
+        Preferences prefs = Preferences.userNodeForPackage(VariantManagerController.class);
+        prefs.put(PREF_API_KEY, apiKey);
+        prefs.put(PREF_API_MODEL, model);
+
+        agentRunning = true;
+        agentSubmitButton.setDisable(true);
+        agentStatusLabel.setText("Analyzing…");
+        agentResponseArea.clear();
+
+        final String capturedModel   = model;
+        final String capturedContext = buildVariantContext();
+        final String fullPrompt = "You are a genomics expert assistant. Below is a summary of the genomic variants currently loaded in the BasePlayer2 viewer.\n\n"
+                + capturedContext + "\n\nUser question: " + prompt;
+
+        Thread thread = new Thread(() -> {
+            try {
+                String response = callGeminiApi(apiKey, capturedModel, fullPrompt);
+                Platform.runLater(() -> {
+                    agentResponseArea.setText(response);
+                    agentStatusLabel.setText("Done.");
+                    agentRunning = false;
+                    agentSubmitButton.setDisable(false);
+                });
+            } catch (Exception e) {
+                Platform.runLater(() -> {
+                    agentStatusLabel.setText("Error: " + e.getMessage());
+                    agentRunning = false;
+                    agentSubmitButton.setDisable(false);
+                });
+            }
+        }, "agent-api-call");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private String buildVariantContext() {
+        VariantList variants = sourceVariants;
+        String chrom = chromosome;
+        if (variants == null || variants.isEmpty()) {
+            return "No variants currently loaded.";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("Chromosome: ").append(chrom).append("\n");
+        sb.append("Total variants: ").append(variants.size()).append("\n\n");
+        sb.append("Variant list (position, ref\u2192alt, type, gene, effect, maxGQ):\n");
+
+        VariantFilter filter = vcfManager.getCurrentFilter();
+        int count = 0;
+        VariantNode node = variants.getFirst();
+        while (node != null && count < 300) {
+            double maxGq = -1;
+            boolean passes = false;
+            for (VariantNode.SampleCall call : node.getSamples()) {
+                if (filter.passes(node, call.trackIndex)) {
+                    passes = true;
+                    if (call.quality > maxGq) maxGq = call.quality;
+                }
+            }
+            if (passes) {
+                VariantAnnotation ann = node.annotation;
+                String gene   = (ann != null && ann.geneName() != null) ? ann.geneName() : "-";
+                String effect = ann != null ? ann.effect().displayName() : "intergenic";
+                sb.append(chrom).append(":").append(node.position)
+                  .append("\t").append(node.ref).append("\u2192").append(node.alt.isEmpty() ? "." : node.alt)
+                  .append("\t").append(typeLabel(node.type))
+                  .append("\tgene=").append(gene)
+                  .append("\teffect=").append(effect)
+                  .append("\tGQ=").append(maxGq >= 0 ? String.format("%.0f", maxGq) : "-")
+                  .append("\n");
+                count++;
+            }
+            node = node.next;
+        }
+        if (count == 300) sb.append("... (truncated to 300 variants)\n");
+        return sb.toString();
+    }
+
+    private String callGeminiApi(String apiKey, String model, String prompt) throws Exception {
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + model + ":generateContent?key=" + apiKey;
+
+        JsonObject part = new JsonObject();
+        part.addProperty("text", prompt);
+        JsonArray parts = new JsonArray();
+        parts.add(part);
+        JsonObject message = new JsonObject();
+        message.addProperty("role", "user");
+        message.add("parts", parts);
+        JsonArray contents = new JsonArray();
+        contents.add(message);
+        JsonObject body = new JsonObject();
+        body.add("contents", contents);
+
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            String errorMsg;
+            try {
+                JsonObject err = JsonParser.parseString(response.body()).getAsJsonObject();
+                errorMsg = err.getAsJsonObject("error").get("message").getAsString();
+            } catch (Exception ignored) {
+                errorMsg = "HTTP " + response.statusCode();
+            }
+            throw new RuntimeException(errorMsg);
+        }
+
+        JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+        return responseJson.getAsJsonArray("candidates")
+                .get(0).getAsJsonObject()
+                .getAsJsonObject("content")
+                .getAsJsonArray("parts")
+                .get(0).getAsJsonObject()
+                .get("text").getAsString();
     }
 
     // ── Data Loading ──────────────────────────────────────────────────────────

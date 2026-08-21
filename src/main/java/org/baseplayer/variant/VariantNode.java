@@ -19,8 +19,8 @@ public class VariantNode {
     private final BitSet samplePresence;  // O(1) presence check for drawing
     private List<SampleCall> samples;     // null until first sample added
 
-    public volatile VariantNode next;
-
+    public volatile VariantNode next;    /** End position for structural variants (from INFO/END); -1 for SNVs/indels. */
+    public volatile long svEnd = -1;
     /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
     public VariantAnnotation annotation;
 
@@ -83,6 +83,20 @@ public class VariantNode {
 
     public int getSampleCount() {
         return samplePresence.cardinality();
+    }
+
+    /**
+     * Remove a sample from this variant node.
+     * @param trackIndex The track index to remove
+     * @return true if the node has no more samples (should be removed from list)
+     */
+    public boolean removeSample(int trackIndex) {
+        samplePresence.clear(trackIndex);
+        if (samples != null) {
+            samples.removeIf(call -> call.trackIndex == trackIndex);
+            if (samples.isEmpty()) samples = null;
+        }
+        return samplePresence.isEmpty();
     }
 
     public boolean isHeterozygous(int trackIndex) {
