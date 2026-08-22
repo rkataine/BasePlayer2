@@ -1,14 +1,12 @@
 package org.baseplayer.components.sidebars;
 
 import org.baseplayer.components.MasterTrackCanvas;
-import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
-import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
@@ -16,7 +14,6 @@ import org.baseplayer.utils.DrawColors;
 
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
-import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
@@ -83,8 +80,6 @@ public class SampleListPanel extends SidebarContentPanel {
   private static final long SCROLL_ANIM_DURATION_NS = 180_000_000L;
   private static final java.util.function.DoubleUnaryOperator EASE_OUT_CUBIC =
       t -> 1 - Math.pow(1 - t, 3);
-  private static final DrawStackManager stackManager =
-      ServiceRegistry.getInstance().getDrawStackManager();
 
   private enum ScrollbarDragMode {
     NONE,
@@ -664,21 +659,11 @@ public class SampleListPanel extends SidebarContentPanel {
       // Skip rows that scrolled above the panel top
       if (sampleY + sampleRegistry.getSampleHeight() < 0) continue;
 
-      // Divider line (snap to integer Y for crisp, non-blurred rendering)
+      // Divider line on sidebar (snap to integer Y for crisp, non-blurred rendering)
       if (sampleY >= 0) {
         double snappedY = Math.round(sampleY);
         gc.setStroke(DrawColors.BORDER);
         gc.strokeLine(0, snappedY, w, snappedY);
-      }
-
-      // Mirror divider line onto each alignment canvas
-      for (DrawStack stack : stackManager.getStacks()) {
-        GraphicsContext alignGc = stack.alignmentCanvas.getGraphicsContext2D();
-        // The Y in the alignment canvas includes the master track offset
-        double alignY = sampleRegistry.getMasterTrackHeight() + sampleY;
-        double snappedAlignY = Math.round(alignY);
-        alignGc.setStroke(DrawColors.BORDER);
-        alignGc.strokeLine(0, snappedAlignY, stack.alignmentCanvas.getWidth(), snappedAlignY);
       }
 
       // Track name
@@ -868,34 +853,36 @@ public class SampleListPanel extends SidebarContentPanel {
       settingsMenu.getItems().add(buildTrackRow(track.getSamples().get(i), track, i, sampleIdx));
     }
 
-    // Methylation section
-    settingsMenu.getItems().add(new SeparatorMenuItem());
-    VBox methylBox = new VBox(4);
-    methylBox.setPadding(new Insets(4, 8, 4, 8));
-    if (track.hasMethylationData()) {
-      Label lbl = new Label("🧬 Methylation tags detected (MM/ML/XM)");
-      lbl.setStyle("-fx-text-fill: #88ccff; -fx-font-size: 11; -fx-font-weight: bold;");
-      methylBox.getChildren().add(lbl);
-    } else {
-      Label lbl = new Label("🧬 Methylation / Bisulfite sequencing");
-      lbl.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11; -fx-font-weight: bold;");
-      methylBox.getChildren().add(lbl);
-    }
-    CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C→T / G→A)");
-    suppressMethylCb.setSelected(track.hasMethylationData());
-    suppressMethylCb.getStyleClass().add("dark-checkbox");
-    suppressMethylCb.setStyle("-fx-font-size: 11;");
-    suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
-      for (Sample s : track.getSamples()) {
-        AlignmentFile bam = s.getBamFile();
-        if (bam != null) bam.setSuppressMethylMismatches(n);
+    // Methylation section (only show if track has BAM files)
+    if (track.getFirstBam() != null) {
+      settingsMenu.getItems().add(new SeparatorMenuItem());
+      VBox methylBox = new VBox(4);
+      methylBox.setPadding(new Insets(4, 8, 4, 8));
+      if (track.hasMethylationData()) {
+        Label lbl = new Label("🧬 Methylation tags detected (MM/ML/XM)");
+        lbl.setStyle("-fx-text-fill: #88ccff; -fx-font-size: 11; -fx-font-weight: bold;");
+        methylBox.getChildren().add(lbl);
+      } else {
+        Label lbl = new Label("🧬 Methylation / Bisulfite sequencing");
+        lbl.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11; -fx-font-weight: bold;");
+        methylBox.getChildren().add(lbl);
       }
-      GenomicCanvas.update.set(!GenomicCanvas.update.get());
-    });
-    Label methylInfo = new Label("Enable for emSeq/WGBS data to hide C→T conversions");
-    methylInfo.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
-    methylBox.getChildren().addAll(suppressMethylCb, methylInfo);
-    settingsMenu.getItems().add(new CustomMenuItem(methylBox, false));
+      CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C→T / G→A)");
+      suppressMethylCb.setSelected(track.hasMethylationData());
+      suppressMethylCb.getStyleClass().add("dark-checkbox");
+      suppressMethylCb.setStyle("-fx-font-size: 11;");
+      suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
+        for (Sample s : track.getSamples()) {
+          AlignmentFile bam = s.getBamFile();
+          if (bam != null) bam.setSuppressMethylMismatches(n);
+        }
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      });
+      Label methylInfo = new Label("Enable for emSeq/WGBS data to hide C→T conversions");
+      methylInfo.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+      methylBox.getChildren().addAll(suppressMethylCb, methylInfo);
+      settingsMenu.getItems().add(new CustomMenuItem(methylBox, false));
+    }
 
     // Haplotype section
     if (track.hasHaplotypeData()) {

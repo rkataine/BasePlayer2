@@ -304,7 +304,6 @@ public final class FetchManager {
   public void cancelAll() {
     generation++;
     long now = System.currentTimeMillis();
-    int evicted = 0;
     for (FetchTicket t : tickets.values()) {
       t.cancelled = true;
       if (now - t.createdMs > STALE_TICKET_MS) {
@@ -315,13 +314,9 @@ public final class FetchManager {
           activeFetches.decrementAndGet();
           AtomicInteger typeCount = activeByType.get(t.type);
           if (typeCount != null) typeCount.decrementAndGet();
-          evicted++;
         }
       }
     }
-    System.out.println("[FetchManager] cancelAll — generation " + generation
-        + ", active=" + activeFetches.get() + ", reads=" + globalReadCount.get()
-        + (evicted > 0 ? ", evicted stale=" + evicted : ""));
   }
 
   /** Age threshold after which a cancelled but unreleased ticket is force-evicted. */

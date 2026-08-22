@@ -30,13 +30,15 @@ public class VariantNode {
         public final String gt;
         public final double quality;
         public final int depth;
+        public final double alleleFraction;  // Fraction of reads supporting alt allele (from AD field)
         public final boolean isPhased;
 
-        public SampleCall(int trackIndex, String gt, double quality, int depth) {
+        public SampleCall(int trackIndex, String gt, double quality, int depth, double alleleFraction) {
             this.trackIndex = trackIndex;
             this.gt = gt;
             this.quality = quality;
             this.depth = depth;
+            this.alleleFraction = alleleFraction;
             this.isPhased = gt != null && gt.contains("|");
         }
     }

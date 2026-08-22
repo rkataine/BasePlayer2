@@ -149,9 +149,7 @@ public class SampleDataManager {
       if (stack.alignmentCanvas != null) {
         org.baseplayer.variant.VariantList variantList = stack.alignmentCanvas.getVariantList();
         if (variantList != null) {
-          int nodesRemoved = variantList.removeTrackIndex(index);
-          System.err.println("[SampleDataManager.removeSample] Removed " + nodesRemoved + 
-                           " variant nodes from " + stack.chromosome + " after removing track " + index);
+          variantList.removeTrackIndex(index);
         }
       }
     }
@@ -492,8 +490,9 @@ public class SampleDataManager {
         }
       },
         result -> {
-            // Defer to the next FX pulse so the current RunnerTask can complete first.
-            // This prevents the popup from sticking to the previous "Loading VCF files" task.
+            // Start Phase 2 on the next FX pulse so the Phase 1 task can
+            // complete and be removed first. This avoids task overlap that can
+            // cause popup message/progress churn.
             Platform.runLater(() -> {
               VcfManager.getInstance().loadVariantsForCurrentView();
               VcfManager.getInstance().autoOpenVariantManager();
@@ -545,35 +544,6 @@ public class SampleDataManager {
     
     return null;
   }
-  
-  /**
-   * Load all files in the batch sequentially (deprecated - use loadVcfFilesBatchWithProgress).
-   */
-  @Deprecated
-  private static Void loadVcfFilesBatch(List<File> files) {
-    for (int index = 0; index < files.size(); index++) {
-      File file = files.get(index);
-      if (file == null || !file.exists()) {
-        System.err.println("Skipping missing file: " + file);
-        continue;
-      }
-      
-      try {
-        loadVcfFileSynchronously(file);
-      } catch (Exception e) {
-        System.err.println("Failed to load VCF: " + file + " - " + e.getMessage());
-        e.printStackTrace();
-      }
-
-      // Redraw every 10 files to allow the spinner to animate between bursts
-      if ((index + 1) % 10 == 0) {
-        Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
-      }
-    }
-    
-    return null;
-  }
-  
   /**
    * Load a single VCF file synchronously (on the calling thread, which is a ThreadRunner background thread).
    * This is a blocking operation that:

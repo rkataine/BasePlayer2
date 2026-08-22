@@ -13,6 +13,8 @@ import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
 
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
@@ -22,6 +24,7 @@ import javafx.fxml.Initializable;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.util.Duration;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -45,18 +48,19 @@ import java.util.prefs.Preferences;
 public class VariantManagerController implements Initializable {
 
     private static final String TEXT         = "white";
-    private static final String ACCENT       = "#0078d4";
     private static final String CANCER_COLOR = "#d16624";
 
     // ── FXML Components ───────────────────────────────────────────────────────
 
     // Filter Tab: Variant Filters
-    @FXML private CheckBox snvCheckBox, indelCheckBox, mnvCheckBox;
+    @FXML private VBox variantTypesContainer;  // Container for dynamic type checkboxes
     @FXML private CheckBox codingCheckBox, intronicCheckBox, intergenicCheckBox;
     @FXML private Slider qualitySlider, coverageSlider, alleleFreqSlider;
     @FXML private TextField qualityField, coverageField, alleleFreqField;
     @FXML private Label qualityValueLabel, coverageValueLabel, alleleFreqValueLabel;
     @FXML private CheckBox cancerOnlyCheckBox;
+    @FXML private VBox advancedFiltersContainer;
+    @FXML private Button addInfoFilterButton, addFilterFieldButton;
 
     // Filter Tab: Sample Comparison
     @FXML private RadioButton showAllSamplesRadio, sharedVariantsRadio, uniqueVariantsRadio, differentialRadio;
@@ -117,12 +121,18 @@ public class VariantManagerController implements Initializable {
     private ChangeListener<Boolean> updateListener;
     private volatile boolean annotationRunning;
     private volatile Thread annotationThread;
+    
+    // Debounce timer for real-time slider updates (200ms delay after last change)
+    private Timeline filterDebounceTimer;
     private int lastBuiltSize = -1;
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
     private static final String PREF_API_KEY   = "gemini_api_key";
     private static final String PREF_API_MODEL = "gemini_model";
     private volatile boolean agentRunning = false;
+    
+    // Dynamic variant type checkboxes
+    private java.util.Map<VcfVariantType, CheckBox> variantTypeCheckBoxes = new java.util.HashMap<>();
 
     // ── Initialization ────────────────────────────────────────────────────────
 
@@ -158,6 +168,9 @@ public class VariantManagerController implements Initializable {
         // Load current filter state into UI
         VariantFilter currentFilter = vcfManager.getCurrentFilter();
         loadFilterState(currentFilter);
+        
+        // Populate variant type filters dynamically
+        populateVariantTypeFilters();
 
         // Set up listeners
         vcfManager.setOnVcfAdded(this::loadData);
@@ -197,11 +210,16 @@ public class VariantManagerController implements Initializable {
     // ── Slider Bindings ───────────────────────────────────────────────────────
 
     private void setupSliderBindings() {
-        // Quality slider
+        // Initialize debounce timer for real-time filter updates
+        filterDebounceTimer = new Timeline(new KeyFrame(Duration.millis(200), e -> handleApplyFilters()));
+        filterDebounceTimer.setCycleCount(1);
+        
+        // Quality slider - update UI and trigger debounced filter update
         qualitySlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             int val = newVal.intValue();
             qualityValueLabel.setText(String.valueOf(val));
             qualityField.setText(String.valueOf(val));
+            scheduleFilterUpdate();
         });
         qualityField.textProperty().addListener((obs, oldVal, newVal) -> {
             try {
@@ -210,11 +228,12 @@ public class VariantManagerController implements Initializable {
             } catch (NumberFormatException ignored) {}
         });
 
-        // Coverage slider
+        // Coverage slider - update UI and trigger debounced filter update
         coverageSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             int val = newVal.intValue();
             coverageValueLabel.setText(String.valueOf(val));
             coverageField.setText(String.valueOf(val));
+            scheduleFilterUpdate();
         });
         coverageField.textProperty().addListener((obs, oldVal, newVal) -> {
             try {
@@ -223,12 +242,13 @@ public class VariantManagerController implements Initializable {
             } catch (NumberFormatException ignored) {}
         });
 
-        // Allele frequency slider
+        // Allele frequency slider - update UI and trigger debounced filter update
         alleleFreqSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             double val = newVal.doubleValue();
             String formatted = String.format("%.2f", val);
             alleleFreqValueLabel.setText(formatted);
             alleleFreqField.setText(formatted);
+            scheduleFilterUpdate();
         });
         alleleFreqField.textProperty().addListener((obs, oldVal, newVal) -> {
             try {
@@ -237,13 +257,21 @@ public class VariantManagerController implements Initializable {
             } catch (NumberFormatException ignored) {}
         });
     }
+    
+    /**
+     * Schedule a debounced filter update. Restarts the timer on each call,
+     * so rapid slider movements only trigger one update 200ms after the last change.
+     */
+    private void scheduleFilterUpdate() {
+        if (filterDebounceTimer != null) {
+            filterDebounceTimer.stop();
+            filterDebounceTimer.playFromStart();
+        }
+    }
 
     private void setupAutoFilterListeners() {
-        // Type checkboxes
-        snvCheckBox.setOnAction(e -> handleApplyFilters());
-        indelCheckBox.setOnAction(e -> handleApplyFilters());
-        mnvCheckBox.setOnAction(e -> handleApplyFilters());
-
+        // Type checkboxes - dynamic, set up in populateVariantTypeFilters()
+        
         // Effect checkboxes
         codingCheckBox.setOnAction(e -> handleApplyFilters());
         intronicCheckBox.setOnAction(e -> handleApplyFilters());
@@ -254,6 +282,121 @@ public class VariantManagerController implements Initializable {
 
         // Quality field (apply on Enter)
         qualityField.setOnAction(e -> handleApplyFilters());
+    }
+    
+    /**
+     * Populate variant type checkboxes dynamically based on actual types in loaded VCFs.
+     * This ensures we only show SNV/Indel for SNV files or SV types for SV files.
+     * Consolidates small and SV versions of the same type (e.g., INSERTION + SV_INSERTION = "INS").
+     */
+    private void populateVariantTypeFilters() {
+        if (variantTypesContainer == null) return;
+        
+        // Clear existing checkboxes
+        variantTypesContainer.getChildren().clear();
+        variantTypeCheckBoxes.clear();
+        
+        // Get variant types from the loaded data
+        java.util.Set<VcfVariantType> presentTypes = collectPresentVariantTypes();
+        
+        // If no data yet, show only basic types (not SV types)
+        if (presentTypes.isEmpty()) {
+            presentTypes = new java.util.HashSet<>();
+            presentTypes.add(VcfVariantType.SNV);
+            presentTypes.add(VcfVariantType.INSERTION);
+            presentTypes.add(VcfVariantType.DELETION);
+            presentTypes.add(VcfVariantType.MNV);
+        }
+        
+        // Detect if this is an SV-dominant file (has any actual SV types present)
+        boolean hasSvTypes = presentTypes.stream().anyMatch(t -> 
+            t == VcfVariantType.SV_DELETION || t == VcfVariantType.SV_INSERTION ||
+            t == VcfVariantType.SV_DUPLICATION || t == VcfVariantType.SV_INVERSION ||
+            t == VcfVariantType.SV_TRANSLOCATION || t == VcfVariantType.SV_BREAKEND);
+        
+        // Group types to avoid duplicates (e.g., both INSERTION and SV_INSERTION)
+        java.util.Set<VcfVariantType> typesToShow = new java.util.LinkedHashSet<>();
+        
+        for (VcfVariantType type : presentTypes) {
+            switch (type) {
+                case SNV:
+                case MNV:
+                case COMPLEX:
+                    // Always show these if present
+                    typesToShow.add(type);
+                    break;
+                case INSERTION:
+                    // Only show small INSERTION if there's no SV version or if this is not an SV file
+                    if (!hasSvTypes || !presentTypes.contains(VcfVariantType.SV_INSERTION)) {
+                        typesToShow.add(type);
+                    }
+                    break;
+                case DELETION:
+                    // Only show small DELETION if there's no SV version or if this is not an SV file
+                    if (!hasSvTypes || !presentTypes.contains(VcfVariantType.SV_DELETION)) {
+                        typesToShow.add(type);
+                    }
+                    break;
+                case SV_INSERTION:
+                case SV_DELETION:
+                case SV_DUPLICATION:
+                case SV_INVERSION:
+                case SV_TRANSLOCATION:
+                case SV_BREAKEND:
+                    // Only show SV types if this is actually an SV file
+                    if (hasSvTypes) {
+                        typesToShow.add(type);
+                    }
+                    break;
+            }
+        }
+        
+        // Create checkboxes for each type to show
+        for (VcfVariantType type : typesToShow) {
+            CheckBox cb = new CheckBox(getVariantTypeLabel(type));
+            cb.setSelected(true);
+            cb.getStyleClass().add("filter-checkbox");
+            cb.setOnAction(e -> handleApplyFilters());
+            
+            // For consolidated types, map both variants to same checkbox
+            variantTypeCheckBoxes.put(type, cb);
+            if (type == VcfVariantType.SV_INSERTION && presentTypes.contains(VcfVariantType.INSERTION)) {
+                variantTypeCheckBoxes.put(VcfVariantType.INSERTION, cb);
+            } else if (type == VcfVariantType.SV_DELETION && presentTypes.contains(VcfVariantType.DELETION)) {
+                variantTypeCheckBoxes.put(VcfVariantType.DELETION, cb);
+            }
+            
+            variantTypesContainer.getChildren().add(cb);
+        }
+    }
+    
+    /**
+     * Collect all variant types present in the currently loaded chromosome data.
+     */
+    private java.util.Set<VcfVariantType> collectPresentVariantTypes() {
+        if (sourceVariants != null) {
+            return sourceVariants.collectVariantTypes();
+        }
+        return java.util.Collections.emptySet();
+    }
+    
+    /**
+     * Get user-friendly label for a variant type.
+     */
+    private String getVariantTypeLabel(VcfVariantType type) {
+        return switch (type) {
+            case SNV -> "SNV";
+            case INSERTION -> "INS";
+            case DELETION -> "DEL";
+            case MNV -> "MNV";
+            case SV_DELETION -> "DEL";
+            case SV_INSERTION -> "INS";
+            case SV_DUPLICATION -> "DUP";
+            case SV_INVERSION -> "INV";
+            case SV_TRANSLOCATION -> "TRA";
+            case SV_BREAKEND -> "BND";
+            case COMPLEX -> "Complex";
+        };
     }
 
     // ── Table Setup ───────────────────────────────────────────────────────────
@@ -323,31 +466,47 @@ public class VariantManagerController implements Initializable {
 
     private void loadFilterState(VariantFilter filter) {
         Set<VcfVariantType> types = filter.getAllowedTypes();
-        snvCheckBox.setSelected(types.contains(VcfVariantType.SNV));
-        indelCheckBox.setSelected(types.contains(VcfVariantType.INSERTION)
-                || types.contains(VcfVariantType.DELETION));
-        mnvCheckBox.setSelected(types.contains(VcfVariantType.MNV));
+        
+        // Update dynamic type checkboxes
+        for (java.util.Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+            entry.getValue().setSelected(types.contains(entry.getKey()));
+        }
 
         codingCheckBox.setSelected(filter.isShowCoding());
         intronicCheckBox.setSelected(filter.isShowIntronic());
         intergenicCheckBox.setSelected(filter.isShowIntergenic());
 
         qualitySlider.setValue(filter.getMinQuality());
+        coverageSlider.setValue(filter.getMinDepth());
+        alleleFreqSlider.setValue(filter.getMinAlleleFraction());
         cancerOnlyCheckBox.setSelected(filter.isCancerGenesOnly());
+        
+        // Load advanced filters
+        if (advancedFiltersContainer != null) {
+            advancedFiltersContainer.getChildren().clear();
+            for (java.util.Map.Entry<String, String> entry : filter.getInfoFieldFilters().entrySet()) {
+                addInfoFilterRule(entry.getKey(), entry.getValue());
+            }
+            for (String filterValue : filter.getAllowedFilterValues()) {
+                addFilterFieldRule(filterValue);
+            }
+        }
     }
 
     private VariantFilter buildFilterFromUI() {
         VariantFilter filter = new VariantFilter();
 
-        // Variant types
+        // Variant types - collect from dynamic checkboxes
         Set<VcfVariantType> types = new HashSet<>();
-        if (snvCheckBox.isSelected()) types.add(VcfVariantType.SNV);
-        if (indelCheckBox.isSelected()) {
-            types.add(VcfVariantType.INSERTION);
-            types.add(VcfVariantType.DELETION);
+        for (java.util.Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+            if (entry.getValue().isSelected()) {
+                types.add(entry.getKey());
+            }
         }
-        if (mnvCheckBox.isSelected()) types.add(VcfVariantType.MNV);
-        types.add(VcfVariantType.COMPLEX); // Always include complex/SV
+        // Ensure at least one type is selected to avoid empty results
+        if (types.isEmpty()) {
+            types = EnumSet.allOf(VcfVariantType.class);
+        }
         filter.setAllowedTypes(types);
 
         // Effect categories
@@ -359,9 +518,46 @@ public class VariantManagerController implements Initializable {
         try {
             filter.setMinQuality(Double.parseDouble(qualityField.getText().trim()));
         } catch (NumberFormatException ignored) {}
+        
+        // Depth
+        try {
+            filter.setMinDepth(Integer.parseInt(coverageField.getText().trim()));
+        } catch (NumberFormatException ignored) {}
+        
+        // Allele fraction
+        try {
+            filter.setMinAlleleFraction(Double.parseDouble(alleleFreqField.getText().trim()));
+        } catch (NumberFormatException ignored) {}
 
         // Cancer genes
         filter.setCancerGenesOnly(cancerOnlyCheckBox.isSelected());
+
+        // Advanced filters - extract from UI
+        java.util.Map<String, String> infoFilters = new java.util.HashMap<>();
+        java.util.Set<String> filterValues = new java.util.HashSet<>();
+        
+        for (javafx.scene.Node node : advancedFiltersContainer.getChildren()) {
+            if (node instanceof javafx.scene.layout.HBox) {
+                javafx.scene.layout.HBox ruleBox = (javafx.scene.layout.HBox) node;
+                if (!ruleBox.getChildren().isEmpty() && ruleBox.getChildren().get(0) instanceof javafx.scene.control.Label) {
+                    javafx.scene.control.Label label = (javafx.scene.control.Label) ruleBox.getChildren().get(0);
+                    String text = label.getText();
+                    if (text.startsWith("INFO.")) {
+                        // Parse "INFO.FIELD = VALUE"
+                        String[] parts = text.substring(5).split(" = ");
+                        if (parts.length == 2) {
+                            infoFilters.put(parts[0], parts[1]);
+                        }
+                    } else if (text.startsWith("FILTER = ")) {
+                        // Parse "FILTER = VALUE"
+                        filterValues.add(text.substring(9));
+                    }
+                }
+            }
+        }
+        
+        filter.setInfoFieldFilters(infoFilters);
+        filter.setAllowedFilterValues(filterValues);
 
         return filter;
     }
@@ -377,16 +573,25 @@ public class VariantManagerController implements Initializable {
 
     @FXML
     private void handleResetFilters() {
-        snvCheckBox.setSelected(true);
-        indelCheckBox.setSelected(true);
-        mnvCheckBox.setSelected(true);
+        // Reset all dynamic type checkboxes
+        for (CheckBox cb : variantTypeCheckBoxes.values()) {
+            cb.setSelected(true);
+        }
         codingCheckBox.setSelected(true);
         intronicCheckBox.setSelected(true);
         intergenicCheckBox.setSelected(true);
         qualitySlider.setValue(0);
         coverageSlider.setValue(0);
         alleleFreqSlider.setValue(0);
+        coverageSlider.setValue(0);
+        alleleFreqSlider.setValue(0);
         cancerOnlyCheckBox.setSelected(false);
+        
+        // Clear advanced filters
+        if (advancedFiltersContainer != null) {
+            advancedFiltersContainer.getChildren().clear();
+        }
+        
         handleApplyFilters();
     }
 
@@ -418,6 +623,144 @@ public class VariantManagerController implements Initializable {
     private void handleRemoveControlFile() {
         // TODO: Implement remove control file
         System.out.println("Remove control file not yet implemented");
+    }
+
+    @FXML
+    private void handleAddInfoFilter() {
+        showInfoFilterDialog();
+    }
+
+    @FXML
+    private void handleAddFilterField() {
+        showFilterFieldDialog();
+    }
+
+    private void showInfoFilterDialog() {
+        javafx.scene.control.Dialog<javafx.util.Pair<String, String>> dialog = new javafx.scene.control.Dialog<>();
+        dialog.setTitle("Add INFO Field Filter");
+        dialog.setHeaderText("Specify an INFO field and expected value\n\nNote: INFO/FILTER filtering will be applied once VariantNode stores these fields.");
+        
+        javafx.scene.control.ButtonType addButtonType = new javafx.scene.control.ButtonType("Add", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(addButtonType, javafx.scene.control.ButtonType.CANCEL);
+        
+        javafx.scene.layout.GridPane grid = new javafx.scene.layout.GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        grid.setPadding(new javafx.geometry.Insets(20, 150, 10, 10));
+        
+        javafx.scene.control.TextField fieldName = new javafx.scene.control.TextField();
+        fieldName.setPromptText("e.g., SVTYPE");
+        javafx.scene.control.TextField fieldValue = new javafx.scene.control.TextField();
+        fieldValue.setPromptText("e.g., DEL");
+        
+        grid.add(new javafx.scene.control.Label("INFO Field Name:"), 0, 0);
+        grid.add(fieldName, 1, 0);
+        grid.add(new javafx.scene.control.Label("Expected Value:"), 0, 1);
+        grid.add(fieldValue, 1, 1);
+        
+        dialog.getDialogPane().setContent(grid);
+        javafx.application.Platform.runLater(() -> fieldName.requestFocus());
+        
+        dialog.setResultConverter(dialogButton -> {
+            if (dialogButton == addButtonType) {
+                return new javafx.util.Pair<>(fieldName.getText().trim(), fieldValue.getText().trim());
+            }
+            return null;
+        });
+        
+        dialog.showAndWait().ifPresent(pair -> {
+            if (!pair.getKey().isEmpty() && !pair.getValue().isEmpty()) {
+                addInfoFilterRule(pair.getKey(), pair.getValue());
+                handleApplyFilters();
+            }
+        });
+    }
+
+    private void showFilterFieldDialog() {
+        javafx.scene.control.Dialog<String> dialog = new javafx.scene.control.Dialog<>();
+        dialog.setTitle("Add FILTER Field Value");
+        dialog.setHeaderText("Specify allowed FILTER values (e.g., PASS, LowQual)\n\nNote: INFO/FILTER filtering will be applied once VariantNode stores these fields.");
+        
+        javafx.scene.control.ButtonType addButtonType = new javafx.scene.control.ButtonType("Add", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(addButtonType, javafx.scene.control.ButtonType.CANCEL);
+        
+        javafx.scene.layout.VBox vbox = new javafx.scene.layout.VBox(10);
+        vbox.setPadding(new javafx.geometry.Insets(20, 150, 10, 10));
+        
+        javafx.scene.control.TextField filterValue = new javafx.scene.control.TextField();
+        filterValue.setPromptText("e.g., PASS");
+        javafx.scene.control.Label hint = new javafx.scene.control.Label("Only variants with this FILTER value will be shown.");
+        hint.setStyle("-fx-font-size: 10px; -fx-text-fill: gray;");
+        
+        vbox.getChildren().addAll(new javafx.scene.control.Label("FILTER Value:"), filterValue, hint);
+        
+        dialog.getDialogPane().setContent(vbox);
+        javafx.application.Platform.runLater(() -> filterValue.requestFocus());
+        
+        dialog.setResultConverter(dialogButton -> {
+            if (dialogButton == addButtonType) {
+                return filterValue.getText().trim();
+            }
+            return null;
+        });
+        
+        dialog.showAndWait().ifPresent(value -> {
+            if (!value.isEmpty()) {
+                addFilterFieldRule(value);
+                handleApplyFilters();
+            }
+        });
+    }
+
+    private void addInfoFilterRule(String fieldName, String fieldValue) {
+        // Add to UI
+        javafx.scene.layout.HBox ruleBox = new javafx.scene.layout.HBox(10);
+        ruleBox.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        
+        javafx.scene.control.Label ruleLabel = new javafx.scene.control.Label("INFO." + fieldName + " = " + fieldValue);
+        ruleLabel.setStyle("-fx-text-fill: white; -fx-font-size: 11px;");
+        
+        javafx.scene.control.Button removeBtn = new javafx.scene.control.Button("×");
+        removeBtn.setStyle("-fx-font-size: 14px; -fx-padding: 0 5 0 5;");
+        removeBtn.getStyleClass().add("secondary-button");
+        removeBtn.setOnAction(e -> {
+            advancedFiltersContainer.getChildren().remove(ruleBox);
+            // Remove from filter
+            VariantFilter filter = buildFilterFromUI();
+            filter.getInfoFieldFilters().remove(fieldName);
+            vcfManager.applyFilter(filter, chromosome);
+            scheduleRebuild(filter);
+        });
+        
+        ruleBox.getChildren().addAll(ruleLabel, removeBtn);
+        advancedFiltersContainer.getChildren().add(ruleBox);
+    }
+
+    private void addFilterFieldRule(String filterValue) {
+        // Add to UI
+        javafx.scene.layout.HBox ruleBox = new javafx.scene.layout.HBox(10);
+        ruleBox.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        
+        javafx.scene.control.Label ruleLabel = new javafx.scene.control.Label("FILTER = " + filterValue);
+        ruleLabel.setStyle("-fx-text-fill: white; -fx-font-size: 11px;");
+        
+        javafx.scene.control.Button removeBtn = new javafx.scene.control.Button("×");
+        removeBtn.setStyle("-fx-font-size: 14px; -fx-padding: 0 5 0 5;");
+        removeBtn.getStyleClass().add("secondary-button");
+        removeBtn.setOnAction(e -> {
+            advancedFiltersContainer.getChildren().remove(ruleBox);
+            // Remove from filter
+            VariantFilter filter = buildFilterFromUI();
+            filter.getAllowedFilterValues().remove(filterValue);
+            if (filter.getAllowedFilterValues().isEmpty()) {
+                filter.setAllowedFilterValues(new java.util.HashSet<>());
+            }
+            vcfManager.applyFilter(filter, chromosome);
+            scheduleRebuild(filter);
+        });
+        
+        ruleBox.getChildren().addAll(ruleLabel, removeBtn);
+        advancedFiltersContainer.getChildren().add(ruleBox);
     }
 
     // ── Agent (AI Analysis) ───────────────────────────────────────────────────
@@ -602,6 +945,9 @@ public class VariantManagerController implements Initializable {
         if (!chrom.equals(chromosome)) lastBuiltSize = -1;
         chromosome = chrom;
         sourceVariants = fresh;
+
+        // Update variant type filters based on loaded data
+        populateVariantTypeFilters();
 
         if (sourceVariants == null || sourceVariants.isEmpty()) {
             setPlaceholder("Loading variants for " + chromosome + "…");

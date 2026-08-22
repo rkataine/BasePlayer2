@@ -53,16 +53,14 @@ public final class LoadingManager {
   /** Called on the FX thread whenever the ThreadRunner active-task list changes. */
   private void onTasksChanged() {
     List<ThreadRunner.RunnerTask> tasks = ThreadRunner.get().getActiveTasks();
-    System.err.println("[LoadingManager] onTasksChanged: " + tasks.size() + " active tasks");
+
     if (tasks.isEmpty()) {
-      System.err.println("[LoadingManager] Hiding popup (no active tasks)");
       if (popup != null) {
         popup.hide();
       }
     } else {
       ensurePopup();
       String message = buildMessage(tasks);
-      System.err.println("[LoadingManager] Showing popup: " + message);
       if (!popup.isShowing()) {
         popup.show(message, MainApp.stage, ThreadRunner.get()::cancelAll);
       } else {

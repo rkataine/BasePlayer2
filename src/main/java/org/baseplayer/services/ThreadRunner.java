@@ -85,6 +85,10 @@ public final class ThreadRunner {
                                Consumer<T> onSuccess) {
     RunnerTask task = new RunnerTask(description);
 
+    // Register before submitting so UI can show the task immediately and
+    // early progress updates are not missed by the popup.
+    register(task);
+
     Future<?> future = pool.submit(() -> {
       T result = null;
       try {
@@ -118,7 +122,6 @@ public final class ThreadRunner {
     });
 
     task.setFuture(future);
-    register(task);
     return task;
   }
 
@@ -170,13 +173,10 @@ public final class ThreadRunner {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private void register(RunnerTask task) {
-    System.err.println("[ThreadRunner] Task registered: " + task.getDescription() + " (id: " + task.getId().substring(0, 8) + "...)");
     activeTasks.add(task);
     notifyChanged();
     task.setOnComplete(() -> {
-      System.err.println("[ThreadRunner] Task removed from active list: " + task.getDescription() + " (id: " + task.getId().substring(0, 8) + "...)");
       activeTasks.remove(task);
-      System.err.println("[ThreadRunner] Active tasks remaining: " + activeTasks.size());
       notifyChanged();
     });
   }
@@ -242,7 +242,6 @@ public final class ThreadRunner {
      */
     public void complete() {
       if (completed.compareAndSet(false, true)) {
-        System.err.println("[ThreadRunner] Task completing: " + description + " (id: " + id.substring(0, 8) + "...)");
         Runnable cb = onComplete;
         if (cb != null) cb.run();
       }

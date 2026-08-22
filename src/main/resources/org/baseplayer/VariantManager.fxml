@@ -13,10 +13,11 @@
         
         <!-- Variant Filters Tab -->
         <Tab text="Variant Filters">
-            <HBox spacing="20" styleClass="filter-panel">
-                <padding>
-                    <Insets top="15" right="15" bottom="15" left="15"/>
-                </padding>
+            <ScrollPane fitToWidth="true" styleClass="filter-scroll">
+                <HBox spacing="20" styleClass="filter-panel">
+                    <padding>
+                        <Insets top="15" right="15" bottom="15" left="15"/>
+                    </padding>
                 
                 <!-- Left Panel: Quality Filters -->
                 <VBox spacing="15" HBox.hgrow="ALWAYS">
@@ -53,10 +54,10 @@
                         </HBox>
                     </VBox>
                     
-                    <!-- Allele Frequency Filter Section -->
+                    <!-- Allele Fraction Filter Section -->
                     <VBox spacing="8">
                         <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Label text="Minimum Allele Frequency" styleClass="section-header"/>
+                            <Label text="Minimum Allele Fraction" styleClass="section-header"/>
                             <Label fx:id="alleleFreqValueLabel" text="0.0" styleClass="value-label"/>
                         </HBox>
                         <HBox spacing="10" alignment="CENTER_LEFT">
@@ -80,10 +81,8 @@
                     <!-- Variant Types Section -->
                     <VBox spacing="10">
                         <Label text="Variant Types" styleClass="section-header"/>
-                        <VBox spacing="8">
-                            <CheckBox fx:id="snvCheckBox" text="SNV" selected="true" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="indelCheckBox" text="Indel" selected="true" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="mnvCheckBox" text="MNV" selected="true" styleClass="filter-checkbox"/>
+                        <VBox fx:id="variantTypesContainer" spacing="8">
+                            <!-- Dynamic checkboxes populated by controller -->
                         </VBox>
                     </VBox>
                     
@@ -103,6 +102,18 @@
                         <CheckBox fx:id="cancerOnlyCheckBox" text="Cancer genes only (COSMIC Census)" styleClass="filter-checkbox"/>
                     </VBox>
                     
+                    <!-- Advanced Filtering Section -->
+                    <VBox spacing="10">
+                        <Label text="Advanced Filters (INFO/FILTER)" styleClass="section-header"/>
+                        <VBox fx:id="advancedFiltersContainer" spacing="5">
+                            <!-- Dynamic rules displayed here -->
+                        </VBox>
+                        <HBox spacing="10">
+                            <Button fx:id="addInfoFilterButton" text="Add INFO Filter..." styleClass="secondary-button" onAction="#handleAddInfoFilter"/>
+                            <Button fx:id="addFilterFieldButton" text="Add FILTER..." styleClass="secondary-button" onAction="#handleAddFilterField"/>
+                        </HBox>
+                    </VBox>
+                    
                     <!-- Action Buttons -->
                     <HBox spacing="10" alignment="CENTER_RIGHT" VBox.vgrow="ALWAYS">
                         <padding>
@@ -113,14 +124,16 @@
                     </HBox>
                 </VBox>
             </HBox>
+            </ScrollPane>
         </Tab>
         
         <!-- Sample Comparison Tab -->
         <Tab text="Sample Comparison">
-            <VBox spacing="15" styleClass="filter-panel">
-                <padding>
-                    <Insets top="15" right="15" bottom="15" left="15"/>
-                </padding>
+            <ScrollPane fitToWidth="true" styleClass="filter-scroll">
+                <VBox spacing="15" styleClass="filter-panel">
+                    <padding>
+                        <Insets top="15" right="15" bottom="15" left="15"/>
+                    </padding>
                 
                 <!-- Comparison Mode Section -->
                 <VBox spacing="8">
@@ -165,14 +178,16 @@
                     <Button text="Apply Comparison" styleClass="primary-button" onAction="#handleApplyComparison"/>
                 </HBox>
             </VBox>
+            </ScrollPane>
         </Tab>
         
         <!-- Control Files Tab -->
         <Tab text="Control Files">
-            <VBox spacing="15" styleClass="filter-panel">
-                <padding>
-                    <Insets top="15" right="15" bottom="15" left="15"/>
-                </padding>
+            <ScrollPane fitToWidth="true" styleClass="filter-scroll">
+                <VBox spacing="15" styleClass="filter-panel">
+                    <padding>
+                        <Insets top="15" right="15" bottom="15" left="15"/>
+                    </padding>
                 
                 <!-- Population Frequency Databases -->
                 <VBox spacing="8">
@@ -226,6 +241,7 @@
                     <Button text="Apply Settings" styleClass="primary-button" onAction="#handleApplyControlSettings"/>
                 </HBox>
             </VBox>
+            </ScrollPane>
         </Tab>
 
         <!-- Agent (AI Analysis) Tab -->

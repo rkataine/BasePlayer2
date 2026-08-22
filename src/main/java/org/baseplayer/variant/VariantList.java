@@ -311,4 +311,18 @@ public class VariantList {
         return String.format("VariantList[%s:%d-%d, n=%d]", 
             chromosome, startPosition, endPosition, size);
     }
+    
+    /**
+     * Collect all unique variant types present in this list.
+     * Useful for dynamically generating filter UI based on actual data.
+     */
+    public java.util.Set<VcfVariantType> collectVariantTypes() {
+        java.util.Set<VcfVariantType> types = new java.util.HashSet<>();
+        VariantNode current = head;
+        while (current != null) {
+            types.add(current.type);
+            current = current.next;
+        }
+        return types;
+    }
 }

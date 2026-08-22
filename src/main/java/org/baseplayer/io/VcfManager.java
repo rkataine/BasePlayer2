@@ -220,8 +220,12 @@ public class VcfManager {
     }
 
     private void loadChromosomeVariants(String chromosome) {
-        if (loadedVcfs.isEmpty()) return;
-        if (loading) return;
+        if (loadedVcfs.isEmpty()) {
+            return;
+        }
+        if (loading) {
+            return;
+        }
 
         if (!chromosome.equals(lastLoadedChromosome)) {
             // Release old variant list from canvases immediately so it can be GC'd before the new one loads
@@ -249,7 +253,6 @@ public class VcfManager {
             mappedSamplesPerVcf.stream().mapToInt(Integer::intValue).sum());
         final VariantList mergedList = currentVariants;
         loading = true;
-        org.baseplayer.services.LoadingManager.get().setProgress(-1.0);
         final int vcfCountBefore = loadedVcfs.size();
 
         ThreadRunner.get().submit("Loading variants…",
@@ -264,15 +267,8 @@ public class VcfManager {
                             throw new InterruptedException("Variant loading cancelled");
                         try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
                             vcfData.loader.setVcfReader(reader);
-                            // Progress callback: aggregate per-VCF sample progress into one continuous batch bar.
-                            vcfData.loader.streamChromosomeVariantsToList(chromosome, mergedList, null,
-                                (current, ignoredTotal) -> {
-                                    int boundedCurrent = Math.max(0, Math.min(vcfSampleTotal, current));
-                                    int overallCurrent = Math.min(totalMappedSamples,
-                                        completedSamples[0] + boundedCurrent);
-                                    org.baseplayer.services.LoadingManager.get()
-                                        .setProgress(overallCurrent, totalMappedSamples);
-                                });
+                            // No progress callback - update only after each VCF completes
+                            vcfData.loader.streamChromosomeVariantsToList(chromosome, mergedList, null, null);
                         } catch (IOException e) {
                             System.err.println("Skipping variants for " + vcfData.file.getName() + ": " + e.getMessage());
                         } finally {
@@ -300,7 +296,9 @@ public class VcfManager {
             },
             result -> {
                 loading = false;
-                if (result == null) return;
+                if (result == null) {
+                    return;
+                }
 
                 loadedVcfCountForCurrentChromosome = loadedVcfs.size();
 
@@ -483,6 +481,10 @@ public class VcfManager {
 
     public VariantFilter getCurrentFilter() {
         return currentFilter;
+    }
+
+    public int getFilterGeneration() {
+        return (int) filterGeneration.get();
     }
 
     public String getLastLoadedChromosome() {

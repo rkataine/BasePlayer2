@@ -20,4 +20,7 @@ public final class NavigationState {
 
   /** True while line-zoom mode is active (right-drag zoom). Blocks all BAM fetches. */
   public volatile boolean lineZoomerActive = false;
+
+  /** True while dragging a read scrollbar (vertical scroll only). Skips coverage recomputation to reduce memory allocation. */
+  public volatile boolean scrollbarDragging = false;
 }

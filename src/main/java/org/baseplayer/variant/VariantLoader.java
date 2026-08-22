@@ -402,9 +402,10 @@ public class VariantLoader {
         if ("NA".equalsIgnoreCase(gt)) {
             // System.err.println("[VariantLoader.getSampleCallForAllele]   GT=NA (breakend with no explicit genotype) -> ACCEPT");
             double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
-            int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : -1;
-            // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp);
-            return new VariantNode.SampleCall(trackIndex, gt, gq, dp);
+            int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
+            double af = calculateAlleleFraction(gtMap, altAllele);
+            // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp + ", af=" + af);
+            return new VariantNode.SampleCall(trackIndex, gt, gq, dp, af);
         }
         
         // GT contains allele bases (e.g. "G/A") or indices (e.g. "0/1"); skip if this alt is not present
@@ -414,9 +415,65 @@ public class VariantLoader {
         }
 
         double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
-        int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : -1;
-        // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp);
-        return new VariantNode.SampleCall(trackIndex, gt, gq, dp);
+        int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
+        double af = calculateAlleleFraction(gtMap, altAllele);
+        // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp + ", af=" + af);
+        return new VariantNode.SampleCall(trackIndex, gt, gq, dp, af);
+    }
+    
+    /**
+     * If DP field is missing, calculate depth from AD (Allele Depth) field.
+     * AD format: [ref_count, alt1_count, alt2_count, ...]
+     * Returns sum of all counts, or -1 if AD not available.
+     */
+    private static int calculateDepthFromAd(Map<String, Object> gtMap) {
+        if (!gtMap.containsKey("AD")) {
+            return -1;
+        }
+        
+        Object adObj = gtMap.get("AD");
+        if (!(adObj instanceof int[])) {
+            return -1;
+        }
+        
+        int[] ad = (int[]) adObj;
+        int totalDepth = 0;
+        for (int count : ad) {
+            totalDepth += count;
+        }
+        
+        return totalDepth > 0 ? totalDepth : -1;
+    }
+    
+    /**
+     * Calculate allele fraction from AD (Allele Depth) field.
+     * AD format: [ref_count, alt1_count, alt2_count, ...]
+     * Returns alt_count / (ref_count + alt_count), or -1 if AD not available.
+     */
+    private static double calculateAlleleFraction(Map<String, Object> gtMap, String altAllele) {
+        if (!gtMap.containsKey("AD")) {
+            return -1.0;
+        }
+        
+        Object adObj = gtMap.get("AD");
+        if (!(adObj instanceof int[])) {
+            return -1.0;
+        }
+        
+        int[] ad = (int[]) adObj;
+        if (ad.length < 2) {
+            return -1.0;  // Need at least ref and one alt
+        }
+        
+        int refCount = ad[0];
+        int altCount = ad[1];  // Assuming first alt allele (multi-allelic sites split earlier)
+        int totalCount = refCount + altCount;
+        
+        if (totalCount == 0) {
+            return 0.0;
+        }
+        
+        return (double) altCount / totalCount;
     }
 
     /** Returns true if the GT string (allele-base form, e.g. "G/A") contains the given alt allele. */

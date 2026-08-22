@@ -12,6 +12,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
@@ -780,56 +781,58 @@ public class MasterTrackCanvas extends GenomicCanvas {
     titleLabel.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 13; -fx-font-weight: bold; -fx-padding: 4 8 2 8;");
     settingsMenu.getItems().addAll(new CustomMenuItem(titleLabel, false), new SeparatorMenuItem());
 
-    // Sampled coverage settings
-    VBox sampledCoverageBox = new VBox(4);
-    sampledCoverageBox.setPadding(new Insets(4, 8, 4, 8));
-
-    CheckBox enableCoverageCb = new CheckBox("Enable sampled coverage");
-    enableCoverageCb.setSelected(Settings.get().isEnableSampledCoverage());
-    enableCoverageCb.getStyleClass().add("dark-checkbox");
-    enableCoverageCb.setStyle("-fx-font-size: 12;");
-    enableCoverageCb.selectedProperty().addListener((obs, o, n) -> {
-      Settings.get().setEnableSampledCoverage(n);
-      update.set(!update.get());
-    });
-
-    HBox samplePointsBox = new HBox(6);
-    Label samplePointsLabel = new Label("Sample points:");
-    samplePointsLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
-    TextField samplePointsField = new TextField(String.valueOf(Settings.get().getSampledCoveragePoints()));
-    samplePointsField.setStyle(
-        "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
-    samplePointsField.setPrefWidth(80);
-    Button refreshButton = new Button("Refresh");
-    refreshButton.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11; "
-        + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
-    refreshButton.setOnAction(e -> {
-      try {
-        int value = Integer.parseInt(samplePointsField.getText());
-        if (value > 0 && value <= 10000) {
-          Settings.get().setSampledCoveragePoints(value);
-          for (SampleTrack strack : sampleRegistry.getSampleTracks()) {
-            for (Sample s : strack.getSamples()) {
-              if (s.getBamFile() != null) s.getBamFile().clearSampledCoverageCache();
-            }
-          }
-          update.set(!update.get());
-          settingsMenu.hide();
-        }
-      } catch (NumberFormatException ex) {
-        samplePointsField.setText(String.valueOf(Settings.get().getSampledCoveragePoints()));
-      }
-    });
-    samplePointsBox.getChildren().addAll(samplePointsLabel, samplePointsField, refreshButton);
-    sampledCoverageBox.getChildren().addAll(enableCoverageCb, samplePointsBox);
-    settingsMenu.getItems().add(new CustomMenuItem(sampledCoverageBox, false));
-
     // Gather BAM files once for global controls.
     List<AlignmentFile> bamFiles = new ArrayList<>();
     for (SampleTrack strack : sampleRegistry.getSampleTracks()) {
       for (Sample s : strack.getSamples()) {
         if (s.getBamFile() != null) bamFiles.add(s.getBamFile());
       }
+    }
+
+    // Sampled coverage settings (BAM-specific)
+    if (!bamFiles.isEmpty()) {
+      VBox sampledCoverageBox = new VBox(4);
+      sampledCoverageBox.setPadding(new Insets(4, 8, 4, 8));
+
+      CheckBox enableCoverageCb = new CheckBox("Enable sampled coverage");
+      enableCoverageCb.setSelected(Settings.get().isEnableSampledCoverage());
+      enableCoverageCb.getStyleClass().add("dark-checkbox");
+      enableCoverageCb.setStyle("-fx-font-size: 12;");
+      enableCoverageCb.selectedProperty().addListener((obs, o, n) -> {
+        Settings.get().setEnableSampledCoverage(n);
+        update.set(!update.get());
+      });
+
+      HBox samplePointsBox = new HBox(6);
+      Label samplePointsLabel = new Label("Sample points:");
+      samplePointsLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+      TextField samplePointsField = new TextField(String.valueOf(Settings.get().getSampledCoveragePoints()));
+      samplePointsField.setStyle(
+          "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+      samplePointsField.setPrefWidth(80);
+      Button refreshButton = new Button("Refresh");
+      refreshButton.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11; "
+          + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+      refreshButton.setOnAction(e -> {
+        try {
+          int value = Integer.parseInt(samplePointsField.getText());
+          if (value > 0 && value <= 10000) {
+            Settings.get().setSampledCoveragePoints(value);
+            for (SampleTrack strack : sampleRegistry.getSampleTracks()) {
+              for (Sample s : strack.getSamples()) {
+                if (s.getBamFile() != null) s.getBamFile().clearSampledCoverageCache();
+              }
+            }
+            update.set(!update.get());
+            settingsMenu.hide();
+          }
+        } catch (NumberFormatException ex) {
+          samplePointsField.setText(String.valueOf(Settings.get().getSampledCoveragePoints()));
+        }
+      });
+      samplePointsBox.getChildren().addAll(samplePointsLabel, samplePointsField, refreshButton);
+      sampledCoverageBox.getChildren().addAll(enableCoverageCb, samplePointsBox);
+      settingsMenu.getItems().add(new CustomMenuItem(sampledCoverageBox, false));
     }
 
     // Mismatch filtering controls (apply to all BAM files)
@@ -952,15 +955,18 @@ public class MasterTrackCanvas extends GenomicCanvas {
       settingsMenu.getItems().add(new CustomMenuItem(readRenderBox, false));
     }
 
-    // Circos plot of split reads & inter-chromosomal discordant pairs
-    settingsMenu.getItems().add(new SeparatorMenuItem());
-    MenuItem circosItem = new MenuItem("Circos plot (split reads + discordant pairs)\u2026");
-    circosItem.setStyle("-fx-text-fill: #cccccc;");
-    circosItem.setOnAction(e -> {
-      settingsMenu.hide();
-      openCircosPlot();
-    });
-    settingsMenu.getItems().add(circosItem);
+    // Circos plot of split reads & inter-chromosomal discordant pairs (show if BAM or VCF with SVs)
+    boolean hasVcfData = VcfManager.getInstance().hasVcfLoaded();
+    if (!bamFiles.isEmpty() || hasVcfData) {
+      settingsMenu.getItems().add(new SeparatorMenuItem());
+      MenuItem circosItem = new MenuItem("Circos plot (split reads + discordant pairs)\u2026");
+      circosItem.setStyle("-fx-text-fill: #cccccc;");
+      circosItem.setOnAction(e -> {
+        settingsMenu.hide();
+        openCircosPlot();
+      });
+      settingsMenu.getItems().add(circosItem);
+    }
 
     settingsMenu.show(getScene().getWindow(), screenX, screenY);
   }

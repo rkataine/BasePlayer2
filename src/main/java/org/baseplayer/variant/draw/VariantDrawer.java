@@ -34,7 +34,6 @@ public class VariantDrawer {
     private static final Color COLOR_DELETION = Color.web("#F5A623");      // Orange
     private static final Color COLOR_MNV = Color.web("#BD10E0");           // Purple
     private static final Color COLOR_COMPLEX = Color.web("#B8E986");       // Light green
-    private static final Color COLOR_LOW_QUALITY = Color.web("#666666", 0.3); // Gray semi-transparent
     
     // SV colors (match master track)
     private static final Color COLOR_SV_DELETION = Color.web("#00cc44");      // Green

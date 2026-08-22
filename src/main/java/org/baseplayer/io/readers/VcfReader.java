@@ -195,12 +195,9 @@ public class VcfReader implements AutoCloseable {
         // Iterate through entire VCF and collect structural variants for this chromosome
         try (var iterator = reader.iterator()) {
             boolean foundChromosome = false;
-            int totalVariants = 0;
-            int svCount = 0;
             
             while (iterator.hasNext()) {
                 VariantContext ctx = iterator.next();
-                totalVariants++;
                 
                 // Check if we're on the target chromosome
                 if (ctx.getContig().equals(normalizedChrom)) {
@@ -208,7 +205,6 @@ public class VcfReader implements AutoCloseable {
                     
                     // Only include structural variants
                     if (isStructuralVariant(ctx)) {
-                        svCount++;
                         // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Found SV #" + svCount + ": pos=" + ctx.getStart() + ", alt=" + ctx.getAlternateAlleles() + ", SVTYPE=" + ctx.getAttributeAsString("SVTYPE", "?"));
                         VcfVariantType type = classifyStructuralVariant(ctx);
                         VcfStructuralVariant variant = parseStructuralVariant(ctx, type);
@@ -238,25 +234,19 @@ public class VcfReader implements AutoCloseable {
         String normalizedChrom = normalizeChromosomeName(chromosome);
         // System.err.println("[VcfReader.iterateChromosomeVariants] Normalized: " + normalizedChrom);
         
-        int totalVariants = 0, svCount = 0, snvCount = 0;
-        
         try (var iterator = reader.iterator()) {
             boolean foundChromosome = false;
             while (iterator.hasNext()) {
                 VariantContext ctx = iterator.next();
-                totalVariants++;
                 
                 if (ctx.getContig().equals(normalizedChrom)) {
                     foundChromosome = true;
                     if (isStructuralVariant(ctx)) {
-                        svCount++;
-                        String svType = ctx.getAttributeAsString("SVTYPE", "?");
                         // System.err.println("[VcfReader.iterateChromosomeVariants] SV #" + svCount + ": pos=" + ctx.getStart() + ", SVTYPE=" + svType + ", END=" + ctx.getAttributeAsInt("END", -1));
                         if (svConsumer != null) {
                             svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
                         }
                     } else {
-                        snvCount++;
                         if (snvConsumer != null) {
                             snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
                         }

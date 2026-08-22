@@ -3,6 +3,7 @@ package org.baseplayer.components;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
@@ -34,7 +35,7 @@ public class LoadingPopup {
 
     /** Approximate popup dimensions used for immediate centering. */
     private static final double POPUP_W = 310;
-    private static final double POPUP_H = 180;  // Increased for progress bar with more breathing room
+    private static final double POPUP_H = 200;  // Increased for progress bar and debug controls
 
     private static final String POPUP_STYLE =
             "-fx-background-color: rgba(30, 30, 30, 0.98);" +
@@ -76,17 +77,21 @@ public class LoadingPopup {
 
         // ── Progress bar ───────────────────────────────────────────────────
         progressBar = new ProgressBar(0.0);
-        progressBar.setMinHeight(16);  // Minimum visible height
-        // Bright lime green fill with darker track background
-        progressBar.setStyle(
-            "-fx-accent: #00ff00;" +
-            "-fx-control-inner-background: #222222;" +
-            "-fx-padding: 0;" +
-            "-fx-background-radius: 0;" +
-            "-fx-border-color: #00ff00;" +
-            "-fx-border-width: 1;"
-        );
+        progressBar.setPrefHeight(20);
+        progressBar.setMinHeight(20);
+        progressBar.setMaxHeight(20);
         progressBar.setMaxWidth(Double.MAX_VALUE);
+        
+        // Style the track/background
+        progressBar.setStyle(
+            "-fx-pref-height: 20px;" +
+            "-fx-background-color: linear-gradient(to bottom, #2a2a2a, #1a1a1a);" +
+            "-fx-background-radius: 3px;" +
+            "-fx-border-color: #555555;" +
+            "-fx-border-width: 1px;" +
+            "-fx-border-radius: 3px;"
+        );
+        // Note: The .bar child styling happens in show() after scene construction
 
         // ── Cancel button ──────────────────────────────────────────────────
         Button cancelBtn = new Button("Cancel");
@@ -111,8 +116,9 @@ public class LoadingPopup {
         cancelBtn.setOnAction(e -> cancel());
 
         root.getChildren().addAll(msgRow, progressBar, cancelBtn);
+        
         VBox.setVgrow(msgRow, Priority.NEVER);
-        VBox.setVgrow(progressBar, Priority.ALWAYS);
+        VBox.setVgrow(progressBar, Priority.NEVER);  // Fixed: Don't expand vertically
         VBox.setVgrow(cancelBtn, Priority.NEVER);
         popup.getContent().add(root);
     }
@@ -129,11 +135,23 @@ public class LoadingPopup {
     public void show(String message, Window owner, Runnable onCancel) {
         this.onCancel = onCancel;
         messageLabel.setText(message);
-        progressBar.setProgress(-1.0);  // Start in indeterminate mode until determinate progress arrives
+        progressBar.setProgress(0.0);  // Start at 0% in determinate mode
         // Centre immediately using fixed dimensions so the popup never flashes at (0,0)
         double x = owner.getX() + (owner.getWidth()  - POPUP_W) / 2;
         double y = owner.getY() + (owner.getHeight() - POPUP_H) / 2;
         popup.show(owner, x, y);
+        
+        // Style the internal bar node after the scene is constructed
+        Platform.runLater(() -> {
+            Node bar = progressBar.lookup(".bar");
+            if (bar != null) {
+                bar.setStyle(
+                    "-fx-background-color: #2196F3;" +
+                    "-fx-background-radius: 2px;" +
+                    "-fx-background-insets: 2px;"
+                );
+            }
+        });
     }
 
     /**
