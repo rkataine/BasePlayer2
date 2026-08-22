@@ -420,7 +420,6 @@ public class AlignmentCanvas extends GenomicCanvas {
     final double viewEnd   = drawStack.end;
     final java.util.List<Integer> visibleTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     final org.baseplayer.variant.VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
-    final java.util.Set<VcfVariantType> allowedTypes = activeFilter.getAllowedTypes();
     Thread t = new Thread(() -> {
       try {
         int[] snv = new int[DENSITY_BINS];
@@ -435,16 +434,12 @@ public class AlignmentCanvas extends GenomicCanvas {
         double viewLen = Math.max(1, viewEnd - viewStart);
         VariantNode node = variants.getFirst();
         while (node != null) {
-          // Skip if variant type is filtered out
-          if (!allowedTypes.contains(node.type)) {
-            node = node.next;
-            continue;
-          }
-          
-          // Count samples with this variant in visible tracks
+          // Count only visible samples that pass the active variant filter.
           int sampleCount = 0;
           for (int idx : visibleTrackIndices) {
-            if (node.hasSample(idx)) sampleCount++;
+            if (node.hasSample(idx) && activeFilter.passes(node, idx)) {
+              sampleCount++;
+            }
           }
           
           if (sampleCount > 0) {

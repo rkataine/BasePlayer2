@@ -5,6 +5,7 @@ import java.net.URL;
 
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.utils.DrawColors;
+import org.baseplayer.io.VcfManager;
 
 import javafx.animation.Animation;
 import javafx.animation.FadeTransition;
@@ -93,6 +94,11 @@ public class MainApp extends Application {
         stage.show(); 
         splashScreen.close();
         ft.play();
+        
+        // Auto-open Variant Manager if VCFs are already loaded
+        if (VcfManager.getInstance().hasLoadedVcf()) {
+            VcfManager.getInstance().autoOpenVariantManager();
+        }
     }
     private static Parent loadFXML(String fxml) throws IOException {
         FXMLLoader fxmlLoader = new FXMLLoader(getResource(fxml + ".fxml"));

@@ -349,23 +349,33 @@ public class MasterTrackCanvas extends GenomicCanvas {
 
     gc.setFont(Font.font("Segoe UI", 10));
     gc.setFill(Color.web("#9ea7b3"));
-    gc.fillText("Visible samples", 8, headerBarH + 14);
-    gc.setFill(Color.web("#7f8791"));
-    String label;
-    if (sampleRegistry.hasActiveSampleFilterQuery()) {
-      label = "Filter";
+    
+    // Check if gene focus is active
+    String focusedGene = sampleRegistry.getFocusedGeneName();
+    if (focusedGene != null && !focusedGene.isBlank()) {
+      gc.fillText("Gene focus: " + focusedGene, 8, headerBarH + 14);
+      gc.setFill(Color.web("#ffa500"));
+      gc.fillText("[clear ×]", w - 70, headerBarH + 14);
+      rangeLabelHit = new HitBox(w - 72, headerBarH + 1, 70, 18);
     } else {
-      String rangeText = first == last
-          ? String.valueOf(first + 1)
-          : (first + 1) + "-" + (last + 1);
-      label = rangeText + " / " + trackCount;
+      gc.fillText("Visible samples", 8, headerBarH + 14);
+      gc.setFill(Color.web("#7f8791"));
+      String label;
+      if (sampleRegistry.hasActiveSampleFilterQuery()) {
+        label = "Filter";
+      } else {
+        String rangeText = first == last
+            ? String.valueOf(first + 1)
+            : (first + 1) + "-" + (last + 1);
+        label = rangeText + " / " + trackCount;
+      }
+      double labelX = 96;
+      double labelY = headerBarH + 14;
+      gc.fillText(label, labelX, labelY);
+      // Make clickable area larger for easier interaction - covers entire label region
+      double labelWidth = Math.max(80, label.length() * 8.5);
+      rangeLabelHit = new HitBox(labelX - 6, headerBarH + 1, labelWidth, 18);
     }
-    double labelX = 96;
-    double labelY = headerBarH + 14;
-    gc.fillText(label, labelX, labelY);
-    // Make clickable area larger for easier interaction - covers entire label region
-    double labelWidth = Math.max(80, label.length() * 8.5);
-    rangeLabelHit = new HitBox(labelX - 6, headerBarH + 1, labelWidth, 18);
 
     double railX = 12;
     double railW = Math.max(10, w - 24);
@@ -403,6 +413,13 @@ public class MasterTrackCanvas extends GenomicCanvas {
     double h = getReactiveCanvas().getHeight();
     reactiveGc.clearRect(0, 0, w, h);
 
+    // Highlight gene focus clear button on hover
+    if (isControlsExpanded() && sampleRegistry.hasFocusedTrackIndices() 
+        && rangeLabelHit != null && rangeLabelHit.contains(mousePressedX, mousePressedY)) {
+      reactiveGc.setFill(Color.rgb(255, 165, 0, 0.2));
+      reactiveGc.fillRect(rangeLabelHit.x(), rangeLabelHit.y(), rangeLabelHit.w(), rangeLabelHit.h());
+    }
+
     double sy = (getHeaderBarHeight() - HEADER_BTN_SIZE) / 2;
     if (settingsHovered) {
       reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
@@ -429,6 +446,18 @@ public class MasterTrackCanvas extends GenomicCanvas {
 
   private void handleMasterClick(double x, double y, double screenX, double screenY) {
     if (isControlsExpanded() && rangeLabelHit != null && rangeLabelHit.contains(x, y)) {
+      // If gene focus is active, clicking on label clears it
+      if (sampleRegistry.hasFocusedTrackIndices()) {
+        sampleRegistry.clearFocusedTrackIndices();
+        int trackCount = sampleRegistry.getDisplayedTrackCount();
+        if (trackCount > 0) {
+          sampleRegistry.setFirstVisibleSample(0);
+          sampleRegistry.setLastVisibleSample(trackCount - 1);
+        }
+        update.set(!update.get());
+        return;
+      }
+      // Otherwise, open range input menu
       showRangeInputMenu(screenX, screenY);
       return;
     }

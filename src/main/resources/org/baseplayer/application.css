@@ -262,6 +262,26 @@ VBox {
     -fx-background-color: #2b2b2b;
 }
 
+.variant-manager-split {
+  -fx-background-color: #2b2b2b;
+  -fx-padding: 0;
+}
+
+.variant-manager-split > .split-pane-divider {
+  -fx-background-color: #3a3a3a;
+  -fx-padding: 0 0 1 0;
+}
+
+.tab-content-split {
+  -fx-background-color: transparent;
+  -fx-padding: 0;
+}
+
+.tab-content-split > .split-pane-divider {
+  -fx-background-color: #3a3a3a;
+  -fx-padding: 0 0 1 0;
+}
+
 .root-pane .label {
     -fx-text-fill: white;
 }
@@ -269,6 +289,10 @@ VBox {
 /* Filter panel */
 .filter-panel {
     -fx-background-color: #2b2b2b;
+  -fx-border-color: #3c3c3c;
+  -fx-border-width: 1px;
+  -fx-border-radius: 6px;
+  -fx-background-radius: 6px;
 }
 
 .filter-panel .label {
@@ -393,6 +417,7 @@ VBox {
     -fx-text-fill: white;
     -fx-border-color: #555555;
     -fx-border-width: 1px;
+  -fx-padding: 5 8 5 8;
     -fx-prompt-text-fill: #888888;
 }
 
@@ -456,6 +481,9 @@ VBox {
 /* Variant tables */
 .table-container {
     -fx-background-color: #1e1e1e;
+  -fx-padding: 8 10 10 10;
+  -fx-border-color: #3c3c3c;
+  -fx-border-width: 1px 0 0 0;
 }
 
 .variant-table {
@@ -477,6 +505,7 @@ VBox {
 .variant-table .column-header .label {
     -fx-background-color: #2b2b2b;
     -fx-text-fill: white;
+  -fx-font-weight: bold;
     -fx-border-color: #3c3c3c;
 }
 

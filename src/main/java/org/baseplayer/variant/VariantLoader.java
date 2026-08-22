@@ -195,7 +195,7 @@ public class VariantLoader {
      */
     public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
             VariantNode startCursor) throws IOException {
-        return streamChromosomeVariantsToList(chromosome, target, startCursor, null);
+        return streamChromosomeVariantsToList(chromosome, target, startCursor, null, null);
     }
 
     /**
@@ -208,6 +208,20 @@ public class VariantLoader {
      */
     public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
             VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress) throws IOException {
+        return streamChromosomeVariantsToList(chromosome, target, startCursor, onProgress, null);
+        }
+
+        /**
+         * Stream variants for a chromosome directly into {@code target}, applying load-time filters.
+         *
+         * @param startCursor hint node to begin scanning from (null = scan from head)
+         * @param onProgress optional callback called with (currentCount, totalSamples)
+         * @param loadFilter optional load-time filter snapshot (null = no load-time filtering)
+         * @return the last inserted/updated node – pass it as startCursor for the next VCF
+         */
+        public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
+            VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress,
+            VariantFilter loadFilter) throws IOException {
         // System.err.println("[VariantLoader.streamChromosomeVariantsToList] Loading variants for chromosome: " + chromosome);
         // System.err.println("[VariantLoader.streamChromosomeVariantsToList] Sample mapping: " + vcfSampleToTrackIndex);
         
@@ -231,15 +245,20 @@ public class VariantLoader {
         
         vcfReader.iterateChromosomeVariants(chromosome,
             snv -> {
+                double siteQual = snv.getQuality();
                 List<String> alts = snv.getAlt();
                 for (String alt : alts) {
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             snv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
+                            if (loadFilter != null && !loadFilter.passesLoadTime(snv.getType(), siteQual, call)) {
+                                continue;
+                            }
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
                                 snv.getRef(), alt, snv.getType(), trackIdx, call);
+                            if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
                             // Update highest mapped track rank seen for continuous progress
@@ -278,6 +297,7 @@ public class VariantLoader {
                 List<String> alts = sv.getAlt();
                 // System.err.println("[VariantLoader.streamChromosomeVariantsToList]   Alts: " + alts);
                 Long svEnd = sv.getEnd();
+                double siteQual = sv.getQuality();
                 for (String alt : alts) {
                     // System.err.println("[VariantLoader.streamChromosomeVariantsToList]   Processing alt: " + alt);
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
@@ -285,10 +305,14 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             sv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
+                            if (loadFilter != null && !loadFilter.passesLoadTime(sv.getType(), siteQual, call)) {
+                                continue;
+                            }
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
                                 sv.getRef(), alt, sv.getType(), trackIdx, call);
                             if (svEnd != null && cursor[0].svEnd < 0) cursor[0].svEnd = svEnd;
+                            if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
                             // Update highest mapped track rank seen for continuous progress
@@ -354,6 +378,7 @@ public class VariantLoader {
                                   List<String> alts, VcfVariantType type, Object variant) {
         Long svEndPos = (variant instanceof VcfStructuralVariant sv && sv.getEnd() != null)
             ? sv.getEnd() : null;
+        double siteQual = getVariantQuality(variant);
         for (String alt : alts) {
             for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                 VariantNode.SampleCall call = getSampleCallForAllele(
@@ -361,9 +386,20 @@ public class VariantLoader {
                 if (call != null) {
                     VariantNode node = variantList.addVariant(position, ref, alt, type, entry.getValue(), call);
                     if (svEndPos != null && node.svEnd < 0) node.svEnd = svEndPos;
+                    if (siteQual >= 0 && node.siteQuality < 0) node.siteQuality = siteQual;
                 }
             }
         }
+    }
+
+    private static double getVariantQuality(Object variant) {
+        if (variant instanceof VcfSnvIndel snvIndel) {
+            return snvIndel.getQuality();
+        }
+        if (variant instanceof VcfStructuralVariant sv) {
+            return sv.getQuality();
+        }
+        return -1.0;
     }
     
     private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,

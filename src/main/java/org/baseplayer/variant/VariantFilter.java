@@ -8,6 +8,9 @@ import java.util.Set;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 public class VariantFilter {
 
@@ -62,14 +65,137 @@ public class VariantFilter {
     
     public boolean isFilterFieldsActive() { return filterFieldsActive; }
 
+    /** Create a deep copy so long-running loads can use a stable filter snapshot. */
+    public VariantFilter copy() {
+        VariantFilter copy = new VariantFilter();
+        copy.minQuality = this.minQuality;
+        copy.minDepth = this.minDepth;
+        copy.minAlleleFraction = this.minAlleleFraction;
+        copy.cancerGenesOnly = this.cancerGenesOnly;
+        copy.allowedTypes = EnumSet.copyOf(this.allowedTypes);
+        copy.showCoding = this.showCoding;
+        copy.showIntronic = this.showIntronic;
+        copy.showIntergenic = this.showIntergenic;
+        copy.infoFieldFilters = new HashMap<>(this.infoFieldFilters);
+        copy.allowedFilterValues = new HashSet<>(this.allowedFilterValues);
+        copy.filterFieldsActive = this.filterFieldsActive;
+        return copy;
+    }
+
+    /**
+     * Filters that can be applied during VCF streaming before annotation is available.
+     * Annotation-dependent dimensions (coding/intronic/intergenic, cancer-only, INFO/FILTER)
+     * are intentionally deferred until after annotation/pruning.
+     */
+    public boolean passesLoadTime(VcfVariantType type, double siteQuality, VariantNode.SampleCall call) {
+        if (!allowedTypes.contains(type)) return false;
+
+        if (minQuality > 0) {
+            if (siteQuality >= 0) {
+                if (siteQuality < minQuality) return false;
+            } else if (call != null && call.quality >= 0 && call.quality < minQuality) {
+                return false;
+            }
+        }
+
+        if (call != null) {
+            if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
+            if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
+        }
+
+        return true;
+    }
+
+    /** Whether this filter needs annotation-aware post-load pruning. */
+    public boolean requiresPostAnnotationFiltering() {
+        return cancerGenesOnly
+            || !showCoding
+            || !showIntronic
+            || !showIntergenic
+            || !infoFieldFilters.isEmpty()
+            || filterFieldsActive;
+    }
+
+    /** Stable key for comparing whether cached chromosome data matches filter settings. */
+    public String toStableKey() {
+        List<String> typeNames = new ArrayList<>();
+        for (VcfVariantType t : allowedTypes) typeNames.add(t.name());
+        Collections.sort(typeNames);
+
+        List<String> infoKeys = new ArrayList<>(infoFieldFilters.keySet());
+        Collections.sort(infoKeys);
+        List<String> infoPairs = new ArrayList<>();
+        for (String k : infoKeys) {
+            infoPairs.add(k + "=" + infoFieldFilters.get(k));
+        }
+
+        List<String> filterVals = new ArrayList<>(allowedFilterValues);
+        Collections.sort(filterVals);
+
+        return "minQ=" + minQuality
+            + "|minDP=" + minDepth
+            + "|minAF=" + minAlleleFraction
+            + "|cancerOnly=" + cancerGenesOnly
+            + "|showCoding=" + showCoding
+            + "|showIntronic=" + showIntronic
+            + "|showIntergenic=" + showIntergenic
+            + "|types=" + String.join(",", typeNames)
+            + "|info=" + String.join(",", infoPairs)
+            + "|filterActive=" + filterFieldsActive
+            + "|filterValues=" + String.join(",", filterVals);
+    }
+
+    /**
+     * Returns true if this filter is at least as strict as {@code base}.
+     * If false, applying this filter may require reloading data that was previously pruned.
+     */
+    public boolean isAtLeastAsStrictAs(VariantFilter base) {
+        if (base == null) return false;
+
+        if (this.minQuality < base.minQuality) return false;
+        if (this.minDepth < base.minDepth) return false;
+        if (this.minAlleleFraction < base.minAlleleFraction) return false;
+
+        if (this.allowedTypes == null || base.allowedTypes == null) return false;
+        if (!base.allowedTypes.containsAll(this.allowedTypes)) return false;
+
+        if (base.cancerGenesOnly && !this.cancerGenesOnly) return false;
+
+        if (!base.showCoding && this.showCoding) return false;
+        if (!base.showIntronic && this.showIntronic) return false;
+        if (!base.showIntergenic && this.showIntergenic) return false;
+
+        // INFO/FILTER strictness: conservative handling to avoid false negatives.
+        // Existing constraints must remain, and values for shared keys cannot change.
+        for (Map.Entry<String, String> e : base.infoFieldFilters.entrySet()) {
+            String key = e.getKey();
+            String baseVal = e.getValue();
+            if (!this.infoFieldFilters.containsKey(key)) return false;
+            String newVal = this.infoFieldFilters.get(key);
+            if (newVal == null || !newVal.equals(baseVal)) return false;
+        }
+
+        if (base.filterFieldsActive && !this.filterFieldsActive) return false;
+        if (base.filterFieldsActive && !base.allowedFilterValues.containsAll(this.allowedFilterValues)) return false;
+
+        return true;
+    }
+
     // ── Filtering logic ───────────────────────────────────────────────────────
 
     public boolean passes(VariantNode node, int sampleTrackIndex) {
         if (!allowedTypes.contains(node.type)) return false;
 
+        if (minQuality > 0) {
+            // Prefer record-level QUAL. If QUAL is missing, fall back to sample GQ.
+            if (node.siteQuality >= 0) {
+                if (node.siteQuality < minQuality) return false;
+            }
+        }
+
         VariantNode.SampleCall call = node.getSampleCall(sampleTrackIndex);
         if (call != null) {
-            if (minQuality > 0 && call.quality >= 0 && call.quality < minQuality) return false;
+            if (minQuality > 0 && node.siteQuality < 0 && call.quality >= 0 && call.quality < minQuality) return false;
             if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
             if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
         }
@@ -93,25 +219,6 @@ public class VariantFilter {
         }
 
         return true;
-    }
-
-    public VariantList applyToList(VariantList source) {
-        if (source == null) return null;
-
-        VariantList filtered = new VariantList(source.getChromosome());
-        VariantNode node = source.getFirst();
-
-        while (node != null) {
-            for (VariantNode.SampleCall call : node.getSamples()) {
-                if (passes(node, call.trackIndex)) {
-                    filtered.addVariant(node.position, node.ref, node.alt, node.type,
-                                        call.trackIndex, call);
-                }
-            }
-            node = node.next;
-        }
-
-        return filtered;
     }
 
     /** Returns true if all filters are at default (pass-all) state. */

@@ -2,6 +2,7 @@ package org.baseplayer.variant;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiPredicate;
 
 /**
  * Sorted linked list of variants by genomic position.
@@ -236,6 +237,67 @@ public class VariantList {
         }
         
         return nodesRemoved;
+    }
+
+    /**
+     * Retain only sample calls that satisfy {@code keepPredicate}. Variant nodes with no
+     * remaining samples are removed from the list.
+     */
+    public void retainSamples(BiPredicate<VariantNode, VariantNode.SampleCall> keepPredicate) {
+        if (head == null || keepPredicate == null) return;
+
+        VariantNode prev = null;
+        VariantNode current = head;
+
+        while (current != null) {
+            VariantNode next = current.next;
+
+            // Snapshot because getSamples() returns an unmodifiable live view.
+            List<VariantNode.SampleCall> calls = new ArrayList<>(current.getSamples());
+            for (VariantNode.SampleCall call : calls) {
+                if (!keepPredicate.test(current, call)) {
+                    current.removeSample(call.trackIndex);
+                }
+            }
+
+            if (current.getSampleCount() == 0) {
+                if (prev == null) {
+                    head = next;
+                } else {
+                    prev.next = next;
+                }
+                if (current == tail) {
+                    tail = prev;
+                }
+                size--;
+            } else {
+                prev = current;
+            }
+
+            current = next;
+        }
+
+        recalculateBounds();
+    }
+
+    private void recalculateBounds() {
+        if (head == null) {
+            tail = null;
+            startPosition = Long.MAX_VALUE;
+            endPosition = Long.MIN_VALUE;
+            return;
+        }
+        startPosition = head.position;
+        VariantNode cur = head;
+        long maxPos = head.position;
+        VariantNode last = head;
+        while (cur != null) {
+            if (cur.position > maxPos) maxPos = cur.position;
+            last = cur;
+            cur = cur.next;
+        }
+        endPosition = maxPos;
+        tail = last;
     }
     
     /**

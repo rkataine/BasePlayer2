@@ -1,8 +1,10 @@
 package org.baseplayer.services;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.List;
+import java.util.Set;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.samples.Sample;
@@ -45,6 +47,8 @@ public class SampleRegistry {
     private double sampleHeight = 0;
     private boolean sampleHeightLocked = false;
     private String activeSampleFilterQuery = "";
+    private Set<Integer> focusedTrackIndices = null; // null = no explicit focus filter
+    private String focusedGeneName = null; // gene name currently focused, or null
     public static final double DEFAULT_MASTER_TRACK_HEIGHT = 28;
     private final DoubleProperty masterTrackHeight = new SimpleDoubleProperty(DEFAULT_MASTER_TRACK_HEIGHT);
     
@@ -323,6 +327,63 @@ public class SampleRegistry {
     }
 
     /**
+     * Restrict visible tracks to the given backing sample-track indices.
+     * Pass null to disable explicit focus filtering.
+     * Optionally supply a gene name for UI display.
+     */
+    public void setFocusedTrackIndices(Set<Integer> indices, String geneName) {
+        Set<Integer> old = focusedTrackIndices == null ? null : new HashSet<>(focusedTrackIndices);
+        if (indices == null) {
+            focusedTrackIndices = null;
+            focusedGeneName = null;
+        } else {
+            focusedTrackIndices = new HashSet<>(indices);
+            focusedGeneName = geneName;
+        }
+
+        int displayed = getDisplayedTrackCount();
+        if (displayed <= 0) {
+            firstVisibleSample = -1;
+            lastVisibleSample = -1;
+            scrollBarPosition = 0;
+        } else {
+            firstVisibleSample = Math.max(0, Math.min(displayed - 1, firstVisibleSample));
+            lastVisibleSample = Math.max(firstVisibleSample, Math.min(displayed - 1, lastVisibleSample));
+        }
+
+        if ((old == null && focusedTrackIndices != null)
+            || (old != null && focusedTrackIndices == null)
+            || (old != null && !old.equals(focusedTrackIndices))) {
+            notifyVariantIndexDirty();
+        }
+    }
+
+    /**
+     * Restrict visible tracks to the given backing sample-track indices.
+     * Pass null to disable explicit focus filtering.
+     * @deprecated Use {@link #setFocusedTrackIndices(Set, String)} instead.
+     */
+    @Deprecated
+    public void setFocusedTrackIndices(Set<Integer> indices) {
+        setFocusedTrackIndices(indices, null);
+    }
+
+    /** Clear explicit focused-track filtering. */
+    public void clearFocusedTrackIndices() {
+        setFocusedTrackIndices(null, null);
+    }
+
+    /** Whether explicit focused-track filtering is active. */
+    public boolean hasFocusedTrackIndices() {
+        return focusedTrackIndices != null;
+    }
+
+    /** Get the name of the currently focused gene, or null if no focus. */
+    public String getFocusedGeneName() {
+        return focusedGeneName;
+    }
+
+    /**
      * Ordered list of track indices currently displayed in the samples view.
      * With active filter this contains only matching tracks, otherwise all tracks.
      */
@@ -337,6 +398,9 @@ public class SampleRegistry {
             for (int i = 0; i < sampleTracks.size(); i++) {
                 indices.add(i);
             }
+            if (focusedTrackIndices != null) {
+                indices.removeIf(idx -> !focusedTrackIndices.contains(idx));
+            }
             return indices;
         }
 
@@ -346,6 +410,11 @@ public class SampleRegistry {
                 indices.add(i);
             }
         }
+
+        if (focusedTrackIndices != null) {
+            indices.removeIf(idx -> !focusedTrackIndices.contains(idx));
+        }
+
         return indices;
     }
 

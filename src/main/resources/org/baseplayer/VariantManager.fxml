@@ -4,251 +4,284 @@
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
 
-<VBox xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" 
-      fx:controller="org.baseplayer.variant.ui.VariantManagerController"
-      styleClass="root-pane">
+<SplitPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+         fx:id="mainSplitPane"
+         orientation="VERTICAL"
+         dividerPositions="0.5"
+         fx:controller="org.baseplayer.variant.ui.VariantManagerController"
+         styleClass="root-pane variant-manager-split">
     
     <!-- Filter Panel with Tabs -->
     <TabPane fx:id="filterTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="filter-tabs">
         
         <!-- Variant Filters Tab -->
         <Tab text="Variant Filters">
-            <ScrollPane fitToWidth="true" styleClass="filter-scroll">
-                <HBox spacing="20" styleClass="filter-panel">
-                    <padding>
-                        <Insets top="15" right="15" bottom="15" left="15"/>
-                    </padding>
-                
-                <!-- Left Panel: Quality Filters -->
-                <VBox spacing="15" HBox.hgrow="ALWAYS">
-                    <Label text="Quality Filters" styleClass="panel-title"/>
-                    <Separator/>
-                    
-                    <!-- Quality Filter Section -->
-                    <VBox spacing="8">
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Label text="Minimum Genotype Quality (GQ)" styleClass="section-header"/>
-                            <Label fx:id="qualityValueLabel" text="0" styleClass="value-label"/>
-                        </HBox>
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Slider fx:id="qualitySlider" min="0" max="99" value="0" 
-                                    showTickLabels="true" showTickMarks="true" 
-                                    majorTickUnit="20" minorTickCount="4"
-                                    blockIncrement="5" prefWidth="350" HBox.hgrow="ALWAYS"/>
-                            <TextField fx:id="qualityField" text="0" prefWidth="60" styleClass="filter-field"/>
-                        </HBox>
-                    </VBox>
-                    
-                    <!-- Coverage Filter Section -->
-                    <VBox spacing="8">
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Label text="Minimum Read Depth" styleClass="section-header"/>
-                            <Label fx:id="coverageValueLabel" text="0" styleClass="value-label"/>
-                        </HBox>
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Slider fx:id="coverageSlider" min="0" max="200" value="0" 
-                                    showTickLabels="true" showTickMarks="true" 
-                                    majorTickUnit="50" minorTickCount="4"
-                                    blockIncrement="10" prefWidth="350" HBox.hgrow="ALWAYS"/>
-                            <TextField fx:id="coverageField" text="0" prefWidth="60" styleClass="filter-field"/>
-                        </HBox>
-                    </VBox>
-                    
-                    <!-- Allele Fraction Filter Section -->
-                    <VBox spacing="8">
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Label text="Minimum Allele Fraction" styleClass="section-header"/>
-                            <Label fx:id="alleleFreqValueLabel" text="0.0" styleClass="value-label"/>
-                        </HBox>
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <Slider fx:id="alleleFreqSlider" min="0" max="1.0" value="0" 
-                                    showTickLabels="true" showTickMarks="true" 
-                                    majorTickUnit="0.25" minorTickCount="4"
-                                    blockIncrement="0.05" prefWidth="350" HBox.hgrow="ALWAYS"/>
-                            <TextField fx:id="alleleFreqField" text="0.0" prefWidth="60" styleClass="filter-field"/>
-                        </HBox>
-                    </VBox>
-                </VBox>
-                
-                <!-- Vertical Separator -->
-                <Separator orientation="VERTICAL"/>
-                
-                <!-- Right Panel: Variant Type Filters -->
-                <VBox spacing="15" HBox.hgrow="ALWAYS">
-                    <Label text="Variant Filters" styleClass="panel-title"/>
-                    <Separator/>
-                    
-                    <!-- Variant Types Section -->
-                    <VBox spacing="10">
-                        <Label text="Variant Types" styleClass="section-header"/>
-                        <VBox fx:id="variantTypesContainer" spacing="8">
-                            <!-- Dynamic checkboxes populated by controller -->
-                        </VBox>
-                    </VBox>
-                    
-                    <!-- Effect Categories Section -->
-                    <VBox spacing="10">
-                        <Label text="Effect Categories" styleClass="section-header"/>
-                        <VBox spacing="8">
-                            <CheckBox fx:id="codingCheckBox" text="Coding" selected="true" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="intronicCheckBox" text="Intronic" selected="true" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="intergenicCheckBox" text="Intergenic" selected="true" styleClass="filter-checkbox"/>
-                        </VBox>
-                    </VBox>
-                    
-                    <!-- Cancer Genes Filter -->
-                    <VBox spacing="10">
-                        <Label text="Special Filters" styleClass="section-header"/>
-                        <CheckBox fx:id="cancerOnlyCheckBox" text="Cancer genes only (COSMIC Census)" styleClass="filter-checkbox"/>
-                    </VBox>
-                    
-                    <!-- Advanced Filtering Section -->
-                    <VBox spacing="10">
-                        <Label text="Advanced Filters (INFO/FILTER)" styleClass="section-header"/>
-                        <VBox fx:id="advancedFiltersContainer" spacing="5">
-                            <!-- Dynamic rules displayed here -->
-                        </VBox>
-                        <HBox spacing="10">
-                            <Button fx:id="addInfoFilterButton" text="Add INFO Filter..." styleClass="secondary-button" onAction="#handleAddInfoFilter"/>
-                            <Button fx:id="addFilterFieldButton" text="Add FILTER..." styleClass="secondary-button" onAction="#handleAddFilterField"/>
-                        </HBox>
-                    </VBox>
-                    
-                    <!-- Action Buttons -->
-                    <HBox spacing="10" alignment="CENTER_RIGHT" VBox.vgrow="ALWAYS">
+            <SplitPane fx:id="variantFiltersSplitPane" dividerPositions="0.5" styleClass="tab-content-split">
+                <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
+                    <!-- Left Panel: Quality Filters -->
+                    <VBox spacing="12" styleClass="filter-panel">
                         <padding>
-                            <Insets top="10"/>
+                            <Insets top="16" right="16" bottom="16" left="16"/>
                         </padding>
-                        <Button fx:id="resetFiltersButton" text="Reset All" styleClass="secondary-button" onAction="#handleResetFilters"/>
-                        <Button fx:id="applyFiltersButton" text="Apply Filters" styleClass="primary-button" onAction="#handleApplyFilters"/>
-                    </HBox>
-                </VBox>
-            </HBox>
-            </ScrollPane>
+                                                <HBox spacing="8" alignment="CENTER_LEFT">
+                                                        <Label text="Quality Filters" styleClass="panel-title"/>
+                                                        <HBox fx:id="reloadBanner" spacing="6" alignment="CENTER_LEFT" visible="false" managed="false"
+                                                                    style="-fx-background-color: rgba(209,102,36,0.18); -fx-background-radius: 6; -fx-padding: 2 6 2 6;">
+                                                                <Label fx:id="reloadBannerLabel"
+                                                                             text="Reload needed"
+                                                                             style="-fx-text-fill: #f0c6a9; -fx-font-size: 11px;"/>
+                                                                <Button fx:id="reloadBannerButton" text="Reload" styleClass="secondary-button"
+                                                                                style="-fx-font-size: 10px; -fx-padding: 1 6 1 6;"
+                                                                                onAction="#handleReloadFilteredVariants"/>
+                                                        </HBox>
+                                                </HBox>
+                        <Separator/>
+
+                        <!-- Quality Filter Section -->
+                        <VBox spacing="6">
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Label text="Minimum Variant Quality (QUAL)" styleClass="section-header"/>
+                                <Label fx:id="qualityValueLabel" text="0" styleClass="value-label"/>
+                            </HBox>
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Slider fx:id="qualitySlider" min="0" max="99" value="0"
+                                        showTickLabels="true" showTickMarks="true"
+                                        majorTickUnit="20" minorTickCount="4"
+                                        blockIncrement="5" prefWidth="350" HBox.hgrow="ALWAYS"/>
+                                <TextField fx:id="qualityField" text="0" prefWidth="60" styleClass="filter-field"/>
+                            </HBox>
+                        </VBox>
+
+                        <!-- Coverage Filter Section -->
+                        <VBox spacing="6">
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Label text="Minimum Read Depth" styleClass="section-header"/>
+                                <Label fx:id="coverageValueLabel" text="0" styleClass="value-label"/>
+                            </HBox>
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Slider fx:id="coverageSlider" min="0" max="200" value="0"
+                                        showTickLabels="true" showTickMarks="true"
+                                        majorTickUnit="50" minorTickCount="4"
+                                        blockIncrement="10" prefWidth="350" HBox.hgrow="ALWAYS"/>
+                                <TextField fx:id="coverageField" text="0" prefWidth="60" styleClass="filter-field"/>
+                            </HBox>
+                        </VBox>
+
+                        <!-- Allele Fraction Filter Section -->
+                        <VBox spacing="6">
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Label text="Minimum Allele Fraction" styleClass="section-header"/>
+                                <Label fx:id="alleleFreqValueLabel" text="0.0" styleClass="value-label"/>
+                            </HBox>
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Slider fx:id="alleleFreqSlider" min="0" max="1.0" value="0"
+                                        showTickLabels="true" showTickMarks="true"
+                                        majorTickUnit="0.25" minorTickCount="4"
+                                        blockIncrement="0.05" prefWidth="350" HBox.hgrow="ALWAYS"/>
+                                <TextField fx:id="alleleFreqField" text="0.0" prefWidth="60" styleClass="filter-field"/>
+                            </HBox>
+                        </VBox>
+                    </VBox>
+                </ScrollPane>
+
+                <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
+                    <!-- Right Panel: Variant Type Filters -->
+                    <VBox spacing="12" styleClass="filter-panel">
+                        <padding>
+                            <Insets top="16" right="16" bottom="16" left="16"/>
+                        </padding>
+
+                        <!-- Variant Types Section -->
+                        <VBox spacing="8">
+                            <Label text="Variant Types" styleClass="section-header"/>
+                            <VBox fx:id="variantTypesContainer" spacing="6">
+                                <!-- Dynamic checkboxes populated by controller -->
+                            </VBox>
+                        </VBox>
+
+                        <!-- Effect Categories Section -->
+                        <VBox spacing="8">
+                            <Label text="Effect Categories" styleClass="section-header"/>
+                            <VBox spacing="6">
+                                <CheckBox fx:id="codingCheckBox" text="Coding" selected="true" styleClass="filter-checkbox"/>
+                                <CheckBox fx:id="intronicCheckBox" text="Intronic" selected="true" styleClass="filter-checkbox"/>
+                                <CheckBox fx:id="intergenicCheckBox" text="Intergenic" selected="true" styleClass="filter-checkbox"/>
+                            </VBox>
+                        </VBox>
+
+                        <!-- Cancer Genes Filter -->
+                        <VBox spacing="8">
+                            <Label text="Special Filters" styleClass="section-header"/>
+                            <CheckBox fx:id="cancerOnlyCheckBox" text="Cancer genes only (COSMIC Census)" styleClass="filter-checkbox"/>
+                        </VBox>
+
+                        <!-- Advanced Filtering Section -->
+                        <VBox spacing="8">
+                            <Label text="Advanced Filters (INFO/FILTER)" styleClass="section-header"/>
+                            <VBox fx:id="advancedFiltersContainer" spacing="6">
+                                <!-- Dynamic rules displayed here -->
+                            </VBox>
+                            <HBox spacing="8">
+                                <Button fx:id="addInfoFilterButton" text="Add INFO Filter..." styleClass="secondary-button" onAction="#handleAddInfoFilter"/>
+                                <Button fx:id="addFilterFieldButton" text="Add FILTER..." styleClass="secondary-button" onAction="#handleAddFilterField"/>
+                            </HBox>
+                        </VBox>
+
+                        <!-- Action Buttons -->
+                        <HBox spacing="12" alignment="CENTER_RIGHT" VBox.vgrow="ALWAYS">
+                            <padding>
+                                <Insets top="12"/>
+                            </padding>
+                            <Button fx:id="resetFiltersButton" text="Reset All" styleClass="secondary-button" onAction="#handleResetFilters"/>
+                            <Button fx:id="applyFiltersButton" text="Apply Filters" styleClass="primary-button" onAction="#handleApplyFilters"/>
+                        </HBox>
+                    </VBox>
+                </ScrollPane>
+            </SplitPane>
         </Tab>
         
         <!-- Sample Comparison Tab -->
         <Tab text="Sample Comparison">
-            <ScrollPane fitToWidth="true" styleClass="filter-scroll">
-                <VBox spacing="15" styleClass="filter-panel">
+                <SplitPane fx:id="sampleComparisonSplitPane" dividerPositions="0.5" styleClass="tab-content-split">
+                <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
+                <VBox spacing="12" styleClass="filter-panel">
                     <padding>
-                        <Insets top="15" right="15" bottom="15" left="15"/>
+                        <Insets top="16" right="16" bottom="16" left="16"/>
                     </padding>
-                
-                <!-- Comparison Mode Section -->
-                <VBox spacing="8">
-                    <Label text="Comparison Mode" styleClass="section-header"/>
-                    <VBox spacing="5">
-                        <RadioButton fx:id="showAllSamplesRadio" text="Show all samples" selected="true" styleClass="filter-radio"/>
-                        <RadioButton fx:id="sharedVariantsRadio" text="Variants shared across all samples" styleClass="filter-radio"/>
-                        <RadioButton fx:id="uniqueVariantsRadio" text="Variants unique to selected samples" styleClass="filter-radio"/>
-                        <RadioButton fx:id="differentialRadio" text="Differential variants (present in A, absent in B)" styleClass="filter-radio"/>
+
+                    <!-- Comparison Mode Section -->
+                    <VBox spacing="8">
+                        <Label text="Comparison Mode" styleClass="section-header"/>
+                        <VBox spacing="5">
+                            <RadioButton fx:id="showAllSamplesRadio" text="Show all samples" selected="true" styleClass="filter-radio"/>
+                            <RadioButton fx:id="sharedVariantsRadio" text="Variants shared across all samples" styleClass="filter-radio"/>
+                            <RadioButton fx:id="uniqueVariantsRadio" text="Variants unique to selected samples" styleClass="filter-radio"/>
+                            <RadioButton fx:id="differentialRadio" text="Differential variants (present in A, absent in B)" styleClass="filter-radio"/>
+                        </VBox>
+                    </VBox>
+
+                    <!-- Zygosity Filter -->
+                    <VBox spacing="8">
+                        <Label text="Zygosity Filter" styleClass="section-header"/>
+                        <HBox spacing="12" alignment="CENTER_LEFT">
+                            <CheckBox fx:id="homozygousCheckBox" text="Homozygous" selected="true" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="heterozygousCheckBox" text="Heterozygous" selected="true" styleClass="filter-checkbox"/>
+                        </HBox>
                     </VBox>
                 </VBox>
-                
-                <!-- Sample Selection Section -->
-                <VBox spacing="8">
-                    <Label text="Sample Selection" styleClass="section-header"/>
-                    <HBox spacing="15">
-                        <VBox spacing="5" HBox.hgrow="ALWAYS">
-                            <Label text="Group A (Include)" styleClass="subsection-label"/>
-                            <ListView fx:id="groupASampleList" prefHeight="150" styleClass="sample-list"/>
-                        </VBox>
-                        <VBox spacing="5" HBox.hgrow="ALWAYS">
-                            <Label text="Group B (Exclude)" styleClass="subsection-label"/>
-                            <ListView fx:id="groupBSampleList" prefHeight="150" styleClass="sample-list"/>
-                        </VBox>
-                    </HBox>
-                </VBox>
-                
-                <!-- Zygosity Filter -->
-                <VBox spacing="8">
-                    <Label text="Zygosity Filter" styleClass="section-header"/>
-                    <HBox spacing="15" alignment="CENTER_LEFT">
-                        <CheckBox fx:id="homozygousCheckBox" text="Homozygous" selected="true" styleClass="filter-checkbox"/>
-                        <CheckBox fx:id="heterozygousCheckBox" text="Heterozygous" selected="true" styleClass="filter-checkbox"/>
-                    </HBox>
-                </VBox>
-                
-                <!-- Action Buttons -->
-                <HBox spacing="10" alignment="CENTER_RIGHT">
+                </ScrollPane>
+
+                <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
+                <VBox spacing="12" styleClass="filter-panel">
                     <padding>
-                        <Insets top="10"/>
+                        <Insets top="16" right="16" bottom="16" left="16"/>
                     </padding>
-                    <Button text="Apply Comparison" styleClass="primary-button" onAction="#handleApplyComparison"/>
-                </HBox>
-            </VBox>
-            </ScrollPane>
+
+                    <!-- Sample Selection Section -->
+                    <VBox spacing="8" VBox.vgrow="ALWAYS">
+                        <Label text="Sample Selection" styleClass="section-header"/>
+                        <HBox spacing="12" VBox.vgrow="ALWAYS">
+                            <VBox spacing="5" HBox.hgrow="ALWAYS">
+                                <Label text="Group A (Include)" styleClass="subsection-label"/>
+                                <ListView fx:id="groupASampleList" prefHeight="150" styleClass="sample-list" VBox.vgrow="ALWAYS"/>
+                            </VBox>
+                            <VBox spacing="5" HBox.hgrow="ALWAYS">
+                                <Label text="Group B (Exclude)" styleClass="subsection-label"/>
+                                <ListView fx:id="groupBSampleList" prefHeight="150" styleClass="sample-list" VBox.vgrow="ALWAYS"/>
+                            </VBox>
+                        </HBox>
+                    </VBox>
+
+                    <!-- Action Buttons -->
+                    <HBox spacing="12" alignment="CENTER_RIGHT">
+                        <padding>
+                            <Insets top="12"/>
+                        </padding>
+                        <Button text="Apply Comparison" styleClass="primary-button" onAction="#handleApplyComparison"/>
+                    </HBox>
+                </VBox>
+                </ScrollPane>
+            </SplitPane>
         </Tab>
         
         <!-- Control Files Tab -->
         <Tab text="Control Files">
-            <ScrollPane fitToWidth="true" styleClass="filter-scroll">
-                <VBox spacing="15" styleClass="filter-panel">
+                <SplitPane fx:id="controlFilesSplitPane" dividerPositions="0.5" styleClass="tab-content-split">
+                <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
+                <VBox spacing="12" styleClass="filter-panel">
                     <padding>
-                        <Insets top="15" right="15" bottom="15" left="15"/>
+                        <Insets top="16" right="16" bottom="16" left="16"/>
                     </padding>
-                
-                <!-- Population Frequency Databases -->
-                <VBox spacing="8">
-                    <Label text="Population Frequency Databases" styleClass="section-header"/>
-                    <VBox spacing="5">
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <CheckBox fx:id="filterByPopFreqCheckBox" text="Filter by population frequency" styleClass="filter-checkbox"/>
-                            <Label text="Max frequency:" styleClass="subsection-label"/>
-                            <TextField fx:id="maxPopFreqField" text="0.01" prefWidth="80" styleClass="filter-field"/>
-                        </HBox>
-                        <HBox spacing="10" alignment="CENTER_LEFT">
-                            <CheckBox fx:id="useGnomadCheckBox" text="gnomAD" selected="false" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="use1000GenomesCheckBox" text="1000 Genomes" selected="false" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="useExacCheckBox" text="ExAC" selected="false" styleClass="filter-checkbox"/>
-                        </HBox>
+
+                    <!-- Population Frequency Databases -->
+                    <VBox spacing="8">
+                        <Label text="Population Frequency Databases" styleClass="section-header"/>
+                        <VBox spacing="5">
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <CheckBox fx:id="filterByPopFreqCheckBox" text="Filter by population frequency" styleClass="filter-checkbox"/>
+                                <Label text="Max frequency:" styleClass="subsection-label"/>
+                                <TextField fx:id="maxPopFreqField" text="0.01" prefWidth="80" styleClass="filter-field"/>
+                            </HBox>
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <CheckBox fx:id="useGnomadCheckBox" text="gnomAD" selected="false" styleClass="filter-checkbox"/>
+                                <CheckBox fx:id="use1000GenomesCheckBox" text="1000 Genomes" selected="false" styleClass="filter-checkbox"/>
+                                <CheckBox fx:id="useExacCheckBox" text="ExAC" selected="false" styleClass="filter-checkbox"/>
+                            </HBox>
+                        </VBox>
+                    </VBox>
+
+                    <!-- ClinVar Integration -->
+                    <VBox spacing="8">
+                        <Label text="ClinVar Pathogenicity" styleClass="section-header"/>
+                        <VBox spacing="5">
+                            <CheckBox fx:id="showPathogenicCheckBox" text="Show only pathogenic/likely pathogenic variants" styleClass="filter-checkbox"/>
+                            <CheckBox fx:id="hideBenignCheckBox" text="Hide benign/likely benign variants" styleClass="filter-checkbox"/>
+                        </VBox>
                     </VBox>
                 </VBox>
-                
-                <!-- ClinVar Integration -->
-                <VBox spacing="8">
-                    <Label text="ClinVar Pathogenicity" styleClass="section-header"/>
-                    <VBox spacing="5">
-                        <CheckBox fx:id="showPathogenicCheckBox" text="Show only pathogenic/likely pathogenic variants" styleClass="filter-checkbox"/>
-                        <CheckBox fx:id="hideBenignCheckBox" text="Hide benign/likely benign variants" styleClass="filter-checkbox"/>
+                </ScrollPane>
+
+                <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
+                <VBox spacing="12" styleClass="filter-panel">
+                    <padding>
+                        <Insets top="16" right="16" bottom="16" left="16"/>
+                    </padding>
+
+                    <!-- Custom Control Files -->
+                    <VBox spacing="8" VBox.vgrow="ALWAYS">
+                        <Label text="Custom Control Files" styleClass="section-header"/>
+                        <TableView fx:id="controlFilesTable" prefHeight="150" styleClass="control-files-table" VBox.vgrow="ALWAYS">
+                            <columns>
+                                <TableColumn fx:id="controlFileEnabledColumn" text="Enabled" prefWidth="70"/>
+                                <TableColumn fx:id="controlFileNameColumn" text="File Name" prefWidth="250"/>
+                                <TableColumn fx:id="controlFileTypeColumn" text="Type" prefWidth="100"/>
+                                <TableColumn fx:id="controlFileActionsColumn" text="Actions" prefWidth="100"/>
+                            </columns>
+                        </TableView>
+                        <HBox spacing="8">
+                            <Button text="Add VCF" styleClass="secondary-button" onAction="#handleAddControlVcf"/>
+                            <Button text="Add BED" styleClass="secondary-button" onAction="#handleAddControlBed"/>
+                            <Button text="Remove Selected" styleClass="secondary-button" onAction="#handleRemoveControlFile"/>
+                        </HBox>
                     </VBox>
-                </VBox>
-                
-                <!-- Custom Control Files -->
-                <VBox spacing="8">
-                    <Label text="Custom Control Files" styleClass="section-header"/>
-                    <TableView fx:id="controlFilesTable" prefHeight="150" styleClass="control-files-table">
-                        <columns>
-                            <TableColumn fx:id="controlFileEnabledColumn" text="Enabled" prefWidth="70"/>
-                            <TableColumn fx:id="controlFileNameColumn" text="File Name" prefWidth="250"/>
-                            <TableColumn fx:id="controlFileTypeColumn" text="Type" prefWidth="100"/>
-                            <TableColumn fx:id="controlFileActionsColumn" text="Actions" prefWidth="100"/>
-                        </columns>
-                    </TableView>
-                    <HBox spacing="10">
-                        <Button text="Add VCF" styleClass="secondary-button" onAction="#handleAddControlVcf"/>
-                        <Button text="Add BED" styleClass="secondary-button" onAction="#handleAddControlBed"/>
-                        <Button text="Remove Selected" styleClass="secondary-button" onAction="#handleRemoveControlFile"/>
+
+                    <!-- Action Buttons -->
+                    <HBox spacing="12" alignment="CENTER_RIGHT">
+                        <padding>
+                            <Insets top="12"/>
+                        </padding>
+                        <Button text="Apply Settings" styleClass="primary-button" onAction="#handleApplyControlSettings"/>
                     </HBox>
                 </VBox>
-                
-                <!-- Action Buttons -->
-                <HBox spacing="10" alignment="CENTER_RIGHT">
-                    <padding>
-                        <Insets top="10"/>
-                    </padding>
-                    <Button text="Apply Settings" styleClass="primary-button" onAction="#handleApplyControlSettings"/>
-                </HBox>
-            </VBox>
-            </ScrollPane>
+                </ScrollPane>
+            </SplitPane>
         </Tab>
 
         <!-- Agent (AI Analysis) Tab -->
         <Tab fx:id="agentTab" text="Agent">
             <VBox spacing="12" styleClass="filter-panel">
                 <padding>
-                    <Insets top="15" right="15" bottom="15" left="15"/>
+                    <Insets top="16" right="16" bottom="16" left="16"/>
                 </padding>
 
                 <!-- API Key + Model -->
@@ -290,7 +323,7 @@
     </TabPane>
     
     <!-- Results Tables TabPane -->
-    <TabPane fx:id="resultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs" VBox.vgrow="ALWAYS">
+    <TabPane fx:id="resultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs">
         
         <!-- Coding Variants Table -->
             <Tab fx:id="codingTab" text="Coding">
@@ -343,4 +376,4 @@
                 </StackPane>
             </Tab>
     </TabPane>
-</VBox>
+</SplitPane>

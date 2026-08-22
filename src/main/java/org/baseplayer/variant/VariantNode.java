@@ -21,6 +21,8 @@ public class VariantNode {
 
     public volatile VariantNode next;    /** End position for structural variants (from INFO/END); -1 for SNVs/indels. */
     public volatile long svEnd = -1;
+    /** Record-level VCF QUAL value; -1 when missing/unknown. */
+    public volatile double siteQuality = -1.0;
     /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
     public VariantAnnotation annotation;
 
