@@ -398,6 +398,8 @@ public class VcfReader implements AutoCloseable {
 
     /**
      * Classify a structural variant based on SVTYPE or ALT allele.
+     * Special handling for BND (breakend) types: classify as INV if mate is on same chromosome,
+     * or TRA if mate is on different chromosome.
      */
     private VcfVariantType classifyStructuralVariant(VariantContext ctx) {
         String svType = ctx.getAttributeAsString("SVTYPE", null);
@@ -417,8 +419,29 @@ public class VcfReader implements AutoCloseable {
                 case "INV": 
                     // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION");
                     return VcfVariantType.SV_INVERSION;
-                case "BND": 
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_BREAKEND");
+                case "BND":
+                    // Breakend: check if mate is on same chromosome
+                    String chr2 = ctx.getAttributeAsString("CHR2", null);
+                    String currentChr = ctx.getContig();
+                    
+                    // If no explicit CHR2 field, try to extract from ALT breakend notation
+                    if ((chr2 == null || chr2.isEmpty()) && !ctx.getAlternateAlleles().isEmpty()) {
+                        chr2 = extractChr2FromBreakendAlt(ctx.getAlternateAlleles().get(0).getDisplayString());
+                    }
+                    
+                    if (chr2 != null && !chr2.isEmpty()) {
+                        // Normalize chromosome names for comparison (remove "chr" prefix if present)
+                        String normChr2 = chr2.replaceFirst("^chr", "");
+                        String normCurrentChr = currentChr.replaceFirst("^chr", "");
+                        if (normChr2.equals(normCurrentChr)) {
+                            // Same chromosome -> Inversion
+                            return VcfVariantType.SV_INVERSION;
+                        } else {
+                            // Different chromosome -> Translocation
+                            return VcfVariantType.SV_TRANSLOCATION;
+                        }
+                    }
+                    // Fallback to breakend if no CHR2 info
                     return VcfVariantType.SV_BREAKEND;
                 case "TRA": case "CTX": 
                     // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_TRANSLOCATION");
@@ -449,14 +472,103 @@ public class VcfReader implements AutoCloseable {
                 }
             }
             
-            // Breakend notation
+            // Breakend notation (fallback if not caught above)
             if (alt.contains("[") || alt.contains("]")) {
+                // For breakend notation without explicit CHR2, attempt to parse the mate position from ALT
+                String chr2 = extractChr2FromBreakendAlt(alt);
+                if (chr2 != null && !chr2.isEmpty()) {
+                    String normChr2 = chr2.replaceFirst("^chr", "");
+                    String normCurrentChr = ctx.getContig().replaceFirst("^chr", "");
+                    if (normChr2.equals(normCurrentChr)) {
+                        return VcfVariantType.SV_INVERSION;
+                    } else {
+                        return VcfVariantType.SV_TRANSLOCATION;
+                    }
+                }
                 // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_BREAKEND (from breakend)");
                 return VcfVariantType.SV_BREAKEND;
             }
         }
         
         return VcfVariantType.COMPLEX;
+    }
+    
+    /**
+     * Extract chromosome from breakend ALT notation (e.g., "C[chr6:123[" -> "chr6").
+     */
+    private String extractChr2FromBreakendAlt(String alt) {
+        // Breakend format: REF[CHR:POS[ or ]CHR:POS]REF
+        // Extract the chromosome:position part
+        int openBracket = alt.indexOf('[');
+        int closeBracket = alt.indexOf(']');
+        int startIdx = -1, endIdx = -1;
+        
+        if (openBracket >= 0) {
+            startIdx = openBracket + 1;
+            endIdx = alt.indexOf('[', startIdx);
+        } else if (closeBracket >= 0) {
+            startIdx = alt.indexOf(']');
+            if (startIdx >= 0) {
+                startIdx++;
+                endIdx = alt.indexOf(']', startIdx);
+            }
+        }
+        
+        if (startIdx > 0 && endIdx > startIdx) {
+            String chrPosStr = alt.substring(startIdx, endIdx);
+            int colonIdx = chrPosStr.indexOf(':');
+            if (colonIdx > 0) {
+                return chrPosStr.substring(0, colonIdx);
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Extract mate position from breakend ALT notation (e.g., "C[chr6:123[" -> 123).
+     * Works for both same-chromosome and different-chromosome mates.
+     */
+    private Long extractMatePosFromBreakendAlt(VariantContext ctx, String currentChromosome) {
+        try {
+            if (ctx.getAlternateAlleles().isEmpty()) {
+                return null;
+            }
+            
+            String alt = ctx.getAlternateAlleles().get(0).getDisplayString();
+            
+            // Breakend format: REF[CHR:POS[ or ]CHR:POS]REF
+            int openBracket = alt.indexOf('[');
+            int closeBracket = alt.indexOf(']');
+            int startIdx = -1, endIdx = -1;
+            
+            if (openBracket >= 0) {
+                startIdx = openBracket + 1;
+                endIdx = alt.indexOf('[', startIdx);
+            } else if (closeBracket >= 0) {
+                startIdx = alt.indexOf(']');
+                if (startIdx >= 0) {
+                    startIdx++;
+                    endIdx = alt.indexOf(']', startIdx);
+                }
+            }
+            
+            if (startIdx > 0 && endIdx > startIdx) {
+                String chrPosStr = alt.substring(startIdx, endIdx);
+                int colonIdx = chrPosStr.indexOf(':');
+                if (colonIdx > 0) {
+                    try {
+                        return Long.parseLong(chrPosStr.substring(colonIdx + 1));
+                    } catch (NumberFormatException e) {
+                        // Ignore parse errors
+                    }
+                }
+            }
+            
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ── Parsing ───────────────────────────────────────────────────────────────
@@ -492,11 +604,34 @@ public class VcfReader implements AutoCloseable {
         Integer svLen = ctx.hasAttribute("SVLEN") ? 
             ctx.getAttributeAsInt("SVLEN", 0) : null;
         
+
+        
         String svType = ctx.getAttributeAsString("SVTYPE", null);
         String chr2 = ctx.getAttributeAsString("CHR2", null);
         
         Long end2 = ctx.hasAttribute("END2") ? 
             Long.parseLong(ctx.getAttributeAsString("END2", null)) : null;
+
+        
+        // For BND/breakend variants without END field, extract mate position from ALT notation
+        if (end == null && (type == VcfVariantType.SV_INVERSION || type == VcfVariantType.SV_TRANSLOCATION || 
+                            type == VcfVariantType.SV_BREAKEND)) {
+            Long matePos = extractMatePosFromBreakendAlt(ctx, ctx.getContig());
+            if (matePos != null && type == VcfVariantType.SV_INVERSION) {
+                // For INV (same chromosome), use mate position as END
+                // Ensure END > position for proper span rendering
+                long pos = ctx.getStart();
+                if (matePos > pos) {
+                    end = matePos;
+                } else {
+                    // Swap: start becomes mate position, end becomes current position
+                    // (but we can't change position here, so just set end to current position)
+                    end = pos;
+                }
+            }
+            // For TRA (different chromosomes), leave END as null - it's a point variant
+            // The mate is on a different chromosome, so we can't represent it as a span
+        }
         
         return new VcfStructuralVariant(
             ctx.getContig(),

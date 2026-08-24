@@ -120,7 +120,8 @@ public class VariantDrawer {
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
         
-        // Track last drawn X pixel per sample to avoid overdraw when zoomed out
+        // Track last drawn X pixel per sample to avoid overdraw of point variants when zoomed out
+        // (SV spans are exempt from this deduplication as they span multiple pixels)
         int[] lastDrawnPixelX = new int[visibleTrackIndices.length];
         for (int i = 0; i < lastDrawnPixelX.length; i++) {
             lastDrawnPixelX[i] = -1;
@@ -138,25 +139,26 @@ public class VariantDrawer {
             
             if (isVisible) {
                 int xPixel = (int) x;
+                boolean isSvSpan = isSvWithSpan(node);
                 
                 for (int i = 0; i < visibleTrackIndices.length; i++) {
                     int trackIndex = visibleTrackIndices[i];
                     if (node.hasSample(trackIndex)) {
                         if (filter != null && !filter.passes(node, trackIndex)) continue;
                         
-                        // Skip if this sample already has a variant at this X pixel
-                        if (xPixel == lastDrawnPixelX[i]) continue;
+                        // Skip point variants if this sample already has one at this X pixel
+                        // SV spans are never skipped—they span multiple pixels and always need to be drawn
+                        if (!isSvSpan && xPixel == lastDrawnPixelX[i]) continue;
                         
                         double y = yPositions[i];
                         
                         // Check if this is an SV with a span
-                        if (isSvWithSpan(node)) {
+                        if (isSvSpan) {
                             drawSvSpan(gc, node, trackIndex, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
                         } else {
                             drawVariantLine(gc, node, trackIndex, x, y, sampleHeight);
+                            lastDrawnPixelX[i] = xPixel;
                         }
-                        
-                        lastDrawnPixelX[i] = xPixel;
                     }
                 }
             }

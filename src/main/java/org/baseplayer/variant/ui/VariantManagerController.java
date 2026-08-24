@@ -33,6 +33,7 @@ import com.google.gson.JsonParser;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.scene.layout.GridPane;
 import javafx.stage.Stage;
 
 import java.net.URI;
@@ -60,7 +61,8 @@ public class VariantManagerController implements Initializable {
     // ── FXML Components ───────────────────────────────────────────────────────
 
     // Filter Tab: Variant Filters
-    @FXML private VBox variantTypesContainer;  // Container for dynamic type checkboxes
+    @FXML private GridPane variantTypesContainer;  // Container for dynamic type checkboxes
+    @FXML private CheckBox selectAllTypesCheckBox;
     @FXML private CheckBox selectAllEffectsCheckBox;
     @FXML private CheckBox missenseCheckBox, synonymousCheckBox, stopFrameshiftCheckBox;
     @FXML private CheckBox spliceSiteCheckBox, utrCheckBox, noncodingCheckBox;
@@ -309,7 +311,14 @@ public class VariantManagerController implements Initializable {
     }
 
     private void setupAutoFilterListeners() {
-        // Type checkboxes - dynamic, set up in populateVariantTypeFilters()
+        // Select All Types checkbox
+        selectAllTypesCheckBox.setOnAction(e -> {
+            boolean selectAll = selectAllTypesCheckBox.isSelected();
+            for (CheckBox cb : variantTypeCheckBoxes.values()) {
+                cb.setSelected(selectAll);
+            }
+            handleApplyFilters();
+        });
         
         // Select All Effects checkbox
         selectAllEffectsCheckBox.setOnAction(e -> {
@@ -361,29 +370,30 @@ public class VariantManagerController implements Initializable {
         suppressFilterApplyEvents = false;
     }
     
+    /** Update the "select all types" checkbox state based on individual type checkboxes. */
+    private void updateSelectAllTypesState() {
+        suppressFilterApplyEvents = true;
+        boolean allSelected = true;
+        for (CheckBox cb : variantTypeCheckBoxes.values()) {
+            if (!cb.isSelected()) {
+                allSelected = false;
+                break;
+            }
+        }
+        selectAllTypesCheckBox.setSelected(allSelected);
+        suppressFilterApplyEvents = false;
+    }
+    
     /**
-     * Populate variant type checkboxes dynamically based on actual types in loaded VCFs.
-     * This ensures we only show SNV/Indel for SNV files or SV types for SV files.
-     * Consolidates small and SV versions of the same type (e.g., INSERTION + SV_INSERTION = "INS").
+     * Update variant type checkboxes based on types in loaded VCFs.
+     * Keeps all existing checkboxes and adds new ones if needed.
+     * Never deletes checkboxes when switching chromosomes.
      */
     private void populateVariantTypeFilters() {
         if (variantTypesContainer == null) return;
         
-        // Clear existing checkboxes
-        variantTypesContainer.getChildren().clear();
-        variantTypeCheckBoxes.clear();
-        
         // Get variant types from the loaded data
         java.util.Set<VcfVariantType> presentTypes = collectPresentVariantTypes();
-        
-        // If no data yet, show only basic types (not SV types)
-        if (presentTypes.isEmpty()) {
-            presentTypes = new java.util.HashSet<>();
-            presentTypes.add(VcfVariantType.SNV);
-            presentTypes.add(VcfVariantType.INSERTION);
-            presentTypes.add(VcfVariantType.DELETION);
-            presentTypes.add(VcfVariantType.MNV);
-        }
         
         // Detect if this is an SV-dominant file (has any actual SV types present)
         boolean hasSvTypes = presentTypes.stream().anyMatch(t -> 
@@ -428,23 +438,63 @@ public class VariantManagerController implements Initializable {
             }
         }
         
-        // Create checkboxes for each type to show
+        // Track which types need new checkboxes
+        java.util.Set<VcfVariantType> addedInThisCall = new java.util.HashSet<>();
+        
+        // Add any new types we haven't seen before
+        VariantFilter currentFilter = vcfManager.getCurrentFilter();
         for (VcfVariantType type : typesToShow) {
-            CheckBox cb = new CheckBox(getVariantTypeLabel(type));
-            cb.setSelected(true);
-            cb.getStyleClass().add("filter-checkbox");
-            cb.setOnAction(e -> handleApplyFilters());
-            
-            // For consolidated types, map both variants to same checkbox
-            variantTypeCheckBoxes.put(type, cb);
-            if (type == VcfVariantType.SV_INSERTION && presentTypes.contains(VcfVariantType.INSERTION)) {
-                variantTypeCheckBoxes.put(VcfVariantType.INSERTION, cb);
-            } else if (type == VcfVariantType.SV_DELETION && presentTypes.contains(VcfVariantType.DELETION)) {
-                variantTypeCheckBoxes.put(VcfVariantType.DELETION, cb);
+            if (!variantTypeCheckBoxes.containsKey(type)) {
+                // Create new checkbox for this type
+                CheckBox cb = new CheckBox(getVariantTypeLabel(type));
+                // Initialize based on current filter state
+                boolean isTypeSelected = currentFilter != null && currentFilter.getAllowedTypes().contains(type);
+                cb.setSelected(isTypeSelected);
+                cb.getStyleClass().add("filter-checkbox");
+                
+                // Add listener to update "Select All" state and apply filters
+                cb.selectedProperty().addListener((obs, oldVal, newVal) -> {
+                    updateSelectAllTypesState();
+                    handleApplyFilters();
+                });
+                
+                // Map the type to this checkbox
+                variantTypeCheckBoxes.put(type, cb);
+                addedInThisCall.add(type);
+                
+                // For consolidated types, also map small versions to the same checkbox
+                if (type == VcfVariantType.SV_INSERTION && presentTypes.contains(VcfVariantType.INSERTION)) {
+                    variantTypeCheckBoxes.put(VcfVariantType.INSERTION, cb);
+                } else if (type == VcfVariantType.SV_DELETION && presentTypes.contains(VcfVariantType.DELETION)) {
+                    variantTypeCheckBoxes.put(VcfVariantType.DELETION, cb);
+                }
             }
-            
-            variantTypesContainer.getChildren().add(cb);
         }
+        
+        // Rebuild grid layout with all current checkboxes (only add new ones)
+        int columnCount = 3;
+        int row = 0;
+        int col = 0;
+        java.util.Set<CheckBox> alreadyInGrid = new java.util.HashSet<>();
+        
+        // Collect existing checkboxes from the grid
+        for (javafx.scene.Node node : variantTypesContainer.getChildren()) {
+            if (node instanceof CheckBox) {
+                alreadyInGrid.add((CheckBox) node);
+            }
+        }
+        
+        // Add newly created checkboxes to the grid
+        for (VcfVariantType type : addedInThisCall) {
+            CheckBox cb = variantTypeCheckBoxes.get(type);
+            // Calculate position to append
+            row = variantTypesContainer.getChildren().size() / columnCount;
+            col = variantTypesContainer.getChildren().size() % columnCount;
+            variantTypesContainer.add(cb, col, row);
+        }
+        
+        // Update "Select All" checkbox state
+        updateSelectAllTypesState();
     }
     
     /**
@@ -693,10 +743,6 @@ public class VariantManagerController implements Initializable {
                 types.add(entry.getKey());
             }
         }
-        // Ensure at least one type is selected to avoid empty results
-        if (types.isEmpty()) {
-            types = EnumSet.allOf(VcfVariantType.class);
-        }
         filter.setAllowedTypes(types);
 
         // Effect categories - collect specific effects
@@ -828,6 +874,7 @@ public class VariantManagerController implements Initializable {
         for (CheckBox cb : variantTypeCheckBoxes.values()) {
             cb.setSelected(true);
         }
+        selectAllTypesCheckBox.setSelected(true);
         // Reset all effect checkboxes
         missenseCheckBox.setSelected(true);
         synonymousCheckBox.setSelected(true);
@@ -1179,21 +1226,32 @@ public class VariantManagerController implements Initializable {
             return;
         }
 
+        // When switching chromosomes, reload to ensure fresh data
+        boolean chromosomeChanged = !chrom.equals(chromosome);
+        if (chromosomeChanged) {
+            chromosome = chrom;  // Update immediately to prevent re-triggering reload
+            lastBuiltSize = -1;
+            clearTableItemsForChromosomeSwitch();
+            
+            // Force reload of the chromosome data with current filter
+            vcfManager.reloadCurrentChromosome();
+            // Set up callback to retry loadData when reload completes
+            vcfManager.setOnChromosomeVariantsReady(() -> {
+                Platform.runLater(this::loadData);
+            });
+            return;  // Exit early; loadData will be called again when data is ready
+        }
+
         VariantList fresh = vcfManager.getCachedVariants(chrom);
         int freshSize = fresh != null ? fresh.size() : 0;
 
         // Skip only when same chrom, same size, annotation done, and no annotation in flight
-        if (chrom.equals(chromosome) && fresh == sourceVariants && sourceVariants != null
+        if (fresh == sourceVariants && sourceVariants != null
                 && freshSize == lastBuiltSize && !annotationRunning
                 && vcfManager.isAnnotated(chromosome)) {
             return;
         }
 
-        if (!chrom.equals(chromosome)) {
-            lastBuiltSize = -1;
-            clearTableItemsForChromosomeSwitch();
-        }
-        chromosome = chrom;
         sourceVariants = fresh;
 
         // Update variant type filters based on loaded data

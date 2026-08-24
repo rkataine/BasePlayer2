@@ -424,7 +424,9 @@ public class AlignmentCanvas extends GenomicCanvas {
     densityBusy   = true;
     final int myGeneration = ++densityGeneration;  // Capture generation; stale threads will discard
     if (variants == null) {
-      densityDel = null; densitySvSpans = java.util.List.of();
+      densityDel = null; densityInv = null; densityDup = null;
+      densityIns = null; densityTra = null; densityBnd = null;
+      densitySvSpans = java.util.List.of();
       densityBusy = false;
       return;
     }
@@ -434,35 +436,45 @@ public class AlignmentCanvas extends GenomicCanvas {
     final org.baseplayer.variant.VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
     Thread t = new Thread(() -> {
       try {
-        int[] snv = new int[DENSITY_BINS];
-        int[] indel = new int[DENSITY_BINS];
-        int[] del = new int[DENSITY_BINS];
-        int[] inv = new int[DENSITY_BINS];
-        int[] dup = new int[DENSITY_BINS];
-        int[] ins = new int[DENSITY_BINS];
-        int[] tra = new int[DENSITY_BINS];
-        int[] bnd = new int[DENSITY_BINS];
+        // Use Sets to track distinct samples per bin/type (not variant counts)
+        // This avoids over-counting when one sample has multiple overlapping variants
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] snvBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] indelBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] delBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] invBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] dupBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] insBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] traBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] bndBySample = new java.util.HashSet[DENSITY_BINS];
+        
         java.util.List<SvSpan> spans = new java.util.ArrayList<>();
         double viewLen = Math.max(1, viewEnd - viewStart);
+        
         VariantNode node = variants.getFirst();
         while (node != null) {
-          // Count only visible samples that pass the active variant filter.
-          int sampleCount = 0;
+          // Collect visible samples that pass the active variant filter for this variant
+          java.util.List<Integer> passingIndices = new java.util.ArrayList<>();
           for (int idx : visibleTrackIndices) {
             if (node.hasSample(idx) && activeFilter.passes(node, idx)) {
-              sampleCount++;
+              passingIndices.add(idx);
             }
           }
           
-          if (sampleCount > 0) {
-            // Structural variants with spans
+          if (!passingIndices.isEmpty()) {
+            // Structural variants with spans (on same chromosome)
             boolean isSvWithSpan = node.svEnd > node.position && 
                                    (node.type == VcfVariantType.SV_DELETION ||
                                     node.type == VcfVariantType.SV_INSERTION ||
                                     node.type == VcfVariantType.SV_DUPLICATION ||
-                                    node.type == VcfVariantType.SV_INVERSION ||
-                                    node.type == VcfVariantType.SV_TRANSLOCATION ||
-                                    node.type == VcfVariantType.SV_BREAKEND);
+                                    node.type == VcfVariantType.SV_INVERSION);
             
             if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
               // SV spans: paint all bins covered by the span
@@ -471,31 +483,70 @@ public class AlignmentCanvas extends GenomicCanvas {
               int b0 = (int) Math.max(0, Math.min(DENSITY_BINS - 1, (s - viewStart) * DENSITY_BINS / viewLen));
               int b1 = (int) Math.max(0, Math.min(DENSITY_BINS - 1, (e - viewStart) * DENSITY_BINS / viewLen));
               
-              int[] targetArray = switch (node.type) {
-                case SV_DELETION -> del;
-                case SV_INVERSION -> inv;
-                case SV_DUPLICATION -> dup;
-                case SV_INSERTION -> ins;
-                case SV_TRANSLOCATION -> tra;
-                case SV_BREAKEND -> bnd;
-                default -> del;
+              java.util.Set<Integer>[] targetArray = switch (node.type) {
+                case SV_DELETION -> delBySample;
+                case SV_INVERSION -> invBySample;
+                case SV_DUPLICATION -> dupBySample;
+                case SV_INSERTION -> insBySample;
+                default -> delBySample;
               };
               
-              for (int b = b0; b <= b1; b++) targetArray[b] += sampleCount;
-              spans.add(new SvSpan(node.position, node.svEnd, node.type, sampleCount));
+              // Add each passing sample to the affected samples set for each bin
+              // This counts each sample once per bin, regardless of how many overlapping variants
+              for (int b = b0; b <= b1; b++) {
+                if (targetArray[b] == null) targetArray[b] = new java.util.HashSet<>();
+                targetArray[b].addAll(passingIndices);
+              }
+              spans.add(new SvSpan(node.position, node.svEnd, node.type, passingIndices.size()));
             } else if (node.position >= viewStart && node.position <= viewEnd) {
               // Point variants: increment single bin
               int bin = (int) Math.max(0, Math.min(DENSITY_BINS - 1, (node.position - viewStart) * DENSITY_BINS / viewLen));
               
               switch (node.type) {
-                case SNV -> snv[bin] += sampleCount;
-                case INSERTION, DELETION, MNV -> indel[bin] += sampleCount;
+                case SNV -> {
+                  if (snvBySample[bin] == null) snvBySample[bin] = new java.util.HashSet<>();
+                  snvBySample[bin].addAll(passingIndices);
+                }
+                case INSERTION, DELETION, MNV -> {
+                  if (indelBySample[bin] == null) indelBySample[bin] = new java.util.HashSet<>();
+                  indelBySample[bin].addAll(passingIndices);
+                }
+                case SV_TRANSLOCATION -> {
+                  if (traBySample[bin] == null) traBySample[bin] = new java.util.HashSet<>();
+                  traBySample[bin].addAll(passingIndices);
+                }
+                case SV_BREAKEND -> {
+                  if (bndBySample[bin] == null) bndBySample[bin] = new java.util.HashSet<>();
+                  bndBySample[bin].addAll(passingIndices);
+                }
                 default -> {} // Other types already handled as SVs
               }
             }
           }
           node = node.next;
         }
+        
+        // Convert sample sets to counts
+        int[] snv = new int[DENSITY_BINS];
+        int[] indel = new int[DENSITY_BINS];
+        int[] del = new int[DENSITY_BINS];
+        int[] inv = new int[DENSITY_BINS];
+        int[] dup = new int[DENSITY_BINS];
+        int[] ins = new int[DENSITY_BINS];
+        int[] tra = new int[DENSITY_BINS];
+        int[] bnd = new int[DENSITY_BINS];
+        
+        for (int i = 0; i < DENSITY_BINS; i++) {
+          if (snvBySample[i] != null) snv[i] = snvBySample[i].size();
+          if (indelBySample[i] != null) indel[i] = indelBySample[i].size();
+          if (delBySample[i] != null) del[i] = delBySample[i].size();
+          if (invBySample[i] != null) inv[i] = invBySample[i].size();
+          if (dupBySample[i] != null) dup[i] = dupBySample[i].size();
+          if (insBySample[i] != null) ins[i] = insBySample[i].size();
+          if (traBySample[i] != null) tra[i] = traBySample[i].size();
+          if (bndBySample[i] != null) bnd[i] = bndBySample[i].size();
+        }
+
         // Scale to highest peak across all types
         int maxC = 1;
         for (int i = 0; i < DENSITY_BINS; i++) {
@@ -520,6 +571,8 @@ public class AlignmentCanvas extends GenomicCanvas {
           densityMax = fMax;
           densitySvSpans = fSpans; densityBusy = false;
           densityCachedStart = viewStart; densityCachedEnd = viewEnd;
+          
+          
           draw();
         });
       } catch (Exception e) {
@@ -542,7 +595,8 @@ public class AlignmentCanvas extends GenomicCanvas {
     if (variants != null && !variants.isEmpty()) {
       // Reset cache to force recomputation
       densityCached = null;
-      densityDel = null;
+      densityDel = null; densityInv = null; densityDup = null;
+      densityIns = null; densityTra = null; densityBnd = null;
       densitySvSpans = java.util.List.of();
       densityCachedStart = -1;
       densityCachedEnd = -1;

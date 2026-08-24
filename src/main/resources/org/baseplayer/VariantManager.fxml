@@ -92,11 +92,19 @@
                         </padding>
 
                         <!-- Variant Types Section -->
-                        <VBox spacing="8">
-                            <Label text="Variant Types" styleClass="section-header"/>
-                            <VBox fx:id="variantTypesContainer" spacing="6">
-                                <!-- Dynamic checkboxes populated by controller -->
-                            </VBox>
+                        <VBox spacing="8" fillWidth="true">
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <CheckBox fx:id="selectAllTypesCheckBox" styleClass="filter-checkbox"/>
+                                <Label text="Variant Types" styleClass="section-header"/>
+                            </HBox>
+                            <GridPane fx:id="variantTypesContainer" hgap="12" vgap="6">
+                                <columnConstraints>
+                                    <ColumnConstraints prefWidth="110" fillWidth="true"/>
+                                    <ColumnConstraints prefWidth="110" fillWidth="true"/>
+                                    <ColumnConstraints prefWidth="110" fillWidth="true"/>
+                                </columnConstraints>
+                                <!-- Row constraints will be added dynamically based on number of types -->
+                            </GridPane>
                         </VBox>
 
                         <!-- Effect Categories Section (GridPane for column alignment) -->
