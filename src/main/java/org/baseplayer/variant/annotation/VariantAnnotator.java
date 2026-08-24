@@ -10,6 +10,7 @@ import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.utils.AminoAcids;
+import org.baseplayer.utils.BaseUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -87,14 +88,19 @@ public class VariantAnnotator {
             if (pos != null) {
                 codonNumber = pos.codonNumber;
                 try {
-                    String refCodon = refService.getBases(chromosome, (int) pos.codonGenomicStart,
+                    // Fetch the codon in genomic coordinates (forward strand sequence)
+                    String refCodonGenomic = refService.getBases(chromosome, (int) pos.codonGenomicStart,
                                                          (int) pos.codonGenomicStart + 2);
-                    if (refCodon != null && refCodon.length() == 3) {
-                        char[] altCodonChars = refCodon.toCharArray();
+                    if (refCodonGenomic != null && refCodonGenomic.length() == 3) {
+                        // Build alt codon in genomic coordinates
+                        char[] altCodonGenomicChars = refCodonGenomic.toCharArray();
                         char altBase = node.alt.isEmpty() ? '?' : node.alt.charAt(0);
-                        if (isReverse) altBase = complement(altBase);
-                        altCodonChars[pos.posInCodon] = altBase;
-                        String altCodon = new String(altCodonChars);
+                        altCodonGenomicChars[pos.posInCodon] = altBase;
+                        String altCodonGenomic = new String(altCodonGenomicChars);
+
+                        // For reverse strand genes, reverse complement both codons to get transcript sequence
+                        String refCodon = isReverse ? BaseUtils.reverseComplement(refCodonGenomic) : refCodonGenomic;
+                        String altCodon = isReverse ? BaseUtils.reverseComplement(altCodonGenomic) : altCodonGenomic;
 
                         char refAA = AminoAcids.translateCodon(refCodon);
                         char altAA = AminoAcids.translateCodon(altCodon);
@@ -255,16 +261,6 @@ public class VariantAnnotator {
         }
 
         return new CodingPos(codonNumber, posInCodon, codonGenomicStart);
-    }
-
-    private static char complement(char base) {
-        return switch (Character.toUpperCase(base)) {
-            case 'A' -> 'T';
-            case 'T' -> 'A';
-            case 'C' -> 'G';
-            case 'G' -> 'C';
-            default  -> base;
-        };
     }
 
     private record CodingPos(int codonNumber, int posInCodon, long codonGenomicStart) {}

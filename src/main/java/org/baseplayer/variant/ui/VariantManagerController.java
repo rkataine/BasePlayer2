@@ -61,7 +61,10 @@ public class VariantManagerController implements Initializable {
 
     // Filter Tab: Variant Filters
     @FXML private VBox variantTypesContainer;  // Container for dynamic type checkboxes
-    @FXML private CheckBox codingCheckBox, intronicCheckBox, intergenicCheckBox;
+    @FXML private CheckBox selectAllEffectsCheckBox;
+    @FXML private CheckBox missenseCheckBox, synonymousCheckBox, stopFrameshiftCheckBox;
+    @FXML private CheckBox spliceSiteCheckBox, utrCheckBox, noncodingCheckBox;
+    @FXML private CheckBox intronicCheckBox, intergenicCheckBox;
     @FXML private Slider qualitySlider, coverageSlider, alleleFreqSlider;
     @FXML private TextField qualityField, coverageField, alleleFreqField;
     @FXML private Label qualityValueLabel, coverageValueLabel, alleleFreqValueLabel;
@@ -308,16 +311,54 @@ public class VariantManagerController implements Initializable {
     private void setupAutoFilterListeners() {
         // Type checkboxes - dynamic, set up in populateVariantTypeFilters()
         
-        // Effect checkboxes
-        codingCheckBox.setOnAction(e -> handleApplyFilters());
-        intronicCheckBox.setOnAction(e -> handleApplyFilters());
-        intergenicCheckBox.setOnAction(e -> handleApplyFilters());
+        // Select All Effects checkbox
+        selectAllEffectsCheckBox.setOnAction(e -> {
+            boolean selectAll = selectAllEffectsCheckBox.isSelected();
+            missenseCheckBox.setSelected(selectAll);
+            synonymousCheckBox.setSelected(selectAll);
+            stopFrameshiftCheckBox.setSelected(selectAll);
+            spliceSiteCheckBox.setSelected(selectAll);
+            utrCheckBox.setSelected(selectAll);
+            noncodingCheckBox.setSelected(selectAll);
+            intronicCheckBox.setSelected(selectAll);
+            intergenicCheckBox.setSelected(selectAll);
+            handleApplyFilters();
+        });
+        
+        // Effect checkboxes - also update selectAllEffectsCheckBox state
+        ChangeListener<Boolean> effectCheckListener = (obs, oldVal, newVal) -> {
+            updateSelectAllEffectsState();
+            handleApplyFilters();
+        };
+        missenseCheckBox.selectedProperty().addListener(effectCheckListener);
+        synonymousCheckBox.selectedProperty().addListener(effectCheckListener);
+        stopFrameshiftCheckBox.selectedProperty().addListener(effectCheckListener);
+        spliceSiteCheckBox.selectedProperty().addListener(effectCheckListener);
+        utrCheckBox.selectedProperty().addListener(effectCheckListener);
+        noncodingCheckBox.selectedProperty().addListener(effectCheckListener);
+        intronicCheckBox.selectedProperty().addListener(effectCheckListener);
+        intergenicCheckBox.selectedProperty().addListener(effectCheckListener);
 
         // Cancer filter
         cancerOnlyCheckBox.setOnAction(e -> handleApplyFilters());
 
         // Quality field (apply on Enter)
         qualityField.setOnAction(e -> handleApplyFilters());
+    }
+    
+    /** Update the "select all effects" checkbox state based on individual effect checkboxes. */
+    private void updateSelectAllEffectsState() {
+        suppressFilterApplyEvents = true;
+        boolean allSelected = missenseCheckBox.isSelected()
+            && synonymousCheckBox.isSelected()
+            && stopFrameshiftCheckBox.isSelected()
+            && spliceSiteCheckBox.isSelected()
+            && utrCheckBox.isSelected()
+            && noncodingCheckBox.isSelected()
+            && intronicCheckBox.isSelected()
+            && intergenicCheckBox.isSelected();
+        selectAllEffectsCheckBox.setSelected(allSelected);
+        suppressFilterApplyEvents = false;
     }
     
     /**
@@ -608,9 +649,18 @@ public class VariantManagerController implements Initializable {
             entry.getValue().setSelected(types.contains(entry.getKey()));
         }
 
-        codingCheckBox.setSelected(filter.isShowCoding());
-        intronicCheckBox.setSelected(filter.isShowIntronic());
-        intergenicCheckBox.setSelected(filter.isShowIntergenic());
+        // Load effect checkboxes based on allowedEffects
+        Set<VariantEffect> effects = filter.getAllowedEffects();
+        
+        // Set specific coding sub-checkboxes
+        missenseCheckBox.setSelected(effects.contains(VariantEffect.CODING_MISSENSE));
+        synonymousCheckBox.setSelected(effects.contains(VariantEffect.CODING_SYNONYMOUS));
+        stopFrameshiftCheckBox.setSelected(effects.contains(VariantEffect.CODING_STOP_GAIN) || effects.contains(VariantEffect.CODING_FRAMESHIFT));
+        spliceSiteCheckBox.setSelected(effects.contains(VariantEffect.SPLICE_SITE));
+        utrCheckBox.setSelected(effects.contains(VariantEffect.UTR5) || effects.contains(VariantEffect.UTR3));
+        noncodingCheckBox.setSelected(effects.contains(VariantEffect.NONCODING_GENE));
+        intronicCheckBox.setSelected(effects.contains(VariantEffect.INTRONIC));
+        intergenicCheckBox.setSelected(effects.contains(VariantEffect.INTERGENIC));
 
         qualitySlider.setValue(filter.getMinQuality());
         coverageSlider.setValue(filter.getMinDepth());
@@ -627,6 +677,9 @@ public class VariantManagerController implements Initializable {
                 addFilterFieldRule(filterValue);
             }
         }
+        
+        // Update select all effects checkbox state
+        updateSelectAllEffectsState();
         suppressFilterApplyEvents = false;
     }
 
@@ -646,10 +699,33 @@ public class VariantManagerController implements Initializable {
         }
         filter.setAllowedTypes(types);
 
-        // Effect categories
-        filter.setShowCoding(codingCheckBox.isSelected());
-        filter.setShowIntronic(intronicCheckBox.isSelected());
-        filter.setShowIntergenic(intergenicCheckBox.isSelected());
+        // Effect categories - collect specific effects
+        Set<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+        
+        // Add coding effect sub-types
+        if (missenseCheckBox.isSelected()) effects.add(VariantEffect.CODING_MISSENSE);
+        if (synonymousCheckBox.isSelected()) effects.add(VariantEffect.CODING_SYNONYMOUS);
+        if (stopFrameshiftCheckBox.isSelected()) {
+            effects.add(VariantEffect.CODING_STOP_GAIN);
+            effects.add(VariantEffect.CODING_STOP_LOSS);
+            effects.add(VariantEffect.CODING_FRAMESHIFT);
+        }
+        
+        // Add regulatory effects
+        if (spliceSiteCheckBox.isSelected()) effects.add(VariantEffect.SPLICE_SITE);
+        if (utrCheckBox.isSelected()) {
+            effects.add(VariantEffect.UTR5);
+            effects.add(VariantEffect.UTR3);
+        }
+        if (noncodingCheckBox.isSelected()) effects.add(VariantEffect.NONCODING_GENE);
+        
+        // Add intronic
+        if (intronicCheckBox.isSelected()) effects.add(VariantEffect.INTRONIC);
+        
+        // Add intergenic
+        if (intergenicCheckBox.isSelected()) effects.add(VariantEffect.INTERGENIC);
+        
+        filter.setAllowedEffects(effects);
 
         // Quality
         try {
@@ -752,9 +828,16 @@ public class VariantManagerController implements Initializable {
         for (CheckBox cb : variantTypeCheckBoxes.values()) {
             cb.setSelected(true);
         }
-        codingCheckBox.setSelected(true);
+        // Reset all effect checkboxes
+        missenseCheckBox.setSelected(true);
+        synonymousCheckBox.setSelected(true);
+        stopFrameshiftCheckBox.setSelected(true);
+        spliceSiteCheckBox.setSelected(true);
+        utrCheckBox.setSelected(true);
+        noncodingCheckBox.setSelected(true);
         intronicCheckBox.setSelected(true);
         intergenicCheckBox.setSelected(true);
+        selectAllEffectsCheckBox.setSelected(true);
         qualitySlider.setValue(0);
         coverageSlider.setValue(0);
         alleleFreqSlider.setValue(0);

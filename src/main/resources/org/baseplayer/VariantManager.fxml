@@ -99,14 +99,34 @@
                             </VBox>
                         </VBox>
 
-                        <!-- Effect Categories Section -->
-                        <VBox spacing="8">
-                            <Label text="Effect Categories" styleClass="section-header"/>
-                            <VBox spacing="6">
-                                <CheckBox fx:id="codingCheckBox" text="Coding" selected="true" styleClass="filter-checkbox"/>
-                                <CheckBox fx:id="intronicCheckBox" text="Intronic" selected="true" styleClass="filter-checkbox"/>
-                                <CheckBox fx:id="intergenicCheckBox" text="Intergenic" selected="true" styleClass="filter-checkbox"/>
-                            </VBox>
+                        <!-- Effect Categories Section (GridPane for column alignment) -->
+                        <VBox spacing="8" fillWidth="true">
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <CheckBox fx:id="selectAllEffectsCheckBox" styleClass="filter-checkbox"/>
+                                <Label text="Effect Categories" styleClass="section-header"/>
+                            </HBox>
+                            <GridPane hgap="12" vgap="6">
+                                <columnConstraints>
+                                    <ColumnConstraints prefWidth="120" fillWidth="true"/>
+                                    <ColumnConstraints prefWidth="120" fillWidth="true"/>
+                                    <ColumnConstraints prefWidth="130" fillWidth="true"/>
+                                    <ColumnConstraints prefWidth="130" fillWidth="true"/>
+                                </columnConstraints>
+                                <rowConstraints>
+                                    <RowConstraints/>
+                                    <RowConstraints/>
+                                </rowConstraints>
+                                <!-- Row 0 -->
+                                <CheckBox fx:id="missenseCheckBox" text="Missense" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="0" GridPane.columnIndex="0"/>
+                                <CheckBox fx:id="synonymousCheckBox" text="Synonymous" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="0" GridPane.columnIndex="1"/>
+                                <CheckBox fx:id="stopFrameshiftCheckBox" text="Stop/Frameshift" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="0" GridPane.columnIndex="2"/>
+                                <CheckBox fx:id="spliceSiteCheckBox" text="Splice Site" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="0" GridPane.columnIndex="3"/>
+                                <!-- Row 1 -->
+                                <CheckBox fx:id="utrCheckBox" text="UTR" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="1" GridPane.columnIndex="0"/>
+                                <CheckBox fx:id="noncodingCheckBox" text="Non-coding" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="1" GridPane.columnIndex="1"/>
+                                <CheckBox fx:id="intronicCheckBox" text="Intronic" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="1" GridPane.columnIndex="2"/>
+                                <CheckBox fx:id="intergenicCheckBox" text="Intergenic" selected="true" styleClass="filter-checkbox" GridPane.rowIndex="1" GridPane.columnIndex="3"/>
+                            </GridPane>
                         </VBox>
 
                         <!-- Cancer Genes Filter -->

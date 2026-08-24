@@ -19,6 +19,7 @@ public class VariantFilter {
     private double minAlleleFraction = 0.0;
     private boolean cancerGenesOnly = false;
     private Set<VcfVariantType> allowedTypes = EnumSet.allOf(VcfVariantType.class);
+    private Set<VariantEffect> allowedEffects = EnumSet.allOf(VariantEffect.class);
     private boolean showCoding = true;
     private boolean showIntronic = true;
     private boolean showIntergenic = true;
@@ -44,6 +45,9 @@ public class VariantFilter {
 
     public Set<VcfVariantType> getAllowedTypes() { return allowedTypes; }
     public void setAllowedTypes(Set<VcfVariantType> allowedTypes) { this.allowedTypes = allowedTypes; }
+
+    public Set<VariantEffect> getAllowedEffects() { return allowedEffects; }
+    public void setAllowedEffects(Set<VariantEffect> allowedEffects) { this.allowedEffects = allowedEffects; }
 
     public boolean isShowCoding() { return showCoding; }
     public void setShowCoding(boolean showCoding) { this.showCoding = showCoding; }
@@ -73,6 +77,7 @@ public class VariantFilter {
         copy.minAlleleFraction = this.minAlleleFraction;
         copy.cancerGenesOnly = this.cancerGenesOnly;
         copy.allowedTypes = EnumSet.copyOf(this.allowedTypes);
+        copy.allowedEffects = EnumSet.copyOf(this.allowedEffects);
         copy.showCoding = this.showCoding;
         copy.showIntronic = this.showIntronic;
         copy.showIntergenic = this.showIntergenic;
@@ -210,12 +215,12 @@ public class VariantFilter {
             if (cancerGenesOnly && !ann.isCancerGene()) return false;
 
             VariantEffect effect = ann.effect();
-            if (effect.isCoding() && !showCoding) return false;
-            if (effect.isIntronic() && !showIntronic) return false;
-            if (effect == VariantEffect.INTERGENIC && !showIntergenic) return false;
+            // Check if this effect is allowed
+            if (!allowedEffects.contains(effect)) return false;
         } else {
             if (cancerGenesOnly) return false;
-            if (!showIntergenic) return false;
+            // For unannotated variants, treat as intergenic
+            if (!allowedEffects.contains(VariantEffect.INTERGENIC)) return false;
         }
 
         return true;
