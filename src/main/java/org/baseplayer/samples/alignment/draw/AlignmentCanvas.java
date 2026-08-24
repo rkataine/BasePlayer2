@@ -220,6 +220,16 @@ public class AlignmentCanvas extends GenomicCanvas {
         update.set(!update.get());
       }
 
+      // Update sidebar highlighting based on which sample track is under the cursor
+      double masterOffset = sampleRegistry.getMasterTrackHeight();
+      double sampleH = sampleRegistry.getSampleHeight();
+      if (sampleH > 0 && lastMouseY > masterOffset) {
+        int sampleIdx = (int)((lastMouseY - masterOffset + sampleRegistry.getScrollBarPosition()) / sampleH);
+        if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
+          sampleRegistry.hoverSampleProperty().set(sampleIdx);
+        }
+      }
+
       BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
       boolean hoveringSelected = selectedRead != null && hit == selectedRead;
       if (hit != hoveredRead) {
@@ -284,6 +294,8 @@ public class AlignmentCanvas extends GenomicCanvas {
         reactiveCanvas.setCursor(Cursor.DEFAULT);
         drawReadHighlight(); // keeps selectedRead highlighted if popup is still open
       }
+      // Clear sidebar highlighting when mouse leaves the sample tracks
+      sampleRegistry.hoverSampleProperty().set(-1);
     });
   }
 

@@ -30,6 +30,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
 import javafx.animation.AnimationTimer;
 import java.util.List;
 
@@ -60,6 +61,7 @@ public class SampleListPanel extends SidebarContentPanel {
   private static final Color OVERLAY_DOT    = Color.color(0.6, 0.8, 0.6);
 
   private final SampleRegistry sampleRegistry;
+  private boolean mouseOverSidebar = false; // Track if mouse is actually over this sidebar
   private AnimationTimer scrollAnimation;
   private long scrollAnimStartNanos;
   private int animationTargetFirst = -1;
@@ -104,6 +106,18 @@ public class SampleListPanel extends SidebarContentPanel {
 
     setupHoverHandlers();
     setupScrollAndClickHandlers();
+    setupSidebarMouseTracking();
+    
+    // Listen to external hover changes (e.g., from sample track mouse movement)
+    // and sync back to local hoverIndex for rendering
+    sampleRegistry.hoverSampleProperty().addListener((obs, oldVal, newVal) -> {
+      int newIndex = newVal.intValue();
+      if (hoverIndex != newIndex) {
+        hoverIndex = newIndex;
+        draw();
+        drawReactive();
+      }
+    });
   }
 
   @Override
@@ -112,6 +126,16 @@ public class SampleListPanel extends SidebarContentPanel {
     sampleRegistry.hoverSampleProperty().set(currentRow);
     // Repaint static layer so hover-row buttons appear/disappear immediately.
     draw();
+  }
+
+  private void setupSidebarMouseTracking() {
+    // Track when mouse enters/exits this sidebar
+    reactiveCanvas.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_ENTERED, event -> {
+      mouseOverSidebar = true;
+    });
+    reactiveCanvas.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_EXITED, event -> {
+      mouseOverSidebar = false;
+    });
   }
 
   private void setupScrollAndClickHandlers() {
@@ -667,13 +691,33 @@ public class SampleListPanel extends SidebarContentPanel {
       }
 
       // Track name
-      gc.setFont(NAME_FONT);
-      gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
-      double textY = sampleY + gc.getFont().getSize() + 2;
+      double textY = sampleY + NAME_FONT.getSize() + 2;
       if (textY > 0) {
         String displayName = hasTrack
             ? sampleRegistry.getSampleTracks().get(i).getDisplayName()
             : "";
+        
+        // When hovering, use white color and larger font for readability
+        if (i == hoverIndex) {
+          Font hoverFont = Font.font("Segoe UI", FontWeight.BOLD, 13);
+          gc.setFont(hoverFont);
+          gc.setFill(Color.WHITE);
+          
+          // Draw semi-transparent background behind name for better readability
+          double charWidth = 7.5; // approximate average character width at size 13
+          double textWidth = displayName.length() * charWidth;
+          double bgPadding = 4;
+          double bgHeight = 18;
+          gc.setFill(Color.rgb(0, 0, 0, 0.3));
+          gc.fillRect(8, Math.max(sampleY + 2, 0), textWidth + bgPadding * 2, bgHeight);
+          
+          // Draw text in white on top of background
+          gc.setFill(Color.WHITE);
+        } else {
+          gc.setFont(NAME_FONT);
+          gc.setFill(isVisible ? Color.web("#cccccc") : Color.web("#666666"));
+        }
+        
         gc.fillText(displayName, 10, textY);
       }
 
@@ -734,7 +778,8 @@ public class SampleListPanel extends SidebarContentPanel {
 
         // Action buttons — drawn on the static canvas for the hovered row so the
         // reactive overlay can add a clean glow on top (same pattern as SidebarBase).
-        if (i == hoverIndex) {
+        // Only show buttons if mouse is actually over the sidebar (not when hover synced from sample tracks)
+        if (mouseOverSidebar && i == hoverIndex) {
           drawSampleButtons(i, sampleY, w - rightInset, isVisible, hasSuspended);
         }
       }

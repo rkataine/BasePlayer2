@@ -49,8 +49,13 @@ import java.util.prefs.Preferences;
  */
 public class VariantManagerController implements Initializable {
 
-    private static final String TEXT         = "white";
-    private static final String CANCER_COLOR = "#d16624";
+    private static final String TEXT           = "white";
+    private static final String CANCER_COLOR    = "#d16624";
+    // Effect-based text colors
+    private static final String COLOR_SYNONYMOUS  = "#4caf50";  // Green
+    private static final String COLOR_MISSENSE    = "#ff9800";  // Orange
+    private static final String COLOR_TRUNCATING  = "#f44336";  // Red
+    private static final String COLOR_NONCODING   = "#9e9e9e";  // Light gray
 
     // ── FXML Components ───────────────────────────────────────────────────────
 
@@ -459,6 +464,11 @@ public class VariantManagerController implements Initializable {
         setupTextColumn(intergenicTypeColumn, "variantType");
         setupTextColumn(intergenicSamplesColumn, "sampleCount");
         setupTextColumn(intergenicQualityColumn, "maxQuality");
+
+        // Set up row coloring based on variant effect
+        setupTableRowFactory(codingTable);
+        setupTableRowFactory(intronicTable);
+        setupTableRowFactory(intergenicTable);
     }
 
     private void setupGeneColumn(TableColumn<AnnotationRow, AnnotationRow> column) {
@@ -475,7 +485,9 @@ public class VariantManagerController implements Initializable {
                 HBox hbox = new HBox(4);
                 hbox.setAlignment(Pos.CENTER_LEFT);
                 Label lbl = new Label(row.geneName);
-                lbl.setStyle("-fx-text-fill: " + (row.isCancerGene ? CANCER_COLOR : TEXT) + ";");
+                // Use cancer color if cancer gene, otherwise use effect-based color
+                String textColor = row.isCancerGene ? CANCER_COLOR : row.getRowTextColor();
+                lbl.setStyle("-fx-text-fill: " + textColor + ";");
                 hbox.getChildren().add(lbl);
                 if (row.isCancerGene && row.cosmicTier != null) {
                     Label tier = new Label("T" + row.cosmicTier);
@@ -564,6 +576,25 @@ public class VariantManagerController implements Initializable {
 
     private void setupTextColumn(TableColumn<AnnotationRow, String> column, String property) {
         column.setCellValueFactory(new PropertyValueFactory<>(property));
+        column.setCellFactory(col -> new TableCell<AnnotationRow, String>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty ? "" : item);
+                if (empty || getTableRow() == null || getTableRow().getItem() == null) {
+                    setStyle("");
+                } else {
+                    AnnotationRow row = getTableRow().getItem();
+                    String textColor = row.getRowTextColor();
+                    setStyle("-fx-text-fill: " + textColor + ";");
+                }
+            }
+        });
+    }
+
+    private void setupTableRowFactory(TableView<AnnotationRow> table) {
+        // Row factory no longer needed for text coloring, but kept for potential future use
+        // Coloring is now handled by individual cell factories
     }
 
     // ── Filter State Management ───────────────────────────────────────────────
@@ -1173,9 +1204,15 @@ public class VariantManagerController implements Initializable {
                     AnnotationRow row = new AnnotationRow(node, capturedChrom, passSamples, maxGq);
                     VariantAnnotation ann = node.annotation;
                     VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
-                    if (effect.isCoding()) coding.add(row);
-                    else if (effect.isIntronic()) intronic.add(row);
-                    else intergenic.add(row);
+                    if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
+                        // Gene tab: coding, splice sites, UTR, and non-coding genes
+                        coding.add(row);
+                    } else if (effect.isIntronic()) {
+                        // Intronic tab: only true intronic
+                        intronic.add(row);
+                    } else {
+                        intergenic.add(row);
+                    }
                 }
                 node = node.next;
             }
@@ -1186,7 +1223,7 @@ public class VariantManagerController implements Initializable {
                 intronicTable.setItems(FXCollections.observableArrayList(intronic));
                 intergenicTable.setItems(FXCollections.observableArrayList(intergenic));
 
-                codingTab.setText("Coding (" + coding.size() + ")");
+                codingTab.setText("Gene (" + coding.size() + ")");
                 intronicTab.setText("Intronic (" + intronic.size() + ")");
                 intergenicTab.setText("Intergenic (" + intergenic.size() + ")");
 
@@ -1211,7 +1248,7 @@ public class VariantManagerController implements Initializable {
         codingTable.setPlaceholder(lbl);
         intronicTable.setPlaceholder(new Label(""));
         intergenicTable.setPlaceholder(new Label(""));
-        codingTab.setText("Coding");
+        codingTab.setText("Gene");
         intronicTab.setText("Intronic");
         intergenicTab.setText("Intergenic");
     }
@@ -1261,6 +1298,7 @@ public class VariantManagerController implements Initializable {
         public final String geneName, effectDisplay, aaChange, codonChange;
         public final boolean isCancerGene;
         public final String cosmicTier;
+        public final VariantEffect effect;
 
         AnnotationRow(VariantNode node, String chrom, int samples, double maxGq) {
             VariantAnnotation ann = node.annotation;
@@ -1274,7 +1312,8 @@ public class VariantManagerController implements Initializable {
             isCancerGene = ann != null && ann.isCancerGene();
             CosmicCensusEntry cosmic = ann != null ? ann.cosmicEntry() : null;
             cosmicTier = cosmic != null ? cosmic.tier() : null;
-            effectDisplay = ann != null ? ann.effect().displayName() : VariantEffect.INTERGENIC.displayName();
+            effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
+            effectDisplay = effect.displayName();
             aaChange = ann != null && ann.aaChange() != null ? ann.aaChange() : "";
             codonChange = ann != null && ann.codonChange() != null ? ann.codonChange() : "";
         }
@@ -1287,6 +1326,28 @@ public class VariantManagerController implements Initializable {
         public String getEffectDisplay() { return effectDisplay; }
         public String getAaChange() { return aaChange; }
         public String getCodonChange() { return codonChange; }
+
+        public boolean isSpliceSite() {
+            return effect == VariantEffect.SPLICE_SITE;
+        }
+
+        /**
+         * Get text color for row based on variant effect:
+         * - Synonymous: green
+         * - Missense/inframe indel: orange
+         * - Stop/frameshift/truncating/splice site: red
+         * - UTR/intronic/non-coding gene: light gray
+         * - Intergenic: default (white)
+         */
+        public String getRowTextColor() {
+            return switch (effect) {
+                case CODING_SYNONYMOUS -> COLOR_SYNONYMOUS;
+                case CODING_MISSENSE, CODING_INFRAME -> COLOR_MISSENSE;
+                case CODING_STOP_GAIN, CODING_STOP_LOSS, CODING_FRAMESHIFT, SPLICE_SITE -> COLOR_TRUNCATING;  // Red for highly damaging
+                case CODING_OTHER, UTR5, UTR3, INTRONIC, NONCODING_GENE -> COLOR_NONCODING;  // Light gray for non-coding variants
+                default -> TEXT; // Default white for intergenic
+            };
+        }
     }
 
     private static String typeLabel(VcfVariantType type) {

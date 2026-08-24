@@ -8,9 +8,11 @@ public enum VariantEffect {
     CODING_FRAMESHIFT,
     CODING_INFRAME,
     CODING_OTHER,
+    SPLICE_SITE,
     UTR5,
     UTR3,
     INTRONIC,
+    NONCODING_GENE,
     INTERGENIC;
 
     public boolean isCoding() {
@@ -21,7 +23,15 @@ public enum VariantEffect {
     }
 
     public boolean isIntronic() {
-        return this == INTRONIC || this == UTR5 || this == UTR3;
+        return this == INTRONIC;
+    }
+
+    public boolean isSpliceSite() {
+        return this == SPLICE_SITE;
+    }
+
+    public boolean isRegulatory() {
+        return this == UTR5 || this == UTR3 || this == NONCODING_GENE;
     }
 
     public String displayName() {
@@ -33,9 +43,11 @@ public enum VariantEffect {
             case CODING_FRAMESHIFT -> "Frameshift";
             case CODING_INFRAME    -> "In-frame";
             case CODING_OTHER      -> "Coding";
+            case SPLICE_SITE       -> "Splice site";
             case UTR5              -> "5' UTR";
             case UTR3              -> "3' UTR";
             case INTRONIC          -> "Intronic";
+            case NONCODING_GENE    -> "Non-coding";
             case INTERGENIC        -> "Intergenic";
         };
     }

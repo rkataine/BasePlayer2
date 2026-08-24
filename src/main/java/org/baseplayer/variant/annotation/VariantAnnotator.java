@@ -74,7 +74,7 @@ public class VariantAnnotator {
         }
 
         boolean isReverse = "-".equals(bestGene.strand());
-        VariantEffect effect = classifyEffect(node, bestTx, isReverse);
+        VariantEffect effect = classifyEffect(node, bestTx, isReverse, bestGene.biotype());
 
         String aaChange = null;
         String codonChange = null;
@@ -133,7 +133,7 @@ public class VariantAnnotator {
             isCancerGene, cosmicEntry);
     }
 
-    private VariantEffect classifyEffect(VariantNode node, Transcript tx, boolean isReverse) {
+    private VariantEffect classifyEffect(VariantNode node, Transcript tx, boolean isReverse, String biotype) {
         if (tx == null) return VariantEffect.INTRONIC;
 
         long pos = node.position;
@@ -149,30 +149,49 @@ public class VariantAnnotator {
             }
         }
 
-        if (!inAnyExon) return VariantEffect.INTRONIC;
-
-        // Inside exon — check UTR vs CDS
-        if (!tx.hasCDS()) return VariantEffect.CODING_OTHER;
-
-        if (pos < tx.cdsStart()) {
-            return isReverse ? VariantEffect.UTR3 : VariantEffect.UTR5;
-        }
-        if (pos > tx.cdsEnd()) {
-            return isReverse ? VariantEffect.UTR5 : VariantEffect.UTR3;
-        }
-
-        // In CDS — classify by variant type
-        return switch (node.type) {
-            case INSERTION, DELETION -> {
-                // Simple length-based check for frameshift
-                int refLen = node.ref.length();
-                int altLen = node.alt.isEmpty() ? 0 : node.alt.length();
-                int diff = Math.abs(altLen - refLen);
-                yield (diff % 3 == 0) ? VariantEffect.CODING_INFRAME : VariantEffect.CODING_FRAMESHIFT;
+        if (inAnyExon) {
+            // Inside exon — check UTR vs CDS
+            if (!tx.hasCDS()) {
+                // For non-coding genes (lincRNA, etc.), use NONCODING_GENE; otherwise CODING_OTHER
+                return !"protein_coding".equals(biotype) ? VariantEffect.NONCODING_GENE : VariantEffect.CODING_OTHER;
             }
-            case SNV, MNV -> VariantEffect.CODING_OTHER; // refined later for SNVs
-            default -> VariantEffect.CODING_OTHER;
-        };
+
+            if (pos < tx.cdsStart()) {
+                return isReverse ? VariantEffect.UTR3 : VariantEffect.UTR5;
+            }
+            if (pos > tx.cdsEnd()) {
+                return isReverse ? VariantEffect.UTR5 : VariantEffect.UTR3;
+            }
+
+            // In CDS — classify by variant type
+            return switch (node.type) {
+                case INSERTION, DELETION -> {
+                    // Simple length-based check for frameshift
+                    int refLen = node.ref.length();
+                    int altLen = node.alt.isEmpty() ? 0 : node.alt.length();
+                    int diff = Math.abs(altLen - refLen);
+                    yield (diff % 3 == 0) ? VariantEffect.CODING_INFRAME : VariantEffect.CODING_FRAMESHIFT;
+                }
+                case SNV, MNV -> VariantEffect.CODING_OTHER; // refined later for SNVs
+                default -> VariantEffect.CODING_OTHER;
+            };
+        }
+
+        // Not in exon — check if near splice site (within 2 bases of exon boundary)
+        if (tx.exons() != null) {
+            for (long[] exon : tx.exons()) {
+                // Check donor site (end of exon): positions [exon[1], exon[1]+2]
+                if (pos > exon[1] && pos <= exon[1] + 2) {
+                    return VariantEffect.SPLICE_SITE;
+                }
+                // Check acceptor site (start of exon): positions [exon[0]-2, exon[0]]
+                if (pos >= exon[0] - 2 && pos < exon[0]) {
+                    return VariantEffect.SPLICE_SITE;
+                }
+            }
+        }
+
+        return VariantEffect.INTRONIC;
     }
 
     /**
