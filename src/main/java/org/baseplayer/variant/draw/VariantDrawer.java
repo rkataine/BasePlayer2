@@ -41,7 +41,7 @@ public class VariantDrawer {
     private static final Color COLOR_SV_DUPLICATION = Color.web("#c0c0d0");   // Grayish white
     private static final Color COLOR_SV_INSERTION = Color.web("#33cc66");     // Light green
     private static final Color COLOR_SV_TRANSLOCATION = Color.web("#ffdd00"); // Yellow
-    private static final Color COLOR_SV_BREAKEND = Color.web("#ffdd00");      // Yellow
+    private static final Color COLOR_SV_BREAKEND = Color.web("#c0c0c0");      // Light gray
     
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;

@@ -48,20 +48,41 @@ public class VcfReader implements AutoCloseable {
         }
         // System.err.println("[VcfReader] File exists: " + vcfPath);
         
-        // Check for index (.tbi or .csi)
+        // Check for index (.tbi or .csi), looking in multiple locations
+        // Try multiple naming conventions: file.vcf.gz.tbi, file.vcf.gz.csi, file.vcf.tbi, file.vcf.csi
         Path tbiPath = Path.of(vcfPath.toString() + ".tbi");
         Path csiPath = Path.of(vcfPath.toString() + ".csi");
         
-        if (!Files.exists(tbiPath) && !Files.exists(csiPath)) {
-            throw new IOException("VCF index not found (.tbi or .csi): " + vcfPath);
+        // For .gz files, also check without the .gz extension
+        Path tbiPathNoGz = null;
+        Path csiPathNoGz = null;
+        if (vcfPath.toString().endsWith(".gz")) {
+            String pathNoGz = vcfPath.toString().substring(0, vcfPath.toString().length() - 3);
+            tbiPathNoGz = Path.of(pathNoGz + ".tbi");
+            csiPathNoGz = Path.of(pathNoGz + ".csi");
+        }
+        
+        boolean hasIndex = Files.exists(tbiPath) || Files.exists(csiPath) || 
+                          (tbiPathNoGz != null && Files.exists(tbiPathNoGz)) ||
+                          (csiPathNoGz != null && Files.exists(csiPathNoGz));
+        
+        if (!hasIndex) {
+            // Index file not found - report which locations were checked
+            String msg = "VCF index not found for " + vcfPath.getFileName() + ". Checked: " +
+                         tbiPath.getFileName();
+            if (csiPath != null) msg += ", " + csiPath.getFileName();
+            if (tbiPathNoGz != null) msg += ", " + tbiPathNoGz.getFileName();
+            if (csiPathNoGz != null) msg += ", " + csiPathNoGz.getFileName();
+            throw new IOException(msg);
         }
         // System.err.println("[VcfReader] Index found (tbi=" + Files.exists(tbiPath) + ", csi=" + Files.exists(csiPath) + ")");
         
-        // Open with htsjdk
+        // Open with htsjdk - don't require index format to be .idx specifically
+        // htsjdk can work with .csi, .tbi, or even without an index for bgzipped files
         this.reader = AbstractFeatureReader.getFeatureReader(
             vcfPath.toString(),
             new VCFCodec(),
-            true  // require index
+            false  // don't require index (htsjdk will use .csi/.tbi if available)
         );
         // System.err.println("[VcfReader] Reader opened successfully");
         
@@ -402,6 +423,26 @@ public class VcfReader implements AutoCloseable {
      * or TRA if mate is on different chromosome.
      */
     private VcfVariantType classifyStructuralVariant(VariantContext ctx) {
+        // Check for SVCLASS first (if provided by caller like Manta)
+        String svClass = ctx.getAttributeAsString("SVCLASS", null);
+        if (svClass != null) {
+            switch (svClass.toUpperCase()) {
+                case "INVERSION":
+                    return VcfVariantType.SV_INVERSION;
+                case "TRANSLOCATION":
+                    return VcfVariantType.SV_TRANSLOCATION;
+                case "DELETION":
+                    return VcfVariantType.SV_DELETION;
+                case "INSERTION":
+                    return VcfVariantType.SV_INSERTION;
+                case "DUPLICATION":
+                case "TANDEM-DUPLICATION":
+                case "TANDEM_DUPLICATION":
+                    return VcfVariantType.SV_DUPLICATION;
+                // If SVCLASS is something else, fall through to SVTYPE check
+            }
+        }
+        
         String svType = ctx.getAttributeAsString("SVTYPE", null);
         // System.err.println("[VcfReader.classifyStructuralVariant] pos=" + ctx.getStart() + ", SVTYPE=" + svType);
         
@@ -420,28 +461,33 @@ public class VcfReader implements AutoCloseable {
                     // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION");
                     return VcfVariantType.SV_INVERSION;
                 case "BND":
-                    // Breakend: check if mate is on same chromosome
+                    // Breakend: classify as translocation if mate is on different chromosome
                     String chr2 = ctx.getAttributeAsString("CHR2", null);
-                    String currentChr = ctx.getContig();
-                    
-                    // If no explicit CHR2 field, try to extract from ALT breakend notation
-                    if ((chr2 == null || chr2.isEmpty()) && !ctx.getAlternateAlleles().isEmpty()) {
-                        chr2 = extractChr2FromBreakendAlt(ctx.getAlternateAlleles().get(0).getDisplayString());
-                    }
-                    
-                    if (chr2 != null && !chr2.isEmpty()) {
-                        // Normalize chromosome names for comparison (remove "chr" prefix if present)
-                        String normChr2 = chr2.replaceFirst("^chr", "");
-                        String normCurrentChr = currentChr.replaceFirst("^chr", "");
-                        if (normChr2.equals(normCurrentChr)) {
-                            // Same chromosome -> Inversion
-                            return VcfVariantType.SV_INVERSION;
-                        } else {
-                            // Different chromosome -> Translocation
+                    if (chr2 != null) {
+                        String chrom = ctx.getContig();
+                        if (!chr2.equals(chrom)) {
+                            // Different chromosome = translocation
                             return VcfVariantType.SV_TRANSLOCATION;
                         }
+                    } else {
+                        // Try to extract CHR2 from ALT breakend notation
+                        String alt = ctx.getAlternateAlleles().stream()
+                            .map(a -> a.getDisplayString())
+                            .filter(s -> s.contains("[") || s.contains("]"))
+                            .findFirst()
+                            .orElse(null);
+                        if (alt != null) {
+                            String altChr2 = extractChr2FromBreakendAlt(alt);
+                            if (altChr2 != null) {
+                                String chrom = ctx.getContig();
+                                if (!altChr2.equals(chrom)) {
+                                    // Different chromosome = translocation
+                                    return VcfVariantType.SV_TRANSLOCATION;
+                                }
+                            }
+                        }
                     }
-                    // Fallback to breakend if no CHR2 info
+                    // Same chromosome or CHR2 not available: keep as breakend
                     return VcfVariantType.SV_BREAKEND;
                 case "TRA": case "CTX": 
                     // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_TRANSLOCATION");
@@ -474,18 +520,8 @@ public class VcfReader implements AutoCloseable {
             
             // Breakend notation (fallback if not caught above)
             if (alt.contains("[") || alt.contains("]")) {
-                // For breakend notation without explicit CHR2, attempt to parse the mate position from ALT
-                String chr2 = extractChr2FromBreakendAlt(alt);
-                if (chr2 != null && !chr2.isEmpty()) {
-                    String normChr2 = chr2.replaceFirst("^chr", "");
-                    String normCurrentChr = ctx.getContig().replaceFirst("^chr", "");
-                    if (normChr2.equals(normCurrentChr)) {
-                        return VcfVariantType.SV_INVERSION;
-                    } else {
-                        return VcfVariantType.SV_TRANSLOCATION;
-                    }
-                }
-                // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_BREAKEND (from breakend)");
+                // Keep BND as-is without trying to deduce INV/TRA
+                // BND classification is too unreliable - many may be noise or from homologous regions
                 return VcfVariantType.SV_BREAKEND;
             }
         }
@@ -614,23 +650,25 @@ public class VcfReader implements AutoCloseable {
 
         
         // For BND/breakend variants without END field, extract mate position from ALT notation
-        if (end == null && (type == VcfVariantType.SV_INVERSION || type == VcfVariantType.SV_TRANSLOCATION || 
-                            type == VcfVariantType.SV_BREAKEND)) {
+        if (end == null && (type == VcfVariantType.SV_DELETION || type == VcfVariantType.SV_INSERTION ||
+                            type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INVERSION || 
+                            type == VcfVariantType.SV_TRANSLOCATION || type == VcfVariantType.SV_BREAKEND)) {
             Long matePos = extractMatePosFromBreakendAlt(ctx, ctx.getContig());
-            if (matePos != null && type == VcfVariantType.SV_INVERSION) {
-                // For INV (same chromosome), use mate position as END
-                // Ensure END > position for proper span rendering
-                long pos = ctx.getStart();
-                if (matePos > pos) {
-                    end = matePos;
-                } else {
-                    // Swap: start becomes mate position, end becomes current position
-                    // (but we can't change position here, so just set end to current position)
-                    end = pos;
+            if (matePos != null) {
+                // For intra-chromosomal SVs (DEL, INV, DUP, INS on same chromosome), use mate as END
+                if (type == VcfVariantType.SV_DELETION || type == VcfVariantType.SV_INVERSION || 
+                    type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INSERTION) {
+                    // Ensure END > position for proper span rendering
+                    long pos = ctx.getStart();
+                    if (matePos > pos) {
+                        end = matePos;
+                    } else {
+                        // Swap positions: use smaller as start, larger as end
+                        end = pos;
+                    }
                 }
+                // For TRA (different chromosomes), leave END as null - it's a point variant
             }
-            // For TRA (different chromosomes), leave END as null - it's a point variant
-            // The mate is on a different chromosome, so we can't represent it as a span
         }
         
         return new VcfStructuralVariant(

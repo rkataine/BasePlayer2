@@ -572,6 +572,20 @@ public class AlignmentCanvas extends GenomicCanvas {
           densitySvSpans = fSpans; densityBusy = false;
           densityCachedStart = viewStart; densityCachedEnd = viewEnd;
           
+          // Guard: if viewport has shifted significantly since calculation started,
+          // discard this result and force immediate recalculation to avoid density shift
+          double currentViewLen = Math.max(1.0, drawStack.end - drawStack.start);
+          boolean viewportShifted = Math.abs(drawStack.start - viewStart) > currentViewLen * 0.05
+                                 || Math.abs(drawStack.end - viewEnd) > currentViewLen * 0.05;
+          if (viewportShifted) {
+            // Viewport changed significantly during calculation — invalidate and recalculate
+            densitySnv = null; densityIndel = null;
+            densityDel = null; densityInv = null; densityDup = null;
+            densityIns = null; densityTra = null; densityBnd = null;
+            densitySvSpans = java.util.List.of();
+            triggerVariantDensityCompute(variantList);
+            return;
+          }
           
           draw();
         });
@@ -665,7 +679,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       if (dupVal > 0) bars.add(new BarData(dupVal, "#c0c0d0", 0.6));
       if (insVal > 0) bars.add(new BarData(insVal, "#33cc66", 0.6));
       if (traVal > 0) bars.add(new BarData(traVal, "#ffdd00", 0.6));
-      if (bndVal > 0) bars.add(new BarData(bndVal, "#dd9900", 0.6));
+      if (bndVal > 0) bars.add(new BarData(bndVal, "#c0c0c0", 0.6));
       
       // Sort largest to smallest so we draw big bars first, small bars on top
       bars.sort((a, b) -> Integer.compare(b.value, a.value));
@@ -746,10 +760,15 @@ public class AlignmentCanvas extends GenomicCanvas {
       double alpha = Math.min(0.70, 0.20 + span.sampleCount() * 0.12);
       
       // User-requested colors:
-      // DEL: green, INV: blue, DUP: grayish white, TRA: yellow
-      if (span.type() == VcfVariantType.SV_TRANSLOCATION || span.type() == VcfVariantType.SV_BREAKEND) {
-        // Translocations and breakends as yellow lines
+      // DEL: green, INV: blue, DUP: grayish white, TRA: yellow, BND: light gray
+      if (span.type() == VcfVariantType.SV_TRANSLOCATION) {
+        // Translocations as yellow lines
         gc.setStroke(Color.web("#ffdd00", alpha));
+        gc.setLineWidth(2.0);
+        gc.strokeLine(x1, barY + barH / 2, x2, barY + barH / 2);
+      } else if (span.type() == VcfVariantType.SV_BREAKEND) {
+        // Breakends as light gray lines
+        gc.setStroke(Color.web("#c0c0c0", alpha));
         gc.setLineWidth(2.0);
         gc.strokeLine(x1, barY + barH / 2, x2, barY + barH / 2);
       } else {

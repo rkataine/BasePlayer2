@@ -316,7 +316,7 @@ public class VcfManager {
                             cursor = vcfData.loader.streamChromosomeVariantsToList(
                                 targetChromosome, mergedList, cursor, null, loadFilter);
                         } catch (IOException e) {
-                            System.err.println("Skipping variants for " + vcfData.file.getName() + ": " + e.getMessage());
+                            //System.err.println("Skipping variants for " + vcfData.file.getName() + ": " + e.getMessage());
                         } finally {
                             vcfData.loader.setVcfReader(null);
                         }
