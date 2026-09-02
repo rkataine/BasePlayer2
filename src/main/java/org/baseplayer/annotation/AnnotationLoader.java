@@ -27,7 +27,7 @@ import org.baseplayer.genome.gene.Transcript;
  */
 public final class AnnotationLoader {
   
-  private static final int CACHE_VERSION = 6;  // Increment when format changes (noncoding representative transcript + merged exons)
+  private static final int CACHE_VERSION = 7;  // Increment when format changes (noncoding representative transcript + merged exons)
   private static final int TRANSCRIPT_CACHE_VERSION = 2;  // Version for non-MANE transcript cache (added CDS bounds)
   
   private AnnotationLoader() {} // Utility class
@@ -307,7 +307,20 @@ public final class AnnotationLoader {
       AnnotationData.getGeneNames().add(gb.name);
     }
     
+    sortGenesByStart();
     AnnotationData.getGeneNames().sort(String.CASE_INSENSITIVE_ORDER);
+  }
+
+  private static void sortGenesByStart() {
+    for (List<Gene> genes : AnnotationData.getGenesByChrom().values()) {
+      genes.sort((a, b) -> {
+        int cmp = Long.compare(a.start(), b.start());
+        if (cmp != 0) return cmp;
+        cmp = Long.compare(a.end(), b.end());
+        if (cmp != 0) return cmp;
+        return a.name().compareToIgnoreCase(b.name());
+      });
+    }
   }
   
   /**

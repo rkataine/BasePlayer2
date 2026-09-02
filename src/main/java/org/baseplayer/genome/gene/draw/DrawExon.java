@@ -12,12 +12,13 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.Gene;
+import org.baseplayer.genome.gene.Transcript;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseColors;
-import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.GeneColors;
+import org.baseplayer.variant.annotation.TranscriptCdsCache;
 
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
@@ -103,21 +104,16 @@ class DrawExon {
     hitBoxes.clear();
   }
 
-  // ── Exon bar rendering ───────────────────────────────────────────────────────
-
   /**
    * Draws one contiguous exon (or UTR) region.
    * Delegates to amino-acid, property-color, or solid-gradient rendering depending on zoom.
-   */
-  /**
-   * Variant that optionally draws this region with an arrowhead at the strand-outer
-   * end (right side for forward genes, left side for reverse). Used by {@link DrawGene}
-   * to make whole transcripts visually point in their direction of transcription.
+   * 
+   * Attempts to use cached CDS sequences for amino-acid rendering to avoid FASTA fetches.
    */
   void drawExonRegion(long regionStart, long regionEnd, double viewStart, double viewLength,
                       double canvasWidth, double rowY, Color color,
                       boolean showAminoAcids, boolean showPropertyColors,
-                      Gene gene, boolean isReverse, long cdsOffset, boolean drawArrowhead) {
+                      Gene gene, Transcript transcript, boolean isReverse, long cdsOffset, boolean drawArrowhead) {
     double ex1 = ((regionStart       - viewStart) / viewLength) * canvasWidth;
     double ex2 = (((regionEnd + 1)  - viewStart) / viewLength) * canvasWidth;
     ex1 = Math.max(0, ex1);
@@ -132,11 +128,11 @@ class DrawExon {
 
     if (showAminoAcids && gene != null && referenceGenomeService.hasGenome()) {
       drawAminoAcidsInRegion(regionStart, regionEnd, viewStart, viewLength, canvasWidth,
-                              rowY, gene, isReverse, cdsOffset);
+                              rowY, gene, transcript, isReverse, cdsOffset);
 
     } else if (showPropertyColors && gene != null && referenceGenomeService.hasGenome()) {
       drawPropertyColoredExon(regionStart, regionEnd, viewStart, viewLength, canvasWidth,
-                               rowY, isReverse, cdsOffset);
+                               rowY, gene, transcript, isReverse, cdsOffset);
       // Subtle 3D highlight/shadow overlay
       gc.setFill(EXON_OVERLAY_GRADIENT);
       gc.fillRect(exonX, exonY, exonWidth, GENE_HEIGHT);
@@ -154,24 +150,20 @@ class DrawExon {
 
   /**
    * Paints each codon in a CDS region as a thin horizontal strip coloured by its amino-acid
-   * property group (hydrophobic / polar / positive / negative). Used when zoomed in enough
-   * that the reference sequence is cached but not so close that individual ovals are drawn.
-   * The caller is responsible for adding the 3D overlay on top.
+   * property group (hydrophobic / polar / positive / negative).
+   * Uses cached transcript CDS sequences.
    */
   private void drawPropertyColoredExon(long regionStart, long regionEnd, double viewStart,
                                         double viewLength, double canvasWidth, double rowY,
-                                        boolean isReverse, long cdsOffset) {
-    if (cachedBases.isEmpty() || !drawStack.chromosome.equals(cachedChromosome)
-        || regionStart < cachedStart || regionEnd > cachedEnd) return;
-
-    int startIdx = (int) (regionStart - cachedStart);
-    int endIdx   = (int) (regionEnd   - cachedStart + 1);
-    if (startIdx < 0 || endIdx > cachedBases.length()) return;
-
-    String bases = cachedBases.substring(startIdx, endIdx);
-    if (bases.isEmpty()) return;
-
-    if (isReverse) bases = BaseUtils.reverseComplement(bases);
+                                        Gene gene, Transcript transcript, boolean isReverse, long cdsOffset) {
+    // Get bases from cached transcript CDS (in transcript orientation)
+    String bases = null;
+    if (gene != null && transcript != null && transcript.hasCDS()) {
+      bases = TranscriptCdsCache.getInstance()
+          .getBasesForGenomicRegion(gene, transcript, regionStart, regionEnd, referenceGenomeService);
+    }
+    
+    if (bases == null || bases.isEmpty()) return;
 
     double exonY      = Math.round(rowY + GENE_LABEL_HEIGHT);
     int    frameOffset = (int) ((3 - (cdsOffset % 3)) % 3);
@@ -206,21 +198,19 @@ class DrawExon {
 
   /**
    * Draws individual amino-acid ovals with contrasting letter labels at the highest zoom level.
+   * Uses cached transcript CDS sequences.
    */
   private void drawAminoAcidsInRegion(long regionStart, long regionEnd, double viewStart,
                                        double viewLength, double canvasWidth, double rowY,
-                                       Gene gene, boolean isReverse, long cdsOffset) {
-    if (cachedBases.isEmpty() || regionStart < cachedStart || regionEnd > cachedEnd
-        || !drawStack.chromosome.equals(cachedChromosome)) return;
-
-    int startIndex = (int) (regionStart - cachedStart);
-    int endIndex   = (int) (regionEnd   - cachedStart + 1);
-    if (startIndex < 0 || endIndex > cachedBases.length()) return;
-
-    String bases = cachedBases.substring(startIndex, endIndex);
-    if (bases.isEmpty()) return;
-
-    if (isReverse) bases = BaseUtils.reverseComplement(bases);
+                                       Gene gene, Transcript transcript, boolean isReverse, long cdsOffset) {
+    // Get bases from cached transcript CDS (in transcript orientation)
+    String bases = null;
+    if (gene != null && transcript != null && transcript.hasCDS()) {
+      bases = TranscriptCdsCache.getInstance()
+          .getBasesForGenomicRegion(gene, transcript, regionStart, regionEnd, referenceGenomeService);
+    }
+    
+    if (bases == null || bases.isEmpty()) return;
 
     double exonY      = Math.round(rowY + GENE_LABEL_HEIGHT);
     int    frameOffset = (int) ((3 - (cdsOffset % 3)) % 3);

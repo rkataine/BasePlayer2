@@ -453,7 +453,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
       drawReactive();
     }
     drawIndicators();
-		drawExon.drawReferenceBases(getWidth(), getHeight());
+    drawExon.drawReferenceBases(getWidth(), getHeight());
     super.draw();
   }
 

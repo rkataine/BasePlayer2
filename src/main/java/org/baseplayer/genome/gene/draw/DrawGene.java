@@ -147,7 +147,7 @@ class DrawGene {
           long utrEnd = Math.min(exon[1], cdsStart - 1);
           if (utrEnd >= exon[0]) {
             drawExon.drawExonRegion(exon[0], utrEnd, viewStart, viewLength, canvasWidth, rowY,
-                                    GeneColors.UTR_COLOR, false, false, null, isReverse, 0, true);
+                                    GeneColors.UTR_COLOR, false, false, null, null, isReverse, 0, true);
           }
         }
         // CDS portion
@@ -155,7 +155,7 @@ class DrawGene {
           long regionStart = Math.max(exon[0], cdsStart);
           long regionEnd   = Math.min(exon[1], cdsEnd);
           drawExon.drawExonRegion(regionStart, regionEnd, viewStart, viewLength, canvasWidth, rowY,
-                                   geneColor, showAminoAcids, showPropertyColors, gene, isReverse, cdsOffsets[i],
+                                   geneColor, showAminoAcids, showPropertyColors, gene, maneTranscript, isReverse, cdsOffsets[i],
                                    true);
         }
         // 3′ UTR
@@ -163,18 +163,18 @@ class DrawGene {
           long utrStart = Math.max(exon[0], cdsEnd + 1);
           if (utrStart <= exon[1]) {
             drawExon.drawExonRegion(utrStart, exon[1], viewStart, viewLength, canvasWidth, rowY,
-                                    GeneColors.UTR_COLOR, false, false, null, isReverse, 0, true);
+                                    GeneColors.UTR_COLOR, false, false, null, null, isReverse, 0, true);
           }
         }
       } else if (hasCDS) {
         // Entire exon is CDS
         drawExon.drawExonRegion(exon[0], exon[1], viewStart, viewLength, canvasWidth, rowY,
-                                 geneColor, showAminoAcids, showPropertyColors, gene, isReverse, cdsOffsets[i],
+                                 geneColor, showAminoAcids, showPropertyColors, gene, maneTranscript, isReverse, cdsOffsets[i],
                                  true);
       } else {
         // Non-coding gene
         drawExon.drawExonRegion(exon[0], exon[1], viewStart, viewLength, canvasWidth, rowY,
-                                 geneColor, false, false, null, isReverse, 0, true);
+                                 geneColor, false, false, null, null, isReverse, 0, true);
       }
 
       // Exon number label

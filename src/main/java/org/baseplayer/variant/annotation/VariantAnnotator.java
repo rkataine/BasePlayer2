@@ -53,6 +53,9 @@ public class VariantAnnotator {
         Transcript bestTx = null;
 
         for (Gene gene : genes) {
+            if (gene.start() > node.position) {
+                break;
+            }
             if (gene.start() > node.position || gene.end() < node.position) continue;
 
             Transcript tx = gene.getManeSelectTranscript();
@@ -88,42 +91,40 @@ public class VariantAnnotator {
             if (pos != null) {
                 codonNumber = pos.codonNumber;
                 try {
-                    // Fetch the codon in genomic coordinates (forward strand sequence)
-                    String refCodonGenomic = refService.getBases(chromosome, (int) pos.codonGenomicStart,
-                                                         (int) pos.codonGenomicStart + 2);
-                    if (refCodonGenomic != null && refCodonGenomic.length() == 3) {
-                        // Build alt codon in genomic coordinates
-                        char[] altCodonGenomicChars = refCodonGenomic.toCharArray();
-                        char altBase = node.alt.isEmpty() ? '?' : node.alt.charAt(0);
-                        altCodonGenomicChars[pos.posInCodon] = altBase;
-                        String altCodonGenomic = new String(altCodonGenomicChars);
+                    String cdsSequence = TranscriptCdsCache.getInstance()
+                            .getCodingSequence(bestGene, bestTx, refService);
+                    if (cdsSequence != null) {
+                        int codonStartIndex = (int) pos.posInCds - pos.posInCodon;
+                        if (codonStartIndex >= 0 && codonStartIndex + 2 < cdsSequence.length()) {
+                            String refCodon = cdsSequence.substring(codonStartIndex, codonStartIndex + 3);
+                            char altBase = transcriptAltBase(node.alt, isReverse);
+                            StringBuilder altCodonBuilder = new StringBuilder(refCodon);
+                            altCodonBuilder.setCharAt(pos.posInCodon, altBase);
+                            String altCodon = altCodonBuilder.toString();
 
-                        // For reverse strand genes, reverse complement both codons to get transcript sequence
-                        String refCodon = isReverse ? BaseUtils.reverseComplement(refCodonGenomic) : refCodonGenomic;
-                        String altCodon = isReverse ? BaseUtils.reverseComplement(altCodonGenomic) : altCodonGenomic;
+                            char refAA = AminoAcids.translateCodon(refCodon);
+                            char altAA = AminoAcids.translateCodon(altCodon);
 
-                        char refAA = AminoAcids.translateCodon(refCodon);
-                        char altAA = AminoAcids.translateCodon(altCodon);
+                            // Reclassify based on actual AA change
+                            if (refAA == '*') {
+                                effect = VariantEffect.CODING_STOP_LOSS;
+                            } else if (altAA == '*') {
+                                effect = VariantEffect.CODING_STOP_GAIN;
+                            } else if (refAA == altAA) {
+                                effect = VariantEffect.CODING_SYNONYMOUS;
+                            } else {
+                                effect = VariantEffect.CODING_MISSENSE;
+                            }
 
-                        // Reclassify based on actual AA change
-                        if (refAA == '*') {
-                            effect = VariantEffect.CODING_STOP_LOSS;
-                        } else if (altAA == '*') {
-                            effect = VariantEffect.CODING_STOP_GAIN;
-                        } else if (refAA == altAA) {
-                            effect = VariantEffect.CODING_SYNONYMOUS;
-                        } else {
-                            effect = VariantEffect.CODING_MISSENSE;
+                            String refThree = AminoAcids.getThreeLetter(refAA);
+                            String altThree = AminoAcids.getThreeLetter(altAA);
+                            aaChange = "p." + refThree + codonNumber + altThree;
+
+                            String refBase = node.ref.isEmpty() ? "?" : node.ref;
+                            String altStr = node.alt.isEmpty() ? "?" : node.alt;
+                            int cdsPos = (codonNumber - 1) * 3 + pos.posInCodon + 1;
+                            codonChange = "c." + cdsPos + refBase + ">" + altStr;
                         }
-
-                        String refThree = AminoAcids.getThreeLetter(refAA);
-                        String altThree = AminoAcids.getThreeLetter(altAA);
-                        aaChange = "p." + refThree + codonNumber + altThree;
-
-                        String refBase = node.ref.isEmpty() ? "?" : node.ref;
-                        String altStr = node.alt.isEmpty() ? "?" : node.alt;
-                        int cdsPos = (codonNumber - 1) * 3 + pos.posInCodon + 1;
-                        codonChange = "c." + cdsPos + refBase + ">" + altStr;
                     }
                 } catch (Exception e) {
                     // Reference access failed — keep effect as CODING_OTHER
@@ -252,16 +253,17 @@ public class VariantAnnotator {
         int posInCodon = (int) (posInCds % 3);
 
         // Genomic start of the codon (forward: subtract offset; reverse: add offset)
-        long codonGenomicStart;
-        if (isReverse) {
-            // On reverse strand the codon runs right-to-left; first base is at highest genomic position
-            codonGenomicStart = variantPos + posInCodon - 2;
-        } else {
-            codonGenomicStart = variantPos - posInCodon;
-        }
-
-        return new CodingPos(codonNumber, posInCodon, codonGenomicStart);
+        return new CodingPos(codonNumber, posInCodon, posInCds);
     }
 
-    private record CodingPos(int codonNumber, int posInCodon, long codonGenomicStart) {}
+    private char transcriptAltBase(String alt, boolean isReverse) {
+        if (alt == null || alt.isEmpty()) return 'N';
+        char base = Character.toUpperCase(alt.charAt(0));
+        if (!isReverse) {
+            return base;
+        }
+        return BaseUtils.reverseComplement(String.valueOf(base)).charAt(0);
+    }
+
+    private record CodingPos(int codonNumber, int posInCodon, long posInCds) {}
 }
