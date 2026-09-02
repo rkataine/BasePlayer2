@@ -35,7 +35,7 @@ public class LoadingPopup {
 
     /** Approximate popup dimensions used for immediate centering. */
     private static final double POPUP_W = 310;
-    private static final double POPUP_H = 200;  // Increased for progress bar and debug controls
+    private static final double POPUP_H = 230;  // Increased for progress bar, time estimate, and cancel
 
     private static final String POPUP_STYLE =
             "-fx-background-color: rgba(30, 30, 30, 0.98);" +
@@ -47,8 +47,10 @@ public class LoadingPopup {
     private final Popup popup;
     private final Label messageLabel;
     private final ProgressBar progressBar;
+    private final Label timeEstimateLabel;
     private Runnable onCancel;
     private static final double PROGRESS_EPSILON = 1e-9;
+    private volatile long startTime = 0;
 
     public LoadingPopup() {
         popup = new Popup();
@@ -74,6 +76,11 @@ public class LoadingPopup {
 
         HBox msgRow = new HBox(10, spinner, messageLabel);
         msgRow.setAlignment(Pos.CENTER_LEFT);
+
+        // ── Time estimate ──────────────────────────────────────────────────
+        timeEstimateLabel = new Label("Elapsed: — | ETA: —");
+        timeEstimateLabel.setStyle("-fx-text-fill: #999999; -fx-font-size: 11;");
+        timeEstimateLabel.setWrapText(false);
 
         // ── Progress bar ───────────────────────────────────────────────────
         progressBar = new ProgressBar(0.0);
@@ -115,10 +122,11 @@ public class LoadingPopup {
         cancelBtn.setOnMouseExited(e -> cancelBtn.setStyle(cancelNormal));
         cancelBtn.setOnAction(e -> cancel());
 
-        root.getChildren().addAll(msgRow, progressBar, cancelBtn);
+        root.getChildren().addAll(msgRow, progressBar, timeEstimateLabel, cancelBtn);
         
         VBox.setVgrow(msgRow, Priority.NEVER);
         VBox.setVgrow(progressBar, Priority.NEVER);  // Fixed: Don't expand vertically
+        VBox.setVgrow(timeEstimateLabel, Priority.NEVER);
         VBox.setVgrow(cancelBtn, Priority.NEVER);
         popup.getContent().add(root);
     }
@@ -136,6 +144,8 @@ public class LoadingPopup {
         this.onCancel = onCancel;
         messageLabel.setText(message);
         progressBar.setProgress(0.0);  // Start at 0% in determinate mode
+        timeEstimateLabel.setText("Elapsed: — | ETA: —");
+        startTime = System.currentTimeMillis();
         // Centre immediately using fixed dimensions so the popup never flashes at (0,0)
         double x = owner.getX() + (owner.getWidth()  - POPUP_W) / 2;
         double y = owner.getY() + (owner.getHeight() - POPUP_H) / 2;
@@ -200,14 +210,49 @@ public class LoadingPopup {
                 return;
             }
             progressBar.setProgress(progress);
+            updateTimeEstimate(progress);
         } else {
             Platform.runLater(() -> {
                 if (Math.abs(progressBar.getProgress() - progress) < PROGRESS_EPSILON) {
                     return;
                 }
                 progressBar.setProgress(progress);
+                updateTimeEstimate(progress);
             });
         }
+    }
+
+    /**
+     * Calculate and display elapsed time and ETA based on progress.
+     */
+    private void updateTimeEstimate(double progress) {
+        if (progress <= 0.0 || progress >= 1.0 || startTime == 0) {
+            timeEstimateLabel.setText("Elapsed: — | ETA: —");
+            return;
+        }
+
+        long elapsedMs = System.currentTimeMillis() - startTime;
+        long elapsedSeconds = elapsedMs / 1000;
+
+        // Estimate total time based on current progress rate
+        long estimatedTotalMs = (long) (elapsedMs / progress);
+        long estimatedRemainingMs = estimatedTotalMs - elapsedMs;
+        long estimatedRemainingSeconds = estimatedRemainingMs / 1000;
+
+        String elapsedStr = formatTime(elapsedSeconds);
+        String etaStr = formatTime(estimatedRemainingSeconds);
+        timeEstimateLabel.setText("Elapsed: " + elapsedStr + " | ETA: " + etaStr);
+    }
+
+    /**
+     * Format seconds into a human-readable string (e.g., "2m 30s", "45s").
+     */
+    private static String formatTime(long seconds) {
+        if (seconds < 0) return "—";
+        if (seconds < 60) return seconds + "s";
+        long minutes = seconds / 60;
+        long secs = seconds % 60;
+        return minutes + "m " + secs + "s";
     }
 
     /** Hide the popup immediately. Safe to call from any thread. */
