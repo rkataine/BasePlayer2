@@ -52,6 +52,8 @@ public class ChromosomeCanvas extends GenomicCanvas {
   private DrawExon.AminoAcidHitBox hoveredAminoAcid = null;
   private String selectedGeneId = null;
   private String selectedTranscriptId = null;
+  private DrawExon.AminoAcidHitBox lastHitAminoAcid = null;  // Cached for efficient hover tracking
+  private Gene lastHitGene = null;  // Cached for efficient hover tracking
 
   public ChromosomeCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
@@ -149,7 +151,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
       }
     });
     
-    // Mouse move for hover effect
+    // Mouse move for hover effect — minimize processing, only search when hover state changes
     reactiveCanvas.setOnMouseMoved(event -> {
       // Suppress all hover while any drag (local or global) is active
       if (isDragging()) {
@@ -159,34 +161,53 @@ public class ChromosomeCanvas extends GenomicCanvas {
 
       double mouseX = event.getX();
       double mouseY = event.getY();
+      double viewLength = drawStack.viewLength;
+      
+      // Only search for amino acids when zoomed in very close (< 500 bp)
+      boolean canShowAminoAcids = viewLength < 500;
 
-      // Check for amino acid hover first (when zoomed close)
-      DrawExon.AminoAcidHitBox aaAtMouse = findAminoAcidAt(mouseX, mouseY);
-      Gene geneAtMouse = findGeneAt(mouseX, mouseY);
+      // First check: is the mouse still over the last hit object? If so, skip expensive search
+      if (lastHitAminoAcid != null && canShowAminoAcids && lastHitAminoAcid.contains(mouseX, mouseY)) {
+        // Still hovering the same amino acid, no update needed
+        return;
+      }
+      
+      DrawGene.GeneHitBox geneHitBox = null;
+      if (lastHitGene != null) {
+        geneHitBox = findGeneHitAt(mouseX, mouseY);
+        if (geneHitBox != null && geneHitBox.gene() == lastHitGene) {
+          // Still hovering the same gene, no update needed
+          return;
+        }
+      }
+
+      // Expensive search: check for amino acid (only if zoomed in) and gene at mouse position
+      DrawExon.AminoAcidHitBox aaAtMouse = canShowAminoAcids ? findAminoAcidAt(mouseX, mouseY) : null;
+      Gene geneAtMouse = (geneHitBox != null) ? geneHitBox.gene() : findGeneAt(mouseX, mouseY);
 
       // When zoomed to amino-acid level, suppress gene-level hover entirely
-      double viewLength = drawStack.viewLength;
-      if (viewLength < 500) {
+      if (canShowAminoAcids) {
         geneAtMouse = null;
       }
 
-      boolean needsRedraw = false;
+      // Only update and redraw if hover state actually changed
+      boolean aaChanged = aaAtMouse != hoveredAminoAcid;
+      boolean geneChanged = geneAtMouse != hoveredGene;
 
-      if (aaAtMouse != hoveredAminoAcid) {
-        hoveredAminoAcid = aaAtMouse;
-        needsRedraw = true;
+      if (!aaChanged && !geneChanged) {
+        // Both same, no action needed
+        return;
       }
 
-      if (geneAtMouse != hoveredGene) {
-        hoveredGene = geneAtMouse;
-        needsRedraw = true;
-      }
+      // Update hover state and cache
+      hoveredAminoAcid = aaAtMouse;
+      hoveredGene = geneAtMouse;
+      lastHitAminoAcid = aaAtMouse;
+      lastHitGene = geneAtMouse;
 
+      // Update cursor and redraw reactive canvas only if hover changed
       reactiveCanvas.setCursor((hoveredAminoAcid != null || hoveredGene != null) ? Cursor.HAND : Cursor.DEFAULT);
-
-      if (needsRedraw) {
-        drawReactive();
-      }
+      drawReactive();
     });
     
     // Clear hover when mouse exits
@@ -198,6 +219,8 @@ public class ChromosomeCanvas extends GenomicCanvas {
     if (hoveredGene != null || hoveredAminoAcid != null) {
       hoveredGene = null;
       hoveredAminoAcid = null;
+      lastHitGene = null;
+      lastHitAminoAcid = null;
       getReactiveCanvas().setCursor(javafx.scene.Cursor.DEFAULT);
       drawReactive();
     }
