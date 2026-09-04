@@ -521,6 +521,11 @@ public class SampleDataManager {
         System.err.println("Skipping missing file: " + file);
         continue;
       }
+
+      // Skip files that are already loaded to avoid duplicate sample/variant loading.
+      if (VcfManager.getInstance().isVcfFileLoaded(file)) {
+        continue;
+      }
       
       // Update progress bar
       final int currentIndex = index + 1;
@@ -556,6 +561,10 @@ public class SampleDataManager {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
     }
+
+    if (VcfManager.getInstance().isVcfFileLoaded(file)) {
+      return;
+    }
     
     Path vcfPath = file.toPath();
     VcfReader reader = new VcfReader(vcfPath);
@@ -566,6 +575,11 @@ public class SampleDataManager {
     
     // Register the VCF in VcfManager and get the VcfData reference
     VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
+    if (vcfData == null) {
+      try { reader.close(); } catch (IOException ignored) {}
+      loader.setVcfReader(null);
+      return;
+    }
     
     // Now push UI updates to FX thread
     Platform.runLater(() -> {

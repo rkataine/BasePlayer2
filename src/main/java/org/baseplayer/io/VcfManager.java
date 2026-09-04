@@ -101,13 +101,36 @@ public class VcfManager {
     public static VcfManager getInstance() {
         return INSTANCE;
     }
+
+    private static String normalizeVcfPath(File file) {
+        if (file == null) return "";
+        return file.toPath().toAbsolutePath().normalize().toString();
+    }
+
+    private boolean isVcfPathLoadedLocked(String normalizedPath) {
+        for (VcfData vcfData : loadedVcfs) {
+            if (normalizeVcfPath(vcfData.file).equals(normalizedPath)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public synchronized boolean isVcfFileLoaded(File file) {
+        String normalizedPath = normalizeVcfPath(file);
+        return !normalizedPath.isEmpty() && isVcfPathLoadedLocked(normalizedPath);
+    }
     
     /**
      * Register a loaded VCF (used by batch loading to add VcfData to the registry).
      * The reader should already have been opened and parsed.
      * Returns the VcfData so the caller can manage reader lifecycle (close + null).
      */
-    public VcfData registerLoadedVcf(VcfReader reader, VariantLoader loader, File file) {
+    public synchronized VcfData registerLoadedVcf(VcfReader reader, VariantLoader loader, File file) {
+        String normalizedPath = normalizeVcfPath(file);
+        if (!normalizedPath.isEmpty() && isVcfPathLoadedLocked(normalizedPath)) {
+            return null;
+        }
         VcfData vcfData = new VcfData(reader, loader, file);
         loadedVcfs.add(vcfData);
         initializeUpdateListener();
@@ -166,6 +189,13 @@ public class VcfManager {
             if (onComplete != null) onComplete.run();
             return;
         }
+
+        if (isVcfFileLoaded(file)) {
+            if (onComplete != null) {
+                Platform.runLater(onComplete);
+            }
+            return;
+        }
         
         ThreadRunner.get().submit("Opening VCF: " + file.getName() + "\u2026",
             () -> {
@@ -185,9 +215,21 @@ public class VcfManager {
                     if (onComplete != null) onComplete.run();
                     return;
                 }
-                
-                loadedVcfs.add(vcfData);
-                initializeUpdateListener();
+
+                String normalizedPath = normalizeVcfPath(vcfData.file);
+                synchronized (this) {
+                    if (!normalizedPath.isEmpty() && isVcfPathLoadedLocked(normalizedPath)) {
+                        try { vcfData.reader.close(); } catch (IOException ignored) {}
+                        vcfData.reader = null;
+                        vcfData.loader.setVcfReader(null);
+                        if (onComplete != null) {
+                            Platform.runLater(onComplete);
+                        }
+                        return;
+                    }
+                    loadedVcfs.add(vcfData);
+                    initializeUpdateListener();
+                }
                 
                 List<String> unmappedSamples = vcfData.loader.getUnmappedSamples();
                 if (!unmappedSamples.isEmpty()) {

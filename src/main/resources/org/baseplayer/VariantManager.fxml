@@ -4,12 +4,15 @@
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
 
-<SplitPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
-         fx:id="mainSplitPane"
+<StackPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+         fx:controller="org.baseplayer.variant.ui.VariantManagerController"
+         styleClass="root-pane">
+    
+    <!-- Main Content -->
+    <SplitPane fx:id="mainSplitPane"
          orientation="VERTICAL"
          dividerPositions="0.5"
-         fx:controller="org.baseplayer.variant.ui.VariantManagerController"
-         styleClass="root-pane variant-manager-split">
+         styleClass="variant-manager-split">
     
     <!-- Filter Panel with Tabs -->
     <TabPane fx:id="filterTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="filter-tabs">
@@ -404,4 +407,15 @@
                 </StackPane>
             </Tab>
     </TabPane>
-</SplitPane>
+    </SplitPane>
+    
+    <!-- Loading Modal Overlay -->
+    <VBox fx:id="loadingModal" visible="false" managed="false" spacing="12"
+          alignment="CENTER" style="-fx-background-color: rgba(0, 0, 0, 0.6);">
+        <VBox spacing="12" alignment="CENTER" style="-fx-background-color: #2d2d2d; -fx-background-radius: 8; -fx-padding: 32;">
+            <ProgressIndicator fx:id="loadingSpinner" prefWidth="80" prefHeight="80"/>
+            <Label fx:id="loadingLabel" text="Rebuilding variant tables..." 
+                   style="-fx-text-fill: white; -fx-font-size: 14px;"/>
+        </VBox>
+    </VBox>
+</StackPane>

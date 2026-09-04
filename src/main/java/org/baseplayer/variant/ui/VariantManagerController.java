@@ -77,6 +77,11 @@ public class VariantManagerController implements Initializable {
     @FXML private Label reloadBannerLabel;
     @FXML private Button reloadBannerButton;
 
+    // Loading Modal
+    @FXML private VBox loadingModal;
+    @FXML private ProgressIndicator loadingSpinner;
+    @FXML private Label loadingLabel;
+
     // Filter Tab: Sample Comparison
     @FXML private RadioButton showAllSamplesRadio, sharedVariantsRadio, uniqueVariantsRadio, differentialRadio;
     @FXML private ListView<String> groupASampleList, groupBSampleList;
@@ -143,6 +148,10 @@ public class VariantManagerController implements Initializable {
     
     // Debounce timer for real-time slider updates (200ms delay after last change)
     private Timeline filterDebounceTimer;
+    // Short-delay timer for checkbox/filter actions so UI paints first
+    private Timeline immediateFilterApplyTimer;
+    // Delay showing loading modal so quick updates don't flash a spinner
+    private Timeline loadingModalDelayTimer;
     private int lastBuiltSize = -1;
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
@@ -237,6 +246,7 @@ public class VariantManagerController implements Initializable {
         if (updateListener != null) {
             GenomicCanvas.update.removeListener(updateListener);
         }
+        cancelDelayedLoadingModal();
         vcfManager.clearFilter();
         vcfManager.setOnVcfAdded(null);
         ServiceRegistry.getInstance().getSampleRegistry().clearFocusedTrackIndices();
@@ -249,8 +259,10 @@ public class VariantManagerController implements Initializable {
 
     private void setupSliderBindings() {
         // Initialize debounce timer for real-time filter updates
-        filterDebounceTimer = new Timeline(new KeyFrame(Duration.millis(200), e -> handleApplyFilters()));
+        filterDebounceTimer = new Timeline(new KeyFrame(Duration.millis(200), e -> applyFiltersNow()));
         filterDebounceTimer.setCycleCount(1);
+        immediateFilterApplyTimer = new Timeline(new KeyFrame(Duration.millis(40), e -> applyFiltersNow()));
+        immediateFilterApplyTimer.setCycleCount(1);
         
         // Quality slider - update UI and trigger debounced filter update
         qualitySlider.valueProperty().addListener((obs, oldVal, newVal) -> {
@@ -310,19 +322,35 @@ public class VariantManagerController implements Initializable {
         }
     }
 
+    private void scheduleImmediateFilterApply() {
+        if (suppressFilterApplyEvents) {
+            return;
+        }
+        Platform.requestNextPulse();
+        if (immediateFilterApplyTimer != null) {
+            immediateFilterApplyTimer.stop();
+            immediateFilterApplyTimer.playFromStart();
+        } else {
+            applyFiltersNow();
+        }
+    }
+
     private void setupAutoFilterListeners() {
         // Select All Types checkbox
         selectAllTypesCheckBox.setOnAction(e -> {
             boolean selectAll = selectAllTypesCheckBox.isSelected();
-            for (CheckBox cb : variantTypeCheckBoxes.values()) {
+            suppressFilterApplyEvents = true;
+            for (CheckBox cb : new HashSet<>(variantTypeCheckBoxes.values())) {
                 cb.setSelected(selectAll);
             }
-            handleApplyFilters();
+            suppressFilterApplyEvents = false;
+            scheduleImmediateFilterApply();
         });
         
         // Select All Effects checkbox
         selectAllEffectsCheckBox.setOnAction(e -> {
             boolean selectAll = selectAllEffectsCheckBox.isSelected();
+            suppressFilterApplyEvents = true;
             missenseCheckBox.setSelected(selectAll);
             synonymousCheckBox.setSelected(selectAll);
             stopFrameshiftCheckBox.setSelected(selectAll);
@@ -331,13 +359,14 @@ public class VariantManagerController implements Initializable {
             noncodingCheckBox.setSelected(selectAll);
             intronicCheckBox.setSelected(selectAll);
             intergenicCheckBox.setSelected(selectAll);
-            handleApplyFilters();
+            suppressFilterApplyEvents = false;
+            scheduleImmediateFilterApply();
         });
         
         // Effect checkboxes - also update selectAllEffectsCheckBox state
         ChangeListener<Boolean> effectCheckListener = (obs, oldVal, newVal) -> {
             updateSelectAllEffectsState();
-            handleApplyFilters();
+            scheduleImmediateFilterApply();
         };
         missenseCheckBox.selectedProperty().addListener(effectCheckListener);
         synonymousCheckBox.selectedProperty().addListener(effectCheckListener);
@@ -349,10 +378,10 @@ public class VariantManagerController implements Initializable {
         intergenicCheckBox.selectedProperty().addListener(effectCheckListener);
 
         // Cancer filter
-        cancerOnlyCheckBox.setOnAction(e -> handleApplyFilters());
+        cancerOnlyCheckBox.setOnAction(e -> scheduleImmediateFilterApply());
 
         // Quality field (apply on Enter)
-        qualityField.setOnAction(e -> handleApplyFilters());
+        qualityField.setOnAction(e -> scheduleImmediateFilterApply());
     }
     
     /** Update the "select all effects" checkbox state based on individual effect checkboxes. */
@@ -455,7 +484,7 @@ public class VariantManagerController implements Initializable {
                 // Add listener to update "Select All" state and apply filters
                 cb.selectedProperty().addListener((obs, oldVal, newVal) -> {
                     updateSelectAllTypesState();
-                    handleApplyFilters();
+                    scheduleImmediateFilterApply();
                 });
                 
                 // Map the type to this checkbox
@@ -825,6 +854,10 @@ public class VariantManagerController implements Initializable {
 
     @FXML
     private void handleApplyFilters() {
+        scheduleImmediateFilterApply();
+    }
+
+    private void applyFiltersNow() {
         if (suppressFilterApplyEvents) {
             return;
         }
@@ -1319,10 +1352,15 @@ public class VariantManagerController implements Initializable {
     private void rebuildTables(VariantFilter filter) {
         if (sourceVariants == null) {
             rebuildNeeded = false;
+            cancelDelayedLoadingModal();
             return;
         }
         rebuildRunning = true;
         rebuildNeeded = false;
+
+        // Show loading modal only if rebuild takes longer than 500ms.
+        scheduleDelayedLoadingModal("Rebuilding variant tables...");
+        
         final VariantList snapshot = sourceVariants;
         final String capturedChrom = chromosome;
 
@@ -1331,31 +1369,41 @@ public class VariantManagerController implements Initializable {
             List<AnnotationRow> intronic = new ArrayList<>();
             List<AnnotationRow> intergenic = new ArrayList<>();
 
-            VariantNode node = snapshot.getFirst();
-            while (node != null) {
-                int passSamples = 0;
-                double maxGq = -1;
-                for (VariantNode.SampleCall call : node.getSamples()) {
-                    if (filter.passes(node, call.trackIndex)) {
-                        passSamples++;
-                        if (call.quality > maxGq) maxGq = call.quality;
+            try {
+                VariantNode node = snapshot.getFirst();
+                while (node != null) {
+                    int passSamples = 0;
+                    double maxGq = -1;
+                    for (VariantNode.SampleCall call : node.getSamples()) {
+                        if (filter.passes(node, call.trackIndex)) {
+                            passSamples++;
+                            if (call.quality > maxGq) maxGq = call.quality;
+                        }
                     }
-                }
-                if (passSamples > 0) {
-                    AnnotationRow row = new AnnotationRow(node, capturedChrom, passSamples, maxGq);
-                    VariantAnnotation ann = node.annotation;
-                    VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
-                    if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
-                        // Gene tab: coding, splice sites, UTR, and non-coding genes
-                        coding.add(row);
-                    } else if (effect.isIntronic()) {
-                        // Intronic tab: only true intronic
-                        intronic.add(row);
-                    } else {
-                        intergenic.add(row);
+                    if (passSamples > 0) {
+                        AnnotationRow row = new AnnotationRow(node, capturedChrom, passSamples, maxGq);
+                        VariantAnnotation ann = node.annotation;
+                        VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
+                        if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
+                            // Gene tab: coding, splice sites, UTR, and non-coding genes
+                            coding.add(row);
+                        } else if (effect.isIntronic()) {
+                            // Intronic tab: only true intronic
+                            intronic.add(row);
+                        } else {
+                            intergenic.add(row);
+                        }
                     }
+                    node = node.next;
                 }
-                node = node.next;
+            } catch (Throwable t) {
+                Platform.runLater(() -> {
+                    rebuildRunning = false;
+                    cancelDelayedLoadingModal();
+                    // Retry if new data arrived while this build was running
+                    if (rebuildNeeded) rebuildTables(vcfManager.getCurrentFilter());
+                });
+                return;
             }
 
             Platform.runLater(() -> {
@@ -1375,6 +1423,7 @@ public class VariantManagerController implements Initializable {
                     intronicTable.setPlaceholder(null);
                     intergenicTable.setPlaceholder(null);
                 }
+                cancelDelayedLoadingModal();
                 // Retry if new data arrived while this build was running
                 if (rebuildNeeded) rebuildTables(vcfManager.getCurrentFilter());
             });
@@ -1409,6 +1458,39 @@ public class VariantManagerController implements Initializable {
             reloadBanner.setVisible(false);
             reloadBanner.setManaged(false);
         }
+    }
+
+    private void showLoadingModal(String message) {
+        if (loadingModal != null) {
+            loadingLabel.setText(message);
+            loadingModal.setVisible(true);
+            loadingModal.setManaged(true);
+        }
+    }
+
+    private void scheduleDelayedLoadingModal(String message) {
+        cancelDelayedLoadingModal();
+        if (loadingModal == null) {
+            return;
+        }
+        loadingModalDelayTimer = new Timeline(new KeyFrame(Duration.millis(500), e -> showLoadingModal(message)));
+        loadingModalDelayTimer.setCycleCount(1);
+        loadingModalDelayTimer.playFromStart();
+    }
+
+    private void hideLoadingModal() {
+        if (loadingModal != null) {
+            loadingModal.setVisible(false);
+            loadingModal.setManaged(false);
+        }
+    }
+
+    private void cancelDelayedLoadingModal() {
+        if (loadingModalDelayTimer != null) {
+            loadingModalDelayTimer.stop();
+            loadingModalDelayTimer = null;
+        }
+        hideLoadingModal();
     }
 
     private void refreshReloadBannerState() {
