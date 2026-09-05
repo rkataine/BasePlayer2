@@ -157,33 +157,6 @@ public class VariantLoader {
         return mapping;
     }
     
-    /**
-     * Load all variants for an entire chromosome and build a VariantList.
-     * More efficient than region-based loading when you need the whole chromosome.
-     * 
-     * @param chromosome Chromosome name
-     * @return VariantList containing all variants on the chromosome
-     * @throws IOException if VCF query fails
-     */
-    public VariantList loadChromosomeVariants(String chromosome) throws IOException {
-        VariantList variantList = new VariantList(chromosome);
-        
-        // Query all SNVs and indels for the chromosome
-        List<VcfSnvIndel> snvIndels = vcfReader.querySnvsAndIndelsForChromosome(chromosome);
-        for (VcfSnvIndel variant : snvIndels) {
-            addVariantToList(variantList, variant.getPosition(), variant.getRef(), variant.getAlt(),
-                           variant.getType(), variant);
-        }
-        
-        // Query all structural variants for the chromosome
-        List<VcfStructuralVariant> svs = vcfReader.queryStructuralVariantsForChromosome(chromosome);
-        for (VcfStructuralVariant sv : svs) {
-            addVariantToList(variantList, sv.getPosition(), sv.getRef(), sv.getAlt(),
-                           sv.getType(), sv);
-        }
-        
-        return variantList;
-    }
     
     /**
      * Stream variants for a chromosome directly into {@code target}, using a forward cursor to
@@ -355,54 +328,7 @@ public class VariantLoader {
         return cursor[0];
     }
 
-    /**
-     * Load variants for a genomic region and build a VariantList.
-     * @deprecated Use loadChromosomeVariants() for whole-chromosome loading
-     * 
-     * @param chromosome Chromosome name
-     * @param start Start position (1-based)
-     * @param end End position (1-based)
-     * @return VariantList containing all variants in the region
-     * @throws IOException if VCF query fails
-     */
-    @Deprecated
-    public VariantList loadVariants(String chromosome, long start, long end) throws IOException {
-        // For now, just load the whole chromosome
-        return loadChromosomeVariants(chromosome);
-    }
-    
-    /**
-     * Add a variant to the VariantList with genotype information for matched samples.
-     */
-    private void addVariantToList(VariantList variantList, long position, String ref,
-                                  List<String> alts, VcfVariantType type, Object variant) {
-        Long svEndPos = (variant instanceof VcfStructuralVariant sv && sv.getEnd() != null)
-            ? sv.getEnd() : null;
-        double siteQual = getVariantQuality(variant);
-        for (String alt : alts) {
-            for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
-                VariantNode.SampleCall call = getSampleCallForAllele(
-                    variant, entry.getKey(), entry.getValue(), alt);
-                if (call != null) {
-                    VariantNode node = variantList.addVariant(position, ref, alt, type, entry.getValue(), call);
-                    if (svEndPos != null && node.svEnd < 0) node.svEnd = svEndPos;
-                    if (siteQual >= 0 && node.siteQuality < 0) node.siteQuality = siteQual;
-                }
-            }
-        }
-    }
-
-    private static double getVariantQuality(Object variant) {
-        if (variant instanceof VcfSnvIndel snvIndel) {
-            return snvIndel.getQuality();
-        }
-        if (variant instanceof VcfStructuralVariant sv) {
-            return sv.getQuality();
-        }
-        return -1.0;
-    }
-    
-    private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,
+		private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,
                                                            int trackIndex, String altAllele) {
         Map<String, Object> gtMap = null;
 
