@@ -2,7 +2,6 @@ package org.baseplayer.variant.ui;
 
 import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.controllers.commands.NavigationCommands;
-import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.services.DrawStackManager;
@@ -141,10 +140,10 @@ public class VariantManagerController implements Initializable {
 
     private VariantList sourceVariants;
     private String chromosome;
-    private String waitingForChromosome;
     private ChangeListener<Boolean> updateListener;
     private volatile boolean annotationRunning;
     private volatile Thread annotationThread;
+    private long lastSeenVariantsRevision = -1;
     
     // Debounce timer for real-time slider updates (200ms delay after last change)
     private Timeline filterDebounceTimer;
@@ -152,7 +151,6 @@ public class VariantManagerController implements Initializable {
     private Timeline immediateFilterApplyTimer;
     // Delay showing loading modal so quick updates don't flash a spinner
     private Timeline loadingModalDelayTimer;
-    private int lastBuiltSize = -1;
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
     private boolean suppressFilterApplyEvents = false;
@@ -420,6 +418,9 @@ public class VariantManagerController implements Initializable {
      */
     private void populateVariantTypeFilters() {
         if (variantTypesContainer == null) return;
+        boolean previousSuppressState = suppressFilterApplyEvents;
+        suppressFilterApplyEvents = true;
+        try {
         
         // Get variant types from the loaded data
         java.util.Set<VcfVariantType> presentTypes = collectPresentVariantTypes();
@@ -471,7 +472,10 @@ public class VariantManagerController implements Initializable {
         java.util.Set<VcfVariantType> addedInThisCall = new java.util.HashSet<>();
         
         // Add any new types we haven't seen before
-        VariantFilter currentFilter = vcfManager.getCurrentFilter();
+        VariantFilter currentFilter = vcfManager.getCurrentLoadedFilter();
+        if (currentFilter == null) {
+            currentFilter = vcfManager.getCurrentFilter();
+        }
         for (VcfVariantType type : typesToShow) {
             if (!variantTypeCheckBoxes.containsKey(type)) {
                 // Create new checkbox for this type
@@ -524,6 +528,9 @@ public class VariantManagerController implements Initializable {
         
         // Update "Select All" checkbox state
         updateSelectAllTypesState();
+        } finally {
+            suppressFilterApplyEvents = previousSuppressState;
+        }
     }
     
     /**
@@ -767,9 +774,13 @@ public class VariantManagerController implements Initializable {
 
         // Variant types - collect from dynamic checkboxes
         Set<VcfVariantType> types = new HashSet<>();
-        for (java.util.Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
-            if (entry.getValue().isSelected()) {
-                types.add(entry.getKey());
+        if (variantTypeCheckBoxes.isEmpty()) {
+            types.addAll(EnumSet.allOf(VcfVariantType.class));
+        } else {
+            for (java.util.Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+                if (entry.getValue().isSelected()) {
+                    types.add(entry.getKey());
+                }
             }
         }
         filter.setAllowedTypes(types);
@@ -892,7 +903,6 @@ public class VariantManagerController implements Initializable {
         VariantFilter target = pendingReloadFilter != null ? pendingReloadFilter : buildFilterFromUI();
         pendingReloadFilter = null;
         hideReloadBanner();
-        lastBuiltSize = -1;
         sourceVariants = null;
         clearTableItemsForChromosomeSwitch();
         setPlaceholder("Reloading variants for " + chromosome + "…");
@@ -1245,104 +1255,74 @@ public class VariantManagerController implements Initializable {
     // ── Data Loading ──────────────────────────────────────────────────────────
 
     private void loadData() {
-        // Get the currently displayed chromosome from the active DrawStack
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        if (stackManager.isEmpty()) {
-            setPlaceholder("No chromosome currently displayed.");
+        if (vcfManager == null) {
             return;
         }
 
-        DrawStack firstStack = stackManager.getFirst();
-        String chrom = firstStack.chromosome;
-        if (chrom == null) {
-            setPlaceholder("No chromosome currently displayed.");
+        String activeChromosome = vcfManager.getLastLoadedChromosome();
+        if (!Objects.equals(chromosome, activeChromosome)) {
+            chromosome = activeChromosome;
+            lastSeenVariantsRevision = -1;
+        }
+
+        // Get the current variant list from VcfManager and rebuild tables if it changed
+        VariantList fresh = vcfManager.getCachedVariants();
+        long revision = vcfManager.getVariantsRevision();
+        
+        // Skip rebuild if variant list and revision have not changed.
+        if (fresh == sourceVariants && revision == lastSeenVariantsRevision) {
             return;
         }
-
-        // When switching chromosomes, reload to ensure fresh data
-        boolean chromosomeChanged = !chrom.equals(chromosome);
-        if (chromosomeChanged) {
-            chromosome = chrom;  // Update immediately to prevent re-triggering reload
-            lastBuiltSize = -1;
-            clearTableItemsForChromosomeSwitch();
-            
-            // Force reload of the chromosome data with current filter
-            vcfManager.reloadCurrentChromosome();
-            // Set up callback to retry loadData when reload completes
-            vcfManager.setOnChromosomeVariantsReady(() -> {
-                Platform.runLater(this::loadData);
-            });
-            return;  // Exit early; loadData will be called again when data is ready
-        }
-
-        VariantList fresh = vcfManager.getCachedVariants(chrom);
-        int freshSize = fresh != null ? fresh.size() : 0;
-
-        // Skip only when same chrom, same size, annotation done, and no annotation in flight
-        if (fresh == sourceVariants && sourceVariants != null
-                && freshSize == lastBuiltSize && !annotationRunning
-                && vcfManager.isAnnotated(chromosome)) {
-            return;
-        }
-
+        
         sourceVariants = fresh;
+        lastSeenVariantsRevision = revision;
 
-        // Update variant type filters based on loaded data
+        // Update variant type filters based on current data
         populateVariantTypeFilters();
 
         if (sourceVariants == null || sourceVariants.isEmpty()) {
             clearTableItemsForChromosomeSwitch();
-            if (sourceVariants == null || vcfManager.isLoadingChromosome(chromosome)) {
-                setPlaceholder("Loading variants for " + chromosome + "…");
-                // Register callback to retry when this chromosome's variants are cached
-                if (!chromosome.equals(waitingForChromosome)) {
-                    waitingForChromosome = chromosome;
-                    vcfManager.setOnChromosomeVariantsReady(() -> {
-                        waitingForChromosome = null;
-                        Platform.runLater(this::loadData);
-                    });
-                }
-            } else {
-                setPlaceholder("No variants match current filter settings");
-            }
+            setPlaceholder("No variants available");
             refreshReloadBannerState();
             return;
         }
 
         refreshReloadBannerState();
+        scheduleRebuild(vcfManager.getCurrentFilter());
 
-        // Coalesce rapid updates: rebuild only when not already running
-        if (freshSize != lastBuiltSize) {
-            lastBuiltSize = freshSize;
-            scheduleRebuild(vcfManager.getCurrentFilter());
-        }
-
-        if (!annotationRunning && !vcfManager.isAnnotated(chromosome)) {
+        if (!annotationRunning
+            && chromosome != null
+            && !chromosome.isBlank()
+            && !vcfManager.isAnnotated(chromosome)) {
             annotationRunning = true;
             final String capturedChrom = chromosome;
             final VariantList capturedVariants = sourceVariants;
             annotationThread = new Thread(() -> {
-                if (Thread.currentThread().isInterrupted()) {
-                    Platform.runLater(() -> annotationRunning = false);
-                    return;
+                boolean interrupted = Thread.currentThread().isInterrupted();
+                if (!interrupted) {
+                    try {
+                        vcfManager.ensureAnnotated(capturedChrom);
+                    } catch (Throwable ignored) {
+                        // Keep table refreshes alive even if annotation fails.
+                    }
                 }
-                vcfManager.ensureAnnotated(capturedChrom);
+
                 Platform.runLater(() -> {
                     annotationRunning = false;
-                    if (!capturedChrom.equals(chromosome) || capturedVariants != sourceVariants) {
+                    if (interrupted) {
+                        return;
+                    }
+                    if (!Objects.equals(capturedChrom, chromosome) || capturedVariants != sourceVariants) {
                         loadData();
                         return;
                     }
                     scheduleRebuild(vcfManager.getCurrentFilter());
-                    lastBuiltSize = sourceVariants != null ? sourceVariants.size() : 0;
                 });
             }, "variant-annotator");
             annotationThread.setDaemon(true);
             annotationThread.start();
         }
     }
-
-    // ── Table Rebuilding ──────────────────────────────────────────────────────
 
     private void scheduleRebuild(VariantFilter filter) {
         rebuildNeeded = true;

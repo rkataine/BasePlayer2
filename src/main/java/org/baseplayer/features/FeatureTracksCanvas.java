@@ -96,9 +96,9 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     // Draw all tracks (visible tracks get data drawn, invisible show placeholder)
     // Heights are calculated dynamically based on available space and preferred height ratios
     double y = HEADER_HEIGHT;
-    String chrom = drawStack.chromosome;
-    double start = drawStack.start;  // Keep as double for smooth scrolling
-    double end = drawStack.end;
+    String chrom = drawStack.getChromosome();
+    double start = drawStack.getViewStart();  // Keep as double for smooth scrolling
+    double end = drawStack.getViewEnd();
     
     for (Track track : tracks) {
       // Calculate dynamic height based on available space
@@ -147,9 +147,9 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   public void notifyRegionChanged() {
     if (drawStack == null) return;
     
-    String chrom = drawStack.chromosome;
-    long start = (long) drawStack.start;
-    long end = (long) drawStack.end;
+    String chrom = drawStack.getChromosome();
+    long start = (long) drawStack.getViewStart();
+    long end = (long) drawStack.getViewEnd();
     
     // Skip if region is identical to last notification
     if (chrom != null && chrom.equals(lastNotifiedChrom) && start == lastNotifiedStart && end == lastNotifiedEnd) {
@@ -283,7 +283,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
           boolean handled = clickedTrack.handleClick(
               clickRelativeX, clickRelativeY,
               getWidth(), calculateTrackHeight(clickedTrack),
-              drawStack.chromosome, drawStack.start, drawStack.end,
+              drawStack.getChromosome(), drawStack.getViewStart(), drawStack.getViewEnd(),
               getScene().getWindow(), e.getScreenX(), e.getScreenY()
           );
           

@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.baseplayer.components.sidebars.FeatureTracksSidebar;
-import org.baseplayer.components.sidebars.SampleSidebar;
+import org.baseplayer.components.sidebars.MasterTrackSidebar;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
@@ -23,7 +23,7 @@ public class EventCoordinator {
   private final Runtime runtime = Runtime.getRuntime();
   private final List<DrawStack> drawStacks;
   private FeatureTracksSidebar featureTracksSidebar;
-  private SampleSidebar sidebarPanel;
+  private MasterTrackSidebar sidebarPanel;
   
   public EventCoordinator(List<DrawStack> drawStacks) {
     this.drawStacks = drawStacks;
@@ -33,7 +33,7 @@ public class EventCoordinator {
     this.featureTracksSidebar = sidebar;
   }
   
-  public void setSidebarPanel(SampleSidebar sidebarPanel) {
+  public void setSidebarPanel(MasterTrackSidebar sidebarPanel) {
     this.sidebarPanel = sidebarPanel;
   }
   
@@ -60,15 +60,12 @@ public class EventCoordinator {
   }
 
   private void redrawAll(IntegerProperty memoryUsage) {
-    // Always draw all stacks so that data updates (e.g. BAM fetch completion)
-    // are reflected everywhere, not just on the hover stack
     for (DrawStack pane : drawStacks) {
       pane.cytobandCanvas.draw();
       pane.chromosomeCanvas.draw();
       pane.alignmentCanvas.draw();
     }
 
-    // Update feature tracks when region changes
     for (DrawStack stack : drawStacks) {
       if (stack.featureTracksCanvas != null) {
         stack.featureTracksCanvas.draw();
@@ -79,12 +76,10 @@ public class EventCoordinator {
       featureTracksSidebar.draw();
     }
 
-    // Update track info sidebar
     if (sidebarPanel != null) {
       sidebarPanel.draw();
     }
 
-    // Update memory usage
     memoryUsage.set(BaseUtils.toMegabytes.apply(runtime.totalMemory() - runtime.freeMemory()));
   }
   

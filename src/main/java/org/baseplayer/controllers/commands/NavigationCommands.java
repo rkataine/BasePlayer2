@@ -4,6 +4,7 @@ import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.gene.GeneLocation;
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.ServiceRegistry;
 
@@ -42,7 +43,7 @@ public class NavigationCommands {
       stack.alignmentCanvas.zoomAnimation(middle - flank, middle + flank);
     } else {
       // Zoom in by 75% (show 25% of current view)
-      double newViewLength = stack.viewLength * 0.25;
+      double newViewLength = stack.getViewLength() * 0.25;
       double newStart = middle - newViewLength / 2;
       double newEnd = middle + newViewLength / 2;
       stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
@@ -64,7 +65,7 @@ public class NavigationCommands {
     var stack = stackManager.getHoverStack();
     
     // Prevent zoom out if already showing 99% or more of the chromosome
-    if (stack.viewLength >= stack.chromSize * 0.99) {
+    if (stack.getViewLength() >= stack.chromSize * 0.99) {
       return;
     }
     
@@ -74,7 +75,7 @@ public class NavigationCommands {
     } else {
       // Zoom out by 300% (triple the view)
       double middle = stack.middlePos();
-      double newViewLength = Math.min(stack.viewLength * 3, stack.chromSize);
+      double newViewLength = Math.min(stack.getViewLength() * 3, stack.chromSize);
       
       // Don't zoom out if new view would be essentially the same (within 1% of full)
       if (newViewLength >= stack.chromSize * 0.99) {
@@ -106,8 +107,9 @@ public class NavigationCommands {
    * @param end End position (1-based, inclusive)
    */
   public static void navigateToPosition(int start, int end) {
-    if (stackManager.getHoverStack() != null) {
-      stackManager.getHoverStack().alignmentCanvas.zoomAnimation(start, end);
+    DrawStack stack = stackManager.getHoverStack();
+    if (stack != null) {
+      stack.navigateTo(stack.getChromosome(), start, end);
     }
   }
   
@@ -118,8 +120,9 @@ public class NavigationCommands {
    */
   public static void navigateToPosition(int position) {
     ViewWindow window = centeredWindow(position, GenomicCanvas.minZoom, SINGLE_BASE_ALIGNMENT_BP);
-    if (stackManager.getHoverStack() != null) {
-      stackManager.getHoverStack().alignmentCanvas.zoomAnimation(window.start(), window.end());
+    DrawStack stack = stackManager.getHoverStack();
+    if (stack != null) {
+      stack.navigateTo(stack.getChromosome(), window.start(), window.end());
     }
   }
 
@@ -142,26 +145,27 @@ public class NavigationCommands {
    * 
    * @param geneName Name of the gene to navigate to
    */
+  /**
+   * Navigate to a gene by name.
+   * Switches chromosome if needed and zooms to gene location.
+   * Fetches exact gene bounds (no padding).
+   * 
+   * @param geneName Name of the gene to navigate to
+   */
   public static void navigateToGene(String geneName) {
     GeneLocation loc = AnnotationData.getGeneLocation(geneName);
     if (loc == null) return;
-    
-    // Only navigate the active/hover stack
-    if (stackManager.getHoverStack() != null) {
-      DrawStack stack = stackManager.getHoverStack();
+    DrawStack stack = stackManager.getHoverStack();
+    if (stack != null) {
+      VcfManager vcfManager = VcfManager.getInstance();
+
+      vcfManager.loadRegionVariants(loc.chrom(), loc.start(), loc.end());
       
-      // Switch chromosome if needed (only for this stack)
-      if (!loc.chrom().equals(stack.chromosome)) {
-        stack.switchToChromosome(loc.chrom());
-      }
-      
-      // Navigate to gene location with some padding
       long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
-      double newStart = loc.start() - padding;
-      double newEnd = loc.end() + padding;
-      stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
+      long viewStart = loc.start() - padding;
+      long viewEnd   = loc.end()   + padding;
+      stack.navigateTo(loc.chrom(), viewStart, viewEnd);
     }
-    
     AnnotationData.clearHighlightedGene();
   }
   

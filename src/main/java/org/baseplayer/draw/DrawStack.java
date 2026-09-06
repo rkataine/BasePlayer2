@@ -3,17 +3,21 @@ package org.baseplayer.draw;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.features.FeatureTrack;
 import org.baseplayer.features.FeatureTracksCanvas;
+import org.baseplayer.genome.GenomicRegion;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.draw.ChromosomeCanvas;
 import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.GnomadDataParser;
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.NavigationState;
 import org.baseplayer.services.ServiceRegistry;
 
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.canvas.Canvas;
@@ -34,13 +38,15 @@ public class DrawStack {
   private static final double CHROM_DROPDOWN_MAX_WIDTH = 320;
   private static final double CHROM_DROPDOWN_CHROME_PADDING = 36;
 
-  public String chromosome = "1";
+  String chromosome = "1";
   public double chromSize;
-  public double start;
-  public double end;
-  public double viewLength;
-  public double pixelSize = 0;
+  double start;
+  double end;
+  double viewLength;
+  double pixelSize = 0;
   public double scale = 0;
+
+  private final ObjectProperty<GenomicRegion> regionProperty = new SimpleObjectProperty<>();
 
   /** Per-stack navigation/rendering state. Mutated only by the owning canvas. */
   public final NavigationState nav = new NavigationState();
@@ -63,6 +69,24 @@ public class DrawStack {
 
   public double middlePos() { return start + (end - start) / 2; }
 
+  public ObjectProperty<GenomicRegion> regionProperty() { return regionProperty; }
+
+  public GenomicRegion getRegion() { return regionProperty.get(); }
+
+  public void setRegion(String chrom, long start, long end) {
+    regionProperty.set(new GenomicRegion(chrom, start, end));
+  }
+
+  public String getChromosome() { return chromosome; }
+
+  public double getViewStart() { return start; }
+
+  public double getViewEnd() { return end; }
+
+  public double getViewLength() { return viewLength; }
+
+  public double getPixelSize() { return pixelSize; }
+
   public DrawStack() {
     this("1");
   }
@@ -81,14 +105,20 @@ public class DrawStack {
     chromStack.setMinSize(0, 0);
     drawStack.setMinSize(0, 0);
 
-    // Create chromosome dropdown
     chromosomeDropdown = new ComboBox<>();
     chromosomeDropdown.getStyleClass().add("minimal-combo-box");
     chromosomeDropdown.setStyle("-fx-background-color: rgba(30, 30, 30, 0.95); -fx-background-radius: 3;");
     chromosomeDropdown.setMinWidth(CHROM_DROPDOWN_MIN_WIDTH);
     chromosomeDropdown.setPrefWidth(120);
     chromosomeDropdown.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
-    chromosomeDropdown.setOnAction(e -> onChromosomeSelected());
+    
+    chromosomeDropdown.setOnAction(e -> {
+      String selected = chromosomeDropdown.getValue();
+      if (selected != null) {
+        onUserSelectedChromosome(selected);
+      }
+    });
+    
     chromosomeDropdown.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
       if (event.getButton() == MouseButton.PRIMARY
           && !chromosomeDropdown.isShowing()
@@ -99,7 +129,6 @@ public class DrawStack {
     StackPane.setAlignment(chromosomeDropdown, Pos.TOP_LEFT);
     StackPane.setMargin(chromosomeDropdown, new Insets(3, 0, 0, 5));
     
-    // Create close button (hidden by default)
     closeButton = new Label("✕");
     closeButton.setStyle("-fx-background-color: rgba(30, 30, 30, 0.9); -fx-background-radius: 3; -fx-text-fill: #aaaaaa; -fx-padding: 2 6 2 6; -fx-cursor: hand;");
     closeButton.setVisible(false);
@@ -109,7 +138,6 @@ public class DrawStack {
     StackPane.setAlignment(closeButton, Pos.TOP_RIGHT);
     StackPane.setMargin(closeButton, new Insets(3, 5, 0, 0));
 
-    // Create cytoband canvas (fixed height at top, wrapped in Pane for sizing)
     cytobandCanvas = new CytobandCanvas(this);
     Pane cytoWrapper = new Pane(cytobandCanvas);
     cytoWrapper.setMinHeight(CytobandCanvas.PREFERRED_HEIGHT);
@@ -118,49 +146,35 @@ public class DrawStack {
     cytobandCanvas.widthProperty().bind(cytoWrapper.widthProperty());
     cytobandCanvas.setHeight(CytobandCanvas.PREFERRED_HEIGHT);
     
-    // Create gene/reference canvas (fills remaining space, with vertical scrolling)
     StackPane canvasPane = new StackPane();
     canvasPane.setMinSize(0, 0);
     chromosomeCanvas = new ChromosomeCanvas(new Canvas(), canvasPane, this);
     canvasPane.getChildren().addAll(chromosomeCanvas, chromosomeCanvas.getReactiveCanvas());
     
-    // Wrap canvas in ScrollPane for vertical scrolling when many gene rows.
     chromScrollPane = new ScrollPane(canvasPane);
     chromScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
     chromScrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
     chromScrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
     chromScrollPane.setPannable(false);
-    // Bind canvas pane width to the full ScrollPane width (NOT fitToWidth).
-    // This makes the scrollbar overlay the content edge instead of shrinking it,
-    // eliminating the left/right shift when the scrollbar appears.
     canvasPane.prefWidthProperty().bind(chromScrollPane.widthProperty());
     canvasPane.minWidthProperty().bind(chromScrollPane.widthProperty());
     canvasPane.maxWidthProperty().bind(chromScrollPane.widthProperty());
     
-    // Redraw when scroll position changes so position indicators stay at bottom
     chromScrollPane.vvalueProperty().addListener((obs, oldVal, newVal) -> chromosomeCanvas.draw());
-
-    // Redraw when ScrollPane is vertically resized (e.g. split divider drag).
-    // ChromosomeCanvas suppresses the normal parent-height→update listener to
-    // avoid a feedback loop, so this replaces that mechanism.
     chromScrollPane.heightProperty().addListener((obs, oldVal, newVal) -> chromosomeCanvas.draw());
     
-    // Overlay dropdown and close button on top of ScrollPane
     chromStack.getChildren().addAll(chromScrollPane, chromosomeDropdown, closeButton);
     VBox.setVgrow(chromStack, Priority.ALWAYS);
     
-    // Assemble the container: cytoband at top, chromStack below
     chromContainer.getChildren().addAll(cytoWrapper, chromStack);
     
     alignmentCanvas = new AlignmentCanvas(new Canvas(), drawStack, this);
     drawStack.getChildren().addAll(alignmentCanvas, alignmentCanvas.getReactiveCanvas());
     
-    // Create feature tracks canvas with default conservation and gnomAD tracks
     featureTracksStack.setMinSize(0, 0);
     featureTracksCanvas = new FeatureTracksCanvas(new Canvas(), featureTracksStack, this);
     featureTracksStack.getChildren().addAll(featureTracksCanvas, featureTracksCanvas.getReactiveCanvas());
     
-    // Add default tracks
     FeatureTrack conservationTrack = new FeatureTrack(
         "PhyloP Conservation", "UCSC API", UcscApiClient::fetchConservation);
     conservationTrack.setCoordinateBase(0); // UCSC is 0-based
@@ -177,7 +191,6 @@ public class DrawStack {
     
     featureTracksCanvas.setCollapsed(true);
     
-    // Show close button on hover
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());
     chromContainer.setOnMouseExited(e -> closeButton.setVisible(false));
     drawStack.setOnMouseEntered(e -> updateControlsVisibility());
@@ -194,50 +207,57 @@ public class DrawStack {
     chromosomeDropdown.getItems().clear();
     chromosomeDropdown.getItems().addAll(chromosomes);
     if (chromosomes.contains(chromosome)) {
-      chromosomeDropdown.setValue(chromosome);
+      setChromosomeDropdownValueSilently(chromosome);
     } else if (!chromosomes.isEmpty()) {
       chromosome = chromosomes.get(0);
-      chromosomeDropdown.setValue(chromosome);
+      setChromosomeDropdownValueSilently(chromosome);
     }
     updateChromosomeDropdownWidthByLongestContig();
-    // Genome just became available (or changed) — re-read the actual chromosome size.
     updateChromosomeSize();
     alignmentCanvas.setStartEnd(1.0, chromSize + 1);
     chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
   }
   
-  private void onChromosomeSelected() {
-    String selected = chromosomeDropdown.getValue();
-    if (selected == null || selected.equals(chromosome)) return;
-    
-    // Cancel all in-flight fetches before switching chromosome
-    FetchManager.get().cancelAll();
-    
-    chromosome = selected;
-    updateChromosomeSize();
-    alignmentCanvas.setStartEnd(1.0, chromSize + 1);
-    chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
-    
-    // Update ViewportState to trigger variant loading
-    ServiceRegistry.getInstance().getViewportState().setCurrentChromosome(selected);
+  private void onUserSelectedChromosome(String selected) {
+    if (selected == null || selected.isBlank()) {
+      return;
+    }
+    long chromLen = referenceGenomeService.hasGenome() 
+      ? referenceGenomeService.getCurrentGenome().getChromosomeLength(selected)
+      : 1_000_000_000L;
+    navigateTo(selected, 1, chromLen + 1);
+    VcfManager vcfManager = org.baseplayer.io.VcfManager.getInstance();
+    vcfManager.loadRegionVariants(selected, 1, chromLen + 1);
   }
 
-  /**
-   * Switch this stack to the given chromosome, updating all coordinates.
-   * Uses the loaded reference genome for the chromosome size.
-   * Does nothing if {@code chrom} is already the current chromosome.
-   */
-  public void switchToChromosome(String chrom) {
-    if (chrom == null || chrom.equals(chromosome)) return;
-    FetchManager.get().cancelAll();
-    chromosome = chrom;
-    updateChromosomeSize();
-    chromosomeDropdown.setValue(chrom);
-    alignmentCanvas.setStartEnd(1.0, chromSize + 1);
-    chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
+  public void navigateTo(String chrom, double start, double end) {
+    if (!chrom.equals(chromosome)) {
+      FetchManager.get().cancelAll();
+      chromosome = chrom;
+      updateChromosomeSize();
+      setChromosomeDropdownValueSilently(chrom);
+    }
+    alignmentCanvas.setStartEnd(start, end);
+    chromosomeCanvas.setStartEnd(start, end);
     
-    // Update ViewportState to trigger variant loading
-    ServiceRegistry.getInstance().getViewportState().setCurrentChromosome(chrom);
+    setRegion(chrom, (long) start, (long) end);
+    alignmentCanvas.zoomAnimation(start, end);
+  }
+
+  public void switchToChromosome(String chrom) {
+    if (chrom == null) return;
+    long chromLen = referenceGenomeService.hasGenome() 
+      ? referenceGenomeService.getCurrentGenome().getChromosomeLength(chrom)
+      : 1_000_000_000L;
+    navigateTo(chrom, 1, chromLen + 1);
+    VcfManager.getInstance().loadRegionVariants(chrom, 1, chromLen + 1);
+  }
+
+  private void setChromosomeDropdownValueSilently(String value) {
+    var originalHandler = chromosomeDropdown.getOnAction();
+    chromosomeDropdown.setOnAction(null);
+    chromosomeDropdown.setValue(value);
+    chromosomeDropdown.setOnAction(originalHandler);
   }
 
   private void updateChromosomeDropdownWidthByLongestContig() {
@@ -268,16 +288,12 @@ public class DrawStack {
   }
   
   private void updateChromosomeSize() {
+		chromSize = 1_000_000;
     if (referenceGenomeService.hasGenome()) {
       chromSize = referenceGenomeService.getCurrentGenome().getChromosomeLength(chromosome);
-    } else {
-      // No reference genome loaded yet; use a large generic fallback.
-      chromSize = 1_000_000_000L;
     }
     start = 1;
     end = chromSize + 1;
     viewLength = chromSize;
   }
-  
-
 }

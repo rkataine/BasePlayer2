@@ -80,7 +80,7 @@ public class CytobandCanvas extends Canvas {
         indicatorDragging = true;
         isDragging = true;
         indicatorDragStartX = event.getX();
-        indicatorViewStartPos = drawStack.start;
+        indicatorViewStartPos = drawStack.getViewStart();
       } else {
         selectDragging = true;
         selectStartX = event.getX();
@@ -155,17 +155,17 @@ public class CytobandCanvas extends Canvas {
   
   private boolean isIndicatorHit(double mouseX) {
     // Don't allow indicator dragging when fully zoomed out
-    boolean isZoomedOut = drawStack.viewLength >= drawStack.chromSize * 0.95;
+    boolean isZoomedOut = drawStack.getViewLength() >= drawStack.chromSize * 0.95;
     if (isZoomedOut) return false;
     
     double cytoWidth = getWidth() - 2 * CYTO_PADDING_X;
-    double indicatorX = CYTO_PADDING_X + (drawStack.start / drawStack.chromSize) * cytoWidth;
-    double indicatorWidth = Math.max(20, (drawStack.viewLength / drawStack.chromSize) * cytoWidth);
+    double indicatorX = CYTO_PADDING_X + (drawStack.getViewStart() / drawStack.chromSize) * cytoWidth;
+    double indicatorWidth = Math.max(20, (drawStack.getViewLength() / drawStack.chromSize) * cytoWidth);
     return mouseX >= indicatorX && mouseX <= indicatorX + indicatorWidth;
   }
   
   private void showBandTooltip(double mouseX, double mouseY) {
-    String currentChrom = drawStack.chromosome;
+    String currentChrom = drawStack.getChromosome();
     if (!AnnotationData.isCytobandsLoaded() || currentChrom == null) return;
     
     double cytoWidth = getWidth() - 2 * CYTO_PADDING_X;
@@ -173,8 +173,12 @@ public class CytobandCanvas extends Canvas {
     for (Cytoband band : AnnotationData.getCytobands()) {
       if (!band.chrom().equals(currentChrom)) continue;
       
-      double xStart = CYTO_PADDING_X + (band.start() / (double)drawStack.chromSize) * cytoWidth;
-      double xEnd = CYTO_PADDING_X + (band.end() / (double)drawStack.chromSize) * cytoWidth;
+      // Clamp band coordinates to chromosome bounds
+      double bandStart = Math.min(band.start(), drawStack.chromSize);
+      double bandEnd = Math.min(band.end(), drawStack.chromSize);
+      
+      double xStart = CYTO_PADDING_X + (bandStart / (double)drawStack.chromSize) * cytoWidth;
+      double xEnd = CYTO_PADDING_X + (bandEnd / (double)drawStack.chromSize) * cytoWidth;
       
       if (mouseX >= xStart && mouseX <= xEnd) {
         if (band.name().equals(currentHoveredBand)) return;
@@ -202,7 +206,7 @@ public class CytobandCanvas extends Canvas {
     gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth(), getHeight());
     
-    String currentChrom = drawStack.chromosome;
+    String currentChrom = drawStack.getChromosome();
     double cytoWidth = getWidth() - 2 * CYTO_PADDING_X;
     
     if (!AnnotationData.isCytobandsLoaded() || currentChrom == null) return;
@@ -224,15 +228,19 @@ public class CytobandCanvas extends Canvas {
     for (Cytoband band : AnnotationData.getCytobands()) {
       if (!band.chrom().equals(currentChrom)) continue;
       
-      double xStart = CYTO_PADDING_X + (band.start() / (double)drawStack.chromSize) * cytoWidth;
-      double xEnd = CYTO_PADDING_X + (band.end() / (double)drawStack.chromSize) * cytoWidth;
+      // Clamp band coordinates to chromosome bounds to prevent off-canvas rendering
+      double bandStart = Math.min(band.start(), drawStack.chromSize);
+      double bandEnd = Math.min(band.end(), drawStack.chromSize);
+      
+      double xStart = CYTO_PADDING_X + (bandStart / (double)drawStack.chromSize) * cytoWidth;
+      double xEnd = CYTO_PADDING_X + (bandEnd / (double)drawStack.chromSize) * cytoWidth;
       double bandWidth = Math.max(1, xEnd - xStart);
       
       Color baseColor = getCytobandColor(band.stain());
       gc.setFill(getCytobandGradient(baseColor));
       
-      boolean isFirstBand = band.start() == 0;
-      boolean isLastBand = band.end() >= drawStack.chromSize - 1;
+      boolean isFirstBand = bandStart == 0;
+      boolean isLastBand = bandEnd >= drawStack.chromSize - 1;
       boolean isCentromere = band.stain().equals("acen");
       
       if (isCentromere) {
@@ -268,23 +276,14 @@ public class CytobandCanvas extends Canvas {
         gc.fillText(band.name(), xStart + bandWidth / 2, CYTO_PADDING_Y + CYTO_HEIGHT / 2 + 3);
       }
     }
-    
-    // Draw outline
-   /*  gc.setStroke(Color.gray(0.4));
-    gc.setLineWidth(1);
-    gc.strokeRoundRect(CYTO_PADDING_X, CYTO_PADDING_Y, cytoWidth, CYTO_HEIGHT, CYTO_ROUND * 2, CYTO_ROUND * 2);
-    // Use pending position if dragging, otherwise use actual position
-    double displayStart = indicatorDragging && pendingViewStart >= 0 ? pendingViewStart : drawStack.start;
-    double xpos = CYTO_PADDING_X + (displayS
-    gc.restore(); */
-    
+
     // Draw current view indicator (only if zoomed in)
-    boolean isZoomedOut = drawStack.viewLength >= drawStack.chromSize * 0.95;
+    boolean isZoomedOut = drawStack.getViewLength() >= drawStack.chromSize * 0.95;
     if (!isZoomedOut) {
       gc.setStroke(Color.DODGERBLUE);
       gc.setLineWidth(2);
-      double xpos = CYTO_PADDING_X + (drawStack.start / drawStack.chromSize) * cytoWidth;
-      double width = Math.max(20, (drawStack.viewLength / drawStack.chromSize) * cytoWidth);
+      double xpos = CYTO_PADDING_X + (drawStack.getViewStart() / drawStack.chromSize) * cytoWidth;
+      double width = Math.max(20, (drawStack.getViewLength() / drawStack.chromSize) * cytoWidth);
       
       Color indicatorColor = Color.rgb(30, 144, 255, 0.5);
       LinearGradient indicatorGradient = getCytobandGradient(indicatorColor);
@@ -293,7 +292,6 @@ public class CytobandCanvas extends Canvas {
       gc.strokeRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
     }
     
-    // Draw selection rectangle when dragging
     if (selectDragging) {
       double selectMinX = Math.max(CYTO_PADDING_X, Math.min(selectStartX, selectEndX));
       double selectMaxX = Math.min(getWidth() - CYTO_PADDING_X, Math.max(selectStartX, selectEndX));
@@ -308,10 +306,9 @@ public class CytobandCanvas extends Canvas {
       gc.strokeRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
     }
     
-    // Draw highlighted gene location from search
     GeneLocation highlightedGeneLocation = AnnotationData.getHighlightedGeneLocation();
     if (highlightedGeneLocation != null && 
-        highlightedGeneLocation.chrom().equals(drawStack.chromosome)) {
+        highlightedGeneLocation.chrom().equals(drawStack.getChromosome())) {
       double geneStartX = CYTO_PADDING_X + (highlightedGeneLocation.start() / drawStack.chromSize) * cytoWidth;
       double geneEndX = CYTO_PADDING_X + (highlightedGeneLocation.end() / drawStack.chromSize) * cytoWidth;
       double geneWidth = Math.max(2, geneEndX - geneStartX);
@@ -341,8 +338,6 @@ public class CytobandCanvas extends Canvas {
     return GRADIENT_CACHE.computeIfAbsent(baseColor, c -> {
       Color lighter = c.interpolate(Color.WHITE, 0.4);
       Color darker  = c.interpolate(Color.BLACK, 0.2);
-      // Proportional coordinates so the cached gradient scales to any fill rect
-      // (y/height arguments are ignored — all callers use the same CYTO_HEIGHT).
       return new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
         new Stop(0, lighter),
         new Stop(0.3, c),

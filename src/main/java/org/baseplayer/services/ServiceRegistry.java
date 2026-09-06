@@ -26,23 +26,18 @@ public class ServiceRegistry {
     private final SampleRegistry sampleRegistry;
     private final ReferenceGenomeService referenceGenomeService;
     private final DrawStackManager drawStackManager;
+    private final RegionFetchCache regionFetchCache;
     
-    /**
-     * Private constructor - use getInstance() to access.
-     */
     private ServiceRegistry() {
         this.viewportState = new ViewportState();
         this.sampleRegistry = new SampleRegistry();
         this.referenceGenomeService = new ReferenceGenomeService();
         this.drawStackManager = new DrawStackManager();
+        this.regionFetchCache = new RegionFetchCache();
         // Eagerly initialise LoadingManager so it registers with ThreadRunner before any tasks are submitted.
         LoadingManager.get();
     }
     
-    /**
-     * Get the singleton instance of the service registry.
-     * Thread-safe lazy initialization.
-     */
     public static synchronized ServiceRegistry getInstance() {
         if (instance == null) {
             instance = new ServiceRegistry();
@@ -50,38 +45,27 @@ public class ServiceRegistry {
         return instance;
     }
     
-    /**
-     * Get the viewport state service.
-     */
     public ViewportState getViewportState() {
         return viewportState;
     }
     
-    /**
-     * Get the sample registry service.
-     */
     public SampleRegistry getSampleRegistry() {
         return sampleRegistry;
     }
     
-    /**
-     * Get the reference genome service.
-     */
     public ReferenceGenomeService getReferenceGenomeService() {
         return referenceGenomeService;
     }
     
-    /**
-     * Get the draw stack manager.
-     */
     public DrawStackManager getDrawStackManager() {
         return drawStackManager;
     }
+
+    public RegionFetchCache getRegionFetchCache() {
+        return regionFetchCache;
+    }
+
     
-    /**
-     * Reset the service registry (useful for testing).
-     * This clears all service state and creates new instances.
-     */
     public static synchronized void reset() {
         instance = null;
     }

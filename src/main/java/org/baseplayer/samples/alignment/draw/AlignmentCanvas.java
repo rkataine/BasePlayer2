@@ -162,7 +162,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   public AlignmentCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
-    widthProperty().addListener((obs, o, n) -> setStartEnd(drawStack.start, drawStack.end));
+    widthProperty().addListener((obs, o, n) -> setStartEnd(drawStack.getViewStart(), drawStack.getViewEnd()));
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
     drawReads = new DrawReads(gc, drawStack);
@@ -236,7 +236,7 @@ public class AlignmentCanvas extends GenomicCanvas {
         hoveredRead = hit;
         reactiveCanvas.setCursor(hit != null ? Cursor.HAND : Cursor.DEFAULT);
         drawReadHighlight();
-      } else if (hoveringSelected || (hit != null && drawStack.pixelSize >= 6)) {
+      } else if (hoveringSelected || (hit != null && drawStack.getPixelSize() >= 6)) {
         // refresh tooltip as cursor moves along the read
         drawReadHighlight();
       } else if (hit == null) {
@@ -255,7 +255,7 @@ public class AlignmentCanvas extends GenomicCanvas {
           Window owner = reactiveCanvas.getScene() != null ? reactiveCanvas.getScene().getWindow() : null;
           if (owner != null) {
             selectedRead = hit;
-            String chrom = drawStack.chromosome != null ? drawStack.chromosome : "";
+            String chrom = drawStack.getChromosome() != null ? drawStack.getChromosome() : "";
             String mateChrName = resolveMateChromName(hit);
 
             double popupX = event.getScreenX() + 30;
@@ -395,8 +395,8 @@ public class AlignmentCanvas extends GenomicCanvas {
     int currentFilterGen = vcfMgr.getFilterGeneration();
     boolean filterChanged = currentFilterGen != densityFilterGeneration;
     boolean viewChanged = densityCachedStart < 0 || densityCachedEnd < 0
-                       || Math.abs(drawStack.start - densityCachedStart) > drawStack.viewLength * 0.1
-                       || Math.abs(drawStack.end - densityCachedEnd) > drawStack.viewLength * 0.1;
+                       || Math.abs(drawStack.getViewStart() - densityCachedStart) > drawStack.getViewLength() * 0.1
+                       || Math.abs(drawStack.getViewEnd() - densityCachedEnd) > drawStack.getViewLength() * 0.1;
     if ((variants != densityCached || viewChanged || filterChanged) && !densityBusy) {
       densityFilterGeneration = currentFilterGen;
       triggerVariantDensityCompute(variants);
@@ -430,8 +430,8 @@ public class AlignmentCanvas extends GenomicCanvas {
       densityBusy = false;
       return;
     }
-    final double viewStart = drawStack.start;
-    final double viewEnd   = drawStack.end;
+    final double viewStart = drawStack.getViewStart();
+    final double viewEnd   = drawStack.getViewEnd();
     final java.util.List<Integer> visibleTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     final org.baseplayer.variant.VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
     Thread t = new Thread(() -> {
@@ -574,9 +574,9 @@ public class AlignmentCanvas extends GenomicCanvas {
           
           // Guard: if viewport has shifted significantly since calculation started,
           // discard this result and force immediate recalculation to avoid density shift
-          double currentViewLen = Math.max(1.0, drawStack.end - drawStack.start);
-          boolean viewportShifted = Math.abs(drawStack.start - viewStart) > currentViewLen * 0.05
-                                 || Math.abs(drawStack.end - viewEnd) > currentViewLen * 0.05;
+          double currentViewLen = Math.max(1.0, drawStack.getViewEnd() - drawStack.getViewStart());
+          boolean viewportShifted = Math.abs(drawStack.getViewStart() - viewStart) > currentViewLen * 0.05
+                                 || Math.abs(drawStack.getViewEnd() - viewEnd) > currentViewLen * 0.05;
           if (viewportShifted) {
             // Viewport changed significantly during calculation — invalidate and recalculate
             densitySnv = null; densityIndel = null;
@@ -621,7 +621,7 @@ public class AlignmentCanvas extends GenomicCanvas {
   }
 
   private void drawDensityBars(double top, double h) {
-    if (drawStack.viewLength <= 0) return;
+    if (drawStack.getViewLength() <= 0) return;
     if (densityDel == null && densitySnv == null && densityIndel == null) return;
     
     double canvasWidth = getWidth();
@@ -634,9 +634,9 @@ public class AlignmentCanvas extends GenomicCanvas {
     double pixelOffset = 0;
     if (cachedViewLength > 0) {
       // How many genomic bases did we shift?
-      double genomicShift = drawStack.start - densityCachedStart;
+      double genomicShift = drawStack.getViewStart() - densityCachedStart;
       // Convert to pixel shift
-      pixelOffset = -genomicShift * canvasWidth / drawStack.viewLength;
+      pixelOffset = -genomicShift * canvasWidth / drawStack.getViewLength();
     }
     
     // Draw each variant type as overlaid bars
@@ -748,7 +748,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private void drawSvSpanBars(double top, double h) {
     java.util.List<SvSpan> spans = densitySvSpans;
-    double viewStart = drawStack.start, viewLen = drawStack.viewLength;
+    double viewStart = drawStack.getViewStart(), viewLen = drawStack.getViewLength();
     if (viewLen <= 0 || spans.isEmpty()) return;
     double barY = top + 1, barH = Math.max(2, h - 3), w = getWidth();
     for (SvSpan span : spans) {
@@ -869,9 +869,9 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     double masterOffset = sampleRegistry.getMasterTrackHeight();
     double sampleH      = sampleRegistry.getSampleHeight();
-    String chrom        = drawStack.chromosome;
-    int    start        = Math.max(0, (int) drawStack.start);
-    int    end          = (int) drawStack.end;
+    String chrom        = drawStack.getChromosome();
+    int    start        = Math.max(0, (int) drawStack.getViewStart());
+    int    end          = (int) drawStack.getViewEnd();
 
     // ── Draw variants at all zoom levels (before zoom checks) ──
     if (variantList != null && !variantList.isEmpty()) {
@@ -880,7 +880,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     }
 
     // ── Beyond coverage threshold: show zoom message or sampled coverage ──
-    if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) {
+    if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) {
       if (Settings.get().isEnableSampledCoverage()) {
         forEachVisibleSample(masterOffset, sampleH, (sampleY, sample) ->
             coverageDrawer.drawSampled(gc, sample, chrom, start, end,
@@ -893,7 +893,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     }
 
     // ── Normal zoom: per-base coverage + optional reads ──
-    boolean coverageOnly = drawStack.viewLength > Settings.get().getMaxReadViewLength();
+    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
     boolean freezeDuringNavigation = drawStack.nav.navigating
@@ -1115,7 +1115,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private BAMRecord findReadAt(double mx, double my) {
     if (sampleRegistry.getSampleTracks().isEmpty()) return null;
-    if (drawStack.viewLength > Settings.get().getMaxReadViewLength()) return null;
+    if (drawStack.getViewLength() > Settings.get().getMaxReadViewLength()) return null;
 
     double masterOffset      = sampleRegistry.getMasterTrackHeight();
     double sampleH           = sampleRegistry.getSampleHeight();
@@ -1167,7 +1167,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     CoverageHoverInfo coverageHover = findCoverageHoverInfo(lastMouseX, lastMouseY);
     boolean hasExternalLinkedRead = externalLinkedReadName != null && externalLinkedOwner != null;
 
-    if (drawStack.viewLength > Settings.get().getMaxReadViewLength()) {
+    if (drawStack.getViewLength() > Settings.get().getMaxReadViewLength()) {
       clearCrossStackTargetHighlight();
       MainController.releaseCrossStackMateArc(this);
       if (coverageHover != null) {
@@ -1261,7 +1261,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
           // SA-tag arcs: off-screen split parts on the same chromosome.
           if (selectedRead.saTag != null && !selectedRead.saTag.isEmpty()) {
-            String viewChrom = normalizeChrom(drawStack.chromosome != null ? drawStack.chromosome : "");
+            String viewChrom = normalizeChrom(drawStack.getChromosome() != null ? drawStack.getChromosome() : "");
             for (String saEntry : selectedRead.saTag.split(";")) {
               if (saEntry.isEmpty()) continue;
               String[] f = saEntry.split(",");
@@ -1271,8 +1271,8 @@ public class AlignmentCanvas extends GenomicCanvas {
               try { saPos = Integer.parseInt(f[1]); } catch (NumberFormatException e) { continue; }
               // Skip positions inside the current viewport — on-screen supplementary reads
               // are handled by the readName loop above with the correct row Y.
-              if (saPos >= drawStack.start && saPos <= drawStack.end) continue;
-              double saScreenX = (saPos - drawStack.start) * drawStack.pixelSize;
+              if (saPos >= drawStack.getViewStart() && saPos <= drawStack.getViewEnd()) continue;
+              double saScreenX = (saPos - drawStack.getViewStart()) * drawStack.getPixelSize();
               saScreenX = Math.max(4, Math.min(getWidth() - 4, saScreenX));
               drawDashedArc(selectedAnchorX, selectedMidY, saScreenX, selectedMidY, splitArcColor);
             }
@@ -1302,7 +1302,7 @@ public class AlignmentCanvas extends GenomicCanvas {
           }
 
           // Per-base tooltip for whichever read is under the cursor
-          if (lastMouseX >= 0 && drawStack.pixelSize >= 6) {
+          if (lastMouseX >= 0 && drawStack.getPixelSize() >= 6) {
             // Find screen Y of this read for the base highlight
             double readY = drawReads.calcReadScreenY(hoveredRead, layout.readsY(), layout.readsH(),
                 layout.readHeight(), layout.gap(), layout.butterfly(), layout.hp2Start(),
@@ -1349,15 +1349,15 @@ public class AlignmentCanvas extends GenomicCanvas {
     if (isScrollbarOverrideActive()) return null;
     if (mx < 0 || my < 0) return null;
     if (!coverageDrawer.hasData()) return null;
-    if (drawStack.viewLength > Settings.get().getMaxCoverageViewLength()) return null;
+    if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) return null;
 
-    int genomicPos = (int) Math.floor(drawStack.start + mx * drawStack.scale);
+    int genomicPos = (int) Math.floor(drawStack.getViewStart() + mx * drawStack.scale);
     int px = (int) Math.floor(chromPosToScreenPos.apply((double) genomicPos));
     if (px < 0 || px >= (int) Math.ceil(getWidth())) return null;
 
     double masterOffset = sampleRegistry.getMasterTrackHeight();
     double sampleH = sampleRegistry.getSampleHeight();
-    boolean coverageOnly = drawStack.viewLength > Settings.get().getMaxReadViewLength();
+    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
     double covH = coverageOnly ? sampleH : coverageFractionH;
@@ -1454,8 +1454,8 @@ public class AlignmentCanvas extends GenomicCanvas {
         : 0;
     double covBarH = Math.max(1.5, hover.coverage() * scale);
     double covBarTop = hover.coverageBottom() - covBarH;
-    double bw = Math.max(1.0, drawStack.pixelSize);
-    double bx = (hover.genomicPos() - drawStack.start) * drawStack.pixelSize;
+    double bw = Math.max(1.0, drawStack.getPixelSize());
+    double bx = (hover.genomicPos() - drawStack.getViewStart()) * drawStack.getPixelSize();
 
     reactiveGc.setStroke(Color.WHITE);
     reactiveGc.setLineWidth(1.3);
@@ -1467,7 +1467,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private void drawCoverageTooltip(CoverageHoverInfo hover, double mx, double my) {
     List<String> lines = new ArrayList<>();
-    String chrom = drawStack.chromosome != null ? drawStack.chromosome : "";
+    String chrom = drawStack.getChromosome() != null ? drawStack.getChromosome() : "";
     lines.add(chrom + ":" + hover.genomicPos() + " cov=" + (int) Math.round(hover.coverage()));
 
     // Determine active color mode and data type
@@ -1479,7 +1479,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     char refBase = '?';
     ReferenceGenomeService refSvc = ServiceRegistry.getInstance().getReferenceGenomeService();
     if (refSvc.hasGenome()) {
-      String ref = refSvc.getBases(drawStack.chromosome, hover.genomicPos(), hover.genomicPos());
+      String ref = refSvc.getBases(drawStack.getChromosome(), hover.genomicPos(), hover.genomicPos());
       if (ref != null && ref.length() == 1) {
         refBase = Character.toUpperCase(ref.charAt(0));
         lines.add("ref=" + refBase);
@@ -1690,8 +1690,8 @@ public class AlignmentCanvas extends GenomicCanvas {
         if (i == thisIdx) continue;
         DrawStack ds = stacks.get(i);
         if (ds == null || ds.alignmentCanvas == null) continue;
-        if (!normalizeChrom(ds.chromosome).equals(saChrom)) continue;
-        if (saPos < ds.start || saPos > ds.end) continue;
+        if (!normalizeChrom(ds.getChromosome()).equals(saChrom)) continue;
+        if (saPos < ds.getViewStart() || saPos > ds.getViewEnd()) continue;
         targetStack = ds;
         targetPos = saPos;
         break outer;
@@ -1719,7 +1719,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       targetX = targetAnchor.getX();
       targetY = targetAnchor.getY();
     } else {
-      targetX = (targetPos - targetStack.start) * targetStack.pixelSize;
+      targetX = (targetPos - targetStack.getViewStart()) * targetStack.getPixelSize();
       targetX = Math.max(2.0, Math.min(targetCanvas.getWidth() - 2.0, targetX));
       Point2D sourceScene = localToScene(x1, y1);
       if (sourceScene == null) return false;
@@ -1769,9 +1769,9 @@ public class AlignmentCanvas extends GenomicCanvas {
     for (int i = 0; i < stacks.size(); i++) {
       if (i == thisIdx) continue;
       DrawStack ds = stacks.get(i);
-      String dsChrom = normalizeChrom(ds.chromosome);
+      String dsChrom = normalizeChrom(ds.getChromosome());
       if (!dsChrom.equals(normalizeChrom(mateChrom))) continue;
-      if (selected.matePos >= ds.start && selected.matePos <= ds.end) {
+      if (selected.matePos >= ds.getViewStart() && selected.matePos <= ds.getViewEnd()) {
         targetIdx = i;
         targetStack = ds;
         break;
@@ -1798,7 +1798,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       targetX = targetAnchor.getX();
       targetY = targetAnchor.getY();
     } else {
-      targetX = (selected.matePos - targetStack.start) * targetStack.pixelSize;
+      targetX = (selected.matePos - targetStack.getViewStart()) * targetStack.getPixelSize();
       targetX = Math.max(2.0, Math.min(targetCanvas.getWidth() - 2.0, targetX));
       Point2D sourceScene = localToScene(x1, y1);
       if (sourceScene == null) return false;
@@ -1846,7 +1846,7 @@ public class AlignmentCanvas extends GenomicCanvas {
    */
   private String resolveMateChromName(BAMRecord read) {
     if (read.mateRefID < 0) return null;
-    if (read.mateRefID == read.refID) return drawStack.chromosome;
+    if (read.mateRefID == read.refID) return drawStack.getChromosome();
     for (SampleTrack track : sampleRegistry.getSampleTracks()) {
       for (Sample sample : track.getSamples()) {
         if (sample.getBamFile() == null) continue;
@@ -1865,10 +1865,10 @@ public class AlignmentCanvas extends GenomicCanvas {
    * Draw a bright highlight rectangle over the single base under the cursor.
    */
   private void drawBaseHighlight(BAMRecord read, double mx, double readY, double readH) {
-    int genomicPos = (int) (drawStack.start + mx * drawStack.scale);
+    int genomicPos = (int) (drawStack.getViewStart() + mx * drawStack.scale);
     if (genomicPos < read.pos || genomicPos >= read.end) return;
-    double bx = (genomicPos - drawStack.start) * drawStack.pixelSize;
-    double bw = Math.max(1, drawStack.pixelSize);
+    double bx = (genomicPos - drawStack.getViewStart()) * drawStack.getPixelSize();
+    double bw = Math.max(1, drawStack.getPixelSize());
     reactiveGc.setStroke(Color.WHITE);
     reactiveGc.setLineWidth(1.5);
     reactiveGc.strokeRect(bx, readY - 1, bw, readH + 2);
@@ -1882,7 +1882,7 @@ public class AlignmentCanvas extends GenomicCanvas {
    * or Phred quality score for STRAND.
    */
   private void drawBaseTooltip(BAMRecord read, double mx, double my, ReadColorMode mode) {
-    int genomicPos = (int) (drawStack.start + mx * drawStack.scale);
+    int genomicPos = (int) (drawStack.getViewStart() + mx * drawStack.scale);
     if (genomicPos < read.pos || genomicPos >= read.end) return;
 
     String label;
@@ -1974,7 +1974,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     if (altBase == 0) return null;
 
     if (!AnnotationData.isGenesLoaded()) return null;
-    List<Gene> genes = AnnotationData.getGenesByChrom().get(drawStack.chromosome);
+    List<Gene> genes = AnnotationData.getGenesByChrom().get(drawStack.getChromosome());
     if (genes == null) return null;
 
     ReferenceGenomeService refSvc = ServiceRegistry.getInstance().getReferenceGenomeService();
@@ -2051,7 +2051,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     }
     if (codonGenomicLow < regionStart || codonGenomicHigh > regionEnd) return null;
 
-    String refGenomic = refSvc.getBases(drawStack.chromosome, (int) codonGenomicLow, (int) codonGenomicHigh);
+    String refGenomic = refSvc.getBases(drawStack.getChromosome(), (int) codonGenomicLow, (int) codonGenomicHigh);
     if (refGenomic == null || refGenomic.length() != 3) return null;
 
     String refCodon, altCodon;

@@ -26,7 +26,6 @@ public class PositionIndicator {
    * @param height Canvas height
    */
   public static void draw(GraphicsContext gc, DrawStack drawStack, double width, double height) {
-    // Draw dark background bar for indicators
     gc.setFill(Color.rgb(30, 30, 30));
     gc.fillRect(0, height - 25, width, 25);
     
@@ -36,31 +35,29 @@ public class PositionIndicator {
     gc.setFont(AppFonts.getMonoFont(10));
     
     ReferenceGenomeService refService = ServiceRegistry.getInstance().getReferenceGenomeService();
-    boolean showingBases = drawStack.viewLength <= BASE_DISPLAY_THRESHOLD && refService.hasGenome();
+    boolean showingBases = drawStack.getViewLength() <= BASE_DISPLAY_THRESHOLD && refService.hasGenome();
     int lineHeight = showingBases ? 20 : 4;
     
-    // Draw indicator lines based on zoom level
-    if (drawStack.viewLength >= 40000000) {
+    if (drawStack.getViewLength() >= 40000000) {
       drawIndicatorLines(gc, drawStack, width, height, 20000000, "M", lineHeight, false);
-    } else if (drawStack.viewLength > 2000000) {
+    } else if (drawStack.getViewLength() > 2000000) {
       drawIndicatorLines(gc, drawStack, width, height, 2000000, "M", lineHeight, false);
-    } else if (drawStack.viewLength > 60000) {
+    } else if (drawStack.getViewLength() > 60000) {
       drawIndicatorLines(gc, drawStack, width, height, 100000, null, lineHeight, false);
-    } else if (drawStack.viewLength > 10000) {
+    } else if (drawStack.getViewLength() > 10000) {
       drawIndicatorLines(gc, drawStack, width, height, 10000, null, lineHeight, false);
-    } else if (drawStack.viewLength > 1000) {
+    } else if (drawStack.getViewLength() > 1000) {
       drawIndicatorLines(gc, drawStack, width, height, 1000, null, lineHeight, false);
     } else { 
       drawIndicatorLines(gc, drawStack, width, height, 100, null, lineHeight, false);
-      if (drawStack.viewLength < 100) {
+      if (drawStack.getViewLength() < 100) {
         drawIndicatorLines(gc, drawStack, width, height, 10, null, lineHeight, false);
         drawIndicatorLines(gc, drawStack, width, height, 1, null, lineHeight, true);
       }
     } 
     
-    // Show center position at high zoom
-    if (drawStack.viewLength < 200) {
-      double lineStart = width / 2 - drawStack.pixelSize / 2;
+    if (drawStack.getViewLength() < 200) {
+      double lineStart = width / 2 - drawStack.getPixelSize() / 2;
       String middlePosText = BaseUtils.formatNumber((int) drawStack.middlePos());
       gc.fillText(middlePosText, lineStart, height - lineHeight - 5);
     }
@@ -69,11 +66,11 @@ public class PositionIndicator {
   private static void drawIndicatorLines(GraphicsContext gc, DrawStack drawStack, 
       double width, double height, int scale, String postfix, int lineHeight, boolean skip) {
     
-    int startValue = (int) Math.round(drawStack.start / scale) * scale;
+    int startValue = (int) Math.round(drawStack.getViewStart() / scale) * scale;
     
     for (int i = startValue; i < drawStack.chromSize; i += scale) {
-      if (i < drawStack.start) continue;
-      if (i > drawStack.end) break;
+      if (i < drawStack.getViewStart()) continue;
+      if (i > drawStack.getViewEnd()) break;
       
       double linePos = chromPosToScreenPos(i, drawStack, width);
       
@@ -94,6 +91,6 @@ public class PositionIndicator {
   }
   
   private static double chromPosToScreenPos(double chromPos, DrawStack drawStack, double width) {
-    return ((chromPos - drawStack.start) / drawStack.viewLength) * width;
+    return ((chromPos - drawStack.getViewStart()) / drawStack.getViewLength()) * width;
   }
 }

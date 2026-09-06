@@ -267,7 +267,7 @@ public class VariantManagerDialog {
         }
         
         DrawStack firstStack = stackManager.getFirst();
-        String chrom = firstStack.chromosome;
+        String chrom = firstStack.getChromosome();
         if (chrom == null) {
             setPlaceholder("No chromosome currently displayed.");
             return;

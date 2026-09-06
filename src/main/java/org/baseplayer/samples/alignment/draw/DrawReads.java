@@ -36,7 +36,7 @@ class DrawReads {
 
   /** Primitive coordinate conversion — avoids Double autoboxing in hot loops. */
   private double toScreenX(double chromPos) {
-    return (chromPos - drawStack.start) * drawStack.pixelSize;
+    return (chromPos - drawStack.getViewStart()) * drawStack.getPixelSize();
   }
 
   // ── Status messages ──────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ class DrawReads {
       } else if (colorMode == ReadColorMode.BASE_QUALITY && read.qualities != null && read.qualities.length > 0) {
         drawBaseQualityRead(gc, read, read.qualities, drawY, drawH, readHeight, canvasWidth);
       } else {
-        Color[] colors = pickColors(read, fwdFill, revFill, fwdStroke, revStroke, drawStack.chromosome);
+        Color[] colors = pickColors(read, fwdFill, revFill, fwdStroke, revStroke, drawStack.getChromosome());
         gc.setFill(colors[0]);
         gc.setStroke(colors[1]);
 
@@ -172,7 +172,7 @@ class DrawReads {
       }
 
       MismatchRenderer.drawMismatches(gc, read.mismatches, drawY, drawH, canvasWidth,
-          drawStack.start, drawStack.pixelSize, isMethylData, read.isReverseStrand(),
+          drawStack.getViewStart(), drawStack.getPixelSize(), isMethylData, read.isReverseStrand(),
           signalMode && read.signalTag != null, colorMode == ReadColorMode.BASE_QUALITY,
           colorMode == ReadColorMode.BASE_QUALITY || colorMode == ReadColorMode.BASE_MODIFICATION);
 
@@ -582,7 +582,7 @@ class DrawReads {
 
     // Pixel step: at zoom levels where each base is sub-pixel, skip forward so
     // we draw ~1 sample per pixel instead of per base.
-    double pixelSize = drawStack.pixelSize;
+    double pixelSize = drawStack.getPixelSize();
     int baseStep = pixelSize >= 1.0 ? 1 : (int) Math.max(1, Math.ceil(1.0 / pixelSize));
 
     // Run-merging state (accumulated same-color fillRect).
@@ -696,7 +696,7 @@ class DrawReads {
     int refPos = read.pos;
     int readIdx = 0;
 
-    double pixelSize = drawStack.pixelSize;
+    double pixelSize = drawStack.getPixelSize();
     int baseStep = pixelSize >= 1.0 ? 1 : (int) Math.max(1, Math.ceil(1.0 / pixelSize));
 
     Color runColor = null;

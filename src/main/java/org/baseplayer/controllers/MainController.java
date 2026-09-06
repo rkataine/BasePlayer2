@@ -4,7 +4,7 @@ import java.util.List;
 
 import org.baseplayer.components.sidebars.FeatureTracksSidebar;
 import org.baseplayer.components.sidebars.GenomeSidebar;
-import org.baseplayer.components.sidebars.SampleSidebar;
+import org.baseplayer.components.sidebars.MasterTrackSidebar;
 import org.baseplayer.components.sidebars.SidebarController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
@@ -19,6 +19,8 @@ import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.fxml.FXML;
 import javafx.geometry.Point2D;
+import javafx.geometry.Pos;
+import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
@@ -48,7 +50,7 @@ public class MainController {
   public static SplitPane drawPane;
   public static SplitPane featureTracksContentPane;
   private FeatureTracksSidebar featureTracksSidebar;
-  SampleSidebar sidebarPanel;
+  static MasterTrackSidebar sidebarPanel;
 
   public static boolean dividerHovered;
   public static boolean isActive = false;
@@ -88,7 +90,12 @@ public class MainController {
       chromSplitPane = chromosomeSplitPane;
       drawPane = alignmentSplitPane;
       featureTracksContentPane = featureTracksContentSplit;
-      sidebarPanel = new SampleSidebar(drawSideBarStackPane);
+      
+      // Set the main viewport StackPane in DrawStackManager EARLY, before creating sidebar
+      // This makes it available to overlay components like LoadRegionButton
+      stackManager.setAlignmentOverlayPane(alignmentOverlayPane);
+      
+      sidebarPanel = new MasterTrackSidebar(drawSideBarStackPane);
       eventCoordinator.setSidebarPanel(sidebarPanel);
       new GenomeSidebar(genomeSideBarPane, initializationService);
       
@@ -182,6 +189,28 @@ public class MainController {
   public static void clearCrossStackMateArc() {
     crossStackOverlayOwner = null;
     clearCrossStackOverlay();
+  }
+
+  public static void addLoadRegionButtonToViewport() {
+    StackPane overlayPane = stackManager.getAlignmentOverlayPane();
+    if (overlayPane == null) {
+      return;
+    }
+    
+    if (sidebarPanel == null || sidebarPanel.masterTrack == null || sidebarPanel.masterTrack.loadRegionButton == null) {
+      return;
+    }
+    
+    org.baseplayer.components.LoadRegionButton button = sidebarPanel.masterTrack.loadRegionButton;
+    // Remove if already added
+    if (overlayPane.getChildren().contains(button)) {
+      return;
+    }
+    
+    // Add to viewport overlay - position below legends on the left
+    overlayPane.getChildren().add(button);
+    StackPane.setAlignment(button, Pos.TOP_LEFT);
+    StackPane.setMargin(button, new Insets(90, 0, 0, 4));  // 90px from top to place below legends
   }
 
   public static boolean drawCrossStackMateArc(Object owner,
@@ -569,5 +598,11 @@ public class MainController {
   public static org.baseplayer.features.FeatureTracksCanvas getFeatureTracksCanvas() {
     if (drawStacks.isEmpty()) return null;
     return drawStacks.get(0).featureTracksCanvas;
+  }
+
+  public static void initializeLoadRegionButton() {
+    if (sidebarPanel != null && sidebarPanel.masterTrack != null) {
+      sidebarPanel.masterTrack.initializeLoadRegionButton();
+    }
   }
 }

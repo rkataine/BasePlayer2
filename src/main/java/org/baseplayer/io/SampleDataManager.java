@@ -106,6 +106,9 @@ public class SampleDataManager {
               sampleRegistry.setSampleHeight(0);
             }
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
+            
+            org.baseplayer.controllers.MainController.initializeLoadRegionButton();
+            org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
         });
 
     return addedSamples;
@@ -475,10 +478,6 @@ public class SampleDataManager {
     
 
     
-    // Suppress variant loading until all tracks are registered
-    VcfManager.getInstance().setSuppressVariantLoading(true);
-
-    // Single ThreadRunner task that wraps the entire batch load to prevent modal flashing
     final int totalFiles = files.size();
     ThreadRunner.get().submit(
         "Loading VCF files",
@@ -486,7 +485,7 @@ public class SampleDataManager {
         try {
           return loadVcfFilesBatchWithProgress(files, totalFiles);
         } finally {
-          VcfManager.getInstance().setSuppressVariantLoading(false);
+          //VcfManager.getInstance().setSuppressVariantLoading(false);
         }
       },
         result -> {
@@ -496,20 +495,15 @@ public class SampleDataManager {
             Platform.runLater(() -> {
               VcfManager.getInstance().loadVariantsForCurrentView();
               VcfManager.getInstance().autoOpenVariantManager();
+              
+              // Initialize LoadRegionButton listener and add to viewport
+              org.baseplayer.controllers.MainController.initializeLoadRegionButton();
+              org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
             });
         }
     );
   }
   
-  /**
-   * Load all files in the batch sequentially on the background thread.
-   * Fires canvas updates after each file for progressive track appearance.
-   * Called from within a single ThreadRunner.submit() task.
-   * 
-   * Separation of concerns:
-   * - Background thread: Opens VCF, parses header, creates VariantLoader
-   * - FX thread: Creates SampleTrack objects, updates registry, fires canvas update
-   */
   private static Void loadVcfFilesBatchWithProgress(List<File> files, int totalFiles) {
     for (int index = 0; index < files.size(); index++) {
       if (Thread.currentThread().isInterrupted()) {
@@ -522,12 +516,10 @@ public class SampleDataManager {
         continue;
       }
 
-      // Skip files that are already loaded to avoid duplicate sample/variant loading.
       if (VcfManager.getInstance().isVcfFileLoaded(file)) {
         continue;
       }
       
-      // Update progress bar
       final int currentIndex = index + 1;
       org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
       
@@ -549,14 +541,7 @@ public class SampleDataManager {
     
     return null;
   }
-  /**
-   * Load a single VCF file synchronously (on the calling thread, which is a ThreadRunner background thread).
-   * This is a blocking operation that:
-   * 1. Parses the VCF header on background thread
-   * 2. Pushes sample track registration to FX thread
-   * 3. Closes reader to free VCFHeader memory
-   * 4. Fires canvas update to progressively display tracks
-   */
+
   private static void loadVcfFileSynchronously(File file) throws IOException {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
@@ -570,10 +555,8 @@ public class SampleDataManager {
     VcfReader reader = new VcfReader(vcfPath);
     VariantLoader loader = new VariantLoader(reader);
     
-    // Parse header and prepare sample mappings on background thread
     List<String> unmappedSamples = loader.getUnmappedSamples();
     
-    // Register the VCF in VcfManager and get the VcfData reference
     VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
     if (vcfData == null) {
       try { reader.close(); } catch (IOException ignored) {}
@@ -625,13 +608,10 @@ public class SampleDataManager {
     VcfManager.getInstance().loadVcfFile(file);
   }
 
-  /** Remove all samples, tracks, and VCF data — restores initial empty state. */
   public static void clearAllData() {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
 
-    // Hard reset: stop all active background tasks immediately.
     ThreadRunner.get().cancelAll();
-    VcfManager.getInstance().setSuppressVariantLoading(false);
 
     for (var track : new ArrayList<>(registry.getSampleTracks())) {
       try { track.close(); } catch (IOException e) {
@@ -641,14 +621,13 @@ public class SampleDataManager {
     registry.getSampleTracks().clear();
     registry.getSampleList().clear();
     
-    // Reset all visibility and UI state to empty
     registry.clearActiveSampleFilterQuery();
     registry.setFirstVisibleSample(-1);
     registry.setLastVisibleSample(-1);
     registry.setScrollBarPosition(0);
     registry.setSampleHeight(0);
     registry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
-    registry.setHoverSample(-1);  // Clear any hover state
+    registry.setHoverSample(-1);
 
     VcfManager.getInstance().closeCurrentVcf();
 

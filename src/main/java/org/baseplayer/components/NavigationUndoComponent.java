@@ -2,7 +2,6 @@ package org.baseplayer.components;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.Objects;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.services.DrawStackManager;
@@ -107,7 +106,7 @@ public class NavigationUndoComponent {
       stack = stackManager.getFirst();
     }
     if (stack == null) return null;
-    return new NavigationLocation(stack.chromosome, stack.start, stack.end);
+    return new NavigationLocation(stack.getChromosome(), stack.getViewStart(), stack.getViewEnd());
   }
 
   private void undoNavigation() {
@@ -155,9 +154,9 @@ public class NavigationUndoComponent {
     }
     if (stack == null) return;
 
-    if (!Objects.equals(location.chromosome(), stack.chromosome)) {
-      stack.switchToChromosome(location.chromosome());
-    }
-    stack.alignmentCanvas.zoomAnimation(location.start(), location.end());
+    stack.navigateTo(location.chromosome(), location.start(), location.end());
+    // Explicitly load variants for the navigated region
+    org.baseplayer.io.VcfManager.getInstance().loadRegionVariants(
+        location.chromosome(), (long)location.start(), (long)location.end());
   }
 }

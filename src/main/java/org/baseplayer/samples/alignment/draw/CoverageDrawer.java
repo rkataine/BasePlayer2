@@ -137,10 +137,10 @@ public class CoverageDrawer {
 
     if (sampleRegistry.getSampleTracks().isEmpty()) { rows = new SampleRow[0]; return; }
 
-    String chrom = drawStack.chromosome;
-    int start = Math.max(0, (int) drawStack.start);
-    int end = (int) drawStack.end;
-    boolean coverageOnly = drawStack.viewLength > Settings.get().getMaxReadViewLength();
+    String chrom = drawStack.getChromosome();
+    int start = Math.max(0, (int) drawStack.getViewStart());
+    int end = (int) drawStack.getViewEnd();
+    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
     boolean isHoverStack = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
 
     // Count visible methylation samples for color assignment
@@ -463,11 +463,11 @@ public class CoverageDrawer {
       }
 
       // At close zoom (high pixelSize), fill gaps between mapped positions
-      if (drawStack.pixelSize > 1.5) {
+      if (drawStack.getPixelSize() > 1.5) {
         for (int p = 0; p < numColumns - 1; p++) {
           if (row.methylRatio[p] >= 0) {
             int nextValid = -1;
-            for (int j = p + 1; j < Math.min(p + (int)(drawStack.pixelSize * 2), numColumns); j++) {
+            for (int j = p + 1; j < Math.min(p + (int)(drawStack.getPixelSize() * 2), numColumns); j++) {
               if (row.methylRatio[j] >= 0) { nextValid = j; break; }
             }
             if (nextValid > p + 1) {
@@ -581,11 +581,11 @@ public class CoverageDrawer {
       }
       
       // Fill gaps between mapped bins if needed
-      if (drawStack.pixelSize > 1.5) {
+      if (drawStack.getPixelSize() > 1.5) {
         for (int p = 0; p < numColumns - 1; p++) {
           if (row.methylRatio[p] >= 0) {
             int nextValid = -1;
-            for (int j = p + 1; j < Math.min(p + (int)(drawStack.pixelSize * 2), numColumns); j++) {
+            for (int j = p + 1; j < Math.min(p + (int)(drawStack.getPixelSize() * 2), numColumns); j++) {
               if (row.methylRatio[j] >= 0) {
                 nextValid = j;
                 break;
@@ -659,7 +659,7 @@ public class CoverageDrawer {
       double covH = coverageOnly ? sampleHeight : coverageFractionH;
       double yBottom = sampleY + covH - 1;
       double scale = row.maxCoverage > 0 ? (covH - 14) / row.maxCoverage : 0;
-      double barW = Math.max(1, drawStack.pixelSize);
+      double barW = Math.max(1, drawStack.getPixelSize());
 
       // Draw coverage fill — always 1px wide to prevent overdraw at close zoom
       gc.setFill(DrawColors.COVERAGE_FILL);
@@ -779,7 +779,7 @@ public class CoverageDrawer {
         double methylTop = sampleY + 2;
         double methylBottom = sampleY + covH - 2;
         double methylH = methylBottom - methylTop;
-        double baseOffset = coverageOnly ? 0 : drawStack.pixelSize / 2.0;
+        double baseOffset = coverageOnly ? 0 : drawStack.getPixelSize() / 2.0;
 
         gc.setStroke(DrawColors.METHYL_LINE);
         gc.setLineWidth(1.5);
@@ -855,11 +855,11 @@ public class CoverageDrawer {
   private void drawBedSamples(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
                               double sampleHeight, double scrollBarPosition,
                               double coverageFractionH) {
-    if (drawStack == null || drawStack.chromosome == null) return;
+    if (drawStack == null || drawStack.getChromosome() == null) return;
 
-    String chrom = drawStack.chromosome;
-    double viewStart = drawStack.start;
-    double viewEnd = drawStack.end;
+    String chrom = drawStack.getChromosome();
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
 
      java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
      for (int slot = sampleRegistry.getFirstVisibleSample();

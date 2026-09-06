@@ -547,6 +547,7 @@ public class GenomicCanvas extends Canvas {
     drawStack.viewLength = end - start;
     drawStack.pixelSize = getWidth() / drawStack.viewLength;
     drawStack.scale = drawStack.viewLength / getWidth();
+    drawStack.setRegion(drawStack.chromosome, start.longValue(), (long) end);
     update.set(!update.get());
   }
 

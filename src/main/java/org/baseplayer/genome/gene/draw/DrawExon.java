@@ -34,40 +34,27 @@ import javafx.scene.text.TextAlignment;
  * after {@code drawExonRegion} calls complete to support click / hover detection.
  */
 class DrawExon {
-
-  // ── Shared geometry constants (also used by DrawGene and ChromosomeCanvas) ──
   static final double GENE_HEIGHT = 12;
   static final double GENE_LABEL_HEIGHT = 10;
 
-  // ── Reference-base display thresholds ──
   static final int BASE_DISPLAY_THRESHOLD = 100_000;
   private static final int REFERENCE_BUFFER = 50_000;
 
-  // ── Reference-base cache ──
   String cachedBases = "";
   int cachedStart = 0;
   int cachedEnd = 0;
   String cachedChromosome = "";
 
-  // ── Async loading state ──
   private final AtomicBoolean isLoadingBases = new AtomicBoolean(false);
   private volatile int pendingFetchStart = -1;
   private volatile int pendingFetchEnd = -1;
   private volatile String pendingFetchChrom = "";
 
-  // ── Owned state ──
   private final GraphicsContext gc;
   final DrawStack drawStack;
   private final ReferenceGenomeService referenceGenomeService;
 
-  /** Amino-acid hit boxes rebuilt each frame. Read by ChromosomeCanvas for mouse events. */
   final List<AminoAcidHitBox> hitBoxes = new ArrayList<>();
-
-  // ── Cached gradients ─────────────────────────────────────────────────────────
-  // LinearGradient and Stop are immutable; allocating fresh ones per exon per
-  // frame was a major source of GC pressure. We cache by exon color (a handful
-  // of distinct values) and reuse them; gradients use proportional coordinates
-  // so they scale correctly to the exon's bounding box regardless of row.
 
   private static final javafx.scene.paint.LinearGradient EXON_OVERLAY_GRADIENT =
       new javafx.scene.paint.LinearGradient(
@@ -92,8 +79,6 @@ class DrawExon {
     });
   }
 
-  // ────────────────────────────────────────────────────────────────────────────
-
   DrawExon(GraphicsContext gc, DrawStack drawStack, ReferenceGenomeService referenceGenomeService) {
     this.gc = gc;
     this.drawStack = drawStack;
@@ -104,12 +89,6 @@ class DrawExon {
     hitBoxes.clear();
   }
 
-  /**
-   * Draws one contiguous exon (or UTR) region.
-   * Delegates to amino-acid, property-color, or solid-gradient rendering depending on zoom.
-   * 
-   * Attempts to use cached CDS sequences for amino-acid rendering to avoid FASTA fetches.
-   */
   void drawExonRegion(long regionStart, long regionEnd, double viewStart, double viewLength,
                       double canvasWidth, double rowY, Color color,
                       boolean showAminoAcids, boolean showPropertyColors,
@@ -276,14 +255,14 @@ class DrawExon {
    * @param canvasHeight height of the gene canvas, used to position the track
    */
   void drawReferenceBases(double canvasWidth, double canvasHeight) {
-    if (drawStack.viewLength > BASE_DISPLAY_THRESHOLD) return;
+    if (drawStack.getViewLength() > BASE_DISPLAY_THRESHOLD) return;
     if (!referenceGenomeService.hasGenome()) return;
 
     if (drawStack.nav.animationRunning || CytobandCanvas.isDragging) return;
 
-    int    viewStart    = (int) drawStack.start;
-    int    viewEnd      = (int) drawStack.end;
-    String currentChrom = drawStack.chromosome;
+    int    viewStart    = (int) drawStack.getViewStart();
+    int    viewEnd      = (int) drawStack.getViewEnd();
+    String currentChrom = drawStack.getChromosome();
 
     boolean needsFetch = cachedBases.isEmpty()
         || !currentChrom.equals(cachedChromosome)
@@ -337,14 +316,14 @@ class DrawExon {
     double baseHeight = 8;
     double yPos       = canvasHeight - baseHeight - 2;
 
-    boolean drawLetters = drawStack.viewLength < 200;
+    boolean drawLetters = drawStack.getViewLength() < 200;
 
     if (drawLetters) {
-      gc.setFont(AppFonts.getMonoFont(Math.min(12, drawStack.pixelSize * 0.8)));
+      gc.setFont(AppFonts.getMonoFont(Math.min(12, drawStack.getPixelSize() * 0.8)));
       gc.setTextAlign(TextAlignment.CENTER);
     }
 
-    int    step        = Math.max(1, (int) Math.ceil(1.0 / drawStack.pixelSize));
+    int    step        = Math.max(1, (int) Math.ceil(1.0 / drawStack.getPixelSize()));
     double lastDrawnX  = -1;
 
     for (int chromPos = viewStart; chromPos <= viewEnd; chromPos += step) {
@@ -352,7 +331,7 @@ class DrawExon {
       if (cacheIndex < 0 || cacheIndex >= cachedBases.length()) continue;
 
       char   base    = cachedBases.charAt(cacheIndex);
-      double xPos    = ((chromPos - drawStack.start) / drawStack.viewLength) * canvasWidth;
+      double xPos    = ((chromPos - drawStack.getViewStart()) / drawStack.getViewLength()) * canvasWidth;
 
       if (!drawLetters && Math.floor(xPos) == Math.floor(lastDrawnX)) continue;
       lastDrawnX = xPos;
@@ -360,7 +339,7 @@ class DrawExon {
       gc.setFill(BaseColors.getBaseColor(base));
 
       if (drawLetters) {
-        gc.fillText(String.valueOf(base), xPos + drawStack.pixelSize / 2, yPos + baseHeight - 3);
+        gc.fillText(String.valueOf(base), xPos + drawStack.getPixelSize() / 2, yPos + baseHeight - 3);
       } else {
         gc.fillRect(Math.floor(xPos), yPos, 1, baseHeight);
       }

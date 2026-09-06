@@ -113,7 +113,7 @@ public class MenuBarController {
     AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
       DrawStack hoverStack = stackManager.getHoverStack();
       if(hoverStack == null) return;
-      String chrom = hoverStack.chromosome != null ? hoverStack.chromosome : "1";
+      String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
       String chromDisplay = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
       chromosomeLabel.setText(chromDisplay + ":");
       if (!isEditingPositionField()) {
@@ -250,7 +250,7 @@ public class MenuBarController {
   private void syncPositionFieldFromHoverStack() {
     DrawStack hoverStack = stackManager.getHoverStack();
     if (hoverStack == null || positionField == null) return;
-    positionField.setText((int) hoverStack.start + "-" + (int) (hoverStack.end - 1));
+    positionField.setText((int) hoverStack.getViewStart() + "-" + (int) (hoverStack.getViewEnd() - 1));
   }
 
   private void navigateFromPositionField() {
@@ -340,9 +340,9 @@ public class MenuBarController {
     DrawStack hoverStack = stackManager.getHoverStack();
     if (hoverStack == null) return;
 
-    String chrom = hoverStack.chromosome != null ? hoverStack.chromosome : "1";
+    String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
     String withChr = chrom.regionMatches(true, 0, "chr", 0, 3) ? chrom : "chr" + chrom;
-    String locus = withChr + ":" + (int) hoverStack.start + "-" + (int) (hoverStack.end - 1);
+    String locus = withChr + ":" + (int) hoverStack.getViewStart() + "-" + (int) (hoverStack.getViewEnd() - 1);
 
     ClipboardContent content = new ClipboardContent();
     content.putString(locus);
@@ -460,12 +460,12 @@ public class MenuBarController {
     var stack = stackManager.getHoverStack();
     
     // Check if can zoom in (not already at minimum zoom)
-    boolean canZoomIn = stack.viewLength > GenomicCanvas.minZoom * 1.1;
+    boolean canZoomIn = stack.getViewLength() > GenomicCanvas.minZoom * 1.1;
     zoomInIcon.setIconColor(canZoomIn ? ZOOM_IN_ACTIVE : ZOOM_DISABLED);
     zoomInButton.setDisable(!canZoomIn);
     
     // Check if can zoom out (not already showing full chromosome)
-    boolean canZoomOut = stack.viewLength < stack.chromSize * 0.99;
+    boolean canZoomOut = stack.getViewLength() < stack.chromSize * 0.99;
     zoomOutIcon.setIconColor(canZoomOut ? ZOOM_OUT_ACTIVE : ZOOM_DISABLED);
     zoomOutButton.setDisable(!canZoomOut);
   }
@@ -524,7 +524,7 @@ public class MenuBarController {
   private void updateViewLengthLabel() {
     if (stackManager.getHoverStack() == null || viewLengthLabel == null) return;
     
-    long viewLength = (long) stackManager.getHoverStack().viewLength;
+    long viewLength = (long) stackManager.getHoverStack().getViewLength();
     viewLengthLabel.setText(formatViewLength(viewLength));
   }
   

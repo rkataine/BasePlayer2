@@ -1,6 +1,7 @@
 package org.baseplayer.components.sidebars;
 
 import org.baseplayer.components.MasterTrackCanvas;
+import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.samples.Sample;
@@ -12,14 +13,12 @@ import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.utils.DrawColors;
 
-import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.Cursor;
@@ -962,7 +961,7 @@ public class SampleListPanel extends SidebarContentPanel {
       colorCombo.getItems().setAll(primaryBam.getAvailableColorModes());
       colorCombo.setValue(primaryBam.getReadColorMode());
       colorCombo.setPrefWidth(190);
-      styleDarkComboBox(colorCombo, settingsMenu);
+      PopupComboBoxStyler.styleDarkComboBox(colorCombo, settingsMenu);
       colorCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
         if (newMode == null) return;
         for (Sample s : track.getSamples()) {
@@ -980,7 +979,7 @@ public class SampleListPanel extends SidebarContentPanel {
       stackCombo.getItems().setAll(AlignmentFile.ReadStackingMode.values());
       stackCombo.setValue(primaryBam.getReadStackingMode());
       stackCombo.setPrefWidth(190);
-      styleDarkComboBox(stackCombo, settingsMenu);
+      PopupComboBoxStyler.styleDarkComboBox(stackCombo, settingsMenu);
       stackCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
         if (newMode == null) return;
         for (Sample s : track.getSamples()) {
@@ -1011,45 +1010,6 @@ public class SampleListPanel extends SidebarContentPanel {
     }
 
     settingsMenu.show(canvas, screenX, screenY);
-  }
-
-  private static <T> void styleDarkComboBox(ComboBox<T> comboBox, ContextMenu parentMenu) {
-    comboBox.setStyle(
-        "-fx-background-color: #333333;"
-            + "-fx-control-inner-background: #333333;"
-            + "-fx-text-fill: #dddddd;"
-            + "-fx-prompt-text-fill: #bbbbbb;"
-            + "-fx-mark-color: #dddddd;");
-
-    comboBox.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
-      parentMenu.setAutoHide(false);
-      if (!comboBox.isShowing()) {
-        comboBox.show();
-      }
-      e.consume();
-    });
-    comboBox.setOnShowing(e -> parentMenu.setAutoHide(false));
-    comboBox.setOnHidden(e -> javafx.application.Platform.runLater(() -> parentMenu.setAutoHide(true)));
-    comboBox.addEventFilter(ActionEvent.ACTION, ActionEvent::consume);
-
-    comboBox.setButtonCell(createDarkComboCell());
-    comboBox.setCellFactory(listView -> createDarkComboCell());
-  }
-
-  private static <T> ListCell<T> createDarkComboCell() {
-    return new ListCell<>() {
-      @Override
-      protected void updateItem(T item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty || item == null) {
-          setText(null);
-          setStyle("-fx-text-fill: #dddddd;");
-          return;
-        }
-        setText(item.toString());
-        setStyle("-fx-text-fill: #dddddd;");
-      }
-    };
   }
 
   private void showAddFileMenu(int sampleIdx, double screenX, double screenY) {

@@ -105,9 +105,8 @@ public class VariantDrawer {
             return;
         }
         
-        // Find first variant in screen range
-        long screenStart = Math.max(0, (long) drawStack.start);
-        long screenEnd = (long) drawStack.end;
+        long screenStart = Math.max(0, (long) drawStack.getViewStart());
+        long screenEnd = (long) drawStack.getViewEnd();
         
         // For SVs with spans, we need to start earlier to catch variants that start before
         // the screen but span into it. Use a generous lookback (e.g., 10x view length).

@@ -34,18 +34,14 @@ public class ChromosomeCanvas extends GenomicCanvas {
   private final GraphicsContext gc;
   private final ReferenceGenomeService referenceGenomeService;
 
-  // ── Drawing helpers ──────────────────────────────────────────────────────────
   private final DrawExon drawExon;
   private final DrawGene drawGene;
 
-  // ── Gene stacking algorithm ──────────────────────────────────────────────────
   private final StackingAlgorithm<Gene> geneStacker;
 
-  // ── Gene display settings ────────────────────────────────────────────────────
   private boolean showManeOnly = true;
   private final Set<String> expandedGeneIds = new HashSet<>();
 
-  // ── Hover / click state ──────────────────────────────────────────────────────
   private final GeneInfoPopup genePopup = new GeneInfoPopup();
   private final AminoAcidPopup aminoAcidPopup = new AminoAcidPopup();
   private Gene hoveredGene = null;
@@ -99,9 +95,9 @@ public class ChromosomeCanvas extends GenomicCanvas {
         clearSelectedGeneHighlight();
         aminoAcidPopup.hide();
         double mouseX = event.getX();
-        double genomicPos = drawStack.start + (mouseX / getWidth()) * drawStack.viewLength;
+        double genomicPos = drawStack.getViewStart() + (mouseX / getWidth()) * drawStack.getViewLength();
         
-        double newViewLength = drawStack.viewLength * 0.1;
+        double newViewLength = drawStack.getViewLength() * 0.1;
         double newStart = genomicPos - newViewLength / 2;
         double newEnd = genomicPos + newViewLength / 2;
         
@@ -112,7 +108,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
         double screenX = event.getScreenX();
         double screenY = event.getScreenY();
         
-        // Get window owner for popups
         Window owner = null;
         if (getScene() != null) {
           owner = getScene().getWindow();
@@ -151,9 +146,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
       }
     });
     
-    // Mouse move for hover effect — minimize processing, only search when hover state changes
     reactiveCanvas.setOnMouseMoved(event -> {
-      // Suppress all hover while any drag (local or global) is active
       if (isDragging()) {
         clearHover();
         return;
@@ -161,14 +154,11 @@ public class ChromosomeCanvas extends GenomicCanvas {
 
       double mouseX = event.getX();
       double mouseY = event.getY();
-      double viewLength = drawStack.viewLength;
+      double viewLength = drawStack.getViewLength();
       
-      // Only search for amino acids when zoomed in very close (< 500 bp)
       boolean canShowAminoAcids = viewLength < 500;
 
-      // First check: is the mouse still over the last hit object? If so, skip expensive search
       if (lastHitAminoAcid != null && canShowAminoAcids && lastHitAminoAcid.contains(mouseX, mouseY)) {
-        // Still hovering the same amino acid, no update needed
         return;
       }
       
@@ -176,45 +166,36 @@ public class ChromosomeCanvas extends GenomicCanvas {
       if (lastHitGene != null) {
         geneHitBox = findGeneHitAt(mouseX, mouseY);
         if (geneHitBox != null && geneHitBox.gene() == lastHitGene) {
-          // Still hovering the same gene, no update needed
           return;
         }
       }
 
-      // Expensive search: check for amino acid (only if zoomed in) and gene at mouse position
       DrawExon.AminoAcidHitBox aaAtMouse = canShowAminoAcids ? findAminoAcidAt(mouseX, mouseY) : null;
       Gene geneAtMouse = (geneHitBox != null) ? geneHitBox.gene() : findGeneAt(mouseX, mouseY);
 
-      // When zoomed to amino-acid level, suppress gene-level hover entirely
       if (canShowAminoAcids) {
         geneAtMouse = null;
       }
 
-      // Only update and redraw if hover state actually changed
       boolean aaChanged = aaAtMouse != hoveredAminoAcid;
       boolean geneChanged = geneAtMouse != hoveredGene;
 
       if (!aaChanged && !geneChanged) {
-        // Both same, no action needed
         return;
       }
 
-      // Update hover state and cache
       hoveredAminoAcid = aaAtMouse;
       hoveredGene = geneAtMouse;
       lastHitAminoAcid = aaAtMouse;
       lastHitGene = geneAtMouse;
 
-      // Update cursor and redraw reactive canvas only if hover changed
       reactiveCanvas.setCursor((hoveredAminoAcid != null || hoveredGene != null) ? Cursor.HAND : Cursor.DEFAULT);
       drawReactive();
     });
     
-    // Clear hover when mouse exits
     reactiveCanvas.setOnMouseExited(event -> clearHover());
   }
   
-  /** Clears hover state and resets the cursor, triggering a redraw if needed. */
   private void clearHover() {
     if (hoveredGene != null || hoveredAminoAcid != null) {
       hoveredGene = null;
@@ -348,11 +329,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
     return showManeOnly;
   }
 
-  /**
-   * Draw hover highlight on the reactive canvas
-   */
   private void drawReactive() {
-    // Clear the reactive canvas
     reactiveGc.clearRect(0, 0, getWidth(), getHeight());
 
     DrawGene.GeneHitBox selectedHit = findSelectedGeneHitBox();
@@ -360,7 +337,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
       drawGeneHitHighlight(selectedHit, Color.rgb(255, 220, 150, 0.95));
     }
 
-    double viewLength = drawStack.viewLength;
+    double viewLength = drawStack.getViewLength();
     if (hoveredAminoAcid != null && viewLength < 500) {
       drawAminoAcidHighlight();
       return;
@@ -380,8 +357,8 @@ public class ChromosomeCanvas extends GenomicCanvas {
     if (gene == null) return;
 
     List<long[]> exonsToShow = gene.getDisplayExons(useManeOnlyForGene());
-    double viewStart = drawStack.start;
-    double viewLength = drawStack.viewLength;
+    double viewStart = drawStack.getViewStart();
+    double viewLength = drawStack.getViewLength();
     double canvasWidth = getWidth();
 
     long bodyStart = gene.start();
@@ -440,9 +417,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
     reactiveGc.fillText(gene.name(), labelX, rowY + DrawExon.GENE_LABEL_HEIGHT - 2);
   }
   
-  /**
-   * Draw highlight for hovered amino acid (codon) only
-   */
   private void drawAminoAcidHighlight() {
     if (hoveredAminoAcid == null) return;
     
@@ -452,7 +426,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
     double codonWidth = cx2 - cx1;
     double ovalHeight = DrawExon.GENE_HEIGHT - 2;
     
-    // Draw white oval highlight around the codon
     reactiveGc.setStroke(Color.WHITE);
     reactiveGc.setLineWidth(2);
     reactiveGc.strokeOval(cx1 - 1, cy1, codonWidth + 2, ovalHeight + 2);
@@ -464,7 +437,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
     gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth(), getHeight());
     
-    // Clear hover state on redraw — but preserve reactive canvas during line zoom drag
     hoveredGene = null;
     hoveredAminoAcid = null;
     if (!isDragging()) {
@@ -483,21 +455,18 @@ public class ChromosomeCanvas extends GenomicCanvas {
   @Override
   protected void handleScroll(ScrollEvent event) {
     if (event.isControlDown()) {
-      // Ctrl+scroll = zoom (consume to prevent ScrollPane from scrolling)
       event.consume();
       zoom(event.getDeltaY(), event.getX());
     } else if (event.getDeltaX() != 0) {
-      // Horizontal scroll = pan genomic position (consume)
       event.consume();
       double scrollMultiplier = 0.3;
       double genomeDelta = event.getDeltaX() * scrollMultiplier * drawStack.scale;
-      setStart(drawStack.start - genomeDelta);
+      setStart(drawStack.getViewStart() - genomeDelta);
     }
-    // Vertical scroll without Ctrl: do NOT consume — let ScrollPane handle it
   }
 
   void drawGenes() {
-    String currentChrom = drawStack.chromosome;
+    String currentChrom = drawStack.getChromosome();
     
 		geneLoadingIndicator();
     
@@ -512,9 +481,9 @@ public class ChromosomeCanvas extends GenomicCanvas {
       return;
     }
     
-    double viewStart = drawStack.start;
-    double viewEnd = drawStack.end;
-    double viewLength = drawStack.viewLength;
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double viewLength = drawStack.getViewLength();
     double canvasWidth = getWidth();
     
     // Filter genes: always include cancer genes, others must be >= 1 pixel wide
@@ -586,7 +555,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
       getReactiveCanvas().setHeight(canvasHeight);
     }
     
-    // Clear and rebuild hit boxes
     drawGene.clearHitBoxes();
     drawExon.clearHitBoxes();
     
@@ -629,7 +597,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
   }
 
   void drawIndicators() {
-    // Draw indicators at the bottom of the visible viewport, not the full canvas
     double visibleHeight = getHeight();
     if (drawStack.chromScrollPane != null) {
       double viewportHeight = drawStack.chromScrollPane.getViewportBounds().getHeight();
