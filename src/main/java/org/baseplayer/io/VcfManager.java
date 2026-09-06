@@ -546,19 +546,10 @@ public class VcfManager {
         if (currentAnnotated) return;
         if (currentVariants == null || !chromosome.equals(lastLoadedChromosome)) return;
 
-        long startTime = System.currentTimeMillis();
         VariantAnnotator annotator = new VariantAnnotator(
             ServiceRegistry.getInstance().getReferenceGenomeService());
         annotator.annotate(currentVariants, chromosome);
         currentAnnotated = true;
-        
-        long endTime = System.currentTimeMillis();
-        TranscriptCdsCache cache = TranscriptCdsCache.getInstance();
-        long hits = cache.getHitCount();
-        long misses = cache.getMissCount();
-        long builds = cache.getBuildCount();
-        System.out.println("[VCF Annotation] " + chromosome + ": " + (endTime - startTime) + "ms");
-        System.out.println("  CDS Cache: " + hits + " hits, " + misses + " misses, " + builds + " builds");
     }
 
     /** Returns true if variants for this chromosome have already been annotated. */

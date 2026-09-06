@@ -197,11 +197,11 @@ public class MainController {
       return;
     }
     
-    if (sidebarPanel == null || sidebarPanel.masterTrack == null || sidebarPanel.masterTrack.loadRegionButton == null) {
+    if (sidebarPanel == null || sidebarPanel.loadRegionButton == null) {
       return;
     }
     
-    org.baseplayer.components.LoadRegionButton button = sidebarPanel.masterTrack.loadRegionButton;
+    org.baseplayer.components.LoadRegionButton button = sidebarPanel.loadRegionButton;
     // Remove if already added
     if (overlayPane.getChildren().contains(button)) {
       return;
@@ -601,8 +601,8 @@ public class MainController {
   }
 
   public static void initializeLoadRegionButton() {
-    if (sidebarPanel != null && sidebarPanel.masterTrack != null) {
-      sidebarPanel.masterTrack.initializeLoadRegionButton();
+    if (sidebarPanel != null) {
+      sidebarPanel.initializeLoadRegionButton();
     }
   }
 }

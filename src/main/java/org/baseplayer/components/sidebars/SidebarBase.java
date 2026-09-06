@@ -1,7 +1,6 @@
 package org.baseplayer.components.sidebars;
 
 import org.baseplayer.components.InfoPopup;
-import org.baseplayer.components.MasterTrackCanvas;
 
 import javafx.geometry.Pos;
 import javafx.scene.canvas.Canvas;
@@ -146,8 +145,7 @@ public abstract class SidebarBase {
   /**
    * Shared utility for rendering the standard sidebar header bar.
    *
-   * <p>Can also be called from non-SidebarBase classes (e.g.
-   * {@link MasterTrackCanvas}) to ensure a consistent look.</p>
+   * <p>Can be called from various sidebar classes to ensure a consistent look.</p>
    *
    * @param gc    target graphics context
    * @param w     canvas width

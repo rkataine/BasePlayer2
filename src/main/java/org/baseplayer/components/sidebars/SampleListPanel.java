@@ -1,6 +1,5 @@
 package org.baseplayer.components.sidebars;
 
-import org.baseplayer.components.MasterTrackCanvas;
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
@@ -38,8 +37,8 @@ import java.util.List;
  *
  * <p>Each row shows the track name, data file list, and on hover: close (✕),
  * settings (⚙), and add-file (+) buttons.  Coordinates are relative to this
- * panel — the master track header lives in a separate {@link MasterTrackCanvas}
- * pane above and is not included here.</p>
+ * panel — the master track header lives in a separate pane above and is not
+ * included here.</p>
  */
 public class SampleListPanel extends SidebarContentPanel {
 

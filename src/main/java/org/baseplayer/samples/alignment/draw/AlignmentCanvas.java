@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.components.MasterTrackCanvas;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
@@ -25,8 +26,6 @@ import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
-import org.baseplayer.variant.VariantNode;
-import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.draw.VariantDrawer;
 
 import javafx.application.Platform;
@@ -48,6 +47,9 @@ public class AlignmentCanvas extends GenomicCanvas {
   /** Unified coverage data computation and rendering. */
   private final CoverageDrawer coverageDrawer = new CoverageDrawer();
 
+  /** Master aggregate rendering (variant density + comparative methylation). */
+  private final MasterTrackCanvas masterTrackCanvas;
+
   /** Unified read rendering, hit-testing, and reactive highlighting. */
   private final DrawReads drawReads;
   
@@ -56,25 +58,6 @@ public class AlignmentCanvas extends GenomicCanvas {
   
   /** Variant list for the current genomic region. */
   private VariantList variantList;
-
-  // ── Variant density cache (computed off the FX thread) ────────────────────
-  private static final int   DENSITY_BINS   = 600;
-  private volatile VariantList densityCached = null;
-  private volatile int[]     densitySnv;
-  private volatile int[]     densityIndel;
-  private volatile int[]     densityDel;
-  private volatile int[]     densityInv;
-  private volatile int[]     densityDup;
-  private volatile int[]     densityIns;
-  private volatile int[]     densityTra;
-  private volatile int[]     densityBnd;
-  private volatile int       densityMax     = 1;
-  private volatile boolean   densityBusy    = false;
-  private volatile double    densityCachedStart = -1, densityCachedEnd = -1;
-  private volatile int       densityGeneration  = 0;  // Incremented on each new compute; stale threads check and discard
-  private volatile int       densityFilterGeneration = -1;  // Track filter changes
-  private record SvSpan(long start, long end, VcfVariantType type, int sampleCount) {}
-  private volatile java.util.List<SvSpan> densitySvSpans = java.util.List.of();
 
   private static final double MIN_COVERAGE_HEIGHT = 30;
   private static final double MAX_COVERAGE_HEIGHT = 60;
@@ -166,6 +149,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
     drawReads = new DrawReads(gc, drawStack);
+    masterTrackCanvas = new MasterTrackCanvas(coverageDrawer, this::draw);
     setupReadMouseHandlers(reactiveCanvas);
     Platform.runLater(this::draw);
   }
@@ -329,8 +313,8 @@ public class AlignmentCanvas extends GenomicCanvas {
     }
     sampleRegistry.clampScrollBarPositionInPlace(available);
 
-    drawVariantDensityOverview(masterOffset);
     drawBamReads();
+    masterTrackCanvas.drawMasterAggregates(gc, drawStack, getWidth(), masterOffset);
     drawSampleTrackDividers(masterOffset);
     super.draw();
 
@@ -356,470 +340,6 @@ public class AlignmentCanvas extends GenomicCanvas {
           || hasCoverageHoverTarget(lastMouseX, lastMouseY)) {
         drawReadHighlight();
       }
-    }
-  }
-
-  // ── Variant density overview (drawn in masterOffset area) ─────────────────
-
-  private void drawVariantDensityOverview(double masterOffset) {
-    if (masterOffset < 14) return;
-    if (!org.baseplayer.io.VcfManager.getInstance().hasLoadedVcf()) return;
-    // Use the canvas's own variantList field — it is cleared to null on chromosome change
-    // and set to the new list by setVariantList() after loading, so reference comparison works.
-    VariantList variants = this.variantList;
-    if (variants == null || variants.isEmpty()) {
-      // Reset cache so we detect when data arrives into the (same-reference) list
-      if (densityCached != null) {
-        densityCached = null;
-        densitySnv = null; densityIndel = null;
-        densityDel = null; densityInv = null; densityDup = null;
-        densityIns = null; densityTra = null; densityBnd = null;
-        densityCachedStart = -1; densityCachedEnd = -1;  // Reset coordinates
-        densityBusy = false;  // Ensure not stuck in busy state
-      }
-      return;
-    }
-    // When the variant list changes (e.g. chromosome switch), forcefully reset busy state
-    // so the new chromosome's computation is not blocked by an in-flight old-thread.
-    if (variants != densityCached) {
-      densityBusy = false;
-      densitySnv = null; densityIndel = null;
-      densityDel = null; densityInv = null; densityDup = null;
-      densityIns = null; densityTra = null; densityBnd = null;
-      densitySvSpans = java.util.List.of();
-      densityCachedStart = -1; densityCachedEnd = -1;
-    }
-    // Recompute if variant list changed, or if zoom level changed significantly (10% threshold),
-    // or if the filter has changed
-    org.baseplayer.io.VcfManager vcfMgr = org.baseplayer.io.VcfManager.getInstance();
-    int currentFilterGen = vcfMgr.getFilterGeneration();
-    boolean filterChanged = currentFilterGen != densityFilterGeneration;
-    boolean viewChanged = densityCachedStart < 0 || densityCachedEnd < 0
-                       || Math.abs(drawStack.getViewStart() - densityCachedStart) > drawStack.getViewLength() * 0.1
-                       || Math.abs(drawStack.getViewEnd() - densityCachedEnd) > drawStack.getViewLength() * 0.1;
-    if ((variants != densityCached || viewChanged || filterChanged) && !densityBusy) {
-      densityFilterGeneration = currentFilterGen;
-      triggerVariantDensityCompute(variants);
-    }
-
-    double areaH = masterOffset - 4;
-    double svH   = densitySvSpans.isEmpty() ? 0 : Math.min(10, areaH * 0.22);
-    double densH = areaH - svH;
-
-    // Draw density bars if any density array has data
-    boolean hasDensityData = densitySnv != null || densityIndel != null || densityDel != null ||
-                             densityInv != null || densityDup != null || densityIns != null ||
-                             densityTra != null || densityBnd != null;
-    if (hasDensityData) drawDensityBars(2, densH);
-    if (svH >= 4) drawSvSpanBars(2 + densH, svH);
-
-    // Separator between master track and sample tracks (matches methylation style)
-    gc.setStroke(DrawColors.COVERAGE_SEPARATOR);
-    gc.setLineWidth(1.0);
-    gc.strokeLine(0, masterOffset, getWidth(), masterOffset);
-  }
-
-  private void triggerVariantDensityCompute(VariantList variants) {
-    densityCached = variants;
-    densityBusy   = true;
-    final int myGeneration = ++densityGeneration;  // Capture generation; stale threads will discard
-    if (variants == null) {
-      densityDel = null; densityInv = null; densityDup = null;
-      densityIns = null; densityTra = null; densityBnd = null;
-      densitySvSpans = java.util.List.of();
-      densityBusy = false;
-      return;
-    }
-    final double viewStart = drawStack.getViewStart();
-    final double viewEnd   = drawStack.getViewEnd();
-    final java.util.List<Integer> visibleTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-    final org.baseplayer.variant.VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
-    Thread t = new Thread(() -> {
-      try {
-        // Use Sets to track distinct samples per bin/type (not variant counts)
-        // This avoids over-counting when one sample has multiple overlapping variants
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] snvBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] indelBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] delBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] invBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] dupBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] insBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] traBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] bndBySample = new java.util.HashSet[DENSITY_BINS];
-        
-        java.util.List<SvSpan> spans = new java.util.ArrayList<>();
-        double viewLen = Math.max(1, viewEnd - viewStart);
-        
-        VariantNode node = variants.getFirst();
-        while (node != null) {
-          // Collect visible samples that pass the active variant filter for this variant
-          java.util.List<Integer> passingIndices = new java.util.ArrayList<>();
-          for (int idx : visibleTrackIndices) {
-            if (node.hasSample(idx) && activeFilter.passes(node, idx)) {
-              passingIndices.add(idx);
-            }
-          }
-          
-          if (!passingIndices.isEmpty()) {
-            // Structural variants with spans (on same chromosome)
-            boolean isSvWithSpan = node.svEnd > node.position && 
-                                   (node.type == VcfVariantType.SV_DELETION ||
-                                    node.type == VcfVariantType.SV_INSERTION ||
-                                    node.type == VcfVariantType.SV_DUPLICATION ||
-                                    node.type == VcfVariantType.SV_INVERSION);
-            
-            if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
-              // SV spans: paint all bins covered by the span
-              long s = Math.max((long)viewStart, node.position);
-              long e = Math.min((long)viewEnd,   node.svEnd);
-              int b0 = (int) Math.max(0, Math.min(DENSITY_BINS - 1, (s - viewStart) * DENSITY_BINS / viewLen));
-              int b1 = (int) Math.max(0, Math.min(DENSITY_BINS - 1, (e - viewStart) * DENSITY_BINS / viewLen));
-              
-              java.util.Set<Integer>[] targetArray = switch (node.type) {
-                case SV_DELETION -> delBySample;
-                case SV_INVERSION -> invBySample;
-                case SV_DUPLICATION -> dupBySample;
-                case SV_INSERTION -> insBySample;
-                default -> delBySample;
-              };
-              
-              // Add each passing sample to the affected samples set for each bin
-              // This counts each sample once per bin, regardless of how many overlapping variants
-              for (int b = b0; b <= b1; b++) {
-                if (targetArray[b] == null) targetArray[b] = new java.util.HashSet<>();
-                targetArray[b].addAll(passingIndices);
-              }
-              spans.add(new SvSpan(node.position, node.svEnd, node.type, passingIndices.size()));
-            } else if (node.position >= viewStart && node.position <= viewEnd) {
-              // Point variants: increment single bin
-              int bin = (int) Math.max(0, Math.min(DENSITY_BINS - 1, (node.position - viewStart) * DENSITY_BINS / viewLen));
-              
-              switch (node.type) {
-                case SNV -> {
-                  if (snvBySample[bin] == null) snvBySample[bin] = new java.util.HashSet<>();
-                  snvBySample[bin].addAll(passingIndices);
-                }
-                case INSERTION, DELETION, MNV -> {
-                  if (indelBySample[bin] == null) indelBySample[bin] = new java.util.HashSet<>();
-                  indelBySample[bin].addAll(passingIndices);
-                }
-                case SV_TRANSLOCATION -> {
-                  if (traBySample[bin] == null) traBySample[bin] = new java.util.HashSet<>();
-                  traBySample[bin].addAll(passingIndices);
-                }
-                case SV_BREAKEND -> {
-                  if (bndBySample[bin] == null) bndBySample[bin] = new java.util.HashSet<>();
-                  bndBySample[bin].addAll(passingIndices);
-                }
-                default -> {} // Other types already handled as SVs
-              }
-            }
-          }
-          node = node.next;
-        }
-        
-        // Convert sample sets to counts
-        int[] snv = new int[DENSITY_BINS];
-        int[] indel = new int[DENSITY_BINS];
-        int[] del = new int[DENSITY_BINS];
-        int[] inv = new int[DENSITY_BINS];
-        int[] dup = new int[DENSITY_BINS];
-        int[] ins = new int[DENSITY_BINS];
-        int[] tra = new int[DENSITY_BINS];
-        int[] bnd = new int[DENSITY_BINS];
-        
-        for (int i = 0; i < DENSITY_BINS; i++) {
-          if (snvBySample[i] != null) snv[i] = snvBySample[i].size();
-          if (indelBySample[i] != null) indel[i] = indelBySample[i].size();
-          if (delBySample[i] != null) del[i] = delBySample[i].size();
-          if (invBySample[i] != null) inv[i] = invBySample[i].size();
-          if (dupBySample[i] != null) dup[i] = dupBySample[i].size();
-          if (insBySample[i] != null) ins[i] = insBySample[i].size();
-          if (traBySample[i] != null) tra[i] = traBySample[i].size();
-          if (bndBySample[i] != null) bnd[i] = bndBySample[i].size();
-        }
-
-        // Scale to highest peak across all types
-        int maxC = 1;
-        for (int i = 0; i < DENSITY_BINS; i++) {
-          maxC = Math.max(maxC, snv[i]);
-          maxC = Math.max(maxC, indel[i]);
-          maxC = Math.max(maxC, del[i]);
-          maxC = Math.max(maxC, inv[i]);
-          maxC = Math.max(maxC, dup[i]);
-          maxC = Math.max(maxC, ins[i]);
-          maxC = Math.max(maxC, tra[i]);
-          maxC = Math.max(maxC, bnd[i]);
-        }
-        final int[] fSnv = snv, fIndel = indel, fDel = del;
-        final int[] fInv = inv, fDup = dup, fIns = ins, fTra = tra, fBnd = bnd;
-        final int fMax = maxC;
-        final java.util.List<SvSpan> fSpans = spans;
-        Platform.runLater(() -> {
-          if (myGeneration != densityGeneration) return;  // Stale — newer compute already started
-          densitySnv = fSnv; densityIndel = fIndel;
-          densityDel = fDel; densityInv = fInv; densityDup = fDup;
-          densityIns = fIns; densityTra = fTra; densityBnd = fBnd;
-          densityMax = fMax;
-          densitySvSpans = fSpans; densityBusy = false;
-          densityCachedStart = viewStart; densityCachedEnd = viewEnd;
-          
-          // Guard: if viewport has shifted significantly since calculation started,
-          // discard this result and force immediate recalculation to avoid density shift
-          double currentViewLen = Math.max(1.0, drawStack.getViewEnd() - drawStack.getViewStart());
-          boolean viewportShifted = Math.abs(drawStack.getViewStart() - viewStart) > currentViewLen * 0.05
-                                 || Math.abs(drawStack.getViewEnd() - viewEnd) > currentViewLen * 0.05;
-          if (viewportShifted) {
-            // Viewport changed significantly during calculation — invalidate and recalculate
-            densitySnv = null; densityIndel = null;
-            densityDel = null; densityInv = null; densityDup = null;
-            densityIns = null; densityTra = null; densityBnd = null;
-            densitySvSpans = java.util.List.of();
-            triggerVariantDensityCompute(variantList);
-            return;
-          }
-          
-          draw();
-        });
-      } catch (Exception e) {
-        System.err.println("Density computation failed: " + e.getMessage());
-        e.printStackTrace();
-        densityBusy = false;
-      }
-    }, "density-compute");
-    t.setDaemon(true);
-    t.start();
-  }
-
-  /**
-   * Force immediate density calculation for the current variant list.
-   * Called by VcfManager after variants are loaded to ensure density
-   * appears immediately without requiring a zoom/pan event.
-   */
-  public void forceCalculateDensity() {
-    VariantList variants = this.variantList;
-    if (variants != null && !variants.isEmpty()) {
-      // Reset cache to force recomputation
-      densityCached = null;
-      densityDel = null; densityInv = null; densityDup = null;
-      densityIns = null; densityTra = null; densityBnd = null;
-      densitySvSpans = java.util.List.of();
-      densityCachedStart = -1;
-      densityCachedEnd = -1;
-      densityBusy = false;
-      // Trigger compute immediately
-      triggerVariantDensityCompute(variants);
-    }
-  }
-
-  private void drawDensityBars(double top, double h) {
-    if (drawStack.getViewLength() <= 0) return;
-    if (densityDel == null && densitySnv == null && densityIndel == null) return;
-    
-    double canvasWidth = getWidth();
-    double maxBarH = h - 1;
-    int maxC = Math.max(1, densityMax);
-    
-    // Calculate coordinate transform: density was computed for densityCached range,
-    // but we're drawing for current view. Shift density bars to match current view.
-    double cachedViewLength = densityCachedEnd - densityCachedStart;
-    double pixelOffset = 0;
-    if (cachedViewLength > 0) {
-      // How many genomic bases did we shift?
-      double genomicShift = drawStack.getViewStart() - densityCachedStart;
-      // Convert to pixel shift
-      pixelOffset = -genomicShift * canvasWidth / drawStack.getViewLength();
-    }
-    
-    // Draw each variant type as overlaid bars
-    for (int px = 0; px < (int) canvasWidth; px++) {
-      // Apply coordinate transform: shift back to cached view coordinates for bin lookup
-      double cachedPx = px - pixelOffset;
-      
-      // Map transformed pixel to bin(s)
-      int b0 = (int)(cachedPx       * DENSITY_BINS / canvasWidth);
-      int b1 = (int)((cachedPx + 1) * DENSITY_BINS / canvasWidth);
-      
-      // Skip if bins are out of range (density not computed for this view yet)
-      if (b0 < 0 || b1 >= DENSITY_BINS) continue;
-      b0 = Math.max(0, Math.min(DENSITY_BINS - 1, b0));
-      b1 = Math.max(0, Math.min(DENSITY_BINS - 1, b1));
-      
-      // Get max value for each type in this pixel
-      int snvVal = 0, indelVal = 0;
-      int delVal = 0, invVal = 0, dupVal = 0, insVal = 0, traVal = 0, bndVal = 0;
-      
-      for (int b = b0; b <= b1; b++) {
-        if (densitySnv != null) snvVal = Math.max(snvVal, densitySnv[b]);
-        if (densityIndel != null) indelVal = Math.max(indelVal, densityIndel[b]);
-        if (densityDel != null) delVal = Math.max(delVal, densityDel[b]);
-        if (densityInv != null) invVal = Math.max(invVal, densityInv[b]);
-        if (densityDup != null) dupVal = Math.max(dupVal, densityDup[b]);
-        if (densityIns != null) insVal = Math.max(insVal, densityIns[b]);
-        if (densityTra != null) traVal = Math.max(traVal, densityTra[b]);
-        if (densityBnd != null) bndVal = Math.max(bndVal, densityBnd[b]);
-      }
-      
-      // Create list of (value, color, alpha) tuples and sort by value (largest first)
-      // This ensures smaller bars remain visible on top of larger ones
-      record BarData(int value, String color, double alpha) {}
-      java.util.List<BarData> bars = new java.util.ArrayList<>();
-      if (snvVal > 0) bars.add(new BarData(snvVal, "#ff6666", 0.5));
-      if (indelVal > 0) bars.add(new BarData(indelVal, "#ffaa44", 0.5));
-      if (delVal > 0) bars.add(new BarData(delVal, "#00cc44", 0.6));
-      if (invVal > 0) bars.add(new BarData(invVal, "#4488ff", 0.6));
-      if (dupVal > 0) bars.add(new BarData(dupVal, "#c0c0d0", 0.6));
-      if (insVal > 0) bars.add(new BarData(insVal, "#33cc66", 0.6));
-      if (traVal > 0) bars.add(new BarData(traVal, "#ffdd00", 0.6));
-      if (bndVal > 0) bars.add(new BarData(bndVal, "#c0c0c0", 0.6));
-      
-      // Sort largest to smallest so we draw big bars first, small bars on top
-      bars.sort((a, b) -> Integer.compare(b.value, a.value));
-      
-      // Draw all bars overlaid from the bottom (not stacked)
-      double bottom = top + h;
-      for (BarData bar : bars) {
-        double bh = maxBarH * (double) bar.value / maxC;
-        gc.setFill(Color.web(bar.color, bar.alpha));
-        gc.fillRect(px, bottom - bh, 1, bh);
-      }
-    }
-    
-    // Draw scale on the right edge using full canvas width
-    drawDensityScale(canvasWidth - 38, top, h, maxC);
-    
-    // Legend showing all variant types
-    gc.setFont(AppFonts.getFont("Segoe UI", 7));
-    double legendX = 3;
-    double legendY = top + 3;
-    
-    // SNV
-    if (densitySnv != null) {
-      gc.setFill(Color.web("#ff6666", 0.7));
-      gc.fillRect(legendX, legendY, 5, 3);
-      gc.setFill(Color.web("#444"));
-      gc.fillText("SNV", legendX + 7, legendY + 5);
-      legendX += 32;
-    }
-    // Indel
-    if (densityIndel != null) {
-      gc.setFill(Color.web("#ffaa44", 0.7));
-      gc.fillRect(legendX, legendY, 5, 3);
-      gc.setFill(Color.web("#444"));
-      gc.fillText("indel", legendX + 7, legendY + 5);
-      legendX += 36;
-    }
-    // SV types
-    if (densityDel != null) {
-      gc.setFill(Color.web("#00cc44", 0.7));
-      gc.fillRect(legendX, legendY, 5, 3);
-      gc.setFill(Color.web("#444"));
-      gc.fillText("DEL", legendX + 7, legendY + 5);
-    }
-  }
-  
-  private void drawDensityScale(double x, double top, double h, int maxCount) {
-    gc.setFont(AppFonts.getFont("Segoe UI", 7));
-    gc.setFill(Color.web("#555"));
-    gc.setTextBaseline(javafx.geometry.VPos.CENTER);
-    
-    // Draw max value at top
-    gc.fillText(String.valueOf(maxCount), x + 2, top + 4);
-    
-    // Draw 0 at bottom
-    gc.fillText("0", x + 2, top + h - 2);
-    
-    // Draw tick marks
-    gc.setStroke(Color.web("#777"));
-    gc.setLineWidth(0.5);
-    for (int i = 0; i <= 4; i++) {
-      double y = top + (i * h / 4.0);
-      gc.strokeLine(x, y, x + 3, y);
-    }
-  }
-
-  private void drawSvSpanBars(double top, double h) {
-    java.util.List<SvSpan> spans = densitySvSpans;
-    double viewStart = drawStack.getViewStart(), viewLen = drawStack.getViewLength();
-    if (viewLen <= 0 || spans.isEmpty()) return;
-    double barY = top + 1, barH = Math.max(2, h - 3), w = getWidth();
-    for (SvSpan span : spans) {
-      if (span.end() < viewStart || span.start() > viewStart + viewLen) continue;
-      double x1 = Math.max(0, (span.start() - viewStart) / viewLen * w);
-      double x2 = Math.min(w, (span.end()   - viewStart) / viewLen * w);
-      if (x2 - x1 < 1.5) x2 = x1 + 1.5;
-      // More transparent colors (reduced from 0.28-0.88 to 0.20-0.70)
-      double alpha = Math.min(0.70, 0.20 + span.sampleCount() * 0.12);
-      
-      // User-requested colors:
-      // DEL: green, INV: blue, DUP: grayish white, TRA: yellow, BND: light gray
-      if (span.type() == VcfVariantType.SV_TRANSLOCATION) {
-        // Translocations as yellow lines
-        gc.setStroke(Color.web("#ffdd00", alpha));
-        gc.setLineWidth(2.0);
-        gc.strokeLine(x1, barY + barH / 2, x2, barY + barH / 2);
-      } else if (span.type() == VcfVariantType.SV_BREAKEND) {
-        // Breakends as light gray lines
-        gc.setStroke(Color.web("#c0c0c0", alpha));
-        gc.setLineWidth(2.0);
-        gc.strokeLine(x1, barY + barH / 2, x2, barY + barH / 2);
-      } else {
-        Color c = switch (span.type()) {
-          case SV_DELETION    -> Color.web("#00cc44", alpha);  // Green
-          case SV_INVERSION   -> Color.web("#4488ff", alpha);  // Blue
-          case SV_DUPLICATION -> Color.web("#c0c0d0", alpha);  // Grayish white
-          case SV_INSERTION   -> Color.web("#33cc66", alpha);  // Light green
-          default             -> Color.web("#aaaaaa", alpha);   // Gray
-        };
-        gc.setFill(c);
-        gc.fillRect(x1, barY, x2 - x1, barH);
-      }
-    }
-    
-    // Add SV type legend
-    gc.setFont(AppFonts.getFont("Segoe UI", 7));
-    double legendX = getWidth() - 200;
-    double legendY = top + h - 2;
-    
-    if (legendX > 100) {  // Only show if enough space
-      // DEL - green
-      gc.setFill(Color.web("#00cc44", 0.6));
-      gc.fillRect(legendX, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("DEL", legendX + 10, legendY);
-      
-      // INV - blue
-      gc.setFill(Color.web("#4488ff", 0.6));
-      gc.fillRect(legendX + 35, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("INV", legendX + 45, legendY);
-      
-      // DUP - grayish
-      gc.setFill(Color.web("#c0c0d0", 0.7));
-      gc.fillRect(legendX + 70, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("DUP", legendX + 80, legendY);
-      
-      // INS - light green
-      gc.setFill(Color.web("#33cc66", 0.6));
-      gc.fillRect(legendX + 110, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("INS", legendX + 120, legendY);
-      
-      // TRA - yellow line
-      gc.setStroke(Color.web("#ffdd00", 0.7));
-      gc.setLineWidth(2.0);
-      gc.strokeLine(legendX + 150, legendY - 3, legendX + 158, legendY - 3);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("TRA", legendX + 160, legendY);
     }
   }
 
@@ -2123,7 +1643,16 @@ public class AlignmentCanvas extends GenomicCanvas {
    */
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
+    masterTrackCanvas.setVariantList(variantList);
     variantDrawer.markIndexDirty();
+  }
+
+  /**
+   * Force immediate density calculation for the current variant list.
+   * Called by VcfManager after variants are loaded to ensure density appears immediately.
+   */
+  public void forceCalculateDensity() {
+    masterTrackCanvas.forceCalculateDensity(drawStack);
   }
   
   /**
@@ -2141,6 +1670,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       variantList.clear();
     }
     variantList = null;
+    masterTrackCanvas.clearVariantList();
   }
   
   /**

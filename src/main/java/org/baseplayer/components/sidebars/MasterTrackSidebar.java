@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.baseplayer.components.InfoPopup;
-import org.baseplayer.components.MasterTrackCanvas;
+import org.baseplayer.components.LoadRegionButton;
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.components.PopupContent;
 import org.baseplayer.controllers.MainController;
@@ -56,9 +56,42 @@ import javafx.stage.Window;
  */
 public class MasterTrackSidebar extends SidebarBase {
 
-  private static final double EXPANDED_MASTER_HEIGHT = 82;
+  // ── Inner interfaces and records ────────────────────────────────────────
+  public static record HitBox(double x, double y, double w, double h) {
+    public boolean contains(double px, double py) {
+      return px >= x && px <= x + w && py >= y && py <= y + h;
+    }
+  }
 
-  public final MasterTrackCanvas masterTrack;
+  public record ExpandedControlsRenderResult(HitBox rangeStartHandleHit, HitBox rangeEndHandleHit, HitBox rangeLabelHit) {
+  }
+
+  public record RenderState(
+      int trackCount,
+      boolean controlsExpanded,
+      boolean canReload,
+      int firstVisible,
+      int lastVisible,
+      String focusedGene,
+      boolean hasActiveSampleFilterQuery,
+      boolean settingsHovered,
+      boolean reloadHovered,
+      boolean addHovered,
+      boolean highlightRangeLabel) {
+    public static RenderState empty() {
+      return new RenderState(0, false, false, 0, 0, null, false, false, false, false, false);
+    }
+  }
+
+  private static final double EXPANDED_MASTER_HEIGHT = 82;
+  private static final double HEADER_BTN_SIZE = 18;
+  private static final double HEADER_BTN_LEFT_X = 4;
+
+  private Canvas masterTrackCanvas;
+  private Canvas masterTrackReactiveCanvas;
+  private DrawStack masterTrackDrawStack;
+  private RenderState masterTrackRenderState = RenderState.empty();
+  public final LoadRegionButton loadRegionButton;
   public final SampleListPanel sampleList;
 
   private final SampleRegistry sampleRegistry;
@@ -84,9 +117,9 @@ public class MasterTrackSidebar extends SidebarBase {
   private double pressX = 0;
   private double pressY = 0;
 
-  private MasterTrackCanvas.HitBox rangeStartHandleHit = null;
-  private MasterTrackCanvas.HitBox rangeEndHandleHit = null;
-  private MasterTrackCanvas.HitBox rangeLabelHit = null;
+  private HitBox rangeStartHandleHit = null;
+  private HitBox rangeEndHandleHit = null;
+  private HitBox rangeLabelHit = null;
 
   public MasterTrackSidebar(StackPane parent) {
     super(parent, SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
@@ -99,81 +132,43 @@ public class MasterTrackSidebar extends SidebarBase {
     headerPane.minHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
     headerPane.maxHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
 
-    // Replace default header canvases with MasterTrackCanvas.
+    // Replace default header canvases with master track canvases.
     replaceHeaderContent();
-    Canvas reactiveCanvas = new Canvas();
-    masterTrack = new MasterTrackCanvas(reactiveCanvas, headerPane, new DrawStack());
+    masterTrackCanvas = new Canvas();
+    masterTrackReactiveCanvas = new Canvas();
+    masterTrackDrawStack = new DrawStack();
+    loadRegionButton = new LoadRegionButton();
+
+    // Bind canvases to header pane size so they render properly.
+    masterTrackCanvas.widthProperty().bind(headerPane.widthProperty());
+    masterTrackCanvas.heightProperty().bind(headerPane.heightProperty());
+    masterTrackReactiveCanvas.widthProperty().bind(headerPane.widthProperty());
+    masterTrackReactiveCanvas.heightProperty().bind(headerPane.heightProperty());
 
     // These canvases are bound to headerPane size; avoid layout feedback loops.
-    masterTrack.setManaged(false);
-    reactiveCanvas.setManaged(false);
+    masterTrackCanvas.setManaged(false);
+    masterTrackReactiveCanvas.setManaged(false);
 
-    headerPane.getChildren().addAll(masterTrack, reactiveCanvas);
+    headerPane.getChildren().addAll(masterTrackCanvas, masterTrackReactiveCanvas);
 
-    masterTrack.setControlRenderHandler(new MasterTrackCanvas.ControlRenderHandler() {
-      @Override
-      public MasterTrackCanvas.ExpandedControlsRenderResult renderExpandedControls(
-          GraphicsContext gc,
-          double w,
-          double h,
-          double headerBarH,
-          int trackCount,
-          int firstVisible,
-          int lastVisible,
-          String focusedGene,
-          boolean hasActiveSampleFilterQuery) {
-        return MasterTrackSidebar.this.renderExpandedControls(
-            gc,
-            w,
-            h,
-            headerBarH,
-            trackCount,
-            firstVisible,
-            lastVisible,
-            focusedGene,
-            hasActiveSampleFilterQuery);
-      }
+    // Keep visuals anchored correctly on resize.
+    masterTrackCanvas.widthProperty().addListener((obs, oldVal, newVal) -> drawMasterTrack());
+    masterTrackCanvas.heightProperty().addListener((obs, oldVal, newVal) -> drawMasterTrack());
+    masterTrackReactiveCanvas.widthProperty().addListener((obs, oldVal, newVal) -> drawMasterTrack());
+    masterTrackReactiveCanvas.heightProperty().addListener((obs, oldVal, newVal) -> drawMasterTrack());
 
-      @Override
-      public void drawHeaderHover(
-          GraphicsContext reactiveGc,
-          double w,
-          double h,
-          double headerBarH,
-          double headerBtnSize,
-          double headerBtnLeftX,
-          boolean settingsHovered,
-          boolean reloadHovered,
-          boolean addHovered,
-          boolean canReload,
-          boolean highlightRangeLabel,
-          MasterTrackCanvas.HitBox rangeLabelHit) {
-        MasterTrackSidebar.this.renderHeaderHover(
-            reactiveGc,
-            w,
-            headerBarH,
-            headerBtnSize,
-            headerBtnLeftX,
-            settingsHovered,
-            reloadHovered,
-            addHovered,
-            canReload,
-            highlightRangeLabel,
-            rangeLabelHit);
-      }
-
-      @Override
-      public void onExpandedControlsRendered(MasterTrackCanvas.ExpandedControlsRenderResult result) {
-        rangeStartHandleHit = result != null ? result.rangeStartHandleHit() : null;
-        rangeEndHandleHit = result != null ? result.rangeEndHandleHit() : null;
-        rangeLabelHit = result != null ? result.rangeLabelHit() : null;
-      }
-    });
-
+    Platform.runLater(loadRegionButton::attachRegionListener);
     installMasterHandlers();
 
     // Sample list in content pane.
     sampleList = new SampleListPanel(contentPane);
+    
+    // Trigger initial draw to render the master track.
+    Platform.runLater(this::draw);
+  }
+
+  public void initializeLoadRegionButton() {
+    Platform.runLater(loadRegionButton::attachRegionListener);
   }
 
   // -- SidebarBase contract -------------------------------------------------
@@ -203,11 +198,11 @@ public class MasterTrackSidebar extends SidebarBase {
     sampleList.draw();
   }
 
-  /** Full repaint -- header (MasterTrackCanvas) + content (SampleListPanel). */
+  /** Full repaint -- header + content (SampleListPanel). */
   @Override
   public void draw() {
     syncRenderState();
-    masterTrack.draw();
+    drawMasterTrack();
     sampleList.draw();
   }
 
@@ -229,7 +224,7 @@ public class MasterTrackSidebar extends SidebarBase {
       lastVisible = Math.max(firstVisible, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
     }
 
-    masterTrack.setRenderState(new MasterTrackCanvas.RenderState(
+    masterTrackRenderState = new RenderState(
         trackCount,
         trackCount > 0 && isControlsExpanded(),
         hasAnySuspended(),
@@ -240,30 +235,27 @@ public class MasterTrackSidebar extends SidebarBase {
         settingsHovered,
         reloadHovered,
         addHovered,
-        rangeLabelHovered && sampleRegistry.hasFocusedTrackIndices()));
+        rangeLabelHovered && sampleRegistry.hasFocusedTrackIndices());
   }
 
   // -- Master header interactions ------------------------------------------
 
   private void installMasterHandlers() {
-    Canvas reactiveCanvas = masterTrack.getReactiveCanvas();
-
     // Keep hover-stack ownership with alignment canvases.
-    reactiveCanvas.setOnMouseEntered(event -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
-    reactiveCanvas.setOnMouseMoved(this::handleMasterMouseMoved);
-    reactiveCanvas.setOnMouseExited(this::handleMasterMouseExited);
-    reactiveCanvas.setOnMousePressed(this::handleMasterMousePressed);
-    reactiveCanvas.setOnMouseDragged(this::handleMasterMouseDragged);
-    reactiveCanvas.setOnMouseReleased(this::handleMasterMouseReleased);
-    reactiveCanvas.setOnScroll(this::handleMasterScroll);
+    masterTrackReactiveCanvas.setOnMouseEntered(event -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+    masterTrackReactiveCanvas.setOnMouseMoved(this::handleMasterMouseMoved);
+    masterTrackReactiveCanvas.setOnMouseExited(this::handleMasterMouseExited);
+    masterTrackReactiveCanvas.setOnMousePressed(this::handleMasterMousePressed);
+    masterTrackReactiveCanvas.setOnMouseDragged(this::handleMasterMouseDragged);
+    masterTrackReactiveCanvas.setOnMouseReleased(this::handleMasterMouseReleased);
+    masterTrackReactiveCanvas.setOnScroll(this::handleMasterScroll);
   }
 
   private void handleMasterMouseMoved(MouseEvent event) {
-    Canvas reactiveCanvas = masterTrack.getReactiveCanvas();
-    double edgeZone = masterTrack.getHeight() - 4;
+    double edgeZone = masterTrackCanvas.getHeight() - 4;
     boolean inResizeZone = event.getY() >= edgeZone;
     boolean overRangeHandle = isControlsExpanded() && isOverRangeHandle(event.getX(), event.getY());
-    reactiveCanvas.setCursor(inResizeZone ? Cursor.V_RESIZE : (overRangeHandle ? Cursor.H_RESIZE : Cursor.DEFAULT));
+    masterTrackReactiveCanvas.setCursor(inResizeZone ? Cursor.V_RESIZE : (overRangeHandle ? Cursor.H_RESIZE : Cursor.DEFAULT));
 
     boolean prevSettings = settingsHovered;
     boolean prevAdd = addHovered;
@@ -276,13 +268,13 @@ public class MasterTrackSidebar extends SidebarBase {
       reloadHovered = false;
       rangeLabelHovered = false;
     } else if (event.getY() <= headerBarHeight()) {
-      double sy = (headerBarHeight() - MasterTrackCanvas.headerBtnSize()) / 2;
-      settingsHovered = MasterTrackCanvas.inHeaderBtn(
-          event.getX(), event.getY(), MasterTrackCanvas.headerBtnLeftX(), sy);
-      reloadHovered = hasAnySuspended() && MasterTrackCanvas.inHeaderBtn(
-          event.getX(), event.getY(), MasterTrackCanvas.reloadBtnX(masterTrack.getWidth()), sy);
-      addHovered = MasterTrackCanvas.inHeaderBtn(
-          event.getX(), event.getY(), masterTrack.getWidth() - MasterTrackCanvas.headerBtnSize() - 4, sy);
+      double sy = (headerBarHeight() - headerBtnSize()) / 2;
+      settingsHovered = inHeaderBtn(
+          event.getX(), event.getY(), headerBtnLeftX(), sy);
+      reloadHovered = hasAnySuspended() && inHeaderBtn(
+          event.getX(), event.getY(), reloadBtnX(masterTrackCanvas.getWidth()), sy);
+      addHovered = inHeaderBtn(
+          event.getX(), event.getY(), masterTrackCanvas.getWidth() - headerBtnSize() - 4, sy);
       rangeLabelHovered = false;
     } else {
       settingsHovered = false;
@@ -297,20 +289,19 @@ public class MasterTrackSidebar extends SidebarBase {
         || prevAdd != addHovered
         || prevReload != reloadHovered
         || prevRangeLabelHover != rangeLabelHovered) {
-      masterTrack.draw();
+      drawMasterTrack();
     }
   }
 
   private void handleMasterMouseExited(MouseEvent event) {
-    Canvas reactiveCanvas = masterTrack.getReactiveCanvas();
-    reactiveCanvas.setCursor(Cursor.DEFAULT);
+    masterTrackReactiveCanvas.setCursor(Cursor.DEFAULT);
 
     if (settingsHovered || addHovered || reloadHovered || rangeLabelHovered) {
       settingsHovered = false;
       addHovered = false;
       reloadHovered = false;
       rangeLabelHovered = false;
-      masterTrack.draw();
+      drawMasterTrack();
     }
   }
 
@@ -319,7 +310,7 @@ public class MasterTrackSidebar extends SidebarBase {
     pressY = event.getY();
     masterMouseDragged = false;
 
-    if (event.getY() >= masterTrack.getHeight() - 4) {
+    if (event.getY() >= masterTrackCanvas.getHeight() - 4) {
       isDraggingResize = true;
       dragStartScreenY = event.getScreenY();
       dragStartHeight = sampleRegistry.getMasterTrackHeight();
@@ -354,7 +345,7 @@ public class MasterTrackSidebar extends SidebarBase {
 
     if (isDraggingResize) {
       isDraggingResize = false;
-      masterTrack.getReactiveCanvas().setCursor(Cursor.DEFAULT);
+      masterTrackReactiveCanvas.setCursor(Cursor.DEFAULT);
     }
 
     if (draggingRangeStart || draggingRangeEnd || pendingSingleHandleResolve) {
@@ -379,24 +370,24 @@ public class MasterTrackSidebar extends SidebarBase {
   private void handleMasterScroll(ScrollEvent event) {
     event.consume();
     syncDrawStack();
-    masterTrack.setNavigating(true);
+    masterTrackDrawStack.nav.navigating = true;
 
     if (event.isControlDown()) {
-      masterTrack.zoomAt(event.getDeltaY(), event.getX());
+      zoomAt(event.getDeltaY(), event.getX());
       return;
     }
 
     double delta = event.getDeltaX() != 0 ? event.getDeltaX() : event.getDeltaY();
-    double genomeDelta = delta * 0.3 * masterTrack.drawStack.scale;
-    masterTrack.panByGenomeDelta(genomeDelta);
+    double genomeDelta = delta * 0.3 * masterTrackDrawStack.scale;
+    panByGenomeDelta(genomeDelta);
   }
 
   private void syncDrawStack() {
     DrawStack hover = stackManager.getHoverStack();
     if (hover != null) {
-      masterTrack.drawStack = hover;
+      masterTrackDrawStack = hover;
     } else if (!stackManager.isEmpty()) {
-      masterTrack.drawStack = stackManager.getFirst();
+      masterTrackDrawStack = stackManager.getFirst();
     }
   }
 
@@ -416,24 +407,24 @@ public class MasterTrackSidebar extends SidebarBase {
       return;
     }
 
-    double sy = (headerBarHeight() - MasterTrackCanvas.headerBtnSize()) / 2;
+    double sy = (headerBarHeight() - headerBtnSize()) / 2;
 
-    if (MasterTrackCanvas.inHeaderBtn(x, y, MasterTrackCanvas.headerBtnLeftX(), sy)) {
+    if (inHeaderBtn(x, y, headerBtnLeftX(), sy)) {
       showGlobalSettingsMenu(screenX, screenY);
       return;
     }
 
-    if (hasAnySuspended() && MasterTrackCanvas.inHeaderBtn(x, y, MasterTrackCanvas.reloadBtnX(masterTrack.getWidth()), sy)) {
+    if (hasAnySuspended() && inHeaderBtn(x, y, reloadBtnX(masterTrackCanvas.getWidth()), sy)) {
       resumeSuspendedReads();
       return;
     }
 
-    if (MasterTrackCanvas.inHeaderBtn(
+    if (inHeaderBtn(
         x,
         y,
-        masterTrack.getWidth() - MasterTrackCanvas.headerBtnSize() - 4,
+        masterTrackCanvas.getWidth() - headerBtnSize() - 4,
         sy)) {
-      addDataMenu.show(masterTrack, screenX, screenY);
+      addDataMenu.show(masterTrackCanvas, screenX, screenY);
     }
   }
 
@@ -456,7 +447,7 @@ public class MasterTrackSidebar extends SidebarBase {
   }
 
   private double headerBarHeight() {
-    return Math.min(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT, masterTrack.getHeight());
+    return Math.min(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT, masterTrackCanvas.getHeight());
   }
 
   private boolean isOverRangeHandle(double x, double y) {
@@ -505,7 +496,7 @@ public class MasterTrackSidebar extends SidebarBase {
     }
 
     double railX = 12;
-    double railW = Math.max(10, masterTrack.getWidth() - 24);
+    double railW = Math.max(10, masterTrackCanvas.getWidth() - 24);
     int mapped = mapMouseXToSampleIndex(mouseX, railX, railW, trackCount);
 
     if (pendingSingleHandleResolve) {
@@ -646,7 +637,7 @@ public class MasterTrackSidebar extends SidebarBase {
     VBox panel = new VBox(4, row, filterRow);
 
     PopupContent content = new PopupContent().node(panel);
-    Window owner = masterTrack.getScene() != null ? masterTrack.getScene().getWindow() : null;
+    Window owner = masterTrackCanvas.getScene() != null ? masterTrackCanvas.getScene().getWindow() : null;
     if (owner == null) {
       return;
     }
@@ -724,7 +715,7 @@ public class MasterTrackSidebar extends SidebarBase {
     return false;
   }
 
-  private MasterTrackCanvas.ExpandedControlsRenderResult renderExpandedControls(
+  private ExpandedControlsRenderResult renderExpandedControls(
       GraphicsContext gc,
       double w,
       double h,
@@ -735,7 +726,7 @@ public class MasterTrackSidebar extends SidebarBase {
       String focusedGene,
       boolean hasActiveSampleFilterQuery) {
     if (h <= headerBarH + 2) {
-      return new MasterTrackCanvas.ExpandedControlsRenderResult(null, null, null);
+      return new ExpandedControlsRenderResult(null, null, null);
     }
 
     if (trackCount <= 0) {
@@ -743,7 +734,7 @@ public class MasterTrackSidebar extends SidebarBase {
       gc.fillRect(0, headerBarH, w, Math.max(0, h - headerBarH));
       gc.setStroke(Color.web("#3e444d"));
       gc.strokeLine(0, headerBarH, w, headerBarH);
-      return new MasterTrackCanvas.ExpandedControlsRenderResult(null, null, null);
+      return new ExpandedControlsRenderResult(null, null, null);
     }
 
     gc.setFill(Color.web("#202327"));
@@ -754,12 +745,12 @@ public class MasterTrackSidebar extends SidebarBase {
     gc.setFont(Font.font("Segoe UI", 10));
     gc.setFill(Color.web("#9ea7b3"));
 
-    MasterTrackCanvas.HitBox labelHit;
+    HitBox labelHit;
     if (focusedGene != null && !focusedGene.isBlank()) {
       gc.fillText("Gene focus: " + focusedGene, 8, headerBarH + 14);
       gc.setFill(Color.web("#ffa500"));
       gc.fillText("[clear x]", w - 70, headerBarH + 14);
-      labelHit = new MasterTrackCanvas.HitBox(w - 72, headerBarH + 1, 70, 18);
+      labelHit = new HitBox(w - 72, headerBarH + 1, 70, 18);
     } else {
       gc.fillText("Visible samples", 8, headerBarH + 14);
       gc.setFill(Color.web("#7f8791"));
@@ -778,7 +769,7 @@ public class MasterTrackSidebar extends SidebarBase {
       double labelY = headerBarH + 14;
       gc.fillText(label, labelX, labelY);
       double labelWidth = Math.max(80, label.length() * 8.5);
-      labelHit = new MasterTrackCanvas.HitBox(labelX - 6, headerBarH + 1, labelWidth, 18);
+      labelHit = new HitBox(labelX - 6, headerBarH + 1, labelWidth, 18);
     }
 
     double railX = 12;
@@ -806,12 +797,12 @@ public class MasterTrackSidebar extends SidebarBase {
     gc.fillRoundRect(startX - handleW / 2, handleY, handleW, handleH, 3, 3);
     gc.fillRoundRect(endX - handleW / 2, handleY, handleW, handleH, 3, 3);
 
-    MasterTrackCanvas.HitBox rangeStartHandleHit =
-        new MasterTrackCanvas.HitBox(startX - handleW / 2 - 2, handleY - 2, handleW + 4, handleH + 4);
-    MasterTrackCanvas.HitBox rangeEndHandleHit =
-        new MasterTrackCanvas.HitBox(endX - handleW / 2 - 2, handleY - 2, handleW + 4, handleH + 4);
+    HitBox rangeStartHandleHit =
+        new HitBox(startX - handleW / 2 - 2, handleY - 2, handleW + 4, handleH + 4);
+    HitBox rangeEndHandleHit =
+        new HitBox(endX - handleW / 2 - 2, handleY - 2, handleW + 4, handleH + 4);
 
-    return new MasterTrackCanvas.ExpandedControlsRenderResult(rangeStartHandleHit, rangeEndHandleHit, labelHit);
+    return new ExpandedControlsRenderResult(rangeStartHandleHit, rangeEndHandleHit, labelHit);
   }
 
   private void renderHeaderHover(
@@ -825,7 +816,7 @@ public class MasterTrackSidebar extends SidebarBase {
       boolean addHovered,
       boolean canReload,
       boolean highlightRangeLabel,
-      MasterTrackCanvas.HitBox rangeLabelHit) {
+      HitBox rangeLabelHit) {
     if (highlightRangeLabel && rangeLabelHit != null) {
       reactiveGc.setFill(Color.rgb(255, 165, 0, 0.2));
       reactiveGc.fillRect(rangeLabelHit.x(), rangeLabelHit.y(), rangeLabelHit.w(), rangeLabelHit.h());
@@ -859,7 +850,7 @@ public class MasterTrackSidebar extends SidebarBase {
 
     MenuItem variantManagerItem = new MenuItem("Variant Manager...");
     variantManagerItem.setOnAction(e ->
-        VcfManager.getInstance().openVariantManager(masterTrack.getScene().getWindow()));
+        VcfManager.getInstance().openVariantManager(masterTrackCanvas.getScene().getWindow()));
 
     MenuItem bedItem = new MenuItem("BED");
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
@@ -1072,7 +1063,7 @@ public class MasterTrackSidebar extends SidebarBase {
       settingsMenu.getItems().add(circosItem);
     }
 
-    settingsMenu.show(masterTrack.getScene().getWindow(), screenX, screenY);
+    settingsMenu.show(masterTrackCanvas.getScene().getWindow(), screenX, screenY);
   }
 
   /**
@@ -1109,7 +1100,7 @@ public class MasterTrackSidebar extends SidebarBase {
       chromNames = new ArrayList<>();
     }
 
-    final String currentChrom = masterTrack.getStack() != null ? masterTrack.getStack().getChromosome() : null;
+    final String currentChrom = masterTrackDrawStack != null ? masterTrackDrawStack.getChromosome() : null;
 
     Thread t = new Thread(() -> {
       List<CircosPlot.Link> links = new ArrayList<>();
@@ -1198,5 +1189,108 @@ public class MasterTrackSidebar extends SidebarBase {
 
   /** Snapshot of a sample's alignment file for off-thread sweeping. */
   private record SampleSweep(AlignmentFile file, String name, String[] refNames) {
+  }
+
+  private void drawMasterTrack() {
+    double w = masterTrackCanvas.getWidth();
+    double h = masterTrackCanvas.getHeight();
+    if (w <= 0 || h <= 0) return;
+
+    int trackCount = Math.max(0, masterTrackRenderState.trackCount());
+
+    GraphicsContext gc = masterTrackCanvas.getGraphicsContext2D();
+    double headerBarH = Math.min(org.baseplayer.services.SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT, h);
+    SidebarBase.drawStandardHeader(gc, w, headerBarH, "Tracks", trackCount);
+    double sy = (headerBarH - HEADER_BTN_SIZE) / 2;
+
+    if (masterTrackRenderState.canReload()) {
+      double reloadX = reloadBtnX(w);
+      gc.setFont(Font.font("Segoe UI Symbol", 14));
+      gc.setFill(Color.web("#ff9944"));
+      gc.fillText("\u21ba", reloadX + 1, sy + HEADER_BTN_SIZE - 3);
+    }
+
+    ExpandedControlsRenderResult expandedResult = new ExpandedControlsRenderResult(null, null, null);
+    if (masterTrackRenderState.controlsExpanded()) {
+      expandedResult = renderExpandedControls(
+          gc,
+          w,
+          h,
+          headerBarH,
+          trackCount,
+          masterTrackRenderState.firstVisible(),
+          masterTrackRenderState.lastVisible(),
+          masterTrackRenderState.focusedGene(),
+          masterTrackRenderState.hasActiveSampleFilterQuery());
+    }
+
+    // Update hit boxes
+    rangeStartHandleHit = expandedResult != null ? expandedResult.rangeStartHandleHit() : null;
+    rangeEndHandleHit = expandedResult != null ? expandedResult.rangeEndHandleHit() : null;
+    rangeLabelHit = expandedResult != null ? expandedResult.rangeLabelHit() : null;
+
+    drawHeaderHover(expandedResult.rangeLabelHit());
+  }
+
+  private void drawHeaderHover(HitBox rangeLabelHit) {
+    GraphicsContext reactiveGc = masterTrackReactiveCanvas.getGraphicsContext2D();
+    double w = masterTrackReactiveCanvas.getWidth();
+    double h = masterTrackReactiveCanvas.getHeight();
+    reactiveGc.clearRect(0, 0, w, h);
+
+    double headerBarH = Math.min(org.baseplayer.services.SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT, masterTrackCanvas.getHeight());
+    renderHeaderHover(
+        reactiveGc,
+        w,
+        headerBarH,
+        HEADER_BTN_SIZE,
+        HEADER_BTN_LEFT_X,
+        masterTrackRenderState.settingsHovered(),
+        masterTrackRenderState.reloadHovered(),
+        masterTrackRenderState.addHovered(),
+        masterTrackRenderState.canReload(),
+        masterTrackRenderState.highlightRangeLabel(),
+        rangeLabelHit);
+  }
+
+  // \u2500\u2500 Master track utility methods \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+  private static double headerBtnSize() {
+    return HEADER_BTN_SIZE;
+  }
+
+  private static double headerBtnLeftX() {
+    return HEADER_BTN_LEFT_X;
+  }
+
+  private static double reloadBtnX(double canvasWidth) {
+    return canvasWidth - 2 * (HEADER_BTN_SIZE + 4);
+  }
+
+  private static boolean inHeaderBtn(double mx, double my, double bx, double by) {
+    return mx >= bx && mx <= bx + HEADER_BTN_SIZE && my >= by && my <= by + HEADER_BTN_SIZE;
+  }
+
+  private double getMasterTrackWidth() {
+    return masterTrackCanvas.getWidth();
+  }
+
+  private void zoomAt(double zoomDirection, double targetX) {
+    if (zoomDirection == 0.0 || masterTrackDrawStack.alignmentCanvas == null) return;
+    // Use the protected zoom() method via reflection or use zoomAnimation with calculated bounds
+    // For now, calculate new zoom bounds manually
+    int direction = zoomDirection > 0 ? 1 : -1;
+    double acceleration = Math.log(Math.abs(zoomDirection) + 1) / 4.0;
+    double currentLength = masterTrackDrawStack.getViewEnd() - masterTrackDrawStack.getViewStart();
+    double newSize = currentLength - GenomicCanvas.zoomFactor * acceleration * direction;
+    double start = masterTrackDrawStack.getViewStart() + (currentLength - newSize) * (targetX / getMasterTrackWidth());
+    double end = start + newSize;
+    masterTrackDrawStack.alignmentCanvas.setStartEnd(start, end);
+  }
+
+  private void panByGenomeDelta(double genomeDelta) {
+    if (masterTrackDrawStack.alignmentCanvas != null) {
+      masterTrackDrawStack.alignmentCanvas.setStart(masterTrackDrawStack.getViewStart() - genomeDelta);
+    }
   }
 }

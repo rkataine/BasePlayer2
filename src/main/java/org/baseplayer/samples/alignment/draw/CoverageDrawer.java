@@ -25,9 +25,8 @@ import javafx.scene.paint.Color;
  * Unified coverage data computation and drawing.
  * <p>
  * Builds a per-sample matrix of coverage values (coverage, mismatches, methylation)
- * in a single left-to-right pass through the reads. Then a single rendering pass
- * draws both individual sample tracks and the master track methylation lines,
- * iterating the matrix only once from left to right.
+ * in a single left-to-right pass through the reads. Sample tracks are rendered
+ * here, while master-track aggregate overlays are rendered by MasterTrackCanvas.
  */
 public class CoverageDrawer {
 
@@ -608,16 +607,8 @@ public class CoverageDrawer {
   // ── Drawing methods ──
 
   /**
-   * Single-pass rendering: iterates columns left-to-right, drawing both individual
-   * sample coverage tracks and master track methylation lines simultaneously.
-   *
-   * @param gc               graphics context to draw on
-   * @param canvasWidth      canvas width
-   * @param masterTrackHeight height of the master track area
-   * @param sampleHeight     height per sample track
-   * @param scrollBarPosition vertical scroll offset
-   * @param coverageOnly     true if in coverage-only mode (full track height)
-   * @param coverageFractionH height of coverage area when in read+coverage mode
+   * Render per-sample coverage/mismatch/methylation content into sample tracks.
+    * Master-track overlays are rendered separately by MasterTrackCanvas.
    */
   public void render(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
                      double sampleHeight, double scrollBarPosition,
@@ -629,39 +620,14 @@ public class CoverageDrawer {
     double mmMinFrac = Settings.get().getMismatchMinFraction();
     int mmMinCount = Settings.get().getMismatchMinCount();
 
-    // Determine which samples have methylation data for master track
-    java.util.List<SampleRow> methylRows = new java.util.ArrayList<>();
     for (SampleRow row : currentRows) {
-      if (row.sample.isMethylationData() && row.smoothedMethylRatio != null) {
-        methylRows.add(row);
-      }
-    }
-    boolean hasMasterMethyl = !methylRows.isEmpty();
-
-    // Draw master track background if needed
-    if (hasMasterMethyl && masterTrackHeight >= 10) {
-      gc.setFill(Color.rgb(25, 28, 35, 0.95));
-      gc.fillRect(0, 0, canvasWidth, masterTrackHeight);
-
-      gc.setStroke(Color.rgb(80, 80, 80, 0.4));
-      gc.setLineWidth(0.5);
-      double y50 = 2 + (masterTrackHeight - 4) * 0.5;
-      gc.strokeLine(0, y50, canvasWidth, y50);
-      gc.setLineWidth(1.0);
-    }
-
-    // ── Single left-to-right pass: draw per-sample coverage + master methylation ──
-
-    // First draw per-sample coverage bars and mismatches
-    for (SampleRow row : currentRows) {
-      if (row.masterTrackOnly) continue; // Skip rows only needed for master track
+      if (row.masterTrackOnly) continue;
       double sampleY = masterTrackHeight + row.sampleIndex * sampleHeight - scrollBarPosition;
       double covH = coverageOnly ? sampleHeight : coverageFractionH;
       double yBottom = sampleY + covH - 1;
       double scale = row.maxCoverage > 0 ? (covH - 14) / row.maxCoverage : 0;
       double barW = Math.max(1, drawStack.getPixelSize());
 
-      // Draw coverage fill — always 1px wide to prevent overdraw at close zoom
       gc.setFill(DrawColors.COVERAGE_FILL);
       for (int px = 0; px < numColumns; px++) {
         if (row.coverage[px] < 0.5) continue;
@@ -669,50 +635,43 @@ public class CoverageDrawer {
         gc.fillRect(px, yBottom - h, 1, h);
       }
 
-      // Get active color mode for this sample to determine what to draw on coverage
-      ReadColorMode colorMode = row.sample.getBamFile() != null 
-          ? row.sample.getBamFile().getReadColorMode() 
+      ReadColorMode colorMode = row.sample.getBamFile() != null
+          ? row.sample.getBamFile().getReadColorMode()
           : ReadColorMode.STRAND;
       CoverageDataType dataType = colorMode.getDataType();
 
-      // Draw numeric data bars (signal/quality), modification bars, or mismatches based on data type
-      if ((dataType == CoverageDataType.SIGNAL || dataType == CoverageDataType.QUALITY) 
+      if ((dataType == CoverageDataType.SIGNAL || dataType == CoverageDataType.QUALITY)
           && (row.maxSignal - row.minSignal) > 0) {
-        // Numeric data mode: draw average values as colored bars
-        // Works for any signal tag (UC, UD, UL, etc.) or base quality
         double signalRange = row.maxSignal - row.minSignal;
         for (int px = 0; px < numColumns; px++) {
           if (row.signalCount[px] == 0) continue;
           double avgSignal = row.signalSum[px] / row.signalCount[px];
-          double normalized = (avgSignal - row.minSignal) / signalRange; // 0-1
-          
+          double normalized = (avgSignal - row.minSignal) / signalRange;
+
           double cov = row.coverage[px];
           double covBarH = cov * scale;
           if (covBarH <= 0) continue;
-          
-          // Map normalized value to color (0=blue, 1=red)
+
           Color signalColor = Color.color(normalized, 0.3 * (1 - normalized), 1.0 - normalized);
           double h = Math.min(Math.max(2, covBarH * 0.6), covBarH);
           gc.setFill(signalColor);
           gc.fillRect(px, yBottom - h, barW, h);
         }
       } else if (dataType == CoverageDataType.MODIFICATION && !row.modTypeCounts.isEmpty()) {
-        // Base modification mode: draw modification bars by type
         ModificationColorScheme modScheme = Settings.get().getModificationColorScheme();
         for (java.util.Map.Entry<Character, double[]> entry : row.modTypeCounts.entrySet()) {
           char modKey = entry.getKey();
           double[] counts = entry.getValue();
           double[] probSums = row.modTypeProbSums.get(modKey);
-          
+
           for (int px = 0; px < numColumns; px++) {
             if (counts[px] < 0.5) continue;
             double avgProb = probSums[px] / counts[px];
-            
+
             double cov = row.coverage[px];
             double covBarH = cov * scale;
             if (covBarH <= 0) continue;
-            
-            // Get color from modification scheme
+
             Color modColor = modScheme.getColor(String.valueOf(modKey), avgProb, '?');
             double modHeight = Math.min(counts[px] * scale, covBarH);
             if (modHeight > 0) {
@@ -722,7 +681,6 @@ public class CoverageDrawer {
           }
         }
       } else {
-        // Default: draw mismatches with thresholds
         int lastMmPx = -1;
         for (int px = 0; px < numColumns; px++) {
           double totalMM = row.mmA[px] + row.mmC[px] + row.mmG[px] + row.mmT[px];
@@ -731,18 +689,17 @@ public class CoverageDrawer {
           lastMmPx = px;
 
           double cov = row.coverage[px];
-          // Top of the coverage bar at this pixel — mismatch bars must not exceed it.
           double covBarH = cov * scale;
           if (covBarH <= 0) continue;
-          double covBarTop = yBottom - covBarH; // bars are capped to this y
+          double covBarTop = yBottom - covBarH;
 
           double baseY = yBottom;
           if (row.mmT[px] >= mmMinCount && (cov == 0 || row.mmT[px] / cov >= mmMinFrac)) {
             double h = Math.min(row.mmT[px] * scale, baseY - covBarTop);
             if (h > 0) {
-            gc.setFill(DrawColors.MISMATCH_T);
-            gc.fillRect(px, baseY - h, barW, h);
-            baseY -= h;
+              gc.setFill(DrawColors.MISMATCH_T);
+              gc.fillRect(px, baseY - h, barW, h);
+              baseY -= h;
             }
           }
           if (baseY <= covBarTop) continue;
@@ -774,7 +731,6 @@ public class CoverageDrawer {
         }
       }
 
-      // Per-sample methylation line
       if (row.sample.isMethylationData()) {
         double methylTop = sampleY + 2;
         double methylBottom = sampleY + covH - 2;
@@ -787,69 +743,31 @@ public class CoverageDrawer {
         boolean started = false;
         for (int px = 0; px < numColumns; px++) {
           double val = row.smoothedMethylRatio[px];
-          if (val < 0) { started = false; continue; }
+          if (val < 0) {
+            started = false;
+            continue;
+          }
           double x = px + baseOffset;
           double y = methylBottom - val * methylH;
-          if (!started) { gc.moveTo(x, y); started = true; }
-          else { gc.lineTo(x, y); }
+          if (!started) {
+            gc.moveTo(x, y);
+            started = true;
+          } else {
+            gc.lineTo(x, y);
+          }
         }
         gc.stroke();
         gc.setLineWidth(1.0);
       }
 
-      // Max coverage label
       gc.setFill(Color.web("#aaaaaa"));
       gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
       gc.fillText(String.valueOf((int) row.maxCoverage), 3, sampleY + 10);
 
-      // Sashimi arches (splice junction arches) for RNAseq data
       sashimiDrawer.draw(gc, row.sample, sampleY, covH, canvasWidth, drawStack, chromPosToScreenPos);
     }
 
-    // Draw BED samples in sample tracks (including BED-only tracks).
     drawBedSamples(gc, canvasWidth, masterTrackHeight, sampleHeight, scrollBarPosition, coverageFractionH);
-
-    // ── Master track methylation lines (same data, just different y-mapping) ──
-    if (hasMasterMethyl && masterTrackHeight >= 10) {
-      double margin = 2;
-      double plotH = masterTrackHeight - 2 * margin;
-
-      for (SampleRow row : methylRows) {
-        Color color = DrawColors.SAMPLE_METHYL_COLORS[row.methylColorIndex % DrawColors.SAMPLE_METHYL_COLORS.length];
-        gc.setStroke(color);
-        gc.setLineWidth(1.5);
-        gc.beginPath();
-        boolean started = false;
-
-        for (int px = 0; px < numColumns; px++) {
-          double val = row.smoothedMethylRatio[px];
-          if (val < 0) { started = false; continue; }
-          double y = margin + plotH * (1.0 - val);
-          if (!started) { gc.moveTo(px, y); started = true; }
-          else { gc.lineTo(px, y); }
-        }
-        gc.stroke();
-      }
-      gc.setLineWidth(1.0);
-
-      // Sample name legend
-      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 8));
-      double legendX = 4;
-      for (SampleRow row : methylRows) {
-        Color color = DrawColors.SAMPLE_METHYL_COLORS[row.methylColorIndex % DrawColors.SAMPLE_METHYL_COLORS.length];
-        String label = row.sample.getName();
-        if (label.length() > 20) label = label.substring(0, 18) + "..";
-        gc.setFill(color);
-        gc.fillRect(legendX, masterTrackHeight - 10, 8, 6);
-        gc.setFill(Color.rgb(200, 200, 200, 0.9));
-        gc.fillText(label, legendX + 10, masterTrackHeight - 4);
-        legendX += 14 + label.length() * 5;
-      }
-
-      // Separator at bottom of master track
-      gc.setStroke(Color.rgb(100, 100, 100, 0.6));
-      gc.strokeLine(0, masterTrackHeight, canvasWidth, masterTrackHeight);
-    }
   }
 
   private void drawBedSamples(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
