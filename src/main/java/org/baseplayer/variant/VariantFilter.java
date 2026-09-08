@@ -188,15 +188,32 @@ public class VariantFilter {
 
     // ── Filtering logic ───────────────────────────────────────────────────────
 
-    public boolean passes(VariantNode node, int sampleTrackIndex) {
+    /**
+     * Variant-level filter checks shared by all samples for a node.
+     * Use this to avoid repeating annotation/type checks in per-sample loops.
+     */
+    public boolean passesNodeLevel(VariantNode node) {
+        if (node == null) return false;
         if (!allowedTypes.contains(node.type)) return false;
 
         if (minQuality > 0) {
-            // Prefer record-level QUAL. If QUAL is missing, fall back to sample GQ.
-            if (node.siteQuality >= 0) {
-                if (node.siteQuality < minQuality) return false;
-            }
+            if (node.siteQuality >= 0 && node.siteQuality < minQuality) return false;
         }
+
+        VariantAnnotation ann = node.annotation;
+        if (ann != null) {
+            if (cancerGenesOnly && !ann.isCancerGene()) return false;
+            if (!allowedEffects.contains(ann.effect())) return false;
+        } else {
+            if (cancerGenesOnly) return false;
+            if (!allowedEffects.contains(VariantEffect.INTERGENIC)) return false;
+        }
+
+        return true;
+    }
+
+    public boolean passesSampleThresholds(VariantNode node, int sampleTrackIndex) {
+        if (node == null) return false;
 
         VariantNode.SampleCall call = node.getSampleCall(sampleTrackIndex);
         if (call != null) {
@@ -205,25 +222,15 @@ public class VariantFilter {
             if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
         }
 
-        VariantAnnotation ann = node.annotation;
-        
+        return true;
+    }
+
+    public boolean passes(VariantNode node, int sampleTrackIndex) {
         // TODO: INFO and FILTER field filtering
         // Once VariantNode stores INFO/FILTER fields, apply those filters here:
         // - Check infoFieldFilters against node.infoFields
         // - Check allowedFilterValues against node.filterField
-        if (ann != null) {
-            if (cancerGenesOnly && !ann.isCancerGene()) return false;
-
-            VariantEffect effect = ann.effect();
-            // Check if this effect is allowed
-            if (!allowedEffects.contains(effect)) return false;
-        } else {
-            if (cancerGenesOnly) return false;
-            // For unannotated variants, treat as intergenic
-            if (!allowedEffects.contains(VariantEffect.INTERGENIC)) return false;
-        }
-
-        return true;
+        return passesNodeLevel(node) && passesSampleThresholds(node, sampleTrackIndex);
     }
 
     /** Returns true if all filters are at default (pass-all) state. */

@@ -1666,9 +1666,6 @@ public class AlignmentCanvas extends GenomicCanvas {
    * Clear the variant list (e.g., when navigating to a new region).
    */
   public void clearVariantList() {
-    if (variantList != null) {
-      variantList.clear();
-    }
     variantList = null;
     masterTrackCanvas.clearVariantList();
   }

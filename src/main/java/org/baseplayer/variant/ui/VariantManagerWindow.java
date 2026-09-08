@@ -20,9 +20,15 @@ public class VariantManagerWindow {
     private static VariantManagerController currentController = null;
 
     public static void show(Window owner, VcfManager vcfManager, Runnable onClose) {
-        // If already open, bring to front and update VcfManager reference
-        if (currentStage != null && currentStage.isShowing()) {
+        if (currentStage != null) {
+            if (currentStage.isIconified()) {
+                currentStage.setIconified(false);
+            }
+            if (!currentStage.isShowing()) {
+                currentStage.show();
+            }
             currentStage.toFront();
+            currentStage.requestFocus();
             if (currentController != null) {
                 currentController.updateVcfManager(vcfManager);
             }
@@ -55,22 +61,32 @@ public class VariantManagerWindow {
             
             // Set up controller with stage reference
             controller.setup(stage, vcfManager, onClose);
+
+            stage.setOnCloseRequest(event -> {
+                event.consume();
+                stage.hide();
+                if (onClose != null) {
+                    onClose.run();
+                }
+            });
+
+            // Keep manager coupled to main app lifecycle without forcing owned-window behavior.
+            if (owner != null) {
+                owner.showingProperty().addListener((obs, wasShowing, isShowing) -> {
+                    if (!isShowing && stage.isShowing()) {
+                        stage.hide();
+                    }
+                });
+            }
             
             // Store singleton references
             currentStage = stage;
             currentController = controller;
             
-            // Handle window close — clear singleton references
-            stage.setOnHidden(e -> {
-                controller.cleanup();
-                currentStage = null;
-                currentController = null;
-            });
-            
             stage.show();
             
         } catch (IOException e) {
-            System.err.println("Error loading Variant Manager FXML: " + e.getMessage());
+           // System.err.println("Error loading Variant Manager FXML: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -78,5 +94,16 @@ public class VariantManagerWindow {
     /** Check if the Variant Manager window is currently open. */
     public static boolean isOpen() {
         return currentStage != null && currentStage.isShowing();
+    }
+
+    public static VariantManagerController getCurrentController() {
+        return currentController;
+    }
+
+    public static void openVariantManager(Window owner, VcfManager vcfManager, Runnable onClose) {
+        if (vcfManager == null || owner == null) {
+            return;
+        }
+        show(owner, vcfManager, onClose);
     }
 }

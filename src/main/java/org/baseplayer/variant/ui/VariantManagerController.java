@@ -1,12 +1,13 @@
 package org.baseplayer.variant.ui;
 
-import org.baseplayer.annotation.CosmicCensusEntry;
+import org.baseplayer.MainApp;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -17,15 +18,16 @@ import org.baseplayer.variant.annotation.VariantEffect;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.application.Platform;
-import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
-import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.*;
-import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.util.Duration;
+
+import java.util.*;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -40,7 +42,6 @@ import java.net.URL;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.*;
 import java.util.prefs.Preferences;
 
 /**
@@ -50,12 +51,6 @@ import java.util.prefs.Preferences;
 public class VariantManagerController implements Initializable {
 
     private static final String TEXT           = "white";
-    private static final String CANCER_COLOR    = "#d16624";
-    // Effect-based text colors
-    private static final String COLOR_SYNONYMOUS  = "#4caf50";  // Green
-    private static final String COLOR_MISSENSE    = "#ff9800";  // Orange
-    private static final String COLOR_TRUNCATING  = "#f44336";  // Red
-    private static final String COLOR_NONCODING   = "#9e9e9e";  // Light gray
 
     // ── FXML Components ───────────────────────────────────────────────────────
 
@@ -72,6 +67,7 @@ public class VariantManagerController implements Initializable {
     @FXML private CheckBox cancerOnlyCheckBox;
     @FXML private VBox advancedFiltersContainer;
     @FXML private Button addInfoFilterButton, addFilterFieldButton;
+    @FXML private Button annotateAllChromosomesButton;
     @FXML private HBox reloadBanner;
     @FXML private Label reloadBannerLabel;
     @FXML private Button reloadBannerButton;
@@ -80,6 +76,9 @@ public class VariantManagerController implements Initializable {
     @FXML private VBox loadingModal;
     @FXML private ProgressIndicator loadingSpinner;
     @FXML private Label loadingLabel;
+    @FXML private ProgressBar loadingProgressBar;
+    @FXML private Label loadingEtaLabel;
+    @FXML private Button loadingCancelButton;
 
     // Filter Tab: Sample Comparison
     @FXML private RadioButton showAllSamplesRadio, sharedVariantsRadio, uniqueVariantsRadio, differentialRadio;
@@ -98,24 +97,24 @@ public class VariantManagerController implements Initializable {
     @FXML private TableColumn<ControlFileEntry, String> controlFileActionsColumn;
 
     // Results Tables
-    @FXML private TableView<AnnotationRow> codingTable, intronicTable, intergenicTable;
+    @FXML private TableView<VariantNode> codingTable, intronicTable, intergenicTable;
     @FXML private Tab codingTab, intronicTab, intergenicTab;
 
     // Table Columns - Coding
-    @FXML private TableColumn<AnnotationRow, AnnotationRow> codingGeneColumn;
-    @FXML private TableColumn<AnnotationRow, String> codingPositionColumn, codingRefAltColumn, codingTypeColumn;
-    @FXML private TableColumn<AnnotationRow, String> codingEffectColumn, codingAaChangeColumn, codingCodonChangeColumn;
-    @FXML private TableColumn<AnnotationRow, String> codingSamplesColumn, codingQualityColumn;
+    @FXML private TableColumn<VariantNode, VariantNode> codingGeneColumn;
+    @FXML private TableColumn<VariantNode, String> codingPositionColumn, codingRefAltColumn, codingTypeColumn;
+    @FXML private TableColumn<VariantNode, String> codingEffectColumn, codingAaChangeColumn, codingCodonChangeColumn;
+    @FXML private TableColumn<VariantNode, String> codingSamplesColumn, codingQualityColumn;
 
     // Table Columns - Intronic
-    @FXML private TableColumn<AnnotationRow, AnnotationRow> intronicGeneColumn;
-    @FXML private TableColumn<AnnotationRow, String> intronicPositionColumn, intronicRefAltColumn, intronicTypeColumn;
-    @FXML private TableColumn<AnnotationRow, String> intronicSamplesColumn, intronicQualityColumn;
+    @FXML private TableColumn<VariantNode, VariantNode> intronicGeneColumn;
+    @FXML private TableColumn<VariantNode, String> intronicPositionColumn, intronicRefAltColumn, intronicTypeColumn;
+    @FXML private TableColumn<VariantNode, String> intronicSamplesColumn, intronicQualityColumn;
 
     // Table Columns - Intergenic
-    @FXML private TableColumn<AnnotationRow, AnnotationRow> intergenicGeneColumn;
-    @FXML private TableColumn<AnnotationRow, String> intergenicPositionColumn, intergenicRefAltColumn, intergenicTypeColumn;
-    @FXML private TableColumn<AnnotationRow, String> intergenicSamplesColumn, intergenicQualityColumn;
+    @FXML private TableColumn<VariantNode, VariantNode> intergenicGeneColumn;
+    @FXML private TableColumn<VariantNode, String> intergenicPositionColumn, intergenicRefAltColumn, intergenicTypeColumn;
+    @FXML private TableColumn<VariantNode, String> intergenicSamplesColumn, intergenicQualityColumn;
 
     // Filter & Results tab panes
     @FXML private SplitPane mainSplitPane;
@@ -139,11 +138,13 @@ public class VariantManagerController implements Initializable {
     private Stage stage;
 
     private VariantList sourceVariants;
+    private List<VcfManager.CachedChromosomeVariants> sourceVariantLists = List.of();
     private String chromosome;
     private ChangeListener<Boolean> updateListener;
     private volatile boolean annotationRunning;
     private volatile Thread annotationThread;
     private long lastSeenVariantsRevision = -1;
+    private String pendingScrollToChromosome;
     
     // Debounce timer for real-time slider updates (200ms delay after last change)
     private Timeline filterDebounceTimer;
@@ -151,13 +152,18 @@ public class VariantManagerController implements Initializable {
     private Timeline immediateFilterApplyTimer;
     // Delay showing loading modal so quick updates don't flash a spinner
     private Timeline loadingModalDelayTimer;
+    private boolean loadingModalRequested = false;
+    private String loadingModalRequestedMessage = "";
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
+    private volatile boolean allChromosomeAnnotationRunning = false;
+    private volatile ThreadRunner.RunnerTask allChromosomeAnnotationTask;
     private boolean suppressFilterApplyEvents = false;
     private VariantFilter pendingReloadFilter;
     private static final String PREF_API_KEY   = "gemini_api_key";
     private static final String PREF_API_MODEL = "gemini_model";
     private volatile boolean agentRunning = false;
+    private VariantTable variantTable;
     
     // Dynamic variant type checkboxes
     private java.util.Map<VcfVariantType, CheckBox> variantTypeCheckBoxes = new java.util.HashMap<>();
@@ -173,11 +179,9 @@ public class VariantManagerController implements Initializable {
         uniqueVariantsRadio.setToggleGroup(comparisonModeGroup);
         differentialRadio.setToggleGroup(comparisonModeGroup);
 
-        // Bind sliders to text fields and labels
         setupSliderBindings();
 
-        // Set up table columns
-        setupTableColumns();
+        initializeVariantTable();
 
         // Apply filters automatically on checkbox change
         setupAutoFilterListeners();
@@ -208,6 +212,8 @@ public class VariantManagerController implements Initializable {
         // Load initial data
         loadData();
 
+        setupWindowVisibilityListeners();
+
         // Keep a balanced workspace: filters on top, tables below.
         Platform.runLater(() -> {
             if (mainSplitPane != null) {
@@ -222,6 +228,7 @@ public class VariantManagerController implements Initializable {
             if (controlFilesSplitPane != null) {
                 controlFilesSplitPane.setDividerPositions(0.5);
             }
+            handleHostWindowStateChanged();
         });
     }
 
@@ -241,6 +248,10 @@ public class VariantManagerController implements Initializable {
         if (annotationThread != null && annotationThread.isAlive()) {
             annotationThread.interrupt();
         }
+        ThreadRunner.RunnerTask task = allChromosomeAnnotationTask;
+        if (task != null && !task.isCompleted()) {
+            task.cancel();
+        }
         if (updateListener != null) {
             GenomicCanvas.update.removeListener(updateListener);
         }
@@ -253,7 +264,18 @@ public class VariantManagerController implements Initializable {
         }
     }
 
-    // ── Slider Bindings ───────────────────────────────────────────────────────
+    public void clearBatchAnnotationResults() {
+        allChromosomeAnnotationTask = null;
+        lastSeenVariantsRevision = -1;
+        sourceVariants = null;
+        sourceVariantLists = List.of();
+        variantTable().setZeroTabCounts();
+        
+        setTableItems(
+            FXCollections.<VariantTable.TableRow>observableArrayList(),
+            FXCollections.<VariantTable.TableRow>observableArrayList(),
+            FXCollections.<VariantTable.TableRow>observableArrayList());
+    }
 
     private void setupSliderBindings() {
         // Initialize debounce timer for real-time filter updates
@@ -311,7 +333,7 @@ public class VariantManagerController implements Initializable {
      * so rapid slider movements only trigger one update 200ms after the last change.
      */
     private void scheduleFilterUpdate() {
-        if (suppressFilterApplyEvents) {
+        if (suppressFilterApplyEvents || allChromosomeAnnotationRunning) {
             return;
         }
         if (filterDebounceTimer != null) {
@@ -321,7 +343,7 @@ public class VariantManagerController implements Initializable {
     }
 
     private void scheduleImmediateFilterApply() {
-        if (suppressFilterApplyEvents) {
+        if (suppressFilterApplyEvents || allChromosomeAnnotationRunning) {
             return;
         }
         Platform.requestNextPulse();
@@ -508,14 +530,6 @@ public class VariantManagerController implements Initializable {
         int columnCount = 3;
         int row = 0;
         int col = 0;
-        java.util.Set<CheckBox> alreadyInGrid = new java.util.HashSet<>();
-        
-        // Collect existing checkboxes from the grid
-        for (javafx.scene.Node node : variantTypesContainer.getChildren()) {
-            if (node instanceof CheckBox) {
-                alreadyInGrid.add((CheckBox) node);
-            }
-        }
         
         // Add newly created checkboxes to the grid
         for (VcfVariantType type : addedInThisCall) {
@@ -534,13 +548,17 @@ public class VariantManagerController implements Initializable {
     }
     
     /**
-     * Collect all variant types present in the currently loaded chromosome data.
+     * Collect all variant types present in cached chromosome data.
      */
     private java.util.Set<VcfVariantType> collectPresentVariantTypes() {
-        if (sourceVariants != null) {
-            return sourceVariants.collectVariantTypes();
+        java.util.Set<VcfVariantType> combined = EnumSet.noneOf(VcfVariantType.class);
+        for (VcfManager.CachedChromosomeVariants cached : sourceVariantLists) {
+            VariantList variants = cached.variants();
+            if (variants != null && !variants.isEmpty()) {
+                combined.addAll(variants.collectVariantTypes());
+            }
         }
-        return java.util.Collections.emptySet();
+        return combined;
     }
     
     /**
@@ -564,129 +582,87 @@ public class VariantManagerController implements Initializable {
 
     // ── Table Setup ───────────────────────────────────────────────────────────
 
-    private void setupTableColumns() {
-        // Coding table
-        setupGeneColumn(codingGeneColumn);
-        setupTextColumn(codingPositionColumn, "position");
-        setupTextColumn(codingRefAltColumn, "refAlt");
-        setupTextColumn(codingTypeColumn, "variantType");
-        setupTextColumn(codingEffectColumn, "effectDisplay");
-        setupTextColumn(codingAaChangeColumn, "aaChange");
-        setupTextColumn(codingCodonChangeColumn, "codonChange");
-        setupTextColumn(codingSamplesColumn, "sampleCount");
-        setupTextColumn(codingQualityColumn, "maxQuality");
+    private void initializeVariantTable() {
+        variantTable = new VariantTable(
+            codingTable,
+            intronicTable,
+            intergenicTable,
+            codingTab,
+            intronicTab,
+            intergenicTab,
+            this::handleGeneRowDoubleClick);
 
-        // Intronic table
-        setupGeneColumn(intronicGeneColumn);
-        setupTextColumn(intronicPositionColumn, "position");
-        setupTextColumn(intronicRefAltColumn, "refAlt");
-        setupTextColumn(intronicTypeColumn, "variantType");
-        setupTextColumn(intronicSamplesColumn, "sampleCount");
-        setupTextColumn(intronicQualityColumn, "maxQuality");
-
-        // Intergenic table
-        setupGeneColumn(intergenicGeneColumn);
-        setupTextColumn(intergenicPositionColumn, "position");
-        setupTextColumn(intergenicRefAltColumn, "refAlt");
-        setupTextColumn(intergenicTypeColumn, "variantType");
-        setupTextColumn(intergenicSamplesColumn, "sampleCount");
-        setupTextColumn(intergenicQualityColumn, "maxQuality");
-
-        // Set up row coloring based on variant effect
-        setupTableRowFactory(codingTable);
-        setupTableRowFactory(intronicTable);
-        setupTableRowFactory(intergenicTable);
+        variantTable.initializeColumns();
     }
 
-    private void setupGeneColumn(TableColumn<AnnotationRow, AnnotationRow> column) {
-        column.setCellValueFactory(cd -> new SimpleObjectProperty<>(cd.getValue()));
-        column.setCellFactory(col -> new TableCell<>() {
-            @Override
-            protected void updateItem(AnnotationRow row, boolean empty) {
-                super.updateItem(row, empty);
-                if (empty || row == null || row.geneName == null) {
-                    setGraphic(null);
-                    setText(null);
-                    return;
-                }
-                HBox hbox = new HBox(4);
-                hbox.setAlignment(Pos.CENTER_LEFT);
-                Label lbl = new Label(row.geneName);
-                // Use cancer color if cancer gene, otherwise use effect-based color
-                String textColor = row.isCancerGene ? CANCER_COLOR : row.getRowTextColor();
-                lbl.setStyle("-fx-text-fill: " + textColor + ";");
-                hbox.getChildren().add(lbl);
-                if (row.isCancerGene && row.cosmicTier != null) {
-                    Label tier = new Label("T" + row.cosmicTier);
-                    tier.setStyle("-fx-background-color: " + CANCER_COLOR + "; -fx-text-fill: white;"
-                            + " -fx-padding: 0 3 0 3; -fx-font-size: 9; -fx-background-radius: 3;");
-                    hbox.getChildren().add(tier);
-                }
-                setGraphic(hbox);
-                setText(null);
-
-                setOnMouseClicked(event -> {
-                    if (event.getClickCount() != 2 || row == null || row.geneName == null || row.geneName.isBlank()) {
-                        return;
-                    }
-                    handleGeneRowDoubleClick(row);
-                    event.consume();
-                });
-            }
-        });
+    private VariantTable variantTable() {
+        if (variantTable == null) {
+            initializeVariantTable();
+        }
+        return variantTable;
     }
 
-    private void handleGeneRowDoubleClick(AnnotationRow row) {
-        String geneName = row.geneName;
+    private void handleGeneRowDoubleClick(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+
+        String geneName = VariantTable.rowGeneName(row);
         if (geneName == null || geneName.isBlank()) {
             return;
         }
 
         NavigationCommands.navigateToGene(geneName);
 
+        String rowChromosome = row.chromosome();
+        if (rowChromosome == null || rowChromosome.isBlank()) {
+            rowChromosome = chromosome;
+        }
+
+        Set<Integer> samplesWithGene = findSamplesWithGene(geneName, rowChromosome);
+
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        Set<Integer> geneTrackIndices = collectVisibleTracksForGene(geneName);
-        registry.setFocusedTrackIndices(geneTrackIndices, geneName);
+        if (!samplesWithGene.isEmpty()) {
+            registry.setFocusedTrackIndices(samplesWithGene, geneName);
 
-        int displayedCount = registry.getDisplayedTrackCount();
-        if (displayedCount <= 0) {
-            registry.setFirstVisibleSample(-1);
-            registry.setLastVisibleSample(-1);
-            registry.setScrollBarPosition(0);
-            GenomicCanvas.update.set(!GenomicCanvas.update.get());
-            return;
+            int displayedCount = registry.getDisplayedTrackCount();
+            if (displayedCount > 0) {
+                registry.setFirstVisibleSample(0);
+                registry.setLastVisibleSample(displayedCount - 1);
+                double viewportHeight = estimateSampleViewportHeight(registry);
+                if (viewportHeight > 0) {
+                    registry.setSampleHeight(viewportHeight / Math.max(1, displayedCount));
+                }
+                registry.setScrollBarPosition(0);
+            }
         }
-
-        registry.setFirstVisibleSample(0);
-        registry.setLastVisibleSample(displayedCount - 1);
-        double viewportHeight = estimateSampleViewportHeight(registry);
-        if (viewportHeight > 0) {
-            registry.setSampleHeight(viewportHeight / Math.max(1, displayedCount));
-        }
-        registry.setScrollBarPosition(0);
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
 
-    private Set<Integer> collectVisibleTracksForGene(String geneName) {
-        Set<Integer> trackIndices = new HashSet<>();
-        if (sourceVariants == null || sourceVariants.isEmpty() || geneName == null || geneName.isBlank()) {
-            return trackIndices;
+    /**
+     */
+    private Set<Integer> findSamplesWithGene(String geneName, String chromosome) {
+        Set<Integer> samplesWithGene = new HashSet<>();
+        
+        VariantList variants = vcfManager.getCachedVariants(chromosome);
+        if (variants == null || variants.isEmpty()) {
+            return samplesWithGene;
         }
 
         VariantFilter filter = vcfManager.getCurrentFilter();
-        VariantNode node = sourceVariants.getFirst();
+        VariantNode node = variants.getFirst();
         while (node != null) {
             VariantAnnotation ann = node.annotation;
             if (ann != null && ann.geneName() != null && ann.geneName().equalsIgnoreCase(geneName)) {
                 for (VariantNode.SampleCall call : node.getSamples()) {
                     if (filter.passes(node, call.trackIndex)) {
-                        trackIndices.add(call.trackIndex);
+                        samplesWithGene.add(call.trackIndex);
                     }
                 }
             }
             node = node.next;
         }
-        return trackIndices;
+        return samplesWithGene;
     }
 
     private double estimateSampleViewportHeight(SampleRegistry registry) {
@@ -701,27 +677,16 @@ public class VariantManagerController implements Initializable {
         return Math.max(0, derived);
     }
 
-    private void setupTextColumn(TableColumn<AnnotationRow, String> column, String property) {
-        column.setCellValueFactory(new PropertyValueFactory<>(property));
-        column.setCellFactory(col -> new TableCell<AnnotationRow, String>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty ? "" : item);
-                if (empty || getTableRow() == null || getTableRow().getItem() == null) {
-                    setStyle("");
-                } else {
-                    AnnotationRow row = getTableRow().getItem();
-                    String textColor = row.getRowTextColor();
-                    setStyle("-fx-text-fill: " + textColor + ";");
-                }
-            }
-        });
+    private void setTableItems(
+        ObservableList<VariantTable.TableRow> codingItems,
+        ObservableList<VariantTable.TableRow> intronicItems,
+        ObservableList<VariantTable.TableRow> intergenicItems) {
+
+        variantTable().setItems(codingItems, intronicItems, intergenicItems);
     }
 
-    private void setupTableRowFactory(TableView<AnnotationRow> table) {
-        // Row factory no longer needed for text coloring, but kept for potential future use
-        // Coloring is now handled by individual cell factories
+    private void setTablePlaceholders(Node codingPlaceholder, Node intronicPlaceholder, Node intergenicPlaceholder) {
+        variantTable().setPlaceholders(codingPlaceholder, intronicPlaceholder, intergenicPlaceholder);
     }
 
     // ── Filter State Management ───────────────────────────────────────────────
@@ -868,8 +833,67 @@ public class VariantManagerController implements Initializable {
         scheduleImmediateFilterApply();
     }
 
+    @FXML
+    private void handleAnnotateAllChromosomes() {
+        if (vcfManager == null || allChromosomeAnnotationRunning) {
+            return;
+        }
+
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        List<String> chromosomes = new ArrayList<>();
+        if (!stackManager.isEmpty()) {
+            org.baseplayer.draw.DrawStack drawStack = stackManager.getFirst();
+            if (drawStack != null && drawStack.chromosomeDropdown != null) {
+                chromosomes.addAll(drawStack.chromosomeDropdown.getItems());
+            }
+        }
+
+        if (chromosomes.isEmpty()) {
+            setPlaceholder("No chromosomes available in dropdown");
+            return;
+        }
+
+        cancelDelayedLoadingModal();
+        allChromosomeAnnotationRunning = true;
+        allChromosomeAnnotationTask = null;
+
+        lockFilterControls(true);
+
+        // Defer the expensive snapshot creation and task submission to let modal display first
+        Platform.runLater(() -> {
+            VariantFilter filterSnapshot = buildFilterFromUI();
+            allChromosomeAnnotationTask = vcfManager.annotateAllReferenceChromosomes(
+                filterSnapshot,
+                chromosomes,
+                this::updateAllChromosomeProgress,
+                this::completeAllChromosomeAnnotation);
+
+            if (allChromosomeAnnotationTask != null) {
+                allChromosomeAnnotationTask.setProgressSuffix(
+                    "Preparing (0/" + chromosomes.size() + "), rows: 0");
+                ThreadRunner.get().notifyDescriptionChanged();
+            } else {
+                allChromosomeAnnotationRunning = false;
+                lockFilterControls(false);
+                hideLoadingModal();
+                setPlaceholder("No chromosomes available for annotation");
+            }
+        });
+    }
+
+    @FXML
+    private void handleCancelLoadingModal() {
+        if (!allChromosomeAnnotationRunning) {
+            return;
+        }
+        ThreadRunner.RunnerTask task = allChromosomeAnnotationTask;
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
     private void applyFiltersNow() {
-        if (suppressFilterApplyEvents) {
+        if (suppressFilterApplyEvents || allChromosomeAnnotationRunning) {
             return;
         }
 
@@ -929,8 +953,6 @@ public class VariantManagerController implements Initializable {
         intergenicCheckBox.setSelected(true);
         selectAllEffectsCheckBox.setSelected(true);
         qualitySlider.setValue(0);
-        coverageSlider.setValue(0);
-        alleleFreqSlider.setValue(0);
         coverageSlider.setValue(0);
         alleleFreqSlider.setValue(0);
         cancerOnlyCheckBox.setSelected(false);
@@ -1167,42 +1189,62 @@ public class VariantManagerController implements Initializable {
     }
 
     private String buildVariantContext() {
-        VariantList variants = sourceVariants;
-        String chrom = chromosome;
-        if (variants == null || variants.isEmpty()) {
+        List<VcfManager.CachedChromosomeVariants> cachedSources = getCachedVariantSources();
+        if (cachedSources.isEmpty()) {
             return "No variants currently loaded.";
         }
+
+        int totalVariants = 0;
+        for (VcfManager.CachedChromosomeVariants cached : cachedSources) {
+            VariantList variants = cached.variants();
+            if (variants != null) {
+                totalVariants += variants.size();
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
-        sb.append("Chromosome: ").append(chrom).append("\n");
-        sb.append("Total variants: ").append(variants.size()).append("\n\n");
-        sb.append("Variant list (position, ref\u2192alt, type, gene, effect, maxGQ):\n");
+        sb.append("Cached chromosomes: ").append(cachedSources.size()).append("\n");
+        sb.append("Total variants: ").append(totalVariants).append("\n\n");
+        sb.append("Variant list (chromosome:position, ref→alt, type, gene, effect, maxGQ):\n");
 
         VariantFilter filter = vcfManager.getCurrentFilter();
         int count = 0;
-        VariantNode node = variants.getFirst();
-        while (node != null && count < 300) {
-            double maxGq = -1;
-            boolean passes = false;
-            for (VariantNode.SampleCall call : node.getSamples()) {
-                if (filter.passes(node, call.trackIndex)) {
-                    passes = true;
-                    if (call.quality > maxGq) maxGq = call.quality;
+        for (VcfManager.CachedChromosomeVariants cached : cachedSources) {
+            if (count >= 300) {
+                break;
+            }
+            String sourceChromosome = cached.chromosome();
+            VariantList variants = cached.variants();
+            if (variants == null || variants.isEmpty()) {
+                continue;
+            }
+
+            VariantNode node = variants.getFirst();
+            while (node != null && count < 300) {
+                double maxGq = -1;
+                boolean passes = false;
+                for (VariantNode.SampleCall call : node.getSamples()) {
+                    if (filter.passes(node, call.trackIndex)) {
+                        passes = true;
+                        if (call.quality > maxGq) maxGq = call.quality;
+                    }
                 }
+
+                if (passes) {
+                    VariantAnnotation ann = node.annotation;
+                    String gene = (ann != null && ann.geneName() != null) ? ann.geneName() : "-";
+                    String effect = ann != null ? ann.effect().displayName() : "intergenic";
+                    sb.append(sourceChromosome).append(":").append(node.position)
+                        .append("\t").append(node.ref).append("→").append(node.alt.isEmpty() ? "." : node.alt)
+                        .append("\t").append(typeLabel(node.type))
+                        .append("\tgene=").append(gene)
+                        .append("\teffect=").append(effect)
+                        .append("\tGQ=").append(maxGq >= 0 ? String.format("%.0f", maxGq) : "-")
+                        .append("\n");
+                    count++;
+                }
+                node = node.next;
             }
-            if (passes) {
-                VariantAnnotation ann = node.annotation;
-                String gene   = (ann != null && ann.geneName() != null) ? ann.geneName() : "-";
-                String effect = ann != null ? ann.effect().displayName() : "intergenic";
-                sb.append(chrom).append(":").append(node.position)
-                  .append("\t").append(node.ref).append("\u2192").append(node.alt.isEmpty() ? "." : node.alt)
-                  .append("\t").append(typeLabel(node.type))
-                  .append("\tgene=").append(gene)
-                  .append("\teffect=").append(effect)
-                  .append("\tGQ=").append(maxGq >= 0 ? String.format("%.0f", maxGq) : "-")
-                  .append("\n");
-                count++;
-            }
-            node = node.next;
         }
         if (count == 300) sb.append("... (truncated to 300 variants)\n");
         return sb.toString();
@@ -1259,10 +1301,27 @@ public class VariantManagerController implements Initializable {
             return;
         }
 
+        if (allChromosomeAnnotationRunning) {
+            return;
+        }
+
+        // A non-manual region/gene navigation should not trigger table autoscroll.
+        if (!vcfManager.wasLastLoadManualChromosomeSelection()) {
+            pendingScrollToChromosome = null;
+        }
+
         String activeChromosome = vcfManager.getLastLoadedChromosome();
-        if (!Objects.equals(chromosome, activeChromosome)) {
+        boolean chromosomeChanged = !Objects.equals(chromosome, activeChromosome);
+        if (chromosomeChanged) {
             chromosome = activeChromosome;
             lastSeenVariantsRevision = -1;
+            pendingScrollToChromosome = null;
+        }
+
+        if (activeChromosome != null
+            && !activeChromosome.isBlank()
+            && vcfManager.consumeManualChromosomeScrollRequest(activeChromosome)) {
+            pendingScrollToChromosome = activeChromosome;
         }
 
         // Get the current variant list from VcfManager and rebuild tables if it changed
@@ -1271,21 +1330,43 @@ public class VariantManagerController implements Initializable {
         
         // Skip rebuild if variant list and revision have not changed.
         if (fresh == sourceVariants && revision == lastSeenVariantsRevision) {
+            if (pendingScrollToChromosome != null && !pendingScrollToChromosome.isBlank()) {
+                final String scrollTarget = pendingScrollToChromosome;
+                Platform.runLater(() -> {
+                    boolean scrolled = variantTable().scrollToFirstVariantForChromosome(scrollTarget);
+                    if (scrolled && Objects.equals(pendingScrollToChromosome, scrollTarget)) {
+                        pendingScrollToChromosome = null;
+                    }
+                });
+            }
             return;
         }
         
         sourceVariants = fresh;
         lastSeenVariantsRevision = revision;
+        sourceVariantLists = getCachedVariantSources();
 
-        // Update variant type filters based on current data
-        populateVariantTypeFilters();
-
-        if (sourceVariants == null || sourceVariants.isEmpty()) {
+        if (sourceVariantLists.isEmpty()) {
             clearTableItemsForChromosomeSwitch();
             setPlaceholder("No variants available");
             refreshReloadBannerState();
+            if (!isCurrentChromosomeStillLoading()) {
+                pendingScrollToChromosome = null;
+            }
             return;
         }
+
+        if (isCurrentChromosomeStillLoading()) {
+            // Progressive loads can trigger many update events; defer expensive full table rebuild
+            // and full variant-type scans until the chromosome load has completed.
+            rebuildNeeded = true;
+            cancelDelayedLoadingModal();
+            return;
+        }
+
+        // Update variant type filters after load completes to avoid repeated full-list scans
+        // during progressive loading.
+        populateVariantTypeFilters();
 
         refreshReloadBannerState();
         scheduleRebuild(vcfManager.getCurrentFilter());
@@ -1293,7 +1374,8 @@ public class VariantManagerController implements Initializable {
         if (!annotationRunning
             && chromosome != null
             && !chromosome.isBlank()
-            && !vcfManager.isAnnotated(chromosome)) {
+            && !vcfManager.isAnnotated(chromosome)
+            && !isCurrentChromosomeStillLoading()) {
             annotationRunning = true;
             final String capturedChrom = chromosome;
             final VariantList capturedVariants = sourceVariants;
@@ -1326,11 +1408,14 @@ public class VariantManagerController implements Initializable {
 
     private void scheduleRebuild(VariantFilter filter) {
         rebuildNeeded = true;
+        if (isCurrentChromosomeStillLoading()) {
+            return;
+        }
         if (!rebuildRunning) rebuildTables(filter);
     }
 
     private void rebuildTables(VariantFilter filter) {
-        if (sourceVariants == null) {
+        if (sourceVariantLists == null || sourceVariantLists.isEmpty()) {
             rebuildNeeded = false;
             cancelDelayedLoadingModal();
             return;
@@ -1339,88 +1424,126 @@ public class VariantManagerController implements Initializable {
         rebuildNeeded = false;
 
         // Show loading modal only if rebuild takes longer than 500ms.
-        scheduleDelayedLoadingModal("Rebuilding variant tables...");
+        if (!allChromosomeAnnotationRunning) {
+            scheduleDelayedLoadingModal("Rebuilding variant tables...");
+        }
         
-        final VariantList snapshot = sourceVariants;
-        final String capturedChrom = chromosome;
+        final List<VcfManager.CachedChromosomeVariants> snapshots = new ArrayList<>(sourceVariantLists);
+        final VariantFilter filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
 
         Thread buildThread = new Thread(() -> {
-            List<AnnotationRow> coding = new ArrayList<>();
-            List<AnnotationRow> intronic = new ArrayList<>();
-            List<AnnotationRow> intergenic = new ArrayList<>();
+            List<VariantTable.TableRow> coding = new ArrayList<>();
+            List<VariantTable.TableRow> intronic = new ArrayList<>();
+            List<VariantTable.TableRow> intergenic = new ArrayList<>();
 
             try {
-                VariantNode node = snapshot.getFirst();
-                while (node != null) {
-                    int passSamples = 0;
-                    double maxGq = -1;
-                    for (VariantNode.SampleCall call : node.getSamples()) {
-                        if (filter.passes(node, call.trackIndex)) {
-                            passSamples++;
-                            if (call.quality > maxGq) maxGq = call.quality;
-                        }
+                for (VcfManager.CachedChromosomeVariants cached : snapshots) {
+                    String sourceChromosome = cached.chromosome();
+                    VariantList variants = cached.variants();
+                    if (variants == null || variants.isEmpty()) {
+                        continue;
                     }
-                    if (passSamples > 0) {
-                        AnnotationRow row = new AnnotationRow(node, capturedChrom, passSamples, maxGq);
-                        VariantAnnotation ann = node.annotation;
-                        VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
-                        if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
-                            // Gene tab: coding, splice sites, UTR, and non-coding genes
-                            coding.add(row);
-                        } else if (effect.isIntronic()) {
-                            // Intronic tab: only true intronic
-                            intronic.add(row);
-                        } else {
-                            intergenic.add(row);
+
+                    VariantNode node = variants.getFirst();
+                    while (node != null) {
+                        if (!filterSnapshot.passesNodeLevel(node)) {
+                            node = node.next;
+                            continue;
                         }
+
+                        int passSamples = 0;
+                        for (VariantNode.SampleCall call : node.getSamples()) {
+                            if (filterSnapshot.passesSampleThresholds(node, call.trackIndex)) {
+                                passSamples++;
+                            }
+                        }
+                        if (passSamples > 0) {
+                            VariantAnnotation ann = node.annotation;
+                            VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
+                            VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
+                            if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
+                                // Gene tab: coding, splice sites, UTR, and non-coding genes
+                                coding.add(row);
+                            } else if (effect.isIntronic()) {
+                                // Intronic tab: only true intronic
+                                intronic.add(row);
+                            } else {
+                                intergenic.add(row);
+                            }
+                        }
+                        node = node.next;
                     }
-                    node = node.next;
                 }
             } catch (Throwable t) {
                 Platform.runLater(() -> {
                     rebuildRunning = false;
                     cancelDelayedLoadingModal();
                     // Retry if new data arrived while this build was running
-                    if (rebuildNeeded) rebuildTables(vcfManager.getCurrentFilter());
+                    if (rebuildNeeded) scheduleRebuild(vcfManager.getCurrentFilter());
                 });
                 return;
             }
 
             Platform.runLater(() -> {
                 rebuildRunning = false;
-                codingTable.setItems(FXCollections.observableArrayList(coding));
-                intronicTable.setItems(FXCollections.observableArrayList(intronic));
-                intergenicTable.setItems(FXCollections.observableArrayList(intergenic));
-
-                codingTab.setText("Gene (" + coding.size() + ")");
-                intronicTab.setText("Intronic (" + intronic.size() + ")");
-                intergenicTab.setText("Intergenic (" + intergenic.size() + ")");
+                variantTable().setDisplayContext(filterSnapshot);
+                setTableItems(
+                    FXCollections.observableArrayList(coding),
+                    FXCollections.observableArrayList(intronic),
+                    FXCollections.observableArrayList(intergenic));
 
                 if (coding.isEmpty() && intronic.isEmpty() && intergenic.isEmpty()) {
                     setPlaceholder("No variants match current filter settings");
                 } else {
-                    codingTable.setPlaceholder(null);
-                    intronicTable.setPlaceholder(null);
-                    intergenicTable.setPlaceholder(null);
+                    setTablePlaceholders(null, null, null);
                 }
+
+                if (pendingScrollToChromosome != null && !pendingScrollToChromosome.isBlank()) {
+                    final String scrollTarget = pendingScrollToChromosome;
+                    Platform.runLater(() -> {
+                        boolean scrolled = variantTable().scrollToFirstVariantForChromosome(scrollTarget);
+                        if (scrolled && Objects.equals(pendingScrollToChromosome, scrollTarget)) {
+                            pendingScrollToChromosome = null;
+                        }
+                    });
+                }
+
                 cancelDelayedLoadingModal();
                 // Retry if new data arrived while this build was running
-                if (rebuildNeeded) rebuildTables(vcfManager.getCurrentFilter());
+                if (rebuildNeeded) scheduleRebuild(vcfManager.getCurrentFilter());
             });
         }, "variant-table-build");
         buildThread.setDaemon(true);
         buildThread.start();
     }
 
+    private boolean isCurrentChromosomeStillLoading() {
+        return chromosome != null && !chromosome.isBlank() && vcfManager.isLoadingChromosome(chromosome);
+    }
+
+    private List<String> getReferenceChromosomeOrder() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        if (!stackManager.isEmpty()) {
+            org.baseplayer.draw.DrawStack drawStack = stackManager.getFirst();
+            if (drawStack != null && drawStack.chromosomeDropdown != null) {
+                return new ArrayList<>(drawStack.chromosomeDropdown.getItems());
+            }
+        }
+        return List.of();
+    }
+
+    private List<VcfManager.CachedChromosomeVariants> getCachedVariantSources() {
+        if (vcfManager == null) {
+            return List.of();
+        }
+        return vcfManager.getCachedVariantListsInOrder(getReferenceChromosomeOrder());
+    }
+
     private void setPlaceholder(String text) {
         Label lbl = new Label(text);
         lbl.setStyle("-fx-text-fill: " + TEXT + ";");
-        codingTable.setPlaceholder(lbl);
-        intronicTable.setPlaceholder(new Label(""));
-        intergenicTable.setPlaceholder(new Label(""));
-        codingTab.setText("Gene");
-        intronicTab.setText("Intronic");
-        intergenicTab.setText("Intergenic");
+        setTablePlaceholders(lbl, new Label(""), new Label(""));
+        variantTable().setBaseTabTitles();
     }
 
     private void showReloadBanner(String message) {
@@ -1440,11 +1563,131 @@ public class VariantManagerController implements Initializable {
         }
     }
 
+    private void setupWindowVisibilityListeners() {
+        if (stage != null) {
+            stage.focusedProperty().addListener((obs, oldVal, newVal) -> handleHostWindowStateChanged());
+            stage.iconifiedProperty().addListener((obs, oldVal, newVal) -> handleHostWindowStateChanged());
+            stage.showingProperty().addListener((obs, oldVal, newVal) -> handleHostWindowStateChanged());
+        }
+        if (MainApp.stage != null) {
+            MainApp.stage.focusedProperty().addListener((obs, oldVal, newVal) -> handleHostWindowStateChanged());
+            MainApp.stage.iconifiedProperty().addListener((obs, oldVal, newVal) -> handleHostWindowStateChanged());
+            MainApp.stage.showingProperty().addListener((obs, oldVal, newVal) -> handleHostWindowStateChanged());
+        }
+    }
+
+    private boolean isUiForegroundActive() {
+        if (stage == null || !stage.isShowing() || stage.isIconified()) {
+            return false;
+        }
+        if (stage.isFocused()) {
+            return true;
+        }
+        Stage mainStage = MainApp.stage;
+        return mainStage != null && mainStage.isShowing() && !mainStage.isIconified() && mainStage.isFocused();
+    }
+
+    private void handleHostWindowStateChanged() {
+        if (loadingModal == null) {
+            return;
+        }
+        if (isUiForegroundActive()) {
+            if (loadingModalRequested) {
+                applyLoadingModalVisuals(loadingModalRequestedMessage);
+                loadingModal.setVisible(true);
+                loadingModal.setManaged(true);
+            }
+        } else {
+            hideLoadingModalVisualOnly();
+        }
+    }
+
     private void showLoadingModal(String message) {
+        loadingModalRequested = true;
+        loadingModalRequestedMessage = message == null ? "" : message;
+        if (!isUiForegroundActive()) {
+            hideLoadingModalVisualOnly();
+            return;
+        }
+        applyLoadingModalVisuals(loadingModalRequestedMessage);
         if (loadingModal != null) {
-            loadingLabel.setText(message);
             loadingModal.setVisible(true);
             loadingModal.setManaged(true);
+        }
+    }
+
+    private void applyLoadingModalVisuals(String message) {
+        if (loadingModal == null) {
+            return;
+        }
+        loadingLabel.setText(message);
+        if (loadingSpinner != null) {
+            loadingSpinner.setManaged(true);
+            loadingSpinner.setVisible(true);
+        }
+        if (loadingProgressBar != null) {
+            loadingProgressBar.setManaged(false);
+            loadingProgressBar.setVisible(false);
+            loadingProgressBar.setProgress(0);
+        }
+        if (loadingEtaLabel != null) {
+            loadingEtaLabel.setManaged(false);
+            loadingEtaLabel.setVisible(false);
+            loadingEtaLabel.setText("");
+        }
+        if (loadingCancelButton != null) {
+            loadingCancelButton.setManaged(false);
+            loadingCancelButton.setVisible(false);
+            loadingCancelButton.setDisable(false);
+        }
+    }
+
+    private void updateAllChromosomeProgress(VcfManager.AllChromosomeProgress progress) {
+        if (!allChromosomeAnnotationRunning) {
+            return;
+        }
+
+        int completed = progress.completedChromosomes();
+        ThreadRunner.RunnerTask task = allChromosomeAnnotationTask;
+        if (task != null) {
+            task.setProgressSuffix(
+                progress.chromosome()
+                    + " (" + completed + "/" + progress.totalChromosomes() + ")"
+                    + ", rows: " + progress.totalRows());
+            ThreadRunner.get().notifyDescriptionChanged();
+        }
+    }
+
+    private void completeAllChromosomeAnnotation(VcfManager.AllChromosomeAnnotationResult result) {
+        ThreadRunner.RunnerTask task = allChromosomeAnnotationTask;
+        if (task != null) {
+            task.setProgressSuffix("");
+            ThreadRunner.get().notifyDescriptionChanged();
+        }
+
+        allChromosomeAnnotationRunning = false;
+        allChromosomeAnnotationTask = null;
+        lockFilterControls(false);
+        hideLoadingModal();
+        lastSeenVariantsRevision = -1;
+        loadData();
+
+        if (result != null && !result.warnings().isEmpty()) {
+            /* for (String warning : result.warnings()) {
+                System.err.println("[VariantManager] " + warning);
+            } */
+        }
+    }
+
+    private void lockFilterControls(boolean locked) {
+        if (filterTabPane != null) {
+            filterTabPane.setDisable(locked);
+        }
+        if (annotateAllChromosomesButton != null) {
+            annotateAllChromosomesButton.setDisable(locked);
+        }
+        if (reloadBannerButton != null) {
+            reloadBannerButton.setDisable(locked);
         }
     }
 
@@ -1459,6 +1702,12 @@ public class VariantManagerController implements Initializable {
     }
 
     private void hideLoadingModal() {
+        loadingModalRequested = false;
+        loadingModalRequestedMessage = "";
+        hideLoadingModalVisualOnly();
+    }
+
+    private void hideLoadingModalVisualOnly() {
         if (loadingModal != null) {
             loadingModal.setVisible(false);
             loadingModal.setManaged(false);
@@ -1470,7 +1719,9 @@ public class VariantManagerController implements Initializable {
             loadingModalDelayTimer.stop();
             loadingModalDelayTimer = null;
         }
-        hideLoadingModal();
+        if (!allChromosomeAnnotationRunning) {
+            hideLoadingModal();
+        }
     }
 
     private void refreshReloadBannerState() {
@@ -1489,68 +1740,10 @@ public class VariantManagerController implements Initializable {
     }
 
     private void clearTableItemsForChromosomeSwitch() {
-        codingTable.setItems(FXCollections.observableArrayList());
-        intronicTable.setItems(FXCollections.observableArrayList());
-        intergenicTable.setItems(FXCollections.observableArrayList());
-    }
-
-    // ── Row Model ─────────────────────────────────────────────────────────────
-
-    public static class AnnotationRow {
-        public final String position, refAlt, variantType, sampleCount, maxQuality;
-        public final String geneName, effectDisplay, aaChange, codonChange;
-        public final boolean isCancerGene;
-        public final String cosmicTier;
-        public final VariantEffect effect;
-
-        AnnotationRow(VariantNode node, String chrom, int samples, double maxGq) {
-            VariantAnnotation ann = node.annotation;
-            position = chrom + ":" + node.position;
-            refAlt = node.ref + " → " + (node.alt.isEmpty() ? "." : node.alt);
-            variantType = typeLabel(node.type);
-            sampleCount = String.valueOf(samples);
-            maxQuality = maxGq >= 0 ? String.format("%.0f", maxGq) : "-";
-
-            geneName = ann != null ? ann.geneName() : null;
-            isCancerGene = ann != null && ann.isCancerGene();
-            CosmicCensusEntry cosmic = ann != null ? ann.cosmicEntry() : null;
-            cosmicTier = cosmic != null ? cosmic.tier() : null;
-            effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
-            effectDisplay = effect.displayName();
-            aaChange = ann != null && ann.aaChange() != null ? ann.aaChange() : "";
-            codonChange = ann != null && ann.codonChange() != null ? ann.codonChange() : "";
-        }
-
-        public String getPosition() { return position; }
-        public String getRefAlt() { return refAlt; }
-        public String getVariantType() { return variantType; }
-        public String getSampleCount() { return sampleCount; }
-        public String getMaxQuality() { return maxQuality; }
-        public String getEffectDisplay() { return effectDisplay; }
-        public String getAaChange() { return aaChange; }
-        public String getCodonChange() { return codonChange; }
-
-        public boolean isSpliceSite() {
-            return effect == VariantEffect.SPLICE_SITE;
-        }
-
-        /**
-         * Get text color for row based on variant effect:
-         * - Synonymous: green
-         * - Missense/inframe indel: orange
-         * - Stop/frameshift/truncating/splice site: red
-         * - UTR/intronic/non-coding gene: light gray
-         * - Intergenic: default (white)
-         */
-        public String getRowTextColor() {
-            return switch (effect) {
-                case CODING_SYNONYMOUS -> COLOR_SYNONYMOUS;
-                case CODING_MISSENSE, CODING_INFRAME -> COLOR_MISSENSE;
-                case CODING_STOP_GAIN, CODING_STOP_LOSS, CODING_FRAMESHIFT, SPLICE_SITE -> COLOR_TRUNCATING;  // Red for highly damaging
-                case CODING_OTHER, UTR5, UTR3, INTRONIC, NONCODING_GENE -> COLOR_NONCODING;  // Light gray for non-coding variants
-                default -> TEXT; // Default white for intergenic
-            };
-        }
+        setTableItems(
+            FXCollections.<VariantTable.TableRow>observableArrayList(),
+            FXCollections.<VariantTable.TableRow>observableArrayList(),
+            FXCollections.<VariantTable.TableRow>observableArrayList());
     }
 
     private static String typeLabel(VcfVariantType type) {

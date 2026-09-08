@@ -127,6 +127,11 @@ public class VariantDrawer {
         }
         
         while (node != null && node.position <= screenEnd) {
+            if (filter != null && !filter.passesNodeLevel(node)) {
+                node = node.next;
+                continue;
+            }
+
             double x = chromPosToScreenPos.apply((double) node.position);
             
             // For SVs with spans, check if span overlaps screen even if start is off-screen
@@ -143,7 +148,7 @@ public class VariantDrawer {
                 for (int i = 0; i < visibleTrackIndices.length; i++) {
                     int trackIndex = visibleTrackIndices[i];
                     if (node.hasSample(trackIndex)) {
-                        if (filter != null && !filter.passes(node, trackIndex)) continue;
+                        if (filter != null && !filter.passesSampleThresholds(node, trackIndex)) continue;
                         
                         // Skip point variants if this sample already has one at this X pixel
                         // SV spans are never skipped—they span multiple pixels and always need to be drawn

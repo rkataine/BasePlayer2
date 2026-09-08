@@ -8,10 +8,17 @@ import java.util.function.BiPredicate;
  * Sorted linked list of variants by genomic position.
  * Memory-efficient: one node per unique genomic position, shared across all samples.
  * 
+ * Single source of truth for all variant data and metadata for a chromosome:
+ * - Variant nodes (linked list)
+ * - Loaded regions (which parts have been fetched)
+ * - Filter used to load these variants
+ * - Annotation status
+ * 
  * This structure is optimized for:
  * - Sequential iteration during drawing (cache-friendly)
  * - Memory efficiency (shared nodes across samples)
  * - Fast range queries (start/end position bounds)
+ * - Incremental loading (track what's loaded, add new VCF samples to existing lists)
  */
 public class VariantList {
     
@@ -24,6 +31,39 @@ public class VariantList {
     private long startPosition;
     private long endPosition;
     
+    /** Tracks which genomic regions have been loaded */
+    private final List<LoadedRegion> loadedRegions = new ArrayList<>();
+    
+    /** Stable key for the filter used to load these variants (for detecting filter changes) */
+    private String loadedFilterKey;
+    
+    /** Filter that was used to load these variants */
+    private VariantFilter loadedFilter;
+    
+    /** Whether these variants have been annotated */
+    private boolean annotated = false;
+    
+    private int vcfCountWhenLoaded = 0;
+    
+    /**
+     * Tracks a genomic region that has been loaded.
+     * Used to detect if a new region needs loading when viewing different parts of the chromosome.
+     */
+    public static class LoadedRegion {
+        public final long start;
+        public final long end;
+        
+        public LoadedRegion(long start, long end) {
+            this.start = start;
+            this.end = end;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("[%d-%d]", start, end);
+        }
+    }
+    
     public VariantList(String chromosome) {
         this.chromosome = chromosome;
         this.head = null;
@@ -31,6 +71,10 @@ public class VariantList {
         this.size = 0;
         this.startPosition = Long.MAX_VALUE;
         this.endPosition = Long.MIN_VALUE;
+        this.loadedFilterKey = null;
+        this.loadedFilter = null;
+        this.annotated = false;
+        this.vcfCountWhenLoaded = 0;
     }
     
     public VariantNode addVariant(long position, String ref, String alt,
@@ -280,6 +324,40 @@ public class VariantList {
         recalculateBounds();
     }
 
+    /**
+     * Remove variants that don't satisfy {@code keepPredicate}.
+     * Useful for filtering variants based on annotation (e.g., effect type).
+     */
+    public void retainVariants(java.util.function.Predicate<VariantNode> keepPredicate) {
+        if (head == null || keepPredicate == null) return;
+
+        VariantNode prev = null;
+        VariantNode current = head;
+
+        while (current != null) {
+            VariantNode next = current.next;
+
+            if (!keepPredicate.test(current)) {
+                // Remove this node
+                if (prev == null) {
+                    head = next;
+                } else {
+                    prev.next = next;
+                }
+                if (current == tail) {
+                    tail = prev;
+                }
+                size--;
+            } else {
+                prev = current;
+            }
+
+            current = next;
+        }
+
+        recalculateBounds();
+    }
+
     private void recalculateBounds() {
         if (head == null) {
             tail = null;
@@ -301,7 +379,7 @@ public class VariantList {
     }
     
     /**
-     * Clear all variants from the list.
+     * Clear all variants from the list and reset all metadata.
      */
     public void clear() {
         head = null;
@@ -309,6 +387,11 @@ public class VariantList {
         size = 0;
         startPosition = Long.MAX_VALUE;
         endPosition = Long.MIN_VALUE;
+        loadedRegions.clear();
+        loadedFilterKey = null;
+        loadedFilter = null;
+        annotated = false;
+        vcfCountWhenLoaded = 0;
     }
     
     /**
@@ -372,6 +455,104 @@ public class VariantList {
     public String toString() {
         return String.format("VariantList[%s:%d-%d, n=%d]", 
             chromosome, startPosition, endPosition, size);
+    }
+    
+    /**
+     * Check if the given region has been loaded.
+     * Returns true if the range [start, end] is fully covered by loaded regions.
+     */
+    public boolean isRegionLoaded(long start, long end) {
+        for (LoadedRegion region : loadedRegions) {
+            if (region.start <= start && region.end >= end) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Record that a genomic region has been loaded.
+     * Merges overlapping/adjacent regions to keep the list compact.
+     */
+    public void addLoadedRegion(long start, long end) {
+        if (start > end) return;
+        
+        // Merge with overlapping or adjacent regions
+        long mergedStart = start;
+        long mergedEnd = end;
+        List<LoadedRegion> toRemove = new ArrayList<>();
+        
+        for (LoadedRegion r : loadedRegions) {
+            if (r.end < mergedStart - 1 || r.start > mergedEnd + 1) {
+                continue;  // No overlap or adjacency
+            }
+            // Overlapping or adjacent: merge
+            mergedStart = Math.min(mergedStart, r.start);
+            mergedEnd = Math.max(mergedEnd, r.end);
+            toRemove.add(r);
+        }
+        
+        loadedRegions.removeAll(toRemove);
+        loadedRegions.add(new LoadedRegion(mergedStart, mergedEnd));
+    }
+    
+    /**
+     * Get all loaded regions for this chromosome.
+     */
+    public List<LoadedRegion> getLoadedRegions() {
+        return new ArrayList<>(loadedRegions);
+    }
+    
+    /**
+     * Set the filter key that was used to load these variants.
+     * The key is a stable identifier used to detect when the filter changes.
+     */
+    public void setLoadedFilterKey(String filterKey) {
+        this.loadedFilterKey = filterKey;
+    }
+    
+    /**
+     * Get the filter key used to load these variants.
+     */
+    public String getLoadedFilterKey() {
+        return loadedFilterKey;
+    }
+    
+    /**
+     * Set the filter that was used to load these variants.
+     * Used to detect when filter changes require a reload.
+     */
+    public void setLoadedFilter(VariantFilter filter) {
+        this.loadedFilter = filter;
+    }
+    
+    /**
+     * Get the filter used to load these variants.
+     */
+    public VariantFilter getLoadedFilter() {
+        return loadedFilter;
+    }
+    
+    /**
+     * Mark whether these variants have been annotated.
+     */
+    public void setAnnotated(boolean annotated) {
+        this.annotated = annotated;
+    }
+    
+    /**
+     * Check if these variants have been annotated.
+     */
+    public boolean isAnnotated() {
+        return annotated;
+    }
+
+    public void setVcfCountWhenLoaded(int count) {
+        this.vcfCountWhenLoaded = count;
+    }
+
+    public int getVcfCountWhenLoaded() {
+        return vcfCountWhenLoaded;
     }
     
     /**

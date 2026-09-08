@@ -494,7 +494,8 @@ public class SampleDataManager {
             // cause popup message/progress churn.
             Platform.runLater(() -> {
               VcfManager.getInstance().loadVariantsForCurrentView();
-              VcfManager.getInstance().autoOpenVariantManager();
+              org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+                  MainApp.stage, VcfManager.getInstance(), null);
               
               // Initialize LoadRegionButton listener and add to viewport
               org.baseplayer.controllers.MainController.initializeLoadRegionButton();
@@ -640,6 +641,12 @@ public class SampleDataManager {
           }
         }
       }
+    }
+
+    org.baseplayer.variant.ui.VariantManagerController variantController = 
+        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+    if (variantController != null) {
+      variantController.clearBatchAnnotationResults();
     }
 
     GenomicCanvas.update.set(!GenomicCanvas.update.get());

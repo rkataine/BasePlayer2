@@ -325,9 +325,14 @@ public class MasterTrackCanvas {
 
         VariantNode node = variants.getFirst();
         while (node != null) {
+          if (activeFilter != null && !activeFilter.passesNodeLevel(node)) {
+            node = node.next;
+            continue;
+          }
+
           List<Integer> passingIndices = new ArrayList<>();
           for (int idx : visibleTrackIndices) {
-            if (node.hasSample(idx) && activeFilter.passes(node, idx)) {
+            if (node.hasSample(idx) && (activeFilter == null || activeFilter.passesSampleThresholds(node, idx))) {
               passingIndices.add(idx);
             }
           }

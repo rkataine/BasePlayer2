@@ -55,6 +55,19 @@ public class VariantNode {
 
     /** Mark a sample as present; call may be null if no FORMAT data is available. */
     public void addSample(int trackIndex, SampleCall call) {
+        // Prevent duplicate sample-call objects when regions are reloaded or overlap.
+        if (samplePresence.get(trackIndex)) {
+            if (call == null || samples == null) {
+                return;
+            }
+            for (int i = 0; i < samples.size(); i++) {
+                if (samples.get(i).trackIndex == trackIndex) {
+                    samples.set(i, call);
+                    return;
+                }
+            }
+        }
+
         samplePresence.set(trackIndex);
         if (call != null) {
             if (samples == null) samples = new ArrayList<>();

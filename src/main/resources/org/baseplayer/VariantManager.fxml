@@ -163,6 +163,7 @@
                             <padding>
                                 <Insets top="12"/>
                             </padding>
+                            <Button fx:id="annotateAllChromosomesButton" text="Annotate All Chromosomes" styleClass="secondary-button" onAction="#handleAnnotateAllChromosomes"/>
                             <Button fx:id="resetFiltersButton" text="Reset All" styleClass="secondary-button" onAction="#handleResetFilters"/>
                             <Button fx:id="applyFiltersButton" text="Apply Filters" styleClass="primary-button" onAction="#handleApplyFilters"/>
                         </HBox>
@@ -412,10 +413,16 @@
     <!-- Loading Modal Overlay -->
     <VBox fx:id="loadingModal" visible="false" managed="false" spacing="12"
           alignment="CENTER" style="-fx-background-color: rgba(0, 0, 0, 0.6);">
-        <VBox spacing="12" alignment="CENTER" style="-fx-background-color: #2d2d2d; -fx-background-radius: 8; -fx-padding: 32;">
+        <VBox spacing="12" alignment="CENTER" style="-fx-background-color: #2d2d2d; -fx-background-radius: 8; -fx-padding: 32;" maxWidth="460" prefWidth="420">
             <ProgressIndicator fx:id="loadingSpinner" prefWidth="80" prefHeight="80"/>
             <Label fx:id="loadingLabel" text="Rebuilding variant tables..." 
                    style="-fx-text-fill: white; -fx-font-size: 14px;"/>
+            <ProgressBar fx:id="loadingProgressBar" prefWidth="360" progress="0" visible="false" managed="false"/>
+            <Label fx:id="loadingEtaLabel" text="Elapsed: 0s | ETA: --"
+                   style="-fx-text-fill: #c4c4c4; -fx-font-size: 12px;"
+                   visible="false" managed="false"/>
+            <Button fx:id="loadingCancelButton" text="Cancel" styleClass="secondary-button"
+                    onAction="#handleCancelLoadingModal" visible="false" managed="false"/>
         </VBox>
     </VBox>
 </StackPane>

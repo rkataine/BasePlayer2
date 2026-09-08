@@ -122,13 +122,13 @@ public class VariantLoader {
     }
 
     public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
-            VariantNode startCursor) throws IOException {
-        return streamChromosomeVariantsToList(chromosome, target, startCursor, null, null);
+            VariantNode startCursor, long chromosomeLength) throws IOException {
+        return streamChromosomeVariantsToList(chromosome, target, startCursor, null, null, chromosomeLength);
     }
 
     public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
-            VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress) throws IOException {
-        return streamChromosomeVariantsToList(chromosome, target, startCursor, onProgress, null);
+            VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress, long chromosomeLength) throws IOException {
+        return streamChromosomeVariantsToList(chromosome, target, startCursor, onProgress, null, chromosomeLength);
         }
 
         /**
@@ -141,7 +141,7 @@ public class VariantLoader {
          */
         public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
             VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress,
-            VariantFilter loadFilter) throws IOException {
+            VariantFilter loadFilter, long chromosomeLength) throws IOException {
         
         VariantNode[] cursor = {startCursor};
         int[] svProcessed = {0};
@@ -161,6 +161,7 @@ public class VariantLoader {
             onProgress.accept(0, totalSamples);
         }
         
+
         vcfReader.iterateChromosomeVariants(chromosome,
             snv -> {
                 double siteQual = snv.getQuality();
@@ -259,8 +260,10 @@ public class VariantLoader {
                         }
                     }
                 }
-            }
+            },
+            chromosomeLength
         );
+        
         if (onProgress != null && lastProgressCount[0] < totalSamples) {
             onProgress.accept(totalSamples, totalSamples);
         }

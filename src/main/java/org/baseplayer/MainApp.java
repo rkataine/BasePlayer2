@@ -97,7 +97,8 @@ public class MainApp extends Application {
         
         // Auto-open Variant Manager if VCFs are already loaded
         if (VcfManager.getInstance().hasLoadedVcf()) {
-            VcfManager.getInstance().autoOpenVariantManager();
+            org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+                MainApp.stage, VcfManager.getInstance(), null);
         }
     }
     private static Parent loadFXML(String fxml) throws IOException {

@@ -848,9 +848,12 @@ public class MasterTrackSidebar extends SidebarBase {
     MenuItem vcfItem = new MenuItem("VCF");
     vcfItem.setOnAction(e -> SampleDataManager.addVcfFile());
 
-    MenuItem variantManagerItem = new MenuItem("Variant Manager...");
+    MenuItem variantManagerItem = new MenuItem("Variant Manager");
     variantManagerItem.setOnAction(e ->
-        VcfManager.getInstance().openVariantManager(masterTrackCanvas.getScene().getWindow()));
+        org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+            masterTrackCanvas.getScene().getWindow(),
+            VcfManager.getInstance(),
+            null));
 
     MenuItem bedItem = new MenuItem("BED");
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());

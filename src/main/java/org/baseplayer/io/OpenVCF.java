@@ -90,10 +90,7 @@ public class OpenVCF {
     }
     return currentReader.getSampleNames();
   }
-  
-  /**
-   * Close the current VCF reader.
-   */
+
   public void closeCurrentReader() {
     if (currentReader != null) {
       try {
@@ -103,12 +100,5 @@ public class OpenVCF {
       }
       currentReader = null;
     }
-  }
-  
-  /**
-   * Get the currently open VCF reader (for advanced usage).
-   */
-  public VcfReader getCurrentReader() {
-    return currentReader;
   }
 }

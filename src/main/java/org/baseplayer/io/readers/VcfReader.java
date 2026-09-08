@@ -244,37 +244,24 @@ public class VcfReader implements AutoCloseable {
         return variants;
     }
 
-    /**
-     * Stream all variants for a chromosome, yielding each record to the appropriate consumer.
-     * Avoids materialising an intermediate List – variants are processed as they are read.
-     */
     public void iterateChromosomeVariants(String chromosome,
             Consumer<VcfSnvIndel> snvConsumer,
-            Consumer<VcfStructuralVariant> svConsumer) throws IOException {
-        // System.err.println("[VcfReader.iterateChromosomeVariants] Starting iteration for chromosome: " + chromosome);
+            Consumer<VcfStructuralVariant> svConsumer,
+            long chromosomeLength) throws IOException {
         String normalizedChrom = normalizeChromosomeName(chromosome);
-        // System.err.println("[VcfReader.iterateChromosomeVariants] Normalized: " + normalizedChrom);
         
-        try (var iterator = reader.iterator()) {
-            boolean foundChromosome = false;
+        try (var iterator = reader.query(normalizedChrom, 0, (int) chromosomeLength)) {
             while (iterator.hasNext()) {
                 VariantContext ctx = iterator.next();
                 
-                if (ctx.getContig().equals(normalizedChrom)) {
-                    foundChromosome = true;
-                    if (isStructuralVariant(ctx)) {
-                        // System.err.println("[VcfReader.iterateChromosomeVariants] SV #" + svCount + ": pos=" + ctx.getStart() + ", SVTYPE=" + svType + ", END=" + ctx.getAttributeAsInt("END", -1));
-                        if (svConsumer != null) {
-                            svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
-                        }
-                    } else {
-                        if (snvConsumer != null) {
-                            snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
-                        }
+                if (isStructuralVariant(ctx)) {
+                    if (svConsumer != null) {
+                        svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
                     }
-                } else if (foundChromosome) {
-                    // System.err.println("[VcfReader.iterateChromosomeVariants] Passed chromosome, stopping");
-                    break;
+                } else {
+                    if (snvConsumer != null) {
+                        snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
+                    }
                 }
             }
         } catch (Exception e) {

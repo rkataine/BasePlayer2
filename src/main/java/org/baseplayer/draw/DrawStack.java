@@ -227,7 +227,7 @@ public class DrawStack {
       : 1_000_000_000L;
     navigateTo(selected, 1, chromLen + 1);
     VcfManager vcfManager = org.baseplayer.io.VcfManager.getInstance();
-    vcfManager.loadRegionVariants(selected, 1, chromLen + 1);
+    vcfManager.loadRegionVariants(selected, 1, chromLen + 1, true);
   }
 
   public void navigateTo(String chrom, double start, double end) {
@@ -250,7 +250,7 @@ public class DrawStack {
       ? referenceGenomeService.getCurrentGenome().getChromosomeLength(chrom)
       : 1_000_000_000L;
     navigateTo(chrom, 1, chromLen + 1);
-    VcfManager.getInstance().loadRegionVariants(chrom, 1, chromLen + 1);
+    VcfManager.getInstance().loadRegionVariants(chrom, 1, chromLen + 1, true);
   }
 
   private void setChromosomeDropdownValueSilently(String value) {
