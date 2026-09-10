@@ -37,6 +37,10 @@
                                                                                 style="-fx-font-size: 10px; -fx-padding: 1 6 1 6;"
                                                                                 onAction="#handleReloadFilteredVariants"/>
                                                         </HBox>
+                                                        <Region HBox.hgrow="ALWAYS"/>
+                                                        <Button fx:id="minimizeButton" text="−" styleClass="secondary-button"
+                                                                style="-fx-font-size: 12px; -fx-padding: 2 6 2 6;"
+                                                                onAction="#handleMinimize"/>
                                                 </HBox>
                         <Separator/>
 
@@ -409,6 +413,19 @@
             </Tab>
     </TabPane>
     </SplitPane>
+    
+    <!-- Minimized Pane (Top-Left Corner) -->
+    <HBox fx:id="minimizedPane" visible="false" managed="false" spacing="8" alignment="CENTER_LEFT"
+          style="-fx-background-color: #2d2d2d; -fx-border-color: #555; -fx-border-width: 1; -fx-padding: 4 8 4 8; -fx-background-radius: 4;">
+        <StackPane.alignment>TOP_LEFT</StackPane.alignment>
+        <StackPane.margin>
+            <Insets top="8" left="8"/>
+        </StackPane.margin>
+        <Label text="Variant Manager" style="-fx-text-fill: #cccccc; -fx-font-size: 11px; -fx-font-weight: bold;"/>
+        <Button fx:id="minimizedExpandButton" text="▲" styleClass="secondary-button"
+                style="-fx-font-size: 9px; -fx-padding: 2 6 2 6;"
+                onAction="#handleExpandMinimized"/>
+    </HBox>
     
     <!-- Loading Modal Overlay -->
     <VBox fx:id="loadingModal" visible="false" managed="false" spacing="12"

@@ -79,6 +79,10 @@ public class VariantManagerController implements Initializable {
     @FXML private ProgressBar loadingProgressBar;
     @FXML private Label loadingEtaLabel;
     @FXML private Button loadingCancelButton;
+    
+    @FXML private HBox minimizedPane;
+    @FXML private Button minimizedExpandButton;
+    @FXML private Button minimizeButton;
 
     // Filter Tab: Sample Comparison
     @FXML private RadioButton showAllSamplesRadio, sharedVariantsRadio, uniqueVariantsRadio, differentialRadio;
@@ -131,10 +135,7 @@ public class VariantManagerController implements Initializable {
     @FXML private Label agentStatusLabel;
     @FXML private Button agentSubmitButton;
 
-    // ── State ─────────────────────────────────────────────────────────────────
-
     private VcfManager vcfManager;
-    private Runnable onClose;
     private Stage stage;
 
     private VariantList sourceVariants;
@@ -195,7 +196,6 @@ public class VariantManagerController implements Initializable {
     public void setup(Stage stage, VcfManager vcfManager, Runnable onClose) {
         this.stage = stage;
         this.vcfManager = vcfManager;
-        this.onClose = onClose;
 
         // Load current filter state into UI
         VariantFilter currentFilter = vcfManager.getCurrentFilter();
@@ -241,9 +241,6 @@ public class VariantManagerController implements Initializable {
         loadData();
     }
 
-    /**
-     * Called when the dialog is closed.
-     */
     public void cleanup() {
         if (annotationThread != null && annotationThread.isAlive()) {
             annotationThread.interrupt();
@@ -259,9 +256,7 @@ public class VariantManagerController implements Initializable {
         vcfManager.clearFilter();
         vcfManager.setOnVcfAdded(null);
         ServiceRegistry.getInstance().getSampleRegistry().clearSubsetSource(SampleRegistry.SubsetSource.GENE_FOCUS);
-        if (onClose != null) {
-            onClose.run();
-        }
+				MinimizedVariantManagerWindow.handleCleanup();
     }
 
     public void clearBatchAnnotationResults() {
@@ -275,6 +270,14 @@ public class VariantManagerController implements Initializable {
             FXCollections.<VariantTable.TableRow>observableArrayList(),
             FXCollections.<VariantTable.TableRow>observableArrayList(),
             FXCollections.<VariantTable.TableRow>observableArrayList());
+    }
+
+    public void handleMinimize() {
+        MinimizedVariantManagerWindow.handleMinimize(stage);
+    }
+
+    public void handleExpandMinimized() {
+        MinimizedVariantManagerWindow.handleExpand();
     }
 
     private void setupSliderBindings() {
@@ -632,6 +635,7 @@ public class VariantManagerController implements Initializable {
             }
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
+        MinimizedVariantManagerWindow.handleMinimize(stage);
     }
 
     /**
