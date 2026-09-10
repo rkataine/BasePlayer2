@@ -28,6 +28,11 @@ import javafx.collections.ObservableList;
  * - UI layout parameters (scroll position, heights)
  */
 public class SampleRegistry {
+
+    public enum SubsetSource {
+        TEXT_FILTER,
+        GENE_FOCUS
+    }
     
     // Observable list for UI binding
     private final ObservableList<SampleTrack> sampleTracks = FXCollections.observableArrayList();
@@ -88,9 +93,13 @@ public class SampleRegistry {
     public void clearSampleTracks() {
         sampleTracks.clear();
         sampleList.clear();
+        activeSampleFilterQuery = "";
+        focusedTrackIndices = null;
+        focusedGeneName = null;
         firstVisibleSample = -1;
         lastVisibleSample = -1;
         scrollBarPosition = 0;
+        sampleHeight = 0;
         hoverSample.set(-1);
     }
     
@@ -288,51 +297,36 @@ public class SampleRegistry {
     }
 
     /**
-     * Set active sample filter query (trimmed). Empty string disables filter mode.
-     */
-    public void setActiveSampleFilterQuery(String query) {
-        String oldQuery = this.activeSampleFilterQuery;
-        this.activeSampleFilterQuery = query == null ? "" : query.trim();
-
-        int displayed = getDisplayedTrackCount();
-        if (displayed <= 0) {
-            firstVisibleSample = -1;
-            lastVisibleSample = -1;
-            scrollBarPosition = 0;
-            notifyVariantIndexDirty();
-            return;
-        }
-
-        firstVisibleSample = Math.max(0, Math.min(displayed - 1, firstVisibleSample));
-        lastVisibleSample = Math.max(firstVisibleSample, Math.min(displayed - 1, lastVisibleSample));
-        
-        // Notify if filter actually changed
-        if (!oldQuery.equals(this.activeSampleFilterQuery)) {
-            notifyVariantIndexDirty();
-        }
-    }
-
-    /**
-     * Clear active sample filter query.
-     */
-    public void clearActiveSampleFilterQuery() {
-        setActiveSampleFilterQuery("");
-    }
-
-    /**
      * Whether master track is currently in filter label mode.
      */
     public boolean hasActiveSampleFilterQuery() {
         return !activeSampleFilterQuery.isEmpty();
     }
 
-    /**
-     * Restrict visible tracks to the given backing sample-track indices.
-     * Pass null to disable explicit focus filtering.
-     * Optionally supply a gene name for UI display.
-     */
-    public void setFocusedTrackIndices(Set<Integer> indices, String geneName) {
-        Set<Integer> old = focusedTrackIndices == null ? null : new HashSet<>(focusedTrackIndices);
+    public void applyTextSubsetQuery(String query) {
+        String normalized = query == null ? "" : query.trim();
+        String oldQuery = this.activeSampleFilterQuery;
+        this.activeSampleFilterQuery = normalized;
+
+        normalizeVisibleRangeAfterSubsetChange();
+        if (!oldQuery.equals(this.activeSampleFilterQuery)) {
+            notifyVariantIndexDirty();
+        }
+    }
+
+    /** Whether explicit focused-track filtering is active. */
+    public boolean hasFocusedTrackIndices() {
+        return focusedTrackIndices != null;
+    }
+
+    public String getFocusedGeneName() {
+        return focusedGeneName;
+    }
+
+    public void applyGeneSubset(Set<Integer> indices, String geneName) {
+        Set<Integer> oldIndices = focusedTrackIndices == null ? null : new HashSet<>(focusedTrackIndices);
+        String oldGeneName = focusedGeneName;
+
         if (indices == null) {
             focusedTrackIndices = null;
             focusedGeneName = null;
@@ -341,46 +335,75 @@ public class SampleRegistry {
             focusedGeneName = geneName;
         }
 
-        int displayed = getDisplayedTrackCount();
-        if (displayed <= 0) {
-            firstVisibleSample = -1;
-            lastVisibleSample = -1;
-            scrollBarPosition = 0;
-        } else {
-            firstVisibleSample = Math.max(0, Math.min(displayed - 1, firstVisibleSample));
-            lastVisibleSample = Math.max(firstVisibleSample, Math.min(displayed - 1, lastVisibleSample));
-        }
+        normalizeVisibleRangeAfterSubsetChange();
 
-        if ((old == null && focusedTrackIndices != null)
-            || (old != null && focusedTrackIndices == null)
-            || (old != null && !old.equals(focusedTrackIndices))) {
+        boolean changed = (oldIndices == null && focusedTrackIndices != null)
+            || (oldIndices != null && focusedTrackIndices == null)
+            || (oldIndices != null && !oldIndices.equals(focusedTrackIndices))
+            || (oldGeneName == null ? focusedGeneName != null : !oldGeneName.equals(focusedGeneName));
+        if (changed) {
             notifyVariantIndexDirty();
         }
     }
 
-    /**
-     * Restrict visible tracks to the given backing sample-track indices.
-     * Pass null to disable explicit focus filtering.
-     * @deprecated Use {@link #setFocusedTrackIndices(Set, String)} instead.
-     */
-    @Deprecated
-    public void setFocusedTrackIndices(Set<Integer> indices) {
-        setFocusedTrackIndices(indices, null);
+    public boolean hasActiveSubset() {
+        return hasActiveSampleFilterQuery() || hasFocusedTrackIndices();
     }
 
-    /** Clear explicit focused-track filtering. */
-    public void clearFocusedTrackIndices() {
-        setFocusedTrackIndices(null, null);
+    public boolean hasActiveSubsetSource(SubsetSource source) {
+        return switch (source) {
+            case TEXT_FILTER -> hasActiveSampleFilterQuery();
+            case GENE_FOCUS -> hasFocusedTrackIndices();
+        };
     }
 
-    /** Whether explicit focused-track filtering is active. */
-    public boolean hasFocusedTrackIndices() {
-        return focusedTrackIndices != null;
+    public void clearSubsetSource(SubsetSource source) {
+        switch (source) {
+            case TEXT_FILTER -> applyTextSubsetQuery("");
+            case GENE_FOCUS -> applyGeneSubset(null, null);
+        }
     }
 
-    /** Get the name of the currently focused gene, or null if no focus. */
-    public String getFocusedGeneName() {
-        return focusedGeneName;
+    public void clearAllSubsetSources() {
+        boolean changed = false;
+
+        if (!activeSampleFilterQuery.isEmpty()) {
+            activeSampleFilterQuery = "";
+            changed = true;
+        }
+        if (focusedTrackIndices != null || focusedGeneName != null) {
+            focusedTrackIndices = null;
+            focusedGeneName = null;
+            changed = true;
+        }
+
+        normalizeVisibleRangeAfterSubsetChange();
+        if (changed) {
+            notifyVariantIndexDirty();
+        }
+    }
+
+    public void applyVisibleRangeState(int first, int last, double viewportHeight) {
+        int trackCount = getDisplayedTrackCount();
+        if (trackCount <= 0) {
+            setFirstVisibleSample(-1);
+            setLastVisibleSample(-1);
+            setScrollBarPosition(0);
+            setSampleHeight(0);
+            return;
+        }
+
+        int clampedFirst = Math.max(0, Math.min(trackCount - 1, first));
+        int clampedLast = Math.max(clampedFirst, Math.min(trackCount - 1, last));
+        setFirstVisibleSample(clampedFirst);
+        setLastVisibleSample(clampedLast);
+
+        if (viewportHeight > 0) {
+            int visibleCount = clampedLast - clampedFirst + 1;
+            setSampleHeight(viewportHeight / Math.max(1, visibleCount));
+            double targetScroll = clampedFirst * getSampleHeight();
+            setScrollBarPosition(clampScrollBarPosition(targetScroll, viewportHeight));
+        }
     }
 
     /**
@@ -471,6 +494,19 @@ public class SampleRegistry {
         }
         return false;
     }
+
+    private void normalizeVisibleRangeAfterSubsetChange() {
+        int displayed = getDisplayedTrackCount();
+        if (displayed <= 0) {
+            firstVisibleSample = -1;
+            lastVisibleSample = -1;
+            scrollBarPosition = 0;
+            return;
+        }
+
+        firstVisibleSample = Math.max(0, Math.min(displayed - 1, firstVisibleSample));
+        lastVisibleSample = Math.max(firstVisibleSample, Math.min(displayed - 1, lastVisibleSample));
+    }
     
     /**
      * Get the height of the master track.
@@ -507,14 +543,6 @@ public class SampleRegistry {
             }
         }
     }
-    
-    /**
-     * lic void setMasterTrackHeight(double height) {
-        this.masterTrackHeight.set(Math.max(0, height));
-    }
-    
-    // ── Operations ─────────────────────────────────────────────────────────
-    
     /**
      * Repack cached BAM reads for the given stack to optimize row usage.
      * Call after zoom operations complete.

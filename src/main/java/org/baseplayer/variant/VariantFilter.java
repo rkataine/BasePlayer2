@@ -47,16 +47,20 @@ public class VariantFilter {
     public void setAllowedTypes(Set<VcfVariantType> allowedTypes) { this.allowedTypes = allowedTypes; }
 
     public Set<VariantEffect> getAllowedEffects() { return allowedEffects; }
-    public void setAllowedEffects(Set<VariantEffect> allowedEffects) { this.allowedEffects = allowedEffects; }
+    public void setAllowedEffects(Set<VariantEffect> allowedEffects) {
+        if (allowedEffects == null || allowedEffects.isEmpty()) {
+            this.allowedEffects = EnumSet.noneOf(VariantEffect.class);
+        } else {
+            this.allowedEffects = EnumSet.copyOf(allowedEffects);
+        }
+        syncVisibilityFlagsFromAllowedEffects();
+    }
 
     public boolean isShowCoding() { return showCoding; }
-    public void setShowCoding(boolean showCoding) { this.showCoding = showCoding; }
 
     public boolean isShowIntronic() { return showIntronic; }
-    public void setShowIntronic(boolean showIntronic) { this.showIntronic = showIntronic; }
 
     public boolean isShowIntergenic() { return showIntergenic; }
-    public void setShowIntergenic(boolean showIntergenic) { this.showIntergenic = showIntergenic; }
     
     public Map<String, String> getInfoFieldFilters() { return infoFieldFilters; }
     public void setInfoFieldFilters(Map<String, String> filters) { this.infoFieldFilters = filters; }
@@ -68,6 +72,36 @@ public class VariantFilter {
     }
     
     public boolean isFilterFieldsActive() { return filterFieldsActive; }
+
+    private void syncVisibilityFlagsFromAllowedEffects() {
+        boolean hasCodingLike = false;
+        boolean hasIntronic = false;
+        boolean hasIntergenic = false;
+
+        for (VariantEffect effect : allowedEffects) {
+            if (effect == null) {
+                continue;
+            }
+            if (effect.isCoding()
+                || effect.isSpliceSite()
+                || effect.isRegulatory()
+                || effect == VariantEffect.NONCODING_GENE
+                || effect == VariantEffect.UTR5
+                || effect == VariantEffect.UTR3) {
+                hasCodingLike = true;
+            }
+            if (effect.isIntronic()) {
+                hasIntronic = true;
+            }
+            if (effect == VariantEffect.INTERGENIC) {
+                hasIntergenic = true;
+            }
+        }
+
+        this.showCoding = hasCodingLike;
+        this.showIntronic = hasIntronic;
+        this.showIntergenic = hasIntergenic;
+    }
 
     /** Create a deep copy so long-running loads can use a stable filter snapshot. */
     public VariantFilter copy() {
@@ -148,42 +182,6 @@ public class VariantFilter {
             + "|info=" + String.join(",", infoPairs)
             + "|filterActive=" + filterFieldsActive
             + "|filterValues=" + String.join(",", filterVals);
-    }
-
-    /**
-     * Returns true if this filter is at least as strict as {@code base}.
-     * If false, applying this filter may require reloading data that was previously pruned.
-     */
-    public boolean isAtLeastAsStrictAs(VariantFilter base) {
-        if (base == null) return false;
-
-        if (this.minQuality < base.minQuality) return false;
-        if (this.minDepth < base.minDepth) return false;
-        if (this.minAlleleFraction < base.minAlleleFraction) return false;
-
-        if (this.allowedTypes == null || base.allowedTypes == null) return false;
-        if (!base.allowedTypes.containsAll(this.allowedTypes)) return false;
-
-        if (base.cancerGenesOnly && !this.cancerGenesOnly) return false;
-
-        if (!base.showCoding && this.showCoding) return false;
-        if (!base.showIntronic && this.showIntronic) return false;
-        if (!base.showIntergenic && this.showIntergenic) return false;
-
-        // INFO/FILTER strictness: conservative handling to avoid false negatives.
-        // Existing constraints must remain, and values for shared keys cannot change.
-        for (Map.Entry<String, String> e : base.infoFieldFilters.entrySet()) {
-            String key = e.getKey();
-            String baseVal = e.getValue();
-            if (!this.infoFieldFilters.containsKey(key)) return false;
-            String newVal = this.infoFieldFilters.get(key);
-            if (newVal == null || !newVal.equals(baseVal)) return false;
-        }
-
-        if (base.filterFieldsActive && !this.filterFieldsActive) return false;
-        if (base.filterFieldsActive && !base.allowedFilterValues.containsAll(this.allowedFilterValues)) return false;
-
-        return true;
     }
 
     // ── Filtering logic ───────────────────────────────────────────────────────

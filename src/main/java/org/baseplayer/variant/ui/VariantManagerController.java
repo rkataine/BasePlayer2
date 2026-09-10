@@ -258,7 +258,7 @@ public class VariantManagerController implements Initializable {
         cancelDelayedLoadingModal();
         vcfManager.clearFilter();
         vcfManager.setOnVcfAdded(null);
-        ServiceRegistry.getInstance().getSampleRegistry().clearFocusedTrackIndices();
+        ServiceRegistry.getInstance().getSampleRegistry().clearSubsetSource(SampleRegistry.SubsetSource.GENE_FOCUS);
         if (onClose != null) {
             onClose.run();
         }
@@ -623,17 +623,12 @@ public class VariantManagerController implements Initializable {
 
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
         if (!samplesWithGene.isEmpty()) {
-            registry.setFocusedTrackIndices(samplesWithGene, geneName);
+            registry.applyGeneSubset(samplesWithGene, geneName);
 
             int displayedCount = registry.getDisplayedTrackCount();
             if (displayedCount > 0) {
-                registry.setFirstVisibleSample(0);
-                registry.setLastVisibleSample(displayedCount - 1);
                 double viewportHeight = estimateSampleViewportHeight(registry);
-                if (viewportHeight > 0) {
-                    registry.setSampleHeight(viewportHeight / Math.max(1, displayedCount));
-                }
-                registry.setScrollBarPosition(0);
+                registry.applyVisibleRangeState(0, displayedCount - 1, viewportHeight);
             }
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -777,7 +772,6 @@ public class VariantManagerController implements Initializable {
         if (intergenicCheckBox.isSelected()) effects.add(VariantEffect.INTERGENIC);
         
         filter.setAllowedEffects(effects);
-
         // Quality
         try {
             filter.setMinQuality(Double.parseDouble(qualityField.getText().trim()));
@@ -899,24 +893,13 @@ public class VariantManagerController implements Initializable {
 
         VariantFilter filter = buildFilterFromUI();
 
-        if (chromosome == null || chromosome.isBlank() || sourceVariants == null) {
+        if (vcfManager != null) {
             vcfManager.setCurrentFilterForNextLoad(filter);
-            hideReloadBanner();
-            return;
+            vcfManager.applyFilter(filter);
         }
-
-        if (vcfManager.canApplyFilterWithoutReload(filter, chromosome)) {
-            pendingReloadFilter = null;
-            hideReloadBanner();
-            vcfManager.applyFilter(filter, chromosome);
-            scheduleRebuild(filter);
-            return;
-        }
-
-        // Looser than loaded dataset: keep UI change, but require reload to include newly allowed variants.
         pendingReloadFilter = filter;
-        vcfManager.setCurrentFilterForNextLoad(filter);
         showReloadBanner("Reload needed");
+        scheduleRebuild(filter);
     }
 
     @FXML
@@ -1422,12 +1405,6 @@ public class VariantManagerController implements Initializable {
         }
         rebuildRunning = true;
         rebuildNeeded = false;
-
-        // Show loading modal only if rebuild takes longer than 500ms.
-        if (!allChromosomeAnnotationRunning) {
-            scheduleDelayedLoadingModal("Rebuilding variant tables...");
-        }
-        
         final List<VcfManager.CachedChromosomeVariants> snapshots = new ArrayList<>(sourceVariantLists);
         final VariantFilter filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
 
@@ -1551,7 +1528,6 @@ public class VariantManagerController implements Initializable {
             reloadBannerLabel.setText(message);
         }
         if (reloadBanner != null) {
-            reloadBanner.setManaged(true);
             reloadBanner.setVisible(true);
         }
     }
@@ -1559,7 +1535,6 @@ public class VariantManagerController implements Initializable {
     private void hideReloadBanner() {
         if (reloadBanner != null) {
             reloadBanner.setVisible(false);
-            reloadBanner.setManaged(false);
         }
     }
 
@@ -1599,20 +1574,6 @@ public class VariantManagerController implements Initializable {
             }
         } else {
             hideLoadingModalVisualOnly();
-        }
-    }
-
-    private void showLoadingModal(String message) {
-        loadingModalRequested = true;
-        loadingModalRequestedMessage = message == null ? "" : message;
-        if (!isUiForegroundActive()) {
-            hideLoadingModalVisualOnly();
-            return;
-        }
-        applyLoadingModalVisuals(loadingModalRequestedMessage);
-        if (loadingModal != null) {
-            loadingModal.setVisible(true);
-            loadingModal.setManaged(true);
         }
     }
 
@@ -1671,12 +1632,6 @@ public class VariantManagerController implements Initializable {
         hideLoadingModal();
         lastSeenVariantsRevision = -1;
         loadData();
-
-        if (result != null && !result.warnings().isEmpty()) {
-            /* for (String warning : result.warnings()) {
-                System.err.println("[VariantManager] " + warning);
-            } */
-        }
     }
 
     private void lockFilterControls(boolean locked) {
@@ -1689,16 +1644,6 @@ public class VariantManagerController implements Initializable {
         if (reloadBannerButton != null) {
             reloadBannerButton.setDisable(locked);
         }
-    }
-
-    private void scheduleDelayedLoadingModal(String message) {
-        cancelDelayedLoadingModal();
-        if (loadingModal == null) {
-            return;
-        }
-        loadingModalDelayTimer = new Timeline(new KeyFrame(Duration.millis(500), e -> showLoadingModal(message)));
-        loadingModalDelayTimer.setCycleCount(1);
-        loadingModalDelayTimer.playFromStart();
     }
 
     private void hideLoadingModal() {
@@ -1725,18 +1670,11 @@ public class VariantManagerController implements Initializable {
     }
 
     private void refreshReloadBannerState() {
-        if (vcfManager == null || chromosome == null || chromosome.isBlank() || sourceVariants == null) {
-            hideReloadBanner();
-            return;
-        }
-        VariantFilter uiFilter = buildFilterFromUI();
-        if (vcfManager.canApplyFilterWithoutReload(uiFilter, chromosome)) {
-            pendingReloadFilter = null;
-            hideReloadBanner();
-        } else {
-            pendingReloadFilter = uiFilter;
+        if (pendingReloadFilter != null) {
             showReloadBanner("Reload needed");
+						return;
         }
+            hideReloadBanner();
     }
 
     private void clearTableItemsForChromosomeSwitch() {

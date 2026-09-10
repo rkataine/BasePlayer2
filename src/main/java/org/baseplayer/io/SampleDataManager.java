@@ -622,7 +622,7 @@ public class SampleDataManager {
     registry.getSampleTracks().clear();
     registry.getSampleList().clear();
     
-    registry.clearActiveSampleFilterQuery();
+    registry.clearAllSubsetSources();
     registry.setFirstVisibleSample(-1);
     registry.setLastVisibleSample(-1);
     registry.setScrollBarPosition(0);

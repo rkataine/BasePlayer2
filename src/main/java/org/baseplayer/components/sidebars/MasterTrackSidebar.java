@@ -235,7 +235,7 @@ public class MasterTrackSidebar extends SidebarBase {
         settingsHovered,
         reloadHovered,
         addHovered,
-        rangeLabelHovered && sampleRegistry.hasFocusedTrackIndices());
+        rangeLabelHovered && sampleRegistry.hasActiveSubset());
   }
 
   // -- Master header interactions ------------------------------------------
@@ -392,15 +392,15 @@ public class MasterTrackSidebar extends SidebarBase {
   }
 
   private void handleMasterClick(double x, double y, double screenX, double screenY) {
-    if (isControlsExpanded() && rangeLabelHit != null && rangeLabelHit.contains(x, y)) {
-      if (sampleRegistry.hasFocusedTrackIndices()) {
-        sampleRegistry.clearFocusedTrackIndices();
-        int trackCount = sampleRegistry.getDisplayedTrackCount();
-        if (trackCount > 0) {
-          sampleRegistry.setFirstVisibleSample(0);
-          sampleRegistry.setLastVisibleSample(trackCount - 1);
-        }
-        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+		if (isControlsExpanded() && rangeLabelHit != null && rangeLabelHit.contains(x, y)) {
+      if (sampleRegistry.hasFocusedTrackIndices()
+          && ((masterTrackRenderState.focusedGene() != null && !masterTrackRenderState.focusedGene().isBlank())
+              || !sampleRegistry.hasActiveSampleFilterQuery())) {
+        clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.GENE_FOCUS);
+        return;
+      }
+      if (sampleRegistry.hasActiveSampleFilterQuery()) {
+        clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.TEXT_FILTER);
         return;
       }
       showRangeInputPopup(screenX, screenY);
@@ -605,7 +605,7 @@ public class MasterTrackSidebar extends SidebarBase {
     Runnable applyFilterLive = () -> {
       String filterQuery = filterField.getText() == null ? "" : filterField.getText().trim();
       if (!filterQuery.isEmpty()) {
-        sampleRegistry.setActiveSampleFilterQuery(filterQuery);
+        sampleRegistry.applyTextSubsetQuery(filterQuery);
         int filteredCount = sampleRegistry.getDisplayedTrackCount();
         if (filteredCount > 0) {
           applyVisibleRange(0, filteredCount - 1);
@@ -615,10 +615,7 @@ public class MasterTrackSidebar extends SidebarBase {
         return;
       }
 
-      int prevFirst = sampleRegistry.getFirstVisibleSample();
-      int prevLast = sampleRegistry.getLastVisibleSample();
-      sampleRegistry.clearActiveSampleFilterQuery();
-      applyVisibleRange(prevFirst, prevLast);
+      clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.TEXT_FILTER);
     };
 
     applyBtn.setOnAction(e -> applyRange.run());
@@ -628,7 +625,6 @@ public class MasterTrackSidebar extends SidebarBase {
     filterField.setOnAction(e -> applyFilterLive.run());
     clearBtn.setOnAction(e -> {
       filterField.clear();
-      applyFilterLive.run();
       rangeControlsPopup.hide();
     });
 
@@ -664,28 +660,26 @@ public class MasterTrackSidebar extends SidebarBase {
   private void applyVisibleRange(int first, int last) {
     int trackCount = sampleRegistry.getDisplayedTrackCount();
     if (trackCount <= 0) {
-      sampleRegistry.setFirstVisibleSample(-1);
-      sampleRegistry.setLastVisibleSample(-1);
-      sampleRegistry.setScrollBarPosition(0);
+      sampleRegistry.applyVisibleRangeState(-1, -1, 0);
       sampleRegistry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
       return;
     }
 
-    int clampedFirst = Math.max(0, Math.min(trackCount - 1, first));
-    int clampedLast = Math.max(clampedFirst, Math.min(trackCount - 1, last));
-    sampleRegistry.setFirstVisibleSample(clampedFirst);
-    sampleRegistry.setLastVisibleSample(clampedLast);
-
     double viewportHeight = estimateSampleViewportHeight();
-    int visibleCount = clampedLast - clampedFirst + 1;
-    if (viewportHeight > 0) {
-      sampleRegistry.setSampleHeight(viewportHeight / Math.max(1, visibleCount));
-      double targetScroll = clampedFirst * sampleRegistry.getSampleHeight();
-      sampleRegistry.setScrollBarPosition(sampleRegistry.clampScrollBarPosition(targetScroll, viewportHeight));
-    }
+    sampleRegistry.applyVisibleRangeState(first, last, viewportHeight);
 
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  private void clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource source) {
+    sampleRegistry.clearSubsetSource(source);
+    int trackCount = sampleRegistry.getDisplayedTrackCount();
+    if (trackCount > 0) {
+      applyVisibleRange(0, trackCount - 1);
+    } else {
+      applyVisibleRange(0, 0);
+    }
   }
 
   private double estimateSampleViewportHeight() {
@@ -751,19 +745,19 @@ public class MasterTrackSidebar extends SidebarBase {
       gc.setFill(Color.web("#ffa500"));
       gc.fillText("[clear x]", w - 70, headerBarH + 14);
       labelHit = new HitBox(w - 72, headerBarH + 1, 70, 18);
+    } else if (hasActiveSampleFilterQuery) {
+      gc.fillText("Visible samples", 8, headerBarH + 14);
+      gc.setFill(Color.web("#ffa500"));
+      gc.fillText("Filter [clear x]", 96, headerBarH + 14);
+      labelHit = new HitBox(90, headerBarH + 1, 110, 18);
     } else {
       gc.fillText("Visible samples", 8, headerBarH + 14);
       gc.setFill(Color.web("#7f8791"));
 
-      String label;
-      if (hasActiveSampleFilterQuery) {
-        label = "Filter";
-      } else {
-        String rangeText = firstVisible == lastVisible
-            ? String.valueOf(firstVisible + 1)
-            : (firstVisible + 1) + "-" + (lastVisible + 1);
-        label = rangeText + " / " + trackCount;
-      }
+      String rangeText = firstVisible == lastVisible
+          ? String.valueOf(firstVisible + 1)
+          : (firstVisible + 1) + "-" + (lastVisible + 1);
+      String label = rangeText + " / " + trackCount;
 
       double labelX = 96;
       double labelY = headerBarH + 14;

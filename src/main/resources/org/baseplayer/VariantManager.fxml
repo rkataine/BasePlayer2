@@ -28,7 +28,7 @@
                         </padding>
                                                 <HBox spacing="8" alignment="CENTER_LEFT">
                                                         <Label text="Quality Filters" styleClass="panel-title"/>
-                                                        <HBox fx:id="reloadBanner" spacing="6" alignment="CENTER_LEFT" visible="false" managed="false"
+                                                        <HBox fx:id="reloadBanner" spacing="6" alignment="CENTER_LEFT" visible="false"
                                                                     style="-fx-background-color: rgba(209,102,36,0.18); -fx-background-radius: 6; -fx-padding: 2 6 2 6;">
                                                                 <Label fx:id="reloadBannerLabel"
                                                                              text="Reload needed"

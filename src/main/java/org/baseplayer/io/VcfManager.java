@@ -478,7 +478,9 @@ public class VcfManager {
             return false;  // VCF count changed - must reload to merge with new VCFs
         }
 
-        if (!canUseLoadedVariantsForFilter(cachedVariants, requestedFilter)) {
+        String requestedKey = requestedFilter != null ? requestedFilter.toStableKey() : null;
+        String loadedKey = cachedVariants.getLoadedFilterKey();
+        if (!java.util.Objects.equals(requestedKey, loadedKey)) {
             return false;  // Filter is incompatible - must reload with new filter
         }
 
@@ -494,21 +496,7 @@ public class VcfManager {
         fireAndClearChromosomeReadyCallback();
     }
 
-    /**
-     * Check if loaded variants can be reused for the requested filter.
-     * Variants can be reused if the loaded filter is stricter or equal to requested filter.
-     */
-    private boolean canUseLoadedVariantsForFilter(VariantList loadedList, VariantFilter requestedFilter) {
-        if (loadedList == null || loadedList.getLoadedFilter() == null || requestedFilter == null) {
-            return false;
-        }
-        return requestedFilter.isAtLeastAsStrictAs(loadedList.getLoadedFilter());
-    }
-    
-    /**
-     * Update all alignment canvases with the given variant list.
-     */
-    private void updateCanvasesWithVariants(VariantList variantList) {
+		private void updateCanvasesWithVariants(VariantList variantList) {
         if (variantList == null) return;
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
@@ -672,7 +660,9 @@ public class VcfManager {
         boolean annotated = hasCache && cachedVariants.isAnnotated();
         boolean nonEmpty = hasCache && !cachedVariants.isEmpty();
         boolean vcfCountMatches = hasCache && cachedVariants.getVcfCountWhenLoaded() == files.size();
-        boolean filterCompatible = hasCache && canUseLoadedVariantsForFilter(cachedVariants, filter);
+        String requestedKey = filter != null ? filter.toStableKey() : null;
+        boolean filterCompatible = hasCache
+            && java.util.Objects.equals(requestedKey, cachedVariants.getLoadedFilterKey());
         boolean fullRegionLoaded = hasCache && isChromosomeFullyLoadedForCache(cachedVariants, loadEnd);
 
         if (hasCache && annotated && nonEmpty && vcfCountMatches && filterCompatible && fullRegionLoaded) {
@@ -830,31 +820,6 @@ public class VcfManager {
             this.currentFilter = filter;
             filterGeneration.incrementAndGet();
         }
-    }
-
-    /** True when current chromosome data was materialized with this exact filter. */
-    public synchronized boolean isCurrentChromosomeLoadedForFilter(VariantFilter filter, String chromosome) {
-        if (filter == null || chromosome == null || chromosome.isBlank()) return false;
-        if (!chromosome.equals(lastLoadedChromosome)) return false;
-        VariantList variants = variantCache.get(chromosome);
-        if (variants == null) return false;
-        String key = filter.toStableKey();
-        return key.equals(variants.getLoadedFilterKey());
-    }
-
-    /**
-     * Returns true if applying {@code filter} can be done in-memory without reloading.
-     * This is true when requested filter is equal or stricter than the filter used at load-time.
-     */
-    public synchronized boolean canApplyFilterWithoutReload(VariantFilter filter, String chromosome) {
-        if (filter == null) return true;
-        if (chromosome == null || chromosome.isBlank()) return true;
-        if (!chromosome.equals(lastLoadedChromosome)) return true;
-        VariantList variants = variantCache.get(chromosome);
-        if (variants == null) return true;
-        VariantFilter loadedFilter = variants.getLoadedFilter();
-        if (loadedFilter == null) return false;
-        return filter.isAtLeastAsStrictAs(loadedFilter);
     }
 
     /** Get a copy of the filter used to load current chromosome variants. */
