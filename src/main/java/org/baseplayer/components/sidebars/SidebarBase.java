@@ -45,7 +45,7 @@ public abstract class SidebarBase {
   // ── Constants ─────────────────────────────────────────────────────────────
 
   /** Standard sidebar header height in pixels. */
-  public static final double DEFAULT_HEADER_HEIGHT = 22;
+  public static final double DEFAULT_HEADER_HEIGHT = 26;
   private static final Font HEADER_FONT = Font.font("Segoe UI", 11);
   private static final double BTN_SIZE = 18;
   private static final double BTN_RADIUS = 4;
@@ -184,10 +184,6 @@ public abstract class SidebarBase {
     gc.setFont(Font.font("Segoe UI", 14));
     gc.setFill(Color.web("#cccccc"));
     gc.fillText("+", px + 4, sy + 14);
-
-    // Bottom border
-    gc.setStroke(Color.web("#444444"));
-    gc.strokeLine(0, h - 1, w, h - 1);
   }
 
   // ── Header hover overlay ──────────────────────────────────────────────────

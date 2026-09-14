@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiPredicate;
 
+import org.baseplayer.samples.SampleTrack;
+
 /**
  * Sorted linked list of variants by genomic position.
  * Memory-efficient: one node per unique genomic position, shared across all samples.
@@ -78,19 +80,17 @@ public class VariantList {
     }
     
     public VariantNode addVariant(long position, String ref, String alt,
-                                   VcfVariantType type, int sampleTrackIndex) {
-        return addVariant(position, ref, alt, type, sampleTrackIndex, null);
-    }
+                                   VcfVariantType type, VariantNode.SampleCall call) {
+        if (call == null || call.getTrackIndex() < 0) {
+            return null;
+        }
 
-    public VariantNode addVariant(long position, String ref, String alt,
-                                   VcfVariantType type, int sampleTrackIndex,
-                                   VariantNode.SampleCall call) {
         if (position < startPosition) startPosition = position;
         if (position > endPosition) endPosition = position;
 
         if (head == null) {
             head = new VariantNode(position, ref, alt, type);
-            head.addSample(sampleTrackIndex, call);
+            head.addSample(call);
             tail = head;
             size = 1;
             return head;
@@ -106,12 +106,12 @@ public class VariantList {
 
         if (current != null && current.position == position &&
             current.ref.equals(ref) && current.alt.equals(alt)) {
-            current.addSample(sampleTrackIndex, call);
+            current.addSample(call);
             return current;
         }
 
         VariantNode newNode = new VariantNode(position, ref, alt, type);
-        newNode.addSample(sampleTrackIndex, call);
+        newNode.addSample(call);
 
         if (prev == null) {
             newNode.next = head;
@@ -137,14 +137,17 @@ public class VariantList {
      * @return the inserted or updated node – pass it as cursor to the next call
      */
     public VariantNode addVariantWithCursor(VariantNode cursor, long position, String ref,
-            String alt, VcfVariantType type, int sampleTrackIndex,
-            VariantNode.SampleCall call) {
+            String alt, VcfVariantType type, VariantNode.SampleCall call) {
+        if (call == null || call.getTrackIndex() < 0) {
+            return cursor;
+        }
+
         if (position < startPosition) startPosition = position;
         if (position > endPosition) endPosition = position;
 
         if (head == null) {
             head = new VariantNode(position, ref, alt, type);
-            head.addSample(sampleTrackIndex, call);
+            head.addSample(call);
             tail = head;
             size = 1;
             return head;
@@ -167,12 +170,12 @@ public class VariantList {
 
         if (current != null && current.position == position
                 && current.ref.equals(ref) && current.alt.equals(alt)) {
-            current.addSample(sampleTrackIndex, call);
+            current.addSample(call);
             return current;
         }
 
         VariantNode newNode = new VariantNode(position, ref, alt, type);
-        newNode.addSample(sampleTrackIndex, call);
+        newNode.addSample(call);
         if (prev == null) {
             newNode.next = head;
             head = newNode;
@@ -243,43 +246,42 @@ public class VariantList {
     }
     
     /**
-     * Remove all variants for a specific track index.
+     * Remove all variants for a specific sample track object.
      * If a variant has no more samples after removal, it's removed from the list.
-     * @param trackIndex The track index to remove
+     * @param track The sample track to remove
      * @return The number of variant nodes removed
      */
-    public int removeTrackIndex(int trackIndex) {
-        if (head == null) return 0;
-        
+    public int removeTrack(SampleTrack track) {
+        if (head == null || track == null) return 0;
+
         int nodesRemoved = 0;
         VariantNode prev = null;
         VariantNode current = head;
-        
+
         while (current != null) {
             VariantNode next = current.next;
-            boolean isEmpty = current.removeSample(trackIndex);
-            
+            boolean isEmpty = current.removeSample(track);
+
             if (isEmpty) {
-                // Remove this node from the list
                 if (prev == null) {
                     head = next;
                 } else {
                     prev.next = next;
                 }
-                
+
                 if (current == tail) {
                     tail = prev;
                 }
-                
+
                 size--;
                 nodesRemoved++;
             } else {
                 prev = current;
             }
-            
+
             current = next;
         }
-        
+
         return nodesRemoved;
     }
 
@@ -300,7 +302,7 @@ public class VariantList {
             List<VariantNode.SampleCall> calls = new ArrayList<>(current.getSamples());
             for (VariantNode.SampleCall call : calls) {
                 if (!keepPredicate.test(current, call)) {
-                    current.removeSample(call.trackIndex);
+                    current.removeSample(call);
                 }
             }
 

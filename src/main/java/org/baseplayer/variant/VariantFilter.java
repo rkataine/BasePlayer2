@@ -210,25 +210,18 @@ public class VariantFilter {
         return true;
     }
 
-    public boolean passesSampleThresholds(VariantNode node, int sampleTrackIndex) {
-        if (node == null) return false;
+    public boolean passesSampleThresholds(VariantNode node, VariantNode.SampleCall call) {
+        if (node == null || call == null) return false;
 
-        VariantNode.SampleCall call = node.getSampleCall(sampleTrackIndex);
-        if (call != null) {
-            if (minQuality > 0 && node.siteQuality < 0 && call.quality >= 0 && call.quality < minQuality) return false;
-            if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
-            if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
-        }
+        if (minQuality > 0 && node.siteQuality < 0 && call.quality >= 0 && call.quality < minQuality) return false;
+        if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
+        if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
 
         return true;
     }
 
-    public boolean passes(VariantNode node, int sampleTrackIndex) {
-        // TODO: INFO and FILTER field filtering
-        // Once VariantNode stores INFO/FILTER fields, apply those filters here:
-        // - Check infoFieldFilters against node.infoFields
-        // - Check allowedFilterValues against node.filterField
-        return passesNodeLevel(node) && passesSampleThresholds(node, sampleTrackIndex);
+    public boolean passes(VariantNode node, VariantNode.SampleCall call) {
+        return passesNodeLevel(node) && passesSampleThresholds(node, call);
     }
 
     /** Returns true if all filters are at default (pass-all) state. */

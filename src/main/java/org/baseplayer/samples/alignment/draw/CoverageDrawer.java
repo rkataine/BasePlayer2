@@ -148,10 +148,9 @@ public class CoverageDrawer {
     // Build one SampleRow per visible BAM file
     java.util.List<SampleRow> rowList = new java.util.ArrayList<>();
     java.util.Set<Sample> processedFiles = new java.util.HashSet<>();
-    java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-    for (int slot = sampleRegistry.getFirstVisibleSample();
-         slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size(); slot++) {
-      int sIdx = displayedTrackIndices.get(slot);
+    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int sIdx = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
 
       for (Sample sf : track.getSamples()) {
@@ -169,6 +168,7 @@ public class CoverageDrawer {
     }
 
     // Also build rows for non-visible methylation samples (master track only)
+    java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     for (int slot = 0; slot < displayedTrackIndices.size(); slot++) {
       if (slot >= sampleRegistry.getFirstVisibleSample() && slot <= sampleRegistry.getLastVisibleSample()) {
         continue;
@@ -779,11 +779,10 @@ public class CoverageDrawer {
     double viewStart = drawStack.getViewStart();
     double viewEnd = drawStack.getViewEnd();
 
-     java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-     for (int slot = sampleRegistry.getFirstVisibleSample();
-        slot <= sampleRegistry.getLastVisibleSample() && slot < displayedTrackIndices.size();
-        slot++) {
-      int sIdx = displayedTrackIndices.get(slot);
+     List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+     for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      int sIdx = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
       if (track == null || !track.isVisible()) continue;
 

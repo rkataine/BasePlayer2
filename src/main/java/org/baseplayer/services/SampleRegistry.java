@@ -1,7 +1,7 @@
 package org.baseplayer.services;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.List;
 import java.util.Set;
@@ -15,6 +15,7 @@ import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 
 /**
@@ -28,6 +29,8 @@ import javafx.collections.ObservableList;
  * - UI layout parameters (scroll position, heights)
  */
 public class SampleRegistry {
+
+    public record VisibleTrackSlot(int slot, int trackIndex) {}
 
     public enum SubsetSource {
         TEXT_FILTER,
@@ -52,50 +55,51 @@ public class SampleRegistry {
     private double sampleHeight = 0;
     private boolean sampleHeightLocked = false;
     private String activeSampleFilterQuery = "";
-    private Set<Integer> focusedTrackIndices = null; // null = no explicit focus filter
+    private Set<SampleTrack> focusedTracks = null; // null = no explicit focus filter
     private String focusedGeneName = null; // gene name currently focused, or null
+    private final List<Integer> cachedDisplayedTrackIndices = new ArrayList<>();
+    private boolean displayedTrackIndicesDirty = true;
     public static final double DEFAULT_MASTER_TRACK_HEIGHT = 28;
     private final DoubleProperty masterTrackHeight = new SimpleDoubleProperty(DEFAULT_MASTER_TRACK_HEIGHT);
     
     public SampleRegistry() {
-        // Initialize with empty state
+        sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
+            invalidateDisplayedTrackIndicesCache();
+            normalizeVisibleRangeAfterSubsetChange();
+        });
     }
     
-    // ── Sample Track Management ────────────────────────────────────────────
-    
-    /**
-     * Get all sample tracks (observable for UI binding).
-     */
     public ObservableList<SampleTrack> getSampleTracks() {
         return sampleTracks;
     }
+
+    public int getTrackIndex(SampleTrack track) {
+        if (track == null) {
+            return -1;
+        }
+        return sampleTracks.indexOf(track);
+    }
     
-    /**
-     * Add a sample track to the registry.
-     */
     public void addSampleTrack(SampleTrack track) {
         if (track == null) {
             throw new IllegalArgumentException("Sample track cannot be null");
         }
         sampleTracks.add(track);
+        invalidateDisplayedTrackIndicesCache();
     }
     
-    /**
-     * Remove a sample track from the registry.
-     */
     public void removeSampleTrack(SampleTrack track) {
         sampleTracks.remove(track);
+        invalidateDisplayedTrackIndicesCache();
     }
     
-    /**
-     * Clear all sample tracks.
-     */
     public void clearSampleTracks() {
         sampleTracks.clear();
         sampleList.clear();
         activeSampleFilterQuery = "";
-        focusedTrackIndices = null;
+        focusedTracks = null;
         focusedGeneName = null;
+        invalidateDisplayedTrackIndicesCache();
         firstVisibleSample = -1;
         lastVisibleSample = -1;
         scrollBarPosition = 0;
@@ -103,53 +107,27 @@ public class SampleRegistry {
         hoverSample.set(-1);
     }
     
-    // ── Sample List (Legacy) ───────────────────────────────────────────────
-    
-    /**
-     * Get the legacy sample list (consider migrating away from this).
-     */
     public List<String> getSampleList() {
         return sampleList;
     }
     
-    // ── Hover State ────────────────────────────────────────────────────────
-    
-    /**
-     * Get the currently hovered sample index (-1 if none).
-     */
     public int getHoverSample() {
         return hoverSample.get();
     }
     
-    /**
-     * Set which sample is currently hovered.
-     */
     public void setHoverSample(int index) {
         this.hoverSample.set(index);
     }
     
-    /**
-     * Get the hover sample property for UI binding.
-     */
     public IntegerProperty hoverSampleProperty() {
         return hoverSample;
     }
     
-    // ── Visibility State ───────────────────────────────────────────────────
-    
-    /**
-     * Get the index of the first visible sample in the viewport.
-     */
     public int getFirstVisibleSample() {
         return firstVisibleSample;
     }
     
-    /**
-     * Set the first visible sample index.
-     * Use -1 to indicate no samples are visible (empty state).
-     */
     public void setFirstVisibleSample(int index) {
-        // Allow -1 for empty state, otherwise clamp to valid range
         int newFirst;
         if (index == -1) {
             newFirst = -1;
@@ -166,17 +144,10 @@ public class SampleRegistry {
         this.firstVisibleSample = newFirst;
     }
     
-    /**
-     * Get the index of the last visible sample in the viewport.
-     */
     public int getLastVisibleSample() {
         return lastVisibleSample;
     }
     
-    /**
-     * Set the last visible sample index.
-     * Use -1 to indicate no samples are visible (empty state).
-     */
     public void setLastVisibleSample(int index) {
         // Allow -1 for empty state, otherwise clamp to valid range
         int newLast;
@@ -195,9 +166,6 @@ public class SampleRegistry {
         this.lastVisibleSample = newLast;
     }
     
-    /**
-     * Get the number of currently visible samples.
-     */
     public int getVisibleSampleCount() {
         // Return 0 if in empty state (-1 to -1)
         if (firstVisibleSample < 0 || lastVisibleSample < 0) {
@@ -206,32 +174,18 @@ public class SampleRegistry {
         return Math.max(0, lastVisibleSample - firstVisibleSample + 1);
     }
     
-    // ── UI Layout State ────────────────────────────────────────────────────
-    
-    /**
-     * Get the current scroll bar position.
-     */
     public double getScrollBarPosition() {
         return scrollBarPosition;
     }
     
-    /**
-     * Set the scroll bar position.
-     */
     public void setScrollBarPosition(double position) {
         this.scrollBarPosition = position;
     }
 
-    /**
-     * Get total vertical content height for sample rows.
-     */
     public double getTotalSampleContentHeight() {
         return getDisplayedTrackCount() * sampleHeight;
     }
 
-    /**
-     * Get max scroll position for a viewport height.
-     */
     public double getMaxScrollBarPosition(double viewportHeight) {
         if (getDisplayedTrackCount() <= 0) {
             return 0;
@@ -240,65 +194,38 @@ public class SampleRegistry {
         return Math.max(0, getTotalSampleContentHeight() - safeViewportHeight);
     }
 
-    /**
-     * Clamp an arbitrary scroll position to valid bounds for a viewport height.
-     */
     public double clampScrollBarPosition(double position, double viewportHeight) {
         return Math.max(0, Math.min(position, getMaxScrollBarPosition(viewportHeight)));
     }
 
-    /**
-     * Clamp current scroll position in place for the given viewport height.
-     */
     public void clampScrollBarPositionInPlace(double viewportHeight) {
         scrollBarPosition = clampScrollBarPosition(scrollBarPosition, viewportHeight);
     }
     
-    /**
-     * Get the height allocated for each sample row.
-     */
     public double getSampleHeight() {
         return sampleHeight;
     }
     
-    /**
-     * Set the height for each sample row.
-     */
     public void setSampleHeight(double height) {
         this.sampleHeight = Math.max(0, height);
     }
 
-    /**
-     * Prevent automatic sample-height recalculation during animated transitions.
-     */
     public void lockSampleHeight() {
         sampleHeightLocked = true;
     }
 
-    /**
-     * Re-enable automatic sample-height recalculation.
-     */
     public void unlockSampleHeight() {
         sampleHeightLocked = false;
     }
 
-    /**
-     * Whether sample height is currently locked from automatic recalculation.
-     */
     public boolean isSampleHeightLocked() {
         return sampleHeightLocked;
     }
 
-    /**
-     * Current active free-text sample filter query for master track controls.
-     */
     public String getActiveSampleFilterQuery() {
         return activeSampleFilterQuery;
     }
 
-    /**
-     * Whether master track is currently in filter label mode.
-     */
     public boolean hasActiveSampleFilterQuery() {
         return !activeSampleFilterQuery.isEmpty();
     }
@@ -307,6 +234,7 @@ public class SampleRegistry {
         String normalized = query == null ? "" : query.trim();
         String oldQuery = this.activeSampleFilterQuery;
         this.activeSampleFilterQuery = normalized;
+        invalidateDisplayedTrackIndicesCache();
 
         normalizeVisibleRangeAfterSubsetChange();
         if (!oldQuery.equals(this.activeSampleFilterQuery)) {
@@ -314,46 +242,54 @@ public class SampleRegistry {
         }
     }
 
-    /** Whether explicit focused-track filtering is active. */
-    public boolean hasFocusedTrackIndices() {
-        return focusedTrackIndices != null;
+    public boolean hasFocusedTracks() {
+        return focusedTracks != null;
     }
 
     public String getFocusedGeneName() {
         return focusedGeneName;
     }
 
-    public void applyGeneSubset(Set<Integer> indices, String geneName) {
-        Set<Integer> oldIndices = focusedTrackIndices == null ? null : new HashSet<>(focusedTrackIndices);
-        String oldGeneName = focusedGeneName;
+    public void applyGeneSubset(List<SampleTrack> tracks, String featureName) {
+        boolean hadFocusedTracks = focusedTracks != null;
+        boolean hasFocusedTracks = tracks != null && !tracks.isEmpty();
+        String oldFeatureName = focusedGeneName;
 
-        if (indices == null) {
-            focusedTrackIndices = null;
+        if (tracks == null || tracks.isEmpty()) {
+            focusedTracks = null;
             focusedGeneName = null;
         } else {
-            focusedTrackIndices = new HashSet<>(indices);
-            focusedGeneName = geneName;
+            focusedTracks = new LinkedHashSet<>();
+            for (SampleTrack track : tracks) {
+                if (track != null) {
+                    focusedTracks.add(track);
+                }
+            }
+            if (focusedTracks.isEmpty()) {
+                focusedTracks = null;
+            }
+            focusedGeneName = featureName;
         }
+
+        invalidateDisplayedTrackIndicesCache();
 
         normalizeVisibleRangeAfterSubsetChange();
 
-        boolean changed = (oldIndices == null && focusedTrackIndices != null)
-            || (oldIndices != null && focusedTrackIndices == null)
-            || (oldIndices != null && !oldIndices.equals(focusedTrackIndices))
-            || (oldGeneName == null ? focusedGeneName != null : !oldGeneName.equals(focusedGeneName));
+        boolean changed = (hadFocusedTracks != hasFocusedTracks)
+            || (oldFeatureName == null ? focusedGeneName != null : !oldFeatureName.equals(focusedGeneName));
         if (changed) {
             notifyVariantIndexDirty();
         }
     }
 
     public boolean hasActiveSubset() {
-        return hasActiveSampleFilterQuery() || hasFocusedTrackIndices();
+        return hasActiveSampleFilterQuery() || hasFocusedTracks();
     }
 
     public boolean hasActiveSubsetSource(SubsetSource source) {
         return switch (source) {
             case TEXT_FILTER -> hasActiveSampleFilterQuery();
-            case GENE_FOCUS -> hasFocusedTrackIndices();
+            case GENE_FOCUS -> hasFocusedTracks();
         };
     }
 
@@ -371,11 +307,13 @@ public class SampleRegistry {
             activeSampleFilterQuery = "";
             changed = true;
         }
-        if (focusedTrackIndices != null || focusedGeneName != null) {
-            focusedTrackIndices = null;
+        if (focusedTracks != null || focusedGeneName != null) {
+            focusedTracks = null;
             focusedGeneName = null;
             changed = true;
         }
+
+        invalidateDisplayedTrackIndicesCache();
 
         normalizeVisibleRangeAfterSubsetChange();
         if (changed) {
@@ -406,59 +344,62 @@ public class SampleRegistry {
         }
     }
 
-    /**
-     * Ordered list of track indices currently displayed in the samples view.
-     * With active filter this contains only matching tracks, otherwise all tracks.
-     */
     public List<Integer> getDisplayedTrackIndices() {
-        List<Integer> indices = new ArrayList<>();
+        return List.copyOf(getDisplayedTrackIndicesCached());
+    }
+
+    public int getDisplayedTrackCount() {
+        return getDisplayedTrackIndicesCached().size();
+    }
+
+    /**
+     * Returns visible slots and backing track indices to use for visibility checks.
+     * Rule: if subset is active, iterate subset slots; otherwise iterate all track
+     * slots. In both cases, clamp to current visible slot range.
+     */
+    public List<VisibleTrackSlot> getVisibleTrackSlotsForChecks() {
+        List<VisibleTrackSlot> visibleSlots = new ArrayList<>();
         if (sampleTracks.isEmpty()) {
-            return indices;
+            return visibleSlots;
         }
 
-        String query = activeSampleFilterQuery == null ? "" : activeSampleFilterQuery.trim();
-        if (query.isEmpty()) {
-            for (int i = 0; i < sampleTracks.size(); i++) {
-                indices.add(i);
+        boolean subsetActive = hasActiveSubset();
+        List<Integer> displayed = subsetActive ? getDisplayedTrackIndicesCached() : null;
+        int slotCount = subsetActive ? displayed.size() : sampleTracks.size();
+        if (slotCount <= 0) {
+            return visibleSlots;
+        }
+
+        int first = firstVisibleSample;
+        int last = lastVisibleSample;
+        if (first < 0 || last < first) {
+            return visibleSlots;
+        }
+
+        int clampedFirst = Math.max(0, Math.min(slotCount - 1, first));
+        int clampedLast = Math.max(clampedFirst, Math.min(slotCount - 1, last));
+        for (int slot = clampedFirst; slot <= clampedLast; slot++) {
+            int trackIndex = subsetActive ? displayed.get(slot) : slot;
+            if (trackIndex >= 0 && trackIndex < sampleTracks.size()) {
+                visibleSlots.add(new VisibleTrackSlot(slot, trackIndex));
             }
-            if (focusedTrackIndices != null) {
-                indices.removeIf(idx -> !focusedTrackIndices.contains(idx));
-            }
-            return indices;
         }
+        return visibleSlots;
+    }
 
-        String needle = query.toLowerCase(Locale.ROOT);
-        for (int i = 0; i < sampleTracks.size(); i++) {
-            if (matchesSampleFilter(sampleTracks.get(i), needle)) {
-                indices.add(i);
-            }
+    /**
+     * Returns backing track indices for currently visible slots, using subset-aware rules.
+     */
+    public List<Integer> getVisibleTrackIndicesForChecks() {
+        List<VisibleTrackSlot> visibleSlots = getVisibleTrackSlotsForChecks();
+        List<Integer> indices = new ArrayList<>(visibleSlots.size());
+        for (VisibleTrackSlot slot : visibleSlots) {
+            indices.add(slot.trackIndex());
         }
-
-        if (focusedTrackIndices != null) {
-            indices.removeIf(idx -> !focusedTrackIndices.contains(idx));
-        }
-
         return indices;
     }
 
-    /**
-     * Number of tracks shown in the current displayed (possibly filtered) view.
-     */
-    public int getDisplayedTrackCount() {
-        return getDisplayedTrackIndices().size();
-    }
-
-    /**
-     * Resolve a displayed slot index to backing sampleTracks index.
-     */
-    public int getDisplayedTrackIndexBySlot(int slot) {
-        List<Integer> displayed = getDisplayedTrackIndices();
-        if (slot < 0 || slot >= displayed.size()) {
-            return -1;
-        }
-        return displayed.get(slot);
-    }
-
+		// TODO Where this is used? Can be replaced?
     /**
      * Resolve backing sampleTracks index to displayed slot index, or -1 if hidden by filter.
      */
@@ -466,13 +407,50 @@ public class SampleRegistry {
         if (trackIndex < 0) {
             return -1;
         }
-        List<Integer> displayed = getDisplayedTrackIndices();
+        List<Integer> displayed = getDisplayedTrackIndicesCached();
         for (int slot = 0; slot < displayed.size(); slot++) {
             if (displayed.get(slot) == trackIndex) {
                 return slot;
             }
         }
         return -1;
+    }
+
+    private List<Integer> getDisplayedTrackIndicesCached() {
+        if (!displayedTrackIndicesDirty) {
+            return cachedDisplayedTrackIndices;
+        }
+
+        cachedDisplayedTrackIndices.clear();
+        if (sampleTracks.isEmpty()) {
+            displayedTrackIndicesDirty = false;
+            return cachedDisplayedTrackIndices;
+        }
+
+        String query = activeSampleFilterQuery == null ? "" : activeSampleFilterQuery.trim();
+        if (query.isEmpty()) {
+            for (int i = 0; i < sampleTracks.size(); i++) {
+                cachedDisplayedTrackIndices.add(i);
+            }
+        } else {
+            String needle = query.toLowerCase(Locale.ROOT);
+            for (int i = 0; i < sampleTracks.size(); i++) {
+                if (matchesSampleFilter(sampleTracks.get(i), needle)) {
+                    cachedDisplayedTrackIndices.add(i);
+                }
+            }
+        }
+
+        if (focusedTracks != null) {
+            cachedDisplayedTrackIndices.removeIf(index -> !focusedTracks.contains(sampleTracks.get(index)));
+        }
+
+        displayedTrackIndicesDirty = false;
+        return cachedDisplayedTrackIndices;
+    }
+
+    private void invalidateDisplayedTrackIndicesCache() {
+        displayedTrackIndicesDirty = true;
     }
 
     private boolean matchesSampleFilter(SampleTrack track, String needle) {

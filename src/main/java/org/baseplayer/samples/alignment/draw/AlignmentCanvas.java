@@ -20,6 +20,7 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
@@ -382,6 +383,7 @@ public class AlignmentCanvas extends GenomicCanvas {
    *   <li>Full range → per-base coverage + optional individual reads</li>
    * </ol>
    */
+
   void drawBamReads() {
     readScrollbarComponent.beginFrame();
 
@@ -398,7 +400,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
       variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), masterOffset, activeFilter);
     }
-
+		// TODO Remove loops in these kind of situations. We already go through the samples when drawing tracks. No need to loop them here again
     // ── Beyond coverage threshold: show zoom message or sampled coverage ──
     if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) {
       if (Settings.get().isEnableSampledCoverage()) {
@@ -406,8 +408,11 @@ public class AlignmentCanvas extends GenomicCanvas {
             coverageDrawer.drawSampled(gc, sample, chrom, start, end,
                 sampleY, sampleH, getWidth(), chromPosToScreenPos, drawStack));
       } else {
-        forEachVisibleSample(masterOffset, sampleH, (sampleY, sample) ->
-            DrawReads.drawZoomMessage(gc, sampleY, sampleH, "Zoom in closer to view BAM/CRAM data"));
+        forEachVisibleSample(masterOffset, sampleH, (sampleY, sample) -> {
+          if (sample.getDataType() == Sample.DataType.BAM) {
+            DrawReads.drawZoomMessage(gc, sampleY, sampleH, "Zoom in closer to view BAM/CRAM data");
+          }
+        });
       }
       return;
     }
@@ -642,12 +647,10 @@ public class AlignmentCanvas extends GenomicCanvas {
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-    int firstVisibleSlot = Math.max(0, sampleRegistry.getFirstVisibleSample());
-    int lastVisibleSlot = sampleRegistry.getLastVisibleSample();
-    for (int slot = firstVisibleSlot;
-       slot <= lastVisibleSlot && slot < displayedTrackIndices.size(); slot++) {
-      int i = displayedTrackIndices.get(slot);
+    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
       double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
@@ -708,12 +711,10 @@ public class AlignmentCanvas extends GenomicCanvas {
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-    int firstVisibleSlot = Math.max(0, sampleRegistry.getFirstVisibleSample());
-    int lastVisibleSlot = sampleRegistry.getLastVisibleSample();
-    for (int slot = firstVisibleSlot;
-       slot <= lastVisibleSlot && slot < displayedTrackIndices.size(); slot++) {
-      int i = displayedTrackIndices.get(slot);
+    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
       double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
@@ -884,12 +885,10 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     CoverageHoverInfo best = null;
     double bestCov = -1;
-     List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-      int firstVisibleSlot = Math.max(0, sampleRegistry.getFirstVisibleSample());
-      int lastVisibleSlot = sampleRegistry.getLastVisibleSample();
-      for (int slot = firstVisibleSlot;
-        slot <= lastVisibleSlot && slot < displayedTrackIndices.size(); slot++) {
-      int i = displayedTrackIndices.get(slot);
+     List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+      for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
 
@@ -1127,13 +1126,10 @@ public class AlignmentCanvas extends GenomicCanvas {
     double bestSampleY = 0;
     double bestDist = Double.MAX_VALUE;
 
-    List<Integer> targetDisplayedTrackIndices = targetCanvas.sampleRegistry.getDisplayedTrackIndices();
-     int firstVisibleSlot = Math.max(0, targetCanvas.sampleRegistry.getFirstVisibleSample());
-     int lastVisibleSlot = targetCanvas.sampleRegistry.getLastVisibleSample();
-     for (int slot = firstVisibleSlot;
-       slot <= lastVisibleSlot
-         && slot < targetDisplayedTrackIndices.size(); slot++) {
-      int i = targetDisplayedTrackIndices.get(slot);
+    List<SampleRegistry.VisibleTrackSlot> targetVisibleSlots = targetCanvas.sampleRegistry.getVisibleTrackSlotsForChecks();
+     for (SampleRegistry.VisibleTrackSlot visibleSlot : targetVisibleSlots) {
+      int slot = visibleSlot.slot();
+      int i = visibleSlot.trackIndex();
       SampleTrack track = targetCanvas.sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
       double sampleY = masterOffset + slot * sampleH - targetCanvas.sampleRegistry.getScrollBarPosition();
@@ -1343,12 +1339,10 @@ public class AlignmentCanvas extends GenomicCanvas {
   private interface SampleConsumer { void accept(double sampleY, Sample sample); }
 
   private void forEachVisibleSample(double masterOffset, double sampleH, SampleConsumer consumer) {
-    List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-      int firstVisibleSlot = Math.max(0, sampleRegistry.getFirstVisibleSample());
-      int lastVisibleSlot = sampleRegistry.getLastVisibleSample();
-      for (int slot = firstVisibleSlot;
-        slot <= lastVisibleSlot && slot < displayedTrackIndices.size(); slot++) {
-      int i = displayedTrackIndices.get(slot);
+    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+      for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      int i = visibleSlot.trackIndex();
       // Skip invalid track indices (can be -1 or out of bounds during concurrent updates)
       if (i < 0 || i >= sampleRegistry.getSampleTracks().size()) continue;
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);

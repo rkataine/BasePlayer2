@@ -78,8 +78,8 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     
     if (width <= 0 || height <= 0) return;
     
-    // Clear background
-    gc.setFill(Color.rgb(26, 26, 30));
+    // Clear background with header color for uniform appearance
+    gc.setFill(Color.rgb(35, 35, 40));
     gc.fillRect(0, 0, width, height);
     
     // Draw header
@@ -125,25 +125,16 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   }
   
   private void drawHeader(double width) {
-    // Header background
-    gc.setFill(Color.rgb(35, 35, 40));
-    gc.fillRect(0, 0, width, HEADER_HEIGHT);
-    
-    // Header text
     gc.setFill(Color.rgb(150, 150, 150));
     gc.setFont(AppFonts.getUIFont(11));
     
-    String headerText = collapsed ? "▶ Feature Tracks" : "▼ Feature Tracks";
+    String headerText = collapsed ? "▶" : "▼";
     if (!tracks.isEmpty()) {
       headerText += " (" + tracks.size() + ")";
     }
     gc.fillText(headerText, 8, HEADER_HEIGHT / 2 + 4);
   }
   
-  /**
-   * Notify all tracks of region change to trigger data fetching.
-   * Skips notification if the region hasn't changed since the last call.
-   */
   public void notifyRegionChanged() {
     if (drawStack == null) return;
     
@@ -151,7 +142,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     long start = (long) drawStack.getViewStart();
     long end = (long) drawStack.getViewEnd();
     
-    // Skip if region is identical to last notification
     if (chrom != null && chrom.equals(lastNotifiedChrom) && start == lastNotifiedStart && end == lastNotifiedEnd) {
       return;
     }
@@ -166,13 +156,9 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     }
   }
   
-  /**
-   * Add a track.
-   */
   public void addTrack(Track track) {
     tracks.add(track);
     
-    // Set up callback for async tracks to trigger redraw
     if (track instanceof AbstractUcscTrack ucscTrack) {
       ucscTrack.setOnDataLoaded(() -> update.set(!update.get()));
     }
@@ -182,9 +168,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     update.set(!update.get());
   }
   
-  /**
-   * Remove a track.
-   */
   public void removeTrack(Track track) {
     track.dispose();
     tracks.remove(track);
@@ -192,9 +175,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     update.set(!update.get());
   }
   
-  /**
-   * Get all tracks.
-   */
   public List<Track> getTracks() {
     return new ArrayList<>(tracks);
   }
@@ -209,9 +189,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     update.set(!update.get());
   }
   
-  /**
-   * Calculate preferred height based on visible tracks.
-   */
   public double getPreferredHeight() {
     if (collapsed || tracks.isEmpty()) {
       return HEADER_HEIGHT;
@@ -219,7 +196,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     
     double totalHeight = HEADER_HEIGHT;
     for (Track track : tracks) {
-      // Show all tracks (both visible and invisible) with eye icons
       totalHeight += track.getPreferredHeight() + TRACK_PADDING;
     }
     return totalHeight;
@@ -228,18 +204,15 @@ public class FeatureTracksCanvas extends GenomicCanvas {
   private void setupContextMenu() {
     contextMenu = new ContextMenu();
     
-    // Toggle collapse
     MenuItem toggleItem = new MenuItem("Collapse/Expand");
     toggleItem.setOnAction(e -> setCollapsed(!collapsed));
     
-    // Add from file
     MenuItem addBedFile = new MenuItem("Add BED file...");
     addBedFile.setOnAction(e -> showAddFileDialog("BED", "*.bed", "*.bed.gz"));
     
     MenuItem addBigWigFile = new MenuItem("Add BigWig file...");
     addBigWigFile.setOnAction(e -> showAddFileDialog("BigWig", "*.bw", "*.bigwig", "*.bigWig"));
     
-    // Remove tracks
     MenuItem removeAll = new MenuItem("Remove all tracks");
     removeAll.setOnAction(e -> new ArrayList<>(tracks).forEach(this::removeTrack));
     
@@ -252,7 +225,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
         removeAll
     );
     
-    // Show context menu on right-click
     getReactiveCanvas().setOnContextMenuRequested(e -> {
       contextMenu.show(getReactiveCanvas(), e.getScreenX(), e.getScreenY());
     });
@@ -262,24 +234,19 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     getReactiveCanvas().setOnMouseClicked(e -> {
       if (e.isConsumed() || isDragging()) return;
       
-      // Handle header click (toggle collapse)
       if (e.getY() < HEADER_HEIGHT && e.getClickCount() == 1) {
         setCollapsed(!collapsed);
         e.consume();
         return;
       }
       
-      // Handle track clicks
       if (!collapsed && e.getClickCount() == 1 && e.getButton() == javafx.scene.input.MouseButton.PRIMARY) {
-        // Find which track was clicked
         Track clickedTrack = getTrackAtY(e.getY());
         if (clickedTrack != null && clickedTrack.isVisible() && clickedTrack.supportsClick()) {
-          // Calculate click position relative to track
           double trackY = getTrackY(clickedTrack);
           double clickRelativeY = e.getY() - trackY;
           double clickRelativeX = e.getX();
           
-          // Let the track handle the click (use dynamic height)
           boolean handled = clickedTrack.handleClick(
               clickRelativeX, clickRelativeY,
               getWidth(), calculateTrackHeight(clickedTrack),
@@ -295,9 +262,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     });
   }
   
-  /**
-   * Calculate dynamic height for a track based on available space and preferred height ratios.
-   */
   private double calculateTrackHeight(Track track) {
     if (tracks.isEmpty()) return 0;
     
@@ -305,13 +269,11 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     double totalPadding = TRACK_PADDING * (tracks.size() - 1);
     double trackAreaHeight = availableHeight - totalPadding;
     
-    // Calculate total preferred height weight
     double totalPreferredHeight = 0;
     for (Track t : tracks) {
       totalPreferredHeight += t.getPreferredHeight();
     }
     
-    // Calculate dynamic height based on track's preferred height ratio
     if (totalPreferredHeight > 0) {
       double heightRatio = track.getPreferredHeight() / totalPreferredHeight;
       return trackAreaHeight * heightRatio;
@@ -320,9 +282,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     }
   }
   
-  /**
-   * Get the track at the given Y coordinate.
-   */
   private Track getTrackAtY(double y) {
     if (y < HEADER_HEIGHT) return null;
     
@@ -336,10 +295,7 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     }
     return null;
   }
-  
-  /**
-   * Get the Y position of a track.
-   */
+
   private double getTrackY(Track track) {
     double y = HEADER_HEIGHT;
     for (Track t : tracks) {
@@ -355,7 +311,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     FileChooser chooser = new FileChooser();
     chooser.setTitle("Add " + type + " Track");
     
-    // Use appropriate file type for directory preference
     String fileType = type.toUpperCase();
     if (type.equals("BigWig")) {
       fileType = "BIGWIG";
@@ -366,7 +321,6 @@ public class FeatureTracksCanvas extends GenomicCanvas {
       try {
         chooser.setInitialDirectory(lastDir);
       } catch (IllegalArgumentException e) {
-        // Directory became inaccessible, FileChooser will use system default
         System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
       }
     }

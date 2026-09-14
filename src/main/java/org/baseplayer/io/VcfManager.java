@@ -392,7 +392,7 @@ public class VcfManager {
                     result.retainVariants(node -> {
                         // Keep a variant if it has at least one sample passing the filter
                         for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (loadFilterSnapshot.passes(node, call.trackIndex)) {
+                            if (loadFilterSnapshot.passes(node, call)) {
                                 return true;
                             }
                         }
@@ -701,7 +701,7 @@ public class VcfManager {
         variants.retainVariants(node -> {
             // Keep a variant if it has at least one sample passing the filter
             for (VariantNode.SampleCall call : node.getSamples()) {
-                if (filter.passes(node, call.trackIndex)) {
+                if (filter.passes(node, call)) {
                     return true;
                 }
             }

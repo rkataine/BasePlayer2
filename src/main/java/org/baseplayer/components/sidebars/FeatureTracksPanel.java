@@ -112,10 +112,6 @@ public class FeatureTracksPanel extends SidebarContentPanel {
       gc.fillText("✕", removeX + 3, removeY + ICON_SIZE - 3);
       addIconRegion(i, "remove", removeX - 1, removeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
 
-      // Separator
-      gc.setStroke(DrawColors.BORDER);
-      gc.strokeLine(0, currentY + trackHeight, w, currentY + trackHeight);
-
       currentY += trackHeight + TRACK_PADDING;
     }
   }

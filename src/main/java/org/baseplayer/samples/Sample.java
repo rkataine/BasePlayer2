@@ -27,6 +27,7 @@ public class Sample implements Closeable {
   private final String name;
   private final Path path;
   private final DataType dataType;
+  private SampleTrack track;
 
   /** Visibility toggle for this individual file. */
   public boolean visible = true;
@@ -68,6 +69,10 @@ public class Sample implements Closeable {
   public String getName() { return name; }
   public Path getPath() { return path; }
   public DataType getDataType() { return dataType; }
+
+  public SampleTrack getTrack() { return track; }
+
+  void setTrack(SampleTrack track) { this.track = track; }
 
   // ── BAM delegation ──
 

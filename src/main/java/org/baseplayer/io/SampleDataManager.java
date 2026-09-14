@@ -130,6 +130,7 @@ public class SampleDataManager {
     SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     
     if (index < 0 || index >= sampleRegistry.getSampleTracks().size()) return;
+    SampleTrack removedTrack = sampleRegistry.getSampleTracks().get(index);
 
     int oldFirst = sampleRegistry.getFirstVisibleSample();
     int oldLast = sampleRegistry.getLastVisibleSample();
@@ -152,7 +153,7 @@ public class SampleDataManager {
       if (stack.alignmentCanvas != null) {
         org.baseplayer.variant.VariantList variantList = stack.alignmentCanvas.getVariantList();
         if (variantList != null) {
-          variantList.removeTrackIndex(index);
+          variantList.removeTrack(removedTrack);
         }
       }
     }

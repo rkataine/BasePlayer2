@@ -175,7 +175,7 @@ public class MasterTrackSidebar extends SidebarBase {
 
   @Override
   protected String getTitle() {
-    return "Tracks";
+    return "Sample Tracks";
   }
 
   @Override
@@ -393,7 +393,7 @@ public class MasterTrackSidebar extends SidebarBase {
 
   private void handleMasterClick(double x, double y, double screenX, double screenY) {
 		if (isControlsExpanded() && rangeLabelHit != null && rangeLabelHit.contains(x, y)) {
-      if (sampleRegistry.hasFocusedTrackIndices()
+      if (sampleRegistry.hasFocusedTracks()
           && ((masterTrackRenderState.focusedGene() != null && !masterTrackRenderState.focusedGene().isBlank())
               || !sampleRegistry.hasActiveSampleFilterQuery())) {
         clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.GENE_FOCUS);
@@ -1197,7 +1197,7 @@ public class MasterTrackSidebar extends SidebarBase {
 
     GraphicsContext gc = masterTrackCanvas.getGraphicsContext2D();
     double headerBarH = Math.min(org.baseplayer.services.SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT, h);
-    SidebarBase.drawStandardHeader(gc, w, headerBarH, "Tracks", trackCount);
+    SidebarBase.drawStandardHeader(gc, w, headerBarH, getTitle(), trackCount);
     double sy = (headerBarH - HEADER_BTN_SIZE) / 2;
 
     if (masterTrackRenderState.canReload()) {

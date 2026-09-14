@@ -25,7 +25,7 @@ public class SampleTrack implements Closeable {
    */
   public SampleTrack(Sample initialSample) {
     this.name = initialSample.getName();
-    samples.add(initialSample);
+    addSample(initialSample);
   }
 
   /**
@@ -58,18 +58,21 @@ public class SampleTrack implements Closeable {
 
   /** Add a data file to this individual. */
   public void addSample(Sample sample) {
+    sample.setTrack(this);
     samples.add(sample);
   }
 
   /** Remove and close a data file by index. */
   public void removeSample(int index) {
     if (index < 0 || index >= samples.size()) return;
+    Sample sample = samples.get(index);
     try {
-      samples.get(index).close();
+      sample.close();
     } catch (IOException e) {
       System.err.println("Error closing sample: " + e.getMessage());
     }
     samples.remove(index);
+    sample.setTrack(null);
   }
 
   /** Get the number of data files. */
@@ -77,10 +80,6 @@ public class SampleTrack implements Closeable {
 
   // ── Convenience accessors ──
 
-  /**
-   * Find the first BAM/CRAM sample in this track, or null if none.
-   * Useful for BAM-specific operations like scroll offset, coverage cache, etc.
-   */
   public AlignmentFile getFirstBam() {
     for (Sample s : samples) {
       if (s.getBamFile() != null) return s.getBamFile();
@@ -116,6 +115,7 @@ public class SampleTrack implements Closeable {
   public void close() throws IOException {
     for (Sample sample : samples) {
       sample.close();
+      sample.setTrack(null);
     }
     samples.clear();
   }

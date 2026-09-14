@@ -298,7 +298,7 @@ public class MasterTrackCanvas {
 
     final double viewStart = drawStack.getViewStart();
     final double viewEnd = drawStack.getViewEnd();
-    final List<Integer> visibleTrackIndices = sampleRegistry.getDisplayedTrackIndices();
+    final List<Integer> visibleTrackIndices = sampleRegistry.getVisibleTrackIndicesForChecks();
     final VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
 
     Thread t = new Thread(() -> {
@@ -329,10 +329,11 @@ public class MasterTrackCanvas {
             node = node.next;
             continue;
           }
-
+					// TODO check visible track indices code so that it is run only when changing track visibility
           List<Integer> passingIndices = new ArrayList<>();
           for (int idx : visibleTrackIndices) {
-            if (node.hasSample(idx) && (activeFilter == null || activeFilter.passesSampleThresholds(node, idx))) {
+            VariantNode.SampleCall call = node.getSampleCall(idx);
+            if (call != null && (activeFilter == null || activeFilter.passesSampleThresholds(node, call))) {
               passingIndices.add(idx);
             }
           }

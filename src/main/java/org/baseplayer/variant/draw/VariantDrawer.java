@@ -147,22 +147,22 @@ public class VariantDrawer {
                 
                 for (int i = 0; i < visibleTrackIndices.length; i++) {
                     int trackIndex = visibleTrackIndices[i];
-                    if (node.hasSample(trackIndex)) {
-                        if (filter != null && !filter.passesSampleThresholds(node, trackIndex)) continue;
-                        
-                        // Skip point variants if this sample already has one at this X pixel
-                        // SV spans are never skipped—they span multiple pixels and always need to be drawn
-                        if (!isSvSpan && xPixel == lastDrawnPixelX[i]) continue;
-                        
-                        double y = yPositions[i];
-                        
-                        // Check if this is an SV with a span
-                        if (isSvSpan) {
-                            drawSvSpan(gc, node, trackIndex, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
-                        } else {
-                            drawVariantLine(gc, node, trackIndex, x, y, sampleHeight);
-                            lastDrawnPixelX[i] = xPixel;
-                        }
+                    VariantNode.SampleCall call = node.getSampleCall(trackIndex);
+                    if (call == null) continue;
+                    if (filter != null && !filter.passesSampleThresholds(node, call)) continue;
+
+                    // Skip point variants if this sample already has one at this X pixel
+                    // SV spans are never skipped—they span multiple pixels and always need to be drawn
+                    if (!isSvSpan && xPixel == lastDrawnPixelX[i]) continue;
+
+                    double y = yPositions[i];
+
+                    // Check if this is an SV with a span
+                    if (isSvSpan) {
+                        drawSvSpan(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
+                    } else {
+                        drawVariantLine(gc, node, call, x, y, sampleHeight);
+                        lastDrawnPixelX[i] = xPixel;
                     }
                 }
             }
@@ -171,9 +171,8 @@ public class VariantDrawer {
         }
     }
     
-    private void drawVariantLine(GraphicsContext gc, VariantNode variant, int sampleTrackIndex,
+    private void drawVariantLine(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,
                                  double x, double y, double sampleHeight) {
-        VariantNode.SampleCall call = variant.getSampleCall(sampleTrackIndex);
         Color baseColor = getVariantColor(variant.type);
         double opacity = 1.0;
 
@@ -216,10 +215,9 @@ public class VariantDrawer {
     /**
      * Draw an SV span as a rectangle spanning start to end positions.
      */
-    private void drawSvSpan(GraphicsContext gc, VariantNode variant, int sampleTrackIndex,
+    private void drawSvSpan(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,
                            Function<Double, Double> chromPosToScreenPos, double canvasWidth,
                            double startX, double y, double sampleHeight) {
-        VariantNode.SampleCall call = variant.getSampleCall(sampleTrackIndex);
         Color baseColor = getVariantColor(variant.type);
         double opacity = 0.7;  // Slightly transparent for overlapping spans
 

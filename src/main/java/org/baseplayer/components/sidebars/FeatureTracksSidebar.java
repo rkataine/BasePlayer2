@@ -89,7 +89,7 @@ public class FeatureTracksSidebar extends SidebarBase {
 
   private ContextMenu buildMasterSettingsMenu() {
     ContextMenu menu = new ContextMenu();
-    menu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+    menu.setStyle("-fx-background-color: #2B2B2B; -fx-border-color: #555; -fx-border-width: 1;");
 
     MenuItem removeAll = new MenuItem("Remove all feature tracks");
     removeAll.setOnAction(e -> {

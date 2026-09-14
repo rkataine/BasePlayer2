@@ -101,7 +101,21 @@ public class NavigationCommands {
   }
   
   /**
-   * Navigate to a genomic position on the hover stack.
+   * Navigate to a genomic position on a specific chromosome on the hover stack.
+   * 
+   * @param chromosome Chromosome name (e.g., "1", "X", "MT")
+   * @param start Start position (1-based)
+   * @param end End position (1-based, inclusive)
+   */
+  public static void navigateToPosition(String chromosome, int start, int end) {
+    DrawStack stack = stackManager.getHoverStack();
+    if (stack != null) {
+      stack.navigateTo(chromosome, start, end);
+    }
+  }
+  
+  /**
+   * Navigate to a genomic position on the hover stack (current chromosome).
    * 
    * @param start Start position (1-based)
    * @param end End position (1-based, inclusive)
@@ -114,7 +128,21 @@ public class NavigationCommands {
   }
   
   /**
-   * Navigate to a single position with minZoom flanks.
+   * Navigate to a single position with minZoom flanks on a specific chromosome.
+   * 
+   * @param chromosome Chromosome name (e.g., "1", "X", "MT")
+   * @param position Position to center on (1-based)
+   */
+  public static void navigateToPosition(String chromosome, int position) {
+    ViewWindow window = centeredWindow(position, GenomicCanvas.minZoom, SINGLE_BASE_ALIGNMENT_BP);
+    DrawStack stack = stackManager.getHoverStack();
+    if (stack != null) {
+      stack.navigateTo(chromosome, window.start(), window.end());
+    }
+  }
+  
+  /**
+   * Navigate to a single position with minZoom flanks (current chromosome).
    * 
    * @param position Position to center on (1-based)
    */
@@ -141,25 +169,31 @@ public class NavigationCommands {
   
   /**
    * Navigate to a gene by name.
-   * Switches chromosome if needed and zooms to gene location with padding.
-   * 
-   * @param geneName Name of the gene to navigate to
-   */
-  /**
-   * Navigate to a gene by name.
-   * Switches chromosome if needed and zooms to gene location.
-   * Fetches exact gene bounds (no padding).
+   * Switches chromosome if needed and zooms to gene location with variant region load.
    * 
    * @param geneName Name of the gene to navigate to
    */
   public static void navigateToGene(String geneName) {
+    navigateToGene(geneName, true);
+  }
+
+  /**
+   * Navigate to a gene by name.
+   * Switches chromosome if needed and zooms to gene location.
+   *
+   * @param geneName Name of the gene to navigate to
+   * @param loadVariantRegion whether to trigger VCF region loading as part of navigation
+   */
+  public static void navigateToGene(String geneName, boolean loadVariantRegion) {
     GeneLocation loc = AnnotationData.getGeneLocation(geneName);
     if (loc == null) return;
     DrawStack stack = stackManager.getHoverStack();
     if (stack != null) {
       VcfManager vcfManager = VcfManager.getInstance();
 
-      vcfManager.loadRegionVariants(loc.chrom(), loc.start(), loc.end());
+      if (loadVariantRegion) {
+        vcfManager.loadRegionVariants(loc.chrom(), loc.start(), loc.end());
+      }
       
       long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
       long viewStart = loc.start() - padding;

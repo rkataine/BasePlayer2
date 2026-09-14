@@ -60,7 +60,8 @@ public class VariantTable {
         Tab codingTab,
         Tab intronicTab,
         Tab intergenicTab,
-        Consumer<TableRow> onGeneDoubleClick) {
+        Consumer<TableRow> onGeneDoubleClick,
+        Consumer<TableRow> onPositionClick) {
 
         this.codingTab = codingTab;
         this.intronicTab = intronicTab;
@@ -71,10 +72,11 @@ public class VariantTable {
             intronicTable,
             intergenicTable,
             onGeneDoubleClick,
+            onPositionClick,
             () -> this.displayFilter);
     }
 
-    public void initializeColumns() {
+		public void initializeColumns() {
         backend.initializeColumns();
     }
 
@@ -143,6 +145,7 @@ public class VariantTable {
         private final TableView<VariantNode> intronicTable;
         private final TableView<VariantNode> intergenicTable;
         private final Consumer<TableRow> onGeneDoubleClick;
+        private final Consumer<TableRow> onPositionClick;
         private final Supplier<VariantFilter> filterSupplier;
 
         private ListView<TableRow> codingList;
@@ -154,12 +157,14 @@ public class VariantTable {
             TableView<VariantNode> intronicTable,
             TableView<VariantNode> intergenicTable,
             Consumer<TableRow> onGeneDoubleClick,
+            Consumer<TableRow> onPositionClick,
             Supplier<VariantFilter> filterSupplier) {
 
             this.codingTable = codingTable;
             this.intronicTable = intronicTable;
             this.intergenicTable = intergenicTable;
             this.onGeneDoubleClick = onGeneDoubleClick;
+            this.onPositionClick = onPositionClick;
             this.filterSupplier = filterSupplier;
         }
 
@@ -250,6 +255,7 @@ public class VariantTable {
             listView.setCellFactory(ignored -> new VariantListCell(
                 includeCodingColumns,
                 onGeneDoubleClick,
+                onPositionClick,
                 filterSupplier));
             listView.setPlaceholder(table.getPlaceholder());
 
@@ -310,6 +316,7 @@ public class VariantTable {
     private static final class VariantListCell extends ListCell<TableRow> {
         private final boolean includeCodingColumns;
         private final Consumer<TableRow> onGeneDoubleClick;
+        private final Consumer<TableRow> onPositionClick;
         private final Supplier<VariantFilter> filterSupplier;
 
         private final HBox root = new HBox(8);
@@ -328,10 +335,12 @@ public class VariantTable {
         private VariantListCell(
             boolean includeCodingColumns,
             Consumer<TableRow> onGeneDoubleClickCallback,
+            Consumer<TableRow> onPositionClickCallback,
             Supplier<VariantFilter> filterSupplier) {
 
             this.includeCodingColumns = includeCodingColumns;
             this.onGeneDoubleClick = onGeneDoubleClickCallback;
+            this.onPositionClick = onPositionClickCallback;
             this.filterSupplier = filterSupplier;
 
             root.setAlignment(Pos.CENTER_LEFT);
@@ -381,6 +390,13 @@ public class VariantTable {
             }
 
             setLabel(position, resolveTableColumnValue(row, "position", filter), defaultColor);
+            position.setCursor(javafx.scene.Cursor.HAND);
+            position.setOnMouseClicked(event -> {
+                if (row != null && onPositionClick != null) {
+                    onPositionClick.accept(row);
+                    event.consume();
+                }
+            });
             setLabel(refAlt, resolveTableColumnValue(row, "refAlt", filter), defaultColor);
             setLabel(type, resolveTableColumnValue(row, "variantType", filter), defaultColor);
             if (includeCodingColumns) {
@@ -513,7 +529,7 @@ public class VariantTable {
             return node.getSamples().size();
         }
         for (VariantNode.SampleCall call : node.getSamples()) {
-            if (filter.passesSampleThresholds(node, call.trackIndex)) {
+            if (filter.passesSampleThresholds(node, call)) {
                 passSamples++;
             }
         }
@@ -534,7 +550,7 @@ public class VariantTable {
             return maxQuality;
         }
         for (VariantNode.SampleCall call : node.getSamples()) {
-            if (filter.passesSampleThresholds(node, call.trackIndex) && call.quality > maxQuality) {
+            if (filter.passesSampleThresholds(node, call) && call.quality > maxQuality) {
                 maxQuality = call.quality;
             }
         }

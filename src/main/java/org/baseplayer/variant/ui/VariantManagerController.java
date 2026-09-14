@@ -1,9 +1,12 @@
 package org.baseplayer.variant.ui;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -593,7 +596,8 @@ public class VariantManagerController implements Initializable {
             codingTab,
             intronicTab,
             intergenicTab,
-            this::handleGeneRowDoubleClick);
+            this::handleGeneRowDoubleClick,
+            this::handlePositionClick);
 
         variantTable.initializeColumns();
     }
@@ -615,18 +619,134 @@ public class VariantManagerController implements Initializable {
             return;
         }
 
-        NavigationCommands.navigateToGene(geneName);
+        navigateAndApplySampleFilterForGene(geneName);
+    }
 
+    public void handlePositionClick(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+
+        VariantNode node = row.node();
         String rowChromosome = row.chromosome();
         if (rowChromosome == null || rowChromosome.isBlank()) {
             rowChromosome = chromosome;
         }
 
-        Set<Integer> samplesWithGene = findSamplesWithGene(geneName, rowChromosome);
+        long position = node.position;
+        long minViewLength = 40;
+        long start = Math.max(1, position - minViewLength / 2);
+        long end = position + minViewLength / 2;
 
+        // Make effectively final for lambda
+        final String navChromosome = rowChromosome;
+        final long navStart = start;
+        final long navEnd = end;
+
+        navigateAndApplySampleFilter(
+            () -> NavigationCommands.navigateToPosition(navChromosome, (int)navStart, (int)navEnd),
+            resolveTracksFromCalls(node.getSamples()),
+            "Position:" + position);
+    }
+
+    /**
+     * Resolve unique sample tracks from per-variant sample calls.
+     */
+    private List<SampleTrack> resolveTracksFromCalls(java.util.List<VariantNode.SampleCall> samples) {
+        if (samples == null || samples.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Set<SampleTrack> uniqueTracks = new LinkedHashSet<>();
+
+        for (VariantNode.SampleCall call : samples) {
+            if (call.getTrack() != null) {
+                uniqueTracks.add(call.getTrack());
+            }
+        }
+        return new ArrayList<>(uniqueTracks);
+    }
+
+    private List<SampleTrack> extractSamplesWithGeneVariants(String geneName) {
+        if (geneName == null || geneName.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        // Step 1: Get gene location (chromosome and bounds)
+        GeneLocation geneLoc = AnnotationData.getGeneLocation(geneName);
+        if (geneLoc == null) {
+            return Collections.emptyList();
+        }
+
+        // Step 2: Get cached variants for the gene's chromosome
+        VcfManager vcfManager = VcfManager.getInstance();
+        VariantList variantList = vcfManager.getCachedVariants(geneLoc.chrom());
+        if (variantList == null || variantList.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // Step 3: Collect unique sample tracks from variants matching the gene name
+        Set<SampleTrack> tracksWithGeneVariant = new LinkedHashSet<>();
+
+        for (VariantNode node = variantList.getFirst(); node != null; node = node.next) {
+            // Check if variant is annotated with this gene
+            if (node.annotation == null || node.annotation.geneName() == null) {
+                continue;
+            }
+
+            // Compare gene names (case-insensitive)
+            if (!node.annotation.geneName().equalsIgnoreCase(geneName)) {
+                continue;
+            }
+
+            // Collect samples from this variant
+            List<VariantNode.SampleCall> calls = node.getSamples();
+            if (calls != null) {
+                for (VariantNode.SampleCall call : calls) {
+                    SampleTrack track = call.getTrack();
+                    if (track != null) {
+                        tracksWithGeneVariant.add(track);
+                    }
+                }
+            }
+        }
+
+        return new ArrayList<>(tracksWithGeneVariant);
+    }
+
+    private void navigateAndApplySampleFilterForGene(String geneName) {
+        navigateAndApplySampleFilter(
+            () -> NavigationCommands.navigateToGene(geneName, true),  // true = load variants
+            null,  // samples will be extracted after navigation
+            geneName);
+    }
+
+    /**
+     * Navigate to a location and apply sample filtering.
+     * Accepts sample objects directly; SampleRegistry handles track index extraction.
+     *
+     * @param navigationAction The navigation action to perform
+         * @param tracksWithFeature List of sample tracks containing the feature (may be null for gene filtering)
+     * @param featureName Human-readable name of the feature for the sample subset
+     */
+    private void navigateAndApplySampleFilter(
+            Runnable navigationAction,
+             List<SampleTrack> tracksWithFeature,
+            String featureName) {
+
+        // Perform the navigation
+        navigationAction.run();
+
+        List<SampleTrack> finalTracks = tracksWithFeature;
+        if (finalTracks == null && featureName != null && !featureName.isBlank() 
+            && !featureName.startsWith("Position:")) {
+            finalTracks = extractSamplesWithGeneVariants(featureName);
+        }
+
+        // Apply sample filtering (SampleRegistry extracts track indices internally)
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        if (!samplesWithGene.isEmpty()) {
-            registry.applyGeneSubset(samplesWithGene, geneName);
+        if (finalTracks != null && !finalTracks.isEmpty()) {
+            registry.applyGeneSubset(finalTracks, featureName);
 
             int displayedCount = registry.getDisplayedTrackCount();
             if (displayedCount > 0) {
@@ -636,32 +756,6 @@ public class VariantManagerController implements Initializable {
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
         MinimizedVariantManagerWindow.handleMinimize(stage);
-    }
-
-    /**
-     */
-    private Set<Integer> findSamplesWithGene(String geneName, String chromosome) {
-        Set<Integer> samplesWithGene = new HashSet<>();
-        
-        VariantList variants = vcfManager.getCachedVariants(chromosome);
-        if (variants == null || variants.isEmpty()) {
-            return samplesWithGene;
-        }
-
-        VariantFilter filter = vcfManager.getCurrentFilter();
-        VariantNode node = variants.getFirst();
-        while (node != null) {
-            VariantAnnotation ann = node.annotation;
-            if (ann != null && ann.geneName() != null && ann.geneName().equalsIgnoreCase(geneName)) {
-                for (VariantNode.SampleCall call : node.getSamples()) {
-                    if (filter.passes(node, call.trackIndex)) {
-                        samplesWithGene.add(call.trackIndex);
-                    }
-                }
-            }
-            node = node.next;
-        }
-        return samplesWithGene;
     }
 
     private double estimateSampleViewportHeight(SampleRegistry registry) {
@@ -1211,7 +1305,7 @@ public class VariantManagerController implements Initializable {
                 double maxGq = -1;
                 boolean passes = false;
                 for (VariantNode.SampleCall call : node.getSamples()) {
-                    if (filter.passes(node, call.trackIndex)) {
+                    if (filter.passes(node, call)) {
                         passes = true;
                         if (call.quality > maxGq) maxGq = call.quality;
                     }
@@ -1434,7 +1528,7 @@ public class VariantManagerController implements Initializable {
 
                         int passSamples = 0;
                         for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (filterSnapshot.passesSampleThresholds(node, call.trackIndex)) {
+                            if (filterSnapshot.passesSampleThresholds(node, call)) {
                                 passSamples++;
                             }
                         }

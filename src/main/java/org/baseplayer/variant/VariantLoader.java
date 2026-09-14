@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.baseplayer.io.readers.VcfReader;
+import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -81,43 +82,40 @@ public class VariantLoader {
             if (detectedNormalSample != null && vcfSample.equals(detectedNormalSample)) {
                 continue;
             }
-            
-            boolean found = false;
-            
+						// TODO why track index?
+            int trackIndex = -1;
+
             // Try to find matching sample track
             for (int i = 0; i < registry.getSampleTracks().size(); i++) {
                 SampleTrack track = registry.getSampleTracks().get(i);
                 String trackName = track.getDisplayName();
-                
-                // Match by exact name or if track name contains VCF sample name
-                if (trackName.equals(vcfSample) || trackName.contains(vcfSample)) {
-                    mapping.put(vcfSample, i);
-                    // System.err.println("[VariantLoader.buildSampleMapping] Mapped '" + vcfSample + "' -> track index " + i + " (track name: " + trackName + ")");
-                    found = true;
+
+                if (trackName != null && (trackName.equals(vcfSample) || trackName.contains(vcfSample))) {
+                    trackIndex = i;
                     break;
                 }
-                
+
                 // Also check individual sample names within the track
-                for (var sample : track.getSamples()) {
-                    if (sample.getName().equals(vcfSample) || sample.getName().contains(vcfSample)) {
-                        mapping.put(vcfSample, i);
-                        // System.err.println("[VariantLoader.buildSampleMapping] Mapped '" + vcfSample + "' -> track index " + i + " (sample name in track: " + sample.getName() + ")");
-                        found = true;
+                for (Sample sample : track.getSamples()) {
+                    String sampleName = sample.getName();
+                    if (sampleName != null && (sampleName.equals(vcfSample) || sampleName.contains(vcfSample))) {
+                        trackIndex = i;
                         break;
                     }
                 }
-                
-                if (found) break;
+
+                if (trackIndex >= 0) {
+                    break;
+                }
             }
-            
-            // Track unmapped samples (but not the skipped normal)
-            if (!found) {
+
+            if (trackIndex >= 0) {
+                mapping.put(vcfSample, trackIndex);
+            } else {
                 unmappedSamples.add(vcfSample);
-                // System.err.println("[VariantLoader.buildSampleMapping] Unmapped sample: " + vcfSample);
             }
         }
-        
-        // System.err.println("[VariantLoader.buildSampleMapping] Final mapping: " + mapping);
+
         return mapping;
     }
 
@@ -176,7 +174,7 @@ public class VariantLoader {
                             }
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
-                                snv.getRef(), alt, snv.getType(), trackIdx, call);
+                                snv.getRef(), alt, snv.getType(), call);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -225,7 +223,7 @@ public class VariantLoader {
                             }
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
-                                sv.getRef(), alt, sv.getType(), trackIdx, call);
+                                sv.getRef(), alt, sv.getType(), call);
                             if (svEnd != null && cursor[0].svEnd < 0) cursor[0].svEnd = svEnd;
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
@@ -345,7 +343,7 @@ public class VariantLoader {
                             }
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
-                                snv.getRef(), alt, snv.getType(), trackIdx, call);
+                                snv.getRef(), alt, snv.getType(), call);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -394,7 +392,7 @@ public class VariantLoader {
                             }
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
-                                sv.getRef(), alt, sv.getType(), trackIdx, call);
+                                sv.getRef(), alt, sv.getType(), call);
                             if (svEnd != null && cursor[0].svEnd < 0) cursor[0].svEnd = svEnd;
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
@@ -631,11 +629,23 @@ public class VariantLoader {
             for (int i = 0; i < registry.getSampleTracks().size(); i++) {
                 SampleTrack track = registry.getSampleTracks().get(i);
                 String trackName = track.getDisplayName();
-                
-                // Match by exact name
-                if (trackName.equals(vcfSample)) {
+
+                if (trackName != null && (trackName.equals(vcfSample) || trackName.contains(vcfSample))) {
                     vcfSampleToTrackIndex.put(vcfSample, i);
                     found = true;
+                    break;
+                }
+
+                for (Sample sample : track.getSamples()) {
+                    String sampleName = sample.getName();
+                    if (sampleName != null && (sampleName.equals(vcfSample) || sampleName.contains(vcfSample))) {
+                        vcfSampleToTrackIndex.put(vcfSample, i);
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (found) {
                     break;
                 }
             }

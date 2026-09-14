@@ -302,10 +302,9 @@ public class MainController {
     if (drawStacks.isEmpty()) return;
     double height = drawStacks.get(0).featureTracksCanvas.getPreferredHeight();
     featureTracksPane.setPrefHeight(height);
-    // Keep the visual preferred height, but do not hard-lock Region minHeight.
-    // SplitPane applies minHeight before divider listeners run; if minHeight equals
-    // preferred floor, divider 0 can get blocked when feature pane is at floor.
-    // Our custom divider clamping enforces the feature floor explicitly.
+    // When collapsed, this will be HEADER_HEIGHT; when expanded, it will be
+    // HEADER_HEIGHT + sum of track heights. enforceVerticalDividerBounds() will
+    // then adjust dividers accordingly to respect this floor.
     featureTracksPane.setMinHeight(0);
     enforceVerticalDividerBounds();
     featureTracksSidebar.draw();
