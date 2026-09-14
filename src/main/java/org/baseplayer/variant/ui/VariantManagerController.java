@@ -156,8 +156,6 @@ public class VariantManagerController implements Initializable {
     private Timeline immediateFilterApplyTimer;
     // Delay showing loading modal so quick updates don't flash a spinner
     private Timeline loadingModalDelayTimer;
-    private boolean loadingModalRequested = false;
-    private String loadingModalRequestedMessage = "";
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
     private volatile boolean allChromosomeAnnotationRunning = false;
@@ -216,6 +214,7 @@ public class VariantManagerController implements Initializable {
         loadData();
 
         setupWindowVisibilityListeners();
+        syncBusyOverlay();
 
         // Keep a balanced workspace: filters on top, tables below.
         Platform.runLater(() -> {
@@ -950,6 +949,7 @@ public class VariantManagerController implements Initializable {
         allChromosomeAnnotationTask = null;
 
         lockFilterControls(true);
+        syncBusyOverlay();
 
         // Defer the expensive snapshot creation and task submission to let modal display first
         Platform.runLater(() -> {
@@ -975,13 +975,16 @@ public class VariantManagerController implements Initializable {
 
     @FXML
     private void handleCancelLoadingModal() {
-        if (!allChromosomeAnnotationRunning) {
-            return;
-        }
         ThreadRunner.RunnerTask task = allChromosomeAnnotationTask;
         if (task != null) {
             task.cancel();
+        } else {
+            ThreadRunner.get().cancelAll();
         }
+        allChromosomeAnnotationRunning = false;
+        allChromosomeAnnotationTask = null;
+        lockFilterControls(false);
+        hideLoadingModal();
     }
 
     private void applyFiltersNow() {
@@ -1649,54 +1652,30 @@ public class VariantManagerController implements Initializable {
         }
     }
 
-    private boolean isUiForegroundActive() {
-        if (stage == null || !stage.isShowing() || stage.isIconified()) {
-            return false;
-        }
-        if (stage.isFocused()) {
-            return true;
-        }
-        Stage mainStage = MainApp.stage;
-        return mainStage != null && mainStage.isShowing() && !mainStage.isIconified() && mainStage.isFocused();
-    }
-
     private void handleHostWindowStateChanged() {
-        if (loadingModal == null) {
-            return;
-        }
-        if (isUiForegroundActive()) {
-            if (loadingModalRequested) {
-                applyLoadingModalVisuals(loadingModalRequestedMessage);
-                loadingModal.setVisible(true);
-                loadingModal.setManaged(true);
-            }
-        } else {
-            hideLoadingModalVisualOnly();
-        }
+        // In-window overlay stays with the Variant Manager scene; do not hide it on focus changes.
     }
 
     private void applyLoadingModalVisuals(String message) {
         if (loadingModal == null) {
             return;
         }
-        loadingLabel.setText(message);
+        loadingLabel.setText(message == null || message.isBlank() ? "Loading" : message);
         if (loadingSpinner != null) {
-            loadingSpinner.setManaged(true);
-            loadingSpinner.setVisible(true);
+            loadingSpinner.setManaged(false);
+            loadingSpinner.setVisible(false);
         }
         if (loadingProgressBar != null) {
             loadingProgressBar.setManaged(false);
             loadingProgressBar.setVisible(false);
-            loadingProgressBar.setProgress(0);
         }
         if (loadingEtaLabel != null) {
             loadingEtaLabel.setManaged(false);
             loadingEtaLabel.setVisible(false);
-            loadingEtaLabel.setText("");
         }
         if (loadingCancelButton != null) {
-            loadingCancelButton.setManaged(false);
-            loadingCancelButton.setVisible(false);
+            loadingCancelButton.setManaged(true);
+            loadingCancelButton.setVisible(true);
             loadingCancelButton.setDisable(false);
         }
     }
@@ -1742,11 +1721,52 @@ public class VariantManagerController implements Initializable {
         if (reloadBannerButton != null) {
             reloadBannerButton.setDisable(locked);
         }
+        if (locked) {
+            showBusyOverlay();
+        }
+    }
+
+    public void syncBusyOverlay() {
+        boolean tasksRunning = !ThreadRunner.get().getActiveTasks().isEmpty();
+        if (!tasksRunning) {
+            allChromosomeAnnotationRunning = false;
+            allChromosomeAnnotationTask = null;
+        }
+        boolean busy = tasksRunning || allChromosomeAnnotationRunning;
+        if (busy) {
+            if (filterTabPane != null) {
+                filterTabPane.setDisable(true);
+            }
+            if (annotateAllChromosomesButton != null) {
+                annotateAllChromosomesButton.setDisable(true);
+            }
+            if (reloadBannerButton != null) {
+                reloadBannerButton.setDisable(true);
+            }
+            showBusyOverlay();
+        } else {
+            if (filterTabPane != null) {
+                filterTabPane.setDisable(false);
+            }
+            if (annotateAllChromosomesButton != null) {
+                annotateAllChromosomesButton.setDisable(false);
+            }
+            if (reloadBannerButton != null) {
+                reloadBannerButton.setDisable(false);
+            }
+            hideLoadingModal();
+        }
+    }
+
+    private void showBusyOverlay() {
+        applyLoadingModalVisuals("Loading");
+        if (loadingModal != null) {
+            loadingModal.setVisible(true);
+            loadingModal.setManaged(true);
+        }
     }
 
     private void hideLoadingModal() {
-        loadingModalRequested = false;
-        loadingModalRequestedMessage = "";
         hideLoadingModalVisualOnly();
     }
 

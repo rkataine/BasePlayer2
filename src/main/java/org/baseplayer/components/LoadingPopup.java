@@ -11,7 +11,10 @@ import javafx.scene.control.ProgressIndicator;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.beans.value.ChangeListener;
 import javafx.stage.Popup;
+import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import javafx.stage.Window;
 
 /**
@@ -51,6 +54,15 @@ public class LoadingPopup {
     private Runnable onCancel;
     private static final double PROGRESS_EPSILON = 1e-9;
     private volatile long startTime = 0;
+    private boolean sessionActive;
+    private final ChangeListener<Boolean> focusListener =
+            (obs, was, is) -> syncForegroundVisibility();
+    private final ChangeListener<Number> boundsListener =
+            (obs, was, value) -> {
+                if (sessionActive) {
+                    syncForegroundVisibility();
+                }
+            };
 
     public LoadingPopup() {
         popup = new Popup();
@@ -146,10 +158,9 @@ public class LoadingPopup {
         progressBar.setProgress(0.0);  // Start at 0% in determinate mode
         timeEstimateLabel.setText("Elapsed: — | ETA: —");
         startTime = System.currentTimeMillis();
-        // Centre immediately using fixed dimensions so the popup never flashes at (0,0)
-        double x = owner.getX() + (owner.getWidth()  - POPUP_W) / 2;
-        double y = owner.getY() + (owner.getHeight() - POPUP_H) / 2;
-        popup.show(owner, x, y);
+        sessionActive = true;
+        watchWindows();
+        syncForegroundVisibility();
         
         // Style the internal bar node after the scene is constructed
         Platform.runLater(() -> {
@@ -258,23 +269,90 @@ public class LoadingPopup {
     /** Hide the popup immediately. Safe to call from any thread. */
     public void hide() {
         if (Platform.isFxApplicationThread()) {
+            sessionActive = false;
             popup.hide();
         } else {
-            Platform.runLater(popup::hide);
+            Platform.runLater(this::hide);
         }
     }
 
-    /** @return {@code true} if the popup is currently visible. */
+    /** @return {@code true} if a loading session is in progress (may be hidden while the app is in the background). */
     public boolean isShowing() {
-        return popup.isShowing();
+        return sessionActive;
+    }
+
+    public void syncForegroundVisibility() {
+        if (!sessionActive) {
+            popup.hide();
+            return;
+        }
+        watchWindows();
+        Window top = findTopWindow();
+        if (top == null) {
+            popup.hide();
+            return;
+        }
+        double x = top.getX() + (top.getWidth() - POPUP_W) / 2;
+        double y = top.getY() + (top.getHeight() - POPUP_H) / 2;
+        if (popup.isShowing() && popup.getOwnerWindow() == top) {
+            popup.setX(x);
+            popup.setY(y);
+            return;
+        }
+        if (popup.isShowing()) {
+            popup.hide();
+        }
+        popup.show(top, x, y);
     }
 
     // ── Private ────────────────────────────────────────────────────────────
 
     private void cancel() {
+        sessionActive = false;
         popup.hide();
         if (onCancel != null) {
             onCancel.run();
         }
+    }
+
+    private void watchWindows() {
+        for (Window window : Window.getWindows()) {
+            window.focusedProperty().removeListener(focusListener);
+            window.focusedProperty().addListener(focusListener);
+            if (window instanceof Stage stage) {
+                stage.iconifiedProperty().removeListener(focusListener);
+                stage.iconifiedProperty().addListener(focusListener);
+                stage.xProperty().removeListener(boundsListener);
+                stage.yProperty().removeListener(boundsListener);
+                stage.widthProperty().removeListener(boundsListener);
+                stage.heightProperty().removeListener(boundsListener);
+                stage.xProperty().addListener(boundsListener);
+                stage.yProperty().addListener(boundsListener);
+                stage.widthProperty().addListener(boundsListener);
+                stage.heightProperty().addListener(boundsListener);
+            }
+        }
+    }
+
+    private static Window findTopWindow() {
+        Window fallback = null;
+        boolean appFocused = false;
+        for (Window window : Window.getWindows()) {
+            if (!(window instanceof Stage stage)) {
+                continue;
+            }
+            if (!stage.isShowing() || stage.isIconified()) {
+                continue;
+            }
+            if (stage.getStyle() == StageStyle.TRANSPARENT) {
+                continue;
+            }
+            if (stage.isFocused()) {
+                appFocused = true;
+                return stage;
+            }
+            fallback = stage;
+        }
+        return appFocused ? fallback : null;
     }
 }

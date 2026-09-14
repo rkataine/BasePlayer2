@@ -65,7 +65,13 @@ public final class LoadingManager {
         popup.show(message, MainApp.stage, ThreadRunner.get()::cancelAll);
       } else {
         popup.setMessage(message);
+        popup.syncForegroundVisibility();
       }
+    }
+    org.baseplayer.variant.ui.VariantManagerController controller =
+        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+    if (controller != null) {
+      controller.syncBusyOverlay();
     }
   }
 
