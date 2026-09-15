@@ -45,14 +45,12 @@ public class VisibleVariantIndex {
      * @param lastVisibleSample Last visible sample slot (in displayed list)
      * @param sampleHeight Height per sample in pixels
      * @param scrollBarPosition Vertical scroll offset
-     * @param masterTrackHeight Height of master track at top
      */
     public void rebuild(List<Integer> displayedTrackIndices,
                        int firstVisibleSample, 
                        int lastVisibleSample,
                        double sampleHeight,
-                       double scrollBarPosition,
-                       double masterTrackHeight) {
+                       double scrollBarPosition) {
         
         // Validate inputs
         if (displayedTrackIndices.isEmpty() || 
@@ -88,9 +86,8 @@ public class VisibleVariantIndex {
             int arrayIndex = slot - first;
             int trackIndex = displayedTrackIndices.get(slot);
             
-            // Calculate Y position for this sample's variant line
-            // Formula matches AlignmentCanvas sample positioning
-            double sampleY = masterTrackHeight + slot * sampleHeight - scrollBarPosition;
+            // Sample-canvas-local Y (master band is a sibling canvas above)
+            double sampleY = slot * sampleHeight - scrollBarPosition;
             
             yPositions[arrayIndex] = sampleY;
             sampleTrackIndices[arrayIndex] = trackIndex;

@@ -463,7 +463,7 @@ public class MainController {
       drawStacks.add(drawStack);
       chromSplitPane.getItems().add(drawStack.chromContainer);
       featureTracksContentPane.getItems().add(drawStack.featureTracksStack);
-      drawPane.getItems().add(drawStack.drawStack);
+      drawPane.getItems().add(drawStack.sampleColumn);
       
       // Update visibility of controls on all stacks
       for (DrawStack stack : drawStacks) {
@@ -508,7 +508,7 @@ public class MainController {
     drawStacks.add(drawStack);
     chromSplitPane.getItems().add(drawStack.chromContainer);
     featureTracksContentPane.getItems().add(drawStack.featureTracksStack);
-    drawPane.getItems().add(drawStack.drawStack);
+    drawPane.getItems().add(drawStack.sampleColumn);
 
     for (DrawStack stack : drawStacks) {
       stack.updateControlsVisibility();

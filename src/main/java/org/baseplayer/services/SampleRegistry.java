@@ -53,6 +53,7 @@ public class SampleRegistry {
     // UI layout state
     private double scrollBarPosition = 0;
     private double sampleHeight = 0;
+    private double sampleViewportHeight = 0;
     private boolean sampleHeightLocked = false;
     private String activeSampleFilterQuery = "";
     private Set<SampleTrack> focusedTracks = null; // null = no explicit focus filter
@@ -147,8 +148,7 @@ public class SampleRegistry {
         if (getDisplayedTrackCount() <= 0) {
             return 0;
         }
-        double safeViewportHeight = Math.max(0, viewportHeight);
-        return Math.max(0, getTotalSampleContentHeight() - safeViewportHeight);
+        return Math.max(0, getTotalSampleContentHeight() - Math.max(0, viewportHeight));
     }
 
     public double clampScrollBarPosition(double position, double viewportHeight) {
@@ -171,32 +171,57 @@ public class SampleRegistry {
         return sampleHeightLocked;
     }
 
-    // ── Atomic view-state mutators ───────────────────────────────────────────
-    // All first/last/height/scroll writes must go through commitViewState.
+    public void setVisibleSamples(int first, int last, double viewportHeight) {
+        setVisibleSamples(first, last, Double.NaN, Double.NaN, viewportHeight);
+    }
 
-    /**
-     * Single write path for visible range, row height, and scroll offset.
-     * Clamps values and fires a single variant-index dirty notification when
-     * the range or height changes.
-     */
-    private void commitViewState(int first, int last, double height, double scroll) {
+    public void setVisibleSamples(int first, int last, double height, double scroll,
+                                  double viewportHeight) {
         int trackCount = getDisplayedTrackCount();
-        int newFirst;
-        int newLast;
-        double newHeight;
-        double newScroll;
 
         if (trackCount <= 0 || first < 0 || last < 0) {
-            newFirst = -1;
-            newLast = -1;
-            newHeight = 0;
-            newScroll = 0;
-        } else {
-            newFirst = Math.max(0, Math.min(trackCount - 1, first));
-            newLast = Math.max(newFirst, Math.min(trackCount - 1, last));
-            newHeight = Math.max(0, height);
-            newScroll = Math.max(0, scroll);
+            boolean rangeChanged = firstVisibleSample != -1 || lastVisibleSample != -1;
+            boolean heightChanged = sampleHeight != 0;
+            firstVisibleSample = -1;
+            lastVisibleSample = -1;
+            sampleHeight = 0;
+            scrollBarPosition = 0;
+            if (viewportHeight > 0) {
+                sampleViewportHeight = viewportHeight;
+            }
+            if (rangeChanged || heightChanged) {
+                notifyVariantIndexDirty();
+            }
+            return;
         }
+
+        int newFirst = Math.min(first, last);
+        int newLast = Math.max(first, last);
+        newFirst = Math.max(0, Math.min(trackCount - 1, newFirst));
+        newLast = Math.max(newFirst, Math.min(trackCount - 1, newLast));
+        int window = newLast - newFirst + 1;
+
+        double newHeight;
+        double effectiveViewport = viewportHeight;
+        if (Double.isNaN(height)) {
+            if (effectiveViewport <= 0) {
+                effectiveViewport = sampleViewportHeight;
+            }
+            newHeight = effectiveViewport > 0 ? effectiveViewport / window : sampleHeight;
+        } else {
+            newHeight = Math.max(0, height);
+            if (effectiveViewport <= 0) {
+                effectiveViewport = newHeight > 0 ? newHeight * window : sampleViewportHeight;
+            }
+        }
+
+        if (effectiveViewport > 0) {
+            sampleViewportHeight = effectiveViewport;
+        }
+
+        double desiredScroll = Double.isNaN(scroll) ? newFirst * newHeight : scroll;
+        double maxScroll = Math.max(0, trackCount * newHeight - Math.max(0, sampleViewportHeight));
+        double newScroll = Math.max(0, Math.min(desiredScroll, maxScroll));
 
         boolean rangeChanged = newFirst != firstVisibleSample || newLast != lastVisibleSample;
         boolean heightChanged = Math.abs(newHeight - sampleHeight) > 1e-9;
@@ -214,69 +239,7 @@ public class SampleRegistry {
     /** Empty viewport: no visible samples. */
     public void clearVisibleRange() {
         sampleHeightLocked = false;
-        commitViewState(-1, -1, 0, 0);
-    }
-
-    /**
-     * Fit {@code first..last} into {@code viewportHeight}, recomputing row height
-     * and snapping scroll to the first visible sample.
-     */
-    public void fitVisibleRange(int first, int last, double viewportHeight) {
-        int trackCount = getDisplayedTrackCount();
-        if (trackCount <= 0) {
-            clearVisibleRange();
-            return;
-        }
-
-        int clampedFirst = Math.max(0, Math.min(trackCount - 1, first));
-        int clampedLast = Math.max(clampedFirst, Math.min(trackCount - 1, last));
-        double height = sampleHeight;
-        double scroll = scrollBarPosition;
-
-        if (viewportHeight > 0) {
-            int visibleCount = clampedLast - clampedFirst + 1;
-            height = viewportHeight / Math.max(1, visibleCount);
-            scroll = clampScrollBarPosition(clampedFirst * height, viewportHeight);
-        }
-        commitViewState(clampedFirst, clampedLast, height, scroll);
-    }
-
-    /**
-     * Set the visible window while preserving/forcing row height and snapping
-     * scroll to {@code first * height}.
-     */
-    public void setVisibleWindow(int first, int last, double height) {
-        int trackCount = getDisplayedTrackCount();
-        if (trackCount <= 0) {
-            clearVisibleRange();
-            return;
-        }
-
-        int clampedFirst = Math.max(0, Math.min(trackCount - 1, first));
-        int clampedLast = Math.max(clampedFirst, Math.min(trackCount - 1, last));
-        double safeHeight = Math.max(0, height);
-        int window = clampedLast - clampedFirst + 1;
-        double viewportHeight = safeHeight * Math.max(1, window);
-        double scroll = clampScrollBarPosition(clampedFirst * safeHeight, viewportHeight);
-        commitViewState(clampedFirst, clampedLast, safeHeight, scroll);
-    }
-
-    /**
-     * Full explicit window write with an arbitrary scroll offset (e.g. continuous
-     * thumb drag). Scroll is clamped to {@code viewportHeight}.
-     */
-    public void setVisibleWindow(int first, int last, double height, double scroll, double viewportHeight) {
-        int trackCount = getDisplayedTrackCount();
-        if (trackCount <= 0) {
-            clearVisibleRange();
-            return;
-        }
-
-        int clampedFirst = Math.max(0, Math.min(trackCount - 1, first));
-        int clampedLast = Math.max(clampedFirst, Math.min(trackCount - 1, last));
-        double safeHeight = Math.max(0, height);
-        double clampedScroll = clampScrollBarPosition(scroll, viewportHeight);
-        commitViewState(clampedFirst, clampedLast, safeHeight, clampedScroll);
+        setVisibleSamples(-1, -1, 0, 0, 0);
     }
 
     /** Scroll-only update (animation frames). Keeps first/last/height. */
@@ -284,48 +247,33 @@ public class SampleRegistry {
         if (firstVisibleSample < 0 || lastVisibleSample < 0) {
             return;
         }
-        commitViewState(
-            firstVisibleSample,
-            lastVisibleSample,
-            sampleHeight,
-            clampScrollBarPosition(scroll, viewportHeight));
+        setVisibleSamples(firstVisibleSample, lastVisibleSample, sampleHeight, scroll, viewportHeight);
     }
 
-    /** Clamp current scroll to the viewport without changing range/height. */
+    /** Re-apply current window against an updated viewport height. */
     public void clampScrollToViewport(double viewportHeight) {
         if (firstVisibleSample < 0 || lastVisibleSample < 0) {
-            commitViewState(-1, -1, 0, 0);
+            setVisibleSamples(-1, -1, 0, 0, viewportHeight);
             return;
         }
-        commitViewState(
-            firstVisibleSample,
-            lastVisibleSample,
-            sampleHeight,
-            clampScrollBarPosition(scrollBarPosition, viewportHeight));
+        setVisibleSamples(
+            firstVisibleSample, lastVisibleSample, sampleHeight, scrollBarPosition, viewportHeight);
     }
 
-    /**
-     * Lock height and force the given row height while keeping the current window.
-     * Used at the start of scrollbar thumb drag.
-     */
     public void lockAndKeepSampleHeight(double height) {
         sampleHeightLocked = true;
         if (firstVisibleSample < 0 || lastVisibleSample < 0) {
             return;
         }
-        commitViewState(firstVisibleSample, lastVisibleSample, Math.max(0, height), scrollBarPosition);
+        setVisibleSamples(firstVisibleSample, lastVisibleSample, height, scrollBarPosition, sampleViewportHeight);
     }
 
     /**
      * Draw-time height initialization when height is still 0. Shrinks the window
-     * if needed to enforce a minimum row height, then clamps scroll.
+     * if needed to enforce a minimum row height.
      */
     public void ensureSampleHeightForViewport(double availableHeight) {
-        if (sampleHeightLocked) {
-            clampScrollToViewport(availableHeight);
-            return;
-        }
-        if (sampleHeight != 0 || firstVisibleSample < 0 || lastVisibleSample < 0) {
+        if (sampleHeightLocked || sampleHeight != 0 || firstVisibleSample < 0 || lastVisibleSample < 0) {
             clampScrollToViewport(availableHeight);
             return;
         }
@@ -335,46 +283,26 @@ public class SampleRegistry {
         if (rawHeight < 20) {
             int tracksFit = Math.max(1, (int) (availableHeight / 20));
             int firstVis = Math.max(0, firstVisibleSample);
-            int totalTracks = getDisplayedTrackCount();
-            int newLast = Math.min(firstVis + tracksFit - 1, Math.max(0, totalTracks - 1));
-            commitViewState(
-                firstVis,
-                newLast,
-                20,
-                clampScrollBarPosition(scrollBarPosition, availableHeight));
+            setVisibleSamples(firstVis, firstVis + tracksFit - 1, 20, scrollBarPosition, availableHeight);
         } else {
-            commitViewState(
-                firstVisibleSample,
-                lastVisibleSample,
-                rawHeight,
-                clampScrollBarPosition(scrollBarPosition, availableHeight));
+            setVisibleSamples(
+                firstVisibleSample, lastVisibleSample, rawHeight, scrollBarPosition, availableHeight);
         }
     }
 
     /** Show all displayed tracks and reset height so layout can recompute. */
     public void showAllTracksResetHeight() {
-        int trackCount = getDisplayedTrackCount();
-        if (trackCount <= 0) {
-            clearVisibleRange();
-            return;
-        }
         sampleHeightLocked = false;
-        commitViewState(0, trackCount - 1, 0, 0);
+        setVisibleSamples(0, Integer.MAX_VALUE, 0, 0, sampleViewportHeight);
     }
 
-    /**
-     * After adding tracks: keep current first (or 0 if empty), expand last to the
-     * end, and reset height so layout can recompute.
-     */
     public void includeNewTracksAtEndResetHeight() {
-        int trackCount = getDisplayedTrackCount();
-        if (trackCount <= 0) {
-            clearVisibleRange();
-            return;
-        }
-        int first = firstVisibleSample < 0 ? 0 : Math.min(firstVisibleSample, trackCount - 1);
         sampleHeightLocked = false;
-        commitViewState(first, trackCount - 1, 0, firstVisibleSample < 0 ? 0 : scrollBarPosition);
+        int first = firstVisibleSample < 0 ? 0 : firstVisibleSample;
+        setVisibleSamples(
+            first, Integer.MAX_VALUE, 0,
+            firstVisibleSample < 0 ? 0 : scrollBarPosition,
+            sampleViewportHeight);
     }
 
     /**
@@ -397,13 +325,7 @@ public class SampleRegistry {
         if (removedDisplayedSlot >= 0 && removedDisplayedSlot < previousFirst) {
             newFirst = previousFirst - 1;
         }
-        int maxFirst = Math.max(0, newCount - newWindow);
-        newFirst = Math.max(0, Math.min(maxFirst, newFirst));
-        int newLast = newFirst + newWindow - 1;
-        double height = sampleHeight;
-        double viewportHeight = height * Math.max(1, newWindow);
-        double scroll = clampScrollBarPosition(newFirst * height, viewportHeight);
-        commitViewState(newFirst, newLast, height, scroll);
+        setVisibleSamples(newFirst, newFirst + newWindow - 1, sampleHeight, Double.NaN, sampleHeight * newWindow);
     }
 
     public String getActiveSampleFilterQuery() {
@@ -637,15 +559,13 @@ public class SampleRegistry {
     private void normalizeVisibleRangeAfterSubsetChange() {
         int displayed = getDisplayedTrackCount();
         if (displayed <= 0) {
-            commitViewState(-1, -1, sampleHeight, 0);
+            setVisibleSamples(-1, -1, sampleHeight, 0, sampleViewportHeight);
             return;
         }
 
-        int first = firstVisibleSample < 0 ? 0 : Math.max(0, Math.min(displayed - 1, firstVisibleSample));
-        int last = lastVisibleSample < 0
-            ? first
-            : Math.max(first, Math.min(displayed - 1, lastVisibleSample));
-        commitViewState(first, last, sampleHeight, scrollBarPosition);
+        int first = firstVisibleSample < 0 ? 0 : firstVisibleSample;
+        int last = lastVisibleSample < 0 ? first : lastVisibleSample;
+        setVisibleSamples(first, last, sampleHeight, scrollBarPosition, sampleViewportHeight);
     }
     
     /**

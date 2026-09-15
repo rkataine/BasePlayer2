@@ -59,14 +59,12 @@ public class VariantDrawer {
      * @param drawStack Current view parameters
      * @param chromPosToScreenPos Function to convert genomic position to screen X
      * @param canvasWidth Width of the canvas
-     * @param masterTrackHeight Height of the master track at top
      */
     public void draw(GraphicsContext gc,
                     VariantList variantList,
                     DrawStack drawStack,
                     Function<Double, Double> chromPosToScreenPos,
                     double canvasWidth,
-                    double masterTrackHeight,
                     VariantFilter filter) {
         
         if (variantList == null || variantList.isEmpty()) {
@@ -96,8 +94,7 @@ public class VariantDrawer {
                 sampleRegistry.getFirstVisibleSample(),
                 sampleRegistry.getLastVisibleSample(),
                 sampleHeight,
-                sampleRegistry.getScrollBarPosition(),
-                masterTrackHeight
+                sampleRegistry.getScrollBarPosition()
             );
         }
         

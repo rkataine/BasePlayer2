@@ -64,6 +64,9 @@ public class EventCoordinator {
       pane.cytobandCanvas.draw();
       pane.chromosomeCanvas.draw();
       pane.alignmentCanvas.draw();
+      if (pane.sampleAggregateCanvas != null) {
+        pane.sampleAggregateCanvas.draw();
+      }
     }
 
     for (DrawStack stack : drawStacks) {

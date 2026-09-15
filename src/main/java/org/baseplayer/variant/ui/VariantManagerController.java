@@ -750,7 +750,7 @@ public class VariantManagerController implements Initializable {
             int displayedCount = registry.getDisplayedTrackCount();
             if (displayedCount > 0) {
                 double viewportHeight = estimateSampleViewportHeight(registry);
-                registry.fitVisibleRange(0, displayedCount - 1, viewportHeight);
+                registry.setVisibleSamples(0, displayedCount - 1, viewportHeight);
             }
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -760,7 +760,7 @@ public class VariantManagerController implements Initializable {
     private double estimateSampleViewportHeight(SampleRegistry registry) {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (!stackManager.isEmpty() && stackManager.getFirst().alignmentCanvas != null) {
-            double fromCanvas = stackManager.getFirst().alignmentCanvas.getHeight() - registry.getMasterTrackHeight();
+            double fromCanvas = stackManager.getFirst().alignmentCanvas.getHeight();
             if (fromCanvas > 0) {
                 return fromCanvas;
             }

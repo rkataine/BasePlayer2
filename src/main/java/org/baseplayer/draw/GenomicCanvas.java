@@ -128,6 +128,10 @@ public class GenomicCanvas extends Canvas {
     }
   }
   public Canvas getReactiveCanvas() { return reactiveCanvas; }
+
+  protected boolean handlesSampleVerticalScroll() {
+    return true;
+  }
   
   private void initializeMomentumTimer() {
     momentumTimer = new AnimationTimer() {
@@ -221,12 +225,11 @@ public class GenomicCanvas extends Canvas {
     } else {
         // Vertical scroll (deltaY) — scroll reads within the sample track under cursor
         double deltaY = event.getDeltaY();
-        if (deltaY != 0) {
+        if (deltaY != 0 && handlesSampleVerticalScroll()) {
           double mouseY = event.getY();
-          double masterOffset = sampleRegistry.getMasterTrackHeight();
           double sampleH = sampleRegistry.getSampleHeight();
-          if (sampleH > 0 && mouseY > masterOffset) {
-            int sampleIdx = (int)((mouseY - masterOffset + sampleRegistry.getScrollBarPosition()) / sampleH);
+          if (sampleH > 0 && mouseY >= 0) {
+            int sampleIdx = (int)((mouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
             if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
               org.baseplayer.samples.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
               org.baseplayer.samples.alignment.AlignmentFile sf = track.getFirstBam();
@@ -240,7 +243,7 @@ public class GenomicCanvas extends Canvas {
                 double readsH = Math.max(1.0, sampleH - coverageH);
 
                 // Check if in butterfly layout and which half the mouse is in
-                double sampleY = masterOffset + sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
+                double sampleY = sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
                 double middleY = sampleY + sampleH / 2;
                 int hp2Start = sf.getHP2StartRow(drawStack);
                 int strandStart = sf.getStrandSplitStartRow(drawStack);
@@ -695,6 +698,7 @@ public class GenomicCanvas extends Canvas {
     LinkedHashSet<GenomicCanvas> set = new LinkedHashSet<>();
     set.add(this);
     if (drawStack.alignmentCanvas != null) set.add(drawStack.alignmentCanvas);
+    if (drawStack.sampleAggregateCanvas != null) set.add(drawStack.sampleAggregateCanvas);
     if (drawStack.chromosomeCanvas != null) set.add(drawStack.chromosomeCanvas);
     if (drawStack.featureTracksCanvas != null) set.add(drawStack.featureTracksCanvas);
     return new ArrayList<>(set);

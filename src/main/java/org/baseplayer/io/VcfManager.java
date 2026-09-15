@@ -327,6 +327,7 @@ public class VcfManager {
         DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : sm.getStacks()) {
             if (stack.alignmentCanvas != null) stack.alignmentCanvas.clearVariantList();
+            if (stack.sampleAggregateCanvas != null) stack.sampleAggregateCanvas.clearVariantList();
         }
         lastLoadedChromosome = chromosome;
         variantsRevision.incrementAndGet();
@@ -501,14 +502,18 @@ public class VcfManager {
                 stack.alignmentCanvas.setVariantList(variantList);
                 stack.alignmentCanvas.draw();
             }
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.setVariantList(variantList);
+                stack.sampleAggregateCanvas.draw();
+            }
         }
     }
 
     private void calculateDensityOnAllCanvases() {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.alignmentCanvas != null) {
-                stack.alignmentCanvas.forceCalculateDensity();
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.forceCalculateDensity();
             }
         }
     }
@@ -534,11 +539,13 @@ public class VcfManager {
         TranscriptCdsCache.getInstance().clearMemory();
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
         
-        // Clear variants from all canvases
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.alignmentCanvas != null) {
                 stack.alignmentCanvas.clearVariantList();
+            }
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.clearVariantList();
             }
         }
     }
@@ -889,6 +896,9 @@ public class VcfManager {
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.alignmentCanvas != null) {
                 stack.alignmentCanvas.clearVariantList();
+            }
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.clearVariantList();
             }
         }
     }

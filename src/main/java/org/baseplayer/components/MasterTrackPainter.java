@@ -18,7 +18,7 @@ import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
 
-public class MasterTrackCanvas {
+public class MasterTrackPainter {
 
   private static final int DENSITY_BINS = 600;
 
@@ -51,7 +51,7 @@ public class MasterTrackCanvas {
 
   private volatile boolean wasZoomingLastFrame = false;
 
-  public MasterTrackCanvas(CoverageDrawer coverageDrawer, Runnable redrawCallback) {
+  public MasterTrackPainter(CoverageDrawer coverageDrawer, Runnable redrawCallback) {
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     this.coverageDrawer = coverageDrawer;
     this.redrawCallback = redrawCallback;

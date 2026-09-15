@@ -7,7 +7,6 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.baseplayer.annotation.AnnotationData;
-import org.baseplayer.components.MasterTrackCanvas;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
@@ -47,9 +46,6 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   /** Unified coverage data computation and rendering. */
   private final CoverageDrawer coverageDrawer = new CoverageDrawer();
-
-  /** Master aggregate rendering (variant density + comparative methylation). */
-  private final MasterTrackCanvas masterTrackCanvas;
 
   /** Unified read rendering, hit-testing, and reactive highlighting. */
   private final DrawReads drawReads;
@@ -150,9 +146,12 @@ public class AlignmentCanvas extends GenomicCanvas {
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
     drawReads = new DrawReads(gc, drawStack);
-    masterTrackCanvas = new MasterTrackCanvas(coverageDrawer, this::draw);
     setupReadMouseHandlers(reactiveCanvas);
     Platform.runLater(this::draw);
+  }
+
+  public CoverageDrawer getCoverageDrawer() {
+    return coverageDrawer;
   }
 
   // ── Mouse handlers ────────────────────────────────────────────────────────────
@@ -206,12 +205,12 @@ public class AlignmentCanvas extends GenomicCanvas {
       }
 
       // Update sidebar highlighting based on which sample track is under the cursor
-      double masterOffset = sampleRegistry.getMasterTrackHeight();
       double sampleH = sampleRegistry.getSampleHeight();
-      if (sampleH > 0 && lastMouseY > masterOffset) {
-        int sampleIdx = (int)((lastMouseY - masterOffset + sampleRegistry.getScrollBarPosition()) / sampleH);
-        if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
-          sampleRegistry.hoverSampleProperty().set(sampleIdx);
+      if (sampleH > 0 && lastMouseY >= 0) {
+        int slot = (int) ((lastMouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
+        List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+        if (slot >= 0 && slot < displayed.size()) {
+          sampleRegistry.hoverSampleProperty().set(displayed.get(slot));
         }
       }
 
@@ -291,13 +290,11 @@ public class AlignmentCanvas extends GenomicCanvas {
     gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, getWidth() + 1, getHeight() + 1);
 
-    double masterOffset = sampleRegistry.getMasterTrackHeight();
-    double available    = getHeight() - masterOffset;
+    double available = getHeight();
     sampleRegistry.ensureSampleHeightForViewport(available);
 
     drawBamReads();
-    masterTrackCanvas.drawMasterAggregates(gc, drawStack, getWidth(), masterOffset);
-    drawSampleTrackDividers(masterOffset);
+    drawSampleTrackDividers();
     super.draw();
 
     // Re-evaluate hover at last known mouse position (reads may have shifted due to scroll)
@@ -329,7 +326,7 @@ public class AlignmentCanvas extends GenomicCanvas {
    * Draw horizontal divider lines between sample tracks.
    * Called from draw() so dividers are always present even after canvas clears.
    */
-  private void drawSampleTrackDividers(double masterOffset) {
+  private void drawSampleTrackDividers() {
     double sampleH = sampleRegistry.getSampleHeight();
     double scrollPos = sampleRegistry.getScrollBarPosition();
     List<Integer> displayedIndices = sampleRegistry.getDisplayedTrackIndices();
@@ -338,15 +335,15 @@ public class AlignmentCanvas extends GenomicCanvas {
     gc.setLineWidth(1.0);
     
     for (int slot = 0; slot < displayedIndices.size(); slot++) {
-      double sampleY = masterOffset + slot * sampleH - scrollPos;
+      double sampleY = slot * sampleH - scrollPos;
       
       // Skip if scrolled above visible area
-      if (sampleY + sampleH < masterOffset) continue;
+      if (sampleY + sampleH < 0) continue;
       // Stop if scrolled below visible area
       if (sampleY > getHeight()) break;
       
       // Draw divider at top of this track (snap to integer Y for crisp rendering)
-      if (sampleY >= masterOffset) {
+      if (sampleY >= 0) {
         double snappedY = Math.round(sampleY);
         gc.strokeLine(0, snappedY, getWidth(), snappedY);
       }
@@ -370,7 +367,6 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     if (sampleRegistry.getSampleList().isEmpty()) return;
 
-    double masterOffset = sampleRegistry.getMasterTrackHeight();
     double sampleH      = sampleRegistry.getSampleHeight();
     String chrom        = drawStack.getChromosome();
     int    start        = Math.max(0, (int) drawStack.getViewStart());
@@ -379,17 +375,17 @@ public class AlignmentCanvas extends GenomicCanvas {
     // ── Draw variants at all zoom levels (before zoom checks) ──
     if (variantList != null && !variantList.isEmpty()) {
       VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
-      variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), masterOffset, activeFilter);
+      variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), activeFilter);
     }
 		// TODO Remove loops in these kind of situations. We already go through the samples when drawing tracks. No need to loop them here again
     // ── Beyond coverage threshold: show zoom message or sampled coverage ──
     if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) {
       if (Settings.get().isEnableSampledCoverage()) {
-        forEachVisibleSample(masterOffset, sampleH, (sampleY, sample) ->
+        forEachVisibleSample(sampleH, (sampleY, sample) ->
             coverageDrawer.drawSampled(gc, sample, chrom, start, end,
                 sampleY, sampleH, getWidth(), chromPosToScreenPos, drawStack));
       } else {
-        forEachVisibleSample(masterOffset, sampleH, (sampleY, sample) -> {
+        forEachVisibleSample(sampleH, (sampleY, sample) -> {
           if (sample.getDataType() == Sample.DataType.BAM) {
             DrawReads.drawZoomMessage(gc, sampleY, sampleH, "Zoom in closer to view BAM/CRAM data");
           }
@@ -411,11 +407,11 @@ public class AlignmentCanvas extends GenomicCanvas {
       if (!drawStack.nav.scrollbarDragging) {
         coverageDrawer.compute(drawStack, chromPosToScreenPos, (int) getWidth());
       }
-      coverageDrawer.render(gc, getWidth(), masterOffset, sampleH,
+      coverageDrawer.render(gc, getWidth(), sampleH,
           sampleRegistry.getScrollBarPosition(), coverageOnly, coverageFractionH);
 
       if (!coverageOnly) {
-        forEachVisibleSample(masterOffset, sampleH, (sampleY, sample) ->
+        forEachVisibleSample(sampleH, (sampleY, sample) ->
             drawSampleReads(sample, chrom, start, end, sampleY, sampleH, coverageFractionH,
                 !freezeDuringNavigation));
       }
@@ -623,7 +619,6 @@ public class AlignmentCanvas extends GenomicCanvas {
     if (sampleRegistry.getSampleTracks().isEmpty()) return null;
     if (drawStack.getViewLength() > Settings.get().getMaxReadViewLength()) return null;
 
-    double masterOffset      = sampleRegistry.getMasterTrackHeight();
     double sampleH           = sampleRegistry.getSampleHeight();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
@@ -634,7 +629,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
 
       // Skip this track entirely if the mouse is outside its vertical bounds.
       if (my < sampleY || my >= sampleY + sampleH) continue;
@@ -687,7 +682,6 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     boolean selectedCrossStackLinkDrawn = false;
 
-    double masterOffset      = sampleRegistry.getMasterTrackHeight();
     double sampleH           = sampleRegistry.getSampleHeight();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
@@ -698,7 +692,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
@@ -857,7 +851,6 @@ public class AlignmentCanvas extends GenomicCanvas {
     int px = (int) Math.floor(chromPosToScreenPos.apply((double) genomicPos));
     if (px < 0 || px >= (int) Math.ceil(getWidth())) return null;
 
-    double masterOffset = sampleRegistry.getMasterTrackHeight();
     double sampleH = sampleRegistry.getSampleHeight();
     boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
@@ -873,7 +866,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
 
-      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
       if (my < sampleY || my >= sampleY + covH) continue;
 
       for (Sample sample : track.getSamples()) {
@@ -1097,7 +1090,6 @@ public class AlignmentCanvas extends GenomicCanvas {
   private Point2D findCrossStackReadAnchor(AlignmentCanvas targetCanvas, BAMRecord selected, int preferredPos) {
     if (selected.readName == null || selected.readName.isEmpty()) return null;
 
-    double masterOffset = targetCanvas.sampleRegistry.getMasterTrackHeight();
     double sampleH = targetCanvas.sampleRegistry.getSampleHeight();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
@@ -1113,7 +1105,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       int i = visibleSlot.trackIndex();
       SampleTrack track = targetCanvas.sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + slot * sampleH - targetCanvas.sampleRegistry.getScrollBarPosition();
+      double sampleY = slot * sampleH - targetCanvas.sampleRegistry.getScrollBarPosition();
 
       for (Sample sample : track.getSamples()) {
         if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) continue;
@@ -1319,7 +1311,7 @@ public class AlignmentCanvas extends GenomicCanvas {
   @FunctionalInterface
   private interface SampleConsumer { void accept(double sampleY, Sample sample); }
 
-  private void forEachVisibleSample(double masterOffset, double sampleH, SampleConsumer consumer) {
+  private void forEachVisibleSample(double sampleH, SampleConsumer consumer) {
     List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
       for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
       int slot = visibleSlot.slot();
@@ -1328,7 +1320,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       if (i < 0 || i >= sampleRegistry.getSampleTracks().size()) continue;
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
       if (!track.isVisible()) continue;
-      double sampleY = masterOffset + slot * sampleH - sampleRegistry.getScrollBarPosition();
+      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
       for (Sample sample : track.getSamples()) {
         if (sample.visible) consumer.accept(sampleY, sample);
       }
@@ -1618,16 +1610,7 @@ public class AlignmentCanvas extends GenomicCanvas {
    */
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
-    masterTrackCanvas.setVariantList(variantList);
     variantDrawer.markIndexDirty();
-  }
-
-  /**
-   * Force immediate density calculation for the current variant list.
-   * Called by VcfManager after variants are loaded to ensure density appears immediately.
-   */
-  public void forceCalculateDensity() {
-    masterTrackCanvas.forceCalculateDensity(drawStack);
   }
   
   /**
@@ -1642,7 +1625,6 @@ public class AlignmentCanvas extends GenomicCanvas {
    */
   public void clearVariantList() {
     variantList = null;
-    masterTrackCanvas.clearVariantList();
   }
   
   /**

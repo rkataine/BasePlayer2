@@ -26,15 +26,11 @@ import javafx.scene.paint.Color;
  * <p>
  * Builds a per-sample matrix of coverage values (coverage, mismatches, methylation)
  * in a single left-to-right pass through the reads. Sample tracks are rendered
- * here, while master-track aggregate overlays are rendered by MasterTrackCanvas.
+ * here, while master-band aggregate overlays are rendered by
+ * {@link org.baseplayer.draw.SampleAggregateCanvas}.
  */
 public class CoverageDrawer {
 
-  // ── Per-sample data row in the matrix ──
-  /**
-   * Holds all computed coverage data for one sample at screen-pixel resolution.
-   * Values are indexed by pixel column (0 .. numColumns-1).
-   */
   public static class SampleRow {
     public final Sample sample;
     public final int sampleIndex;
@@ -203,10 +199,6 @@ public class CoverageDrawer {
     return max;
   }
 
-  /**
-   * Build one SampleRow by computing coverage, mismatches, and methylation
-   * from the sample's reads in a single pass.
-   */
   private SampleRow buildRow(Sample sample, int sampleIndex, String chrom,
                              int start, int end, boolean coverageOnly, boolean isHoverStack) {
     boolean isMethyl = sample.isMethylationData();
@@ -608,9 +600,10 @@ public class CoverageDrawer {
 
   /**
    * Render per-sample coverage/mismatch/methylation content into sample tracks.
-    * Master-track overlays are rendered separately by MasterTrackCanvas.
+   * Master-band overlays are rendered separately by
+   * {@link org.baseplayer.draw.SampleAggregateCanvas}.
    */
-  public void render(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
+  public void render(GraphicsContext gc, double canvasWidth,
                      double sampleHeight, double scrollBarPosition,
                      boolean coverageOnly, double coverageFractionH) {
     if (numColumns == 0) return;
@@ -622,7 +615,7 @@ public class CoverageDrawer {
 
     for (SampleRow row : currentRows) {
       if (row.masterTrackOnly) continue;
-      double sampleY = masterTrackHeight + row.sampleIndex * sampleHeight - scrollBarPosition;
+      double sampleY = row.sampleIndex * sampleHeight - scrollBarPosition;
       double covH = coverageOnly ? sampleHeight : coverageFractionH;
       double yBottom = sampleY + covH - 1;
       double scale = row.maxCoverage > 0 ? (covH - 14) / row.maxCoverage : 0;
@@ -767,10 +760,10 @@ public class CoverageDrawer {
       sashimiDrawer.draw(gc, row.sample, sampleY, covH, canvasWidth, drawStack, chromPosToScreenPos);
     }
 
-    drawBedSamples(gc, canvasWidth, masterTrackHeight, sampleHeight, scrollBarPosition, coverageFractionH);
+    drawBedSamples(gc, canvasWidth, sampleHeight, scrollBarPosition, coverageFractionH);
   }
 
-  private void drawBedSamples(GraphicsContext gc, double canvasWidth, double masterTrackHeight,
+  private void drawBedSamples(GraphicsContext gc, double canvasWidth,
                               double sampleHeight, double scrollBarPosition,
                               double coverageFractionH) {
     if (drawStack == null || drawStack.getChromosome() == null) return;
@@ -786,7 +779,7 @@ public class CoverageDrawer {
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
       if (track == null || !track.isVisible()) continue;
 
-      double sampleY = masterTrackHeight + slot * sampleHeight - scrollBarPosition;
+      double sampleY = slot * sampleHeight - scrollBarPosition;
       // Keep BED rendering anchored exactly like the < maxReadViewLength layout
       // regardless of current zoom level.
       double covH = coverageFractionH;

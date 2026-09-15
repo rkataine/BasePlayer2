@@ -58,11 +58,18 @@ public class DrawStack {
   public VBox chromContainer = new VBox();  // Container for cytoband + chrom stack
   public StackPane chromStack = new StackPane(); 
   public ScrollPane chromScrollPane;  // Scroll pane for gene canvas vertical scrolling
+  /** Sample column: master aggregate band above alignment body. */
+  public VBox sampleColumn = new VBox();
+  public StackPane masterStack = new StackPane();
+  /** Sample body only (AlignmentCanvas); no longer includes the master band. */
   public StackPane drawStack = new StackPane();
   public StackPane featureTracksStack = new StackPane();  // Container for feature tracks
+  // Future: featureTracksStack can gain a FeatureAggregateCanvas above FeatureTracksCanvas
+  // for intersect / subtract / annotate operations.
   public CytobandCanvas cytobandCanvas;
   public ChromosomeCanvas chromosomeCanvas;
   public AlignmentCanvas alignmentCanvas;
+  public SampleAggregateCanvas sampleAggregateCanvas;
   public FeatureTracksCanvas featureTracksCanvas;
   public ComboBox<String> chromosomeDropdown;
   public Label closeButton;
@@ -94,15 +101,14 @@ public class DrawStack {
   public DrawStack(String chrom) {
     this.chromosome = chrom;
     
-    // Initialize services
     ServiceRegistry services = ServiceRegistry.getInstance();
     this.referenceGenomeService = services.getReferenceGenomeService();
     
-    // Initialize chromosome size first, before creating any canvas objects
     updateChromosomeSize();
     
     chromContainer.setMinSize(0, 0);
     chromStack.setMinSize(0, 0);
+    sampleColumn.setMinSize(0, 0);
     drawStack.setMinSize(0, 0);
 
     chromosomeDropdown = new ComboBox<>();
@@ -168,8 +174,25 @@ public class DrawStack {
     
     chromContainer.getChildren().addAll(cytoWrapper, chromStack);
     
+    sampleColumn.setMinSize(0, 0);
+    masterStack.setMinSize(0, 0);
+    drawStack.setMinSize(0, 0);
+
+    var sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    masterStack.minHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterStack.maxHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterStack.prefHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+
     alignmentCanvas = new AlignmentCanvas(new Canvas(), drawStack, this);
     drawStack.getChildren().addAll(alignmentCanvas, alignmentCanvas.getReactiveCanvas());
+
+    sampleAggregateCanvas = new SampleAggregateCanvas(
+        new Canvas(), masterStack, this, alignmentCanvas.getCoverageDrawer());
+    masterStack.getChildren().addAll(
+        sampleAggregateCanvas, sampleAggregateCanvas.getReactiveCanvas());
+
+    VBox.setVgrow(drawStack, Priority.ALWAYS);
+    sampleColumn.getChildren().addAll(masterStack, drawStack);
     
     featureTracksStack.setMinSize(0, 0);
     featureTracksCanvas = new FeatureTracksCanvas(new Canvas(), featureTracksStack, this);
@@ -193,8 +216,8 @@ public class DrawStack {
     
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());
     chromContainer.setOnMouseExited(e -> closeButton.setVisible(false));
-    drawStack.setOnMouseEntered(e -> updateControlsVisibility());
-    drawStack.setOnMouseExited(e -> closeButton.setVisible(false));
+    sampleColumn.setOnMouseEntered(e -> updateControlsVisibility());
+    sampleColumn.setOnMouseExited(e -> closeButton.setVisible(false));
   }
   
   public void updateControlsVisibility() {
@@ -215,6 +238,9 @@ public class DrawStack {
     updateChromosomeDropdownWidthByLongestContig();
     updateChromosomeSize();
     alignmentCanvas.setStartEnd(1.0, chromSize + 1);
+    if (sampleAggregateCanvas != null) {
+      sampleAggregateCanvas.setStartEnd(1.0, chromSize + 1);
+    }
     chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
   }
   
@@ -238,6 +264,9 @@ public class DrawStack {
       setChromosomeDropdownValueSilently(chrom);
     }
     alignmentCanvas.setStartEnd(start, end);
+    if (sampleAggregateCanvas != null) {
+      sampleAggregateCanvas.setStartEnd(start, end);
+    }
     chromosomeCanvas.setStartEnd(start, end);
     
     setRegion(chrom, (long) start, (long) end);
