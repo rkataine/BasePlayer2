@@ -195,12 +195,10 @@ public class GnomadApiClient {
     // 2. Check file cache (persistent across sessions)
     VariantData fileCached = cache.getFromFile(cacheKey, json -> parseVariantDataFromCache(json, start, end));
     if (fileCached != null && !fileCached.hasError()) {
-      System.out.println("gnomAD: Loaded from file cache: " + cacheKey);
       return CompletableFuture.completedFuture(fileCached);
     }
     
     // 3. Fetch from API
-    System.out.println("gnomAD: Fetching from API: chr" + chr + ":" + start + "-" + end);
     String query = buildGraphQLQuery(chr, start, end, dataset);
     
     // Create HTTP request with proper headers for GraphQL
@@ -219,14 +217,8 @@ public class GnomadApiClient {
     return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
         .thenApply(response -> {
           if (response.statusCode() != 200) {
-            System.err.println("gnomAD API HTTP error: " + response.statusCode());
             // Track failure
             failedRegions.merge(finalRegionKey, 1, Integer::sum);
-            // Print response body for debugging 400 errors
-            if (response.statusCode() == 400) {
-              String body = response.body();
-              System.err.println("gnomAD 400 error response: " + body.substring(0, Math.min(500, body.length())));
-            }
             return VariantData.error(start, end, "API error: " + response.statusCode());
           }
           
@@ -242,13 +234,11 @@ public class GnomadApiClient {
             
             return data;
           } catch (Exception e) {
-            System.err.println("Failed to parse gnomAD response: " + e.getMessage());
             return VariantData.error(start, end, "Parse error: " + e.getMessage());
           }
         })
         .exceptionally(e -> {
           String message = e.getMessage();
-          System.err.println("gnomAD fetch error: " + message);
           // Track failure
           failedRegions.merge(finalRegionKey, 1, Integer::sum);
           if (message != null && message.contains("UnknownHostException")) {
@@ -320,7 +310,6 @@ public class GnomadApiClient {
       
       return new VariantData(start, end, variants, hasData, null);
     } catch (Exception e) {
-      System.err.println("Failed to parse cached variant data: " + e.getMessage());
       return null;
     }
   }
@@ -388,9 +377,6 @@ public class GnomadApiClient {
       JsonArray errors = json.getAsJsonArray("errors");
       if (!errors.isEmpty()) {
         String errorMsg = errors.get(0).getAsJsonObject().get("message").getAsString();
-        System.err.println("gnomAD API returned error: " + errorMsg);
-        // Print full response for debugging
-        System.err.println("Full response: " + responseBody.substring(0, Math.min(500, responseBody.length())));
         return VariantData.error(start, end, "API: " + errorMsg);
       }
     }
@@ -398,23 +384,19 @@ public class GnomadApiClient {
     // Extract variants
     JsonObject data = json.getAsJsonObject("data");
     if (data == null || data.isJsonNull()) {
-      System.out.println("gnomAD: No data in response");
       return VariantData.empty(start, end);
     }
     
     JsonObject region = data.getAsJsonObject("region");
     if (region == null || region.isJsonNull()) {
-      System.out.println("gnomAD: No region data in response");
       return VariantData.empty(start, end);
     }
     
     JsonArray variantsArray = region.getAsJsonArray("variants");
     if (variantsArray == null || variantsArray.isEmpty()) {
-      System.out.println("gnomAD: No variants found in region");
       return new VariantData(start, end, List.of(), true, null);
     }
     
-    System.out.println("gnomAD: Found " + variantsArray.size() + " variants");
     List<Variant> variants = new ArrayList<>();
     
     for (JsonElement elem : variantsArray) {

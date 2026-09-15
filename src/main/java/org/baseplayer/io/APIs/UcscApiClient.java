@@ -62,14 +62,6 @@ public class UcscApiClient {
   
   private UcscApiClient() {} // Utility class
   
-  /**
-   * Fetch list of available tracks from UCSC for a genome.
-   * Returns track metadata including name, label, type, and group.
-   * Uses both file cache and in-memory cache to avoid repeated API calls for the same genome.
-   * 
-   * @param genome Genome assembly (e.g., "hg38")
-   * @return CompletableFuture with list of track info
-   */
   public static CompletableFuture<java.util.List<UcscTrackInfo>> fetchAvailableTracks(String genome) {
     // 1. Check file cache first (persists across sessions)
     Optional<JsonObject> fileCached = DataCacheManager.loadFromCache(TRACKS_LIST_CACHE_TYPE, genome);
@@ -79,11 +71,9 @@ public class UcscApiClient {
         if (!tracks.isEmpty()) {
           // Store in memory cache for faster subsequent access
           tracksListCache.put(genome, tracks);
-          System.out.println("UCSC tracks list: Loaded " + tracks.size() + " tracks from file cache for " + genome);
           return CompletableFuture.completedFuture(tracks);
         }
       } catch (Exception e) {
-        System.err.println("Failed to parse tracks from file cache: " + e.getMessage());
         // Continue to fetch from API
       }
     }
@@ -91,7 +81,6 @@ public class UcscApiClient {
     // 2. Check in-memory cache
     java.util.List<UcscTrackInfo> cached = tracksListCache.get(genome);
     if (cached != null) {
-      System.out.println("UCSC tracks list: Using in-memory cached data for " + genome);
       return CompletableFuture.completedFuture(cached);
     }
     
@@ -107,7 +96,6 @@ public class UcscApiClient {
     return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
         .thenApply(response -> {
           if (response.statusCode() != 200) {
-            System.err.println("UCSC API error fetching tracks: " + response.statusCode());
             java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
             return empty;
           }
@@ -139,30 +127,19 @@ public class UcscApiClient {
             // Save to file cache for persistence across sessions
             saveTracksToFileCache(genome, tracks);
             
-            System.out.println("UCSC tracks list: Fetched and cached " + tracks.size() + " tracks for " + genome);
             
             return tracks;
           } catch (JsonSyntaxException e) {
-            System.err.println("Failed to parse UCSC tracks list: " + e.getMessage());
             java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
             return empty;
           }
         })
         .exceptionally(e -> {
-          System.err.println("Failed to fetch UCSC tracks: " + e.getMessage());
           java.util.List<UcscTrackInfo> empty = new java.util.ArrayList<>();
           return empty;
         });
   }
   
-  /**
-   * Fetch list of available tracks from UCSC for a genome, bypassing cache.
-   * Forces a fresh fetch from the API even if cached data exists.
-   * Clears both file cache and in-memory cache for this genome.
-   * 
-   * @param genome Genome assembly (e.g., "hg38")
-   * @return CompletableFuture with list of track info
-   */
   public static CompletableFuture<java.util.List<UcscTrackInfo>> fetchAvailableTracksForceRefresh(String genome) {
     // Clear in-memory cache for this genome
     tracksListCache.remove(genome);
@@ -174,21 +151,15 @@ public class UcscApiClient {
       Path cacheFile = typeDir.resolve(genome + ".json");
       if (Files.exists(cacheFile)) {
         Files.delete(cacheFile);
-        System.out.println("UCSC tracks list: Deleted file cache for " + genome);
       }
     } catch (IOException e) {
-      System.err.println("Failed to delete tracks cache file: " + e.getMessage());
     }
     
-    System.out.println("UCSC tracks list: Cleared all caches for " + genome + ", fetching fresh data");
     
     // Now fetch (will not use cache since we just cleared it)
     return fetchAvailableTracks(genome);
   }
   
-  /**
-   * Save tracks list to file cache.
-   */
   private static void saveTracksToFileCache(String genome, java.util.List<UcscTrackInfo> tracks) {
     JsonObject cacheJson = new JsonObject();
     cacheJson.addProperty("genome", genome);
@@ -209,9 +180,6 @@ public class UcscApiClient {
     DataCacheManager.saveToCache(TRACKS_LIST_CACHE_TYPE, genome, cacheJson);
   }
   
-  /**
-   * Parse tracks list from file cache.
-   */
   private static java.util.List<UcscTrackInfo> parseTracksFromCache(JsonObject json) {
     java.util.List<UcscTrackInfo> tracks = new java.util.ArrayList<>();
     
@@ -235,21 +203,8 @@ public class UcscApiClient {
     return tracks;
   }
   
-  /**
-   * Fetch PhyloP conservation scores for a region.
-   * Returns asynchronously to avoid blocking the UI.
-   * 
-   * For small regions (<10kb), fetches per-base data and caches it.
-   * For larger regions, uses binned data.
-   * 
-   * @param chrom Chromosome (e.g., "1" or "chr1")
-   * @param start Start position (1-based)
-   * @param end End position (1-based)
-   * @param bins Number of bins to summarize data into (for large regions)
-   * @return CompletableFuture with conservation data
-   */
-  public static CompletableFuture<ConservationData> fetchConservation(
-      String chrom, long start, long end, int bins) {
+  public static CompletableFuture<ConservationData> fetchTrack(
+      String trackName, String chrom, long start, long end, int bins) {
     
     // Normalize chromosome name
     String chr = chrom.startsWith("chr") ? chrom : "chr" + chrom;
@@ -257,22 +212,18 @@ public class UcscApiClient {
     
     // For small regions, use per-base data with smart caching
     if (regionSize <= BASE_LEVEL_THRESHOLD) {
-      return fetchBaseLevelData(chr, start, end);
+      return fetchBaseLevelData(trackName, chr, start, end);
     }
     
     // For large regions, use binned data
-    return fetchBinnedData(chr, start, end, bins);
+    return fetchBinnedData(trackName, chr, start, end, bins);
   }
   
-  /**
-   * Fetch per-base conservation scores with smart caching.
-   * Cached data is reused if overlapping regions were previously fetched.
-   * Also checks file cache for persistence across sessions.
-   */
   private static CompletableFuture<ConservationData> fetchBaseLevelData(
-      String chr, long start, long end) {
+      String trackName, String chr, long start, long end) {
     
-    ChromosomeCache cache = chromosomeCache.computeIfAbsent(chr, k -> new ChromosomeCache());
+    String cacheId = trackName + "|" + chr;
+    ChromosomeCache cache = chromosomeCache.computeIfAbsent(cacheId, k -> new ChromosomeCache());
     
     // 1. Check in-memory cache first (fastest)
     ConservationData memCached = cache.getDataForRegion(start, end);
@@ -281,17 +232,16 @@ public class UcscApiClient {
     }
     
     // 2. Check file cache for this exact region or a containing region
-    String cacheKey = DataCacheManager.getCacheKey(chr, start, end, "base");
+    String cacheKey = DataCacheManager.getCacheKey(chr, start, end, trackName + "_base");
     Optional<JsonObject> fileCached = DataCacheManager.loadFromCache(CACHE_TYPE, cacheKey);
     if (fileCached.isPresent()) {
       ConservationData data = parseConservationDataFromCache(fileCached.get(), start, end);
-      if (data != null && !data.hasError()) {
+      if (data != null && data.hasData() && !data.hasError()) {
         // Also populate memory cache
         Map<Long, Double> rawData = extractRawDataFromCache(fileCached.get());
         if (!rawData.isEmpty()) {
           cache.addData(start, end, rawData);
         }
-        System.out.println("Conservation: Loaded from file cache: " + cacheKey);
         return CompletableFuture.completedFuture(data);
       }
     }
@@ -303,8 +253,8 @@ public class UcscApiClient {
     
     // Build API URL
     String url = String.format(
-        "%s/getData/track?genome=hg38&track=phyloP100way&chrom=%s&start=%d&end=%d",
-        API_BASE, chr, fetchStart - 1, fetchEnd);
+        "%s/getData/track?genome=hg38&track=%s&chrom=%s&start=%d&end=%d",
+        API_BASE, trackName, chr, fetchStart - 1, fetchEnd);
     
     HttpRequest request = HttpRequest.newBuilder()
         .uri(URI.create(url))
@@ -314,19 +264,22 @@ public class UcscApiClient {
     
     final long fStart = fetchStart;
     final long fEnd = fetchEnd;
-    final String finalCacheKey = DataCacheManager.getCacheKey(chr, fStart, fEnd, "base");
+    final String finalCacheKey = DataCacheManager.getCacheKey(chr, fStart, fEnd, trackName + "_base");
     
-    System.out.println("Conservation: Fetching from API: " + chr + ":" + fStart + "-" + fEnd);
     
     return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
         .thenApply(response -> {
           if (response.statusCode() != 200) {
-            System.err.println("UCSC API error: " + response.statusCode());
-            return ConservationData.error(start, end, (int)(end - start), "API error: " + response.statusCode());
+            String msg = response.statusCode() == 403 ? "Track access restricted"
+                : "API error: " + response.statusCode();
+            return ConservationData.error(start, end, (int)(end - start), msg);
           }
           
           // Parse and cache the raw data
           Map<Long, Double> rawData = parseRawConservationData(response.body(), chr);
+          if (rawData.isEmpty()) {
+            return ConservationData.empty(start, end, (int) (end - start));
+          }
           cache.addData(fStart, fEnd, rawData);
           
           // Save to file cache
@@ -339,7 +292,6 @@ public class UcscApiClient {
         .exceptionally(e -> {
           Throwable cause = e.getCause();
           String errorMsg = cause != null ? cause.getMessage() : e.getMessage();
-          System.err.println("Failed to fetch conservation data: " + errorMsg);
           // Provide user-friendly error messages
           String displayMsg = "Connection error";
           if (errorMsg != null) {
@@ -353,9 +305,6 @@ public class UcscApiClient {
         });
   }
   
-  /**
-   * Save base-level conservation data to file cache.
-   */
   private static void saveBaseLevelToFileCache(String cacheKey, long start, long end, Map<Long, Double> rawData) {
     JsonObject cacheJson = new JsonObject();
     cacheJson.addProperty("start", start);
@@ -373,9 +322,6 @@ public class UcscApiClient {
     DataCacheManager.saveToCache(CACHE_TYPE, cacheKey, cacheJson);
   }
   
-  /**
-   * Parse conservation data from file cache.
-   */
   private static ConservationData parseConservationDataFromCache(JsonObject json, long start, long end) {
     try {
       int bins = (int)(end - start);
@@ -410,14 +356,10 @@ public class UcscApiClient {
       return new ConservationData(start, end, scores, 
           Math.max(-14, minScore), Math.min(6, maxScore), true, null);
     } catch (Exception e) {
-      System.err.println("Failed to parse cached conservation data: " + e.getMessage());
       return null;
     }
   }
   
-  /**
-   * Extract raw position->value map from cached JSON.
-   */
   private static Map<Long, Double> extractRawDataFromCache(JsonObject json) {
     Map<Long, Double> data = new HashMap<>();
     try {
@@ -431,26 +373,53 @@ public class UcscApiClient {
         }
       }
     } catch (Exception e) {
-      System.err.println("Failed to extract raw data from cache: " + e.getMessage());
     }
     return data;
   }
   
-  /**
-   * Parse raw conservation data from UCSC API (per-base positions).
-   */
+  private static JsonArray extractTrackDataArray(JsonObject root, String chrom) {
+    if (root == null) {
+      return null;
+    }
+    if (root.has("error")) {
+      return null;
+    }
+
+    if (root.has("track") && root.get("track").isJsonPrimitive()) {
+      String trackKey = root.get("track").getAsString();
+      if (root.has(trackKey) && root.get(trackKey).isJsonArray()) {
+        return root.getAsJsonArray(trackKey);
+      }
+    }
+
+    String chromKey = chrom != null && chrom.startsWith("chr") ? chrom : "chr" + chrom;
+    if (root.has(chromKey) && root.get(chromKey).isJsonArray()) {
+      return root.getAsJsonArray(chromKey);
+    }
+
+    // Fallback: first array field that looks like score data
+    for (Map.Entry<String, JsonElement> entry : root.entrySet()) {
+      if (!entry.getValue().isJsonArray()) {
+        continue;
+      }
+      String key = entry.getKey();
+      if (key.equals("downloadTime") || key.equals("statusMessage")) {
+        continue;
+      }
+      JsonArray arr = entry.getValue().getAsJsonArray();
+      if (!arr.isEmpty() && arr.get(0).isJsonObject() && arr.get(0).getAsJsonObject().has("value")) {
+        return arr;
+      }
+    }
+    return null;
+  }
+
   private static Map<Long, Double> parseRawConservationData(String json, String chrom) {
     Map<Long, Double> data = new HashMap<>();
     
     try {
       JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-      String chromKey = chrom.startsWith("chr") ? chrom : "chr" + chrom;
-      
-      if (!root.has(chromKey)) {
-        return data;
-      }
-      
-      JsonArray dataArray = root.getAsJsonArray(chromKey);
+      JsonArray dataArray = extractTrackDataArray(root, chrom);
       if (dataArray == null) {
         return data;
       }
@@ -468,18 +437,13 @@ public class UcscApiClient {
         }
       }
     } catch (JsonSyntaxException e) {
-      System.err.println("Failed to parse raw conservation data: " + e.getMessage());
     }
     
     return data;
   }
   
-  /**
-   * Fetch binned conservation data for larger regions.
-   * Uses file cache for persistence across sessions.
-   */
   private static CompletableFuture<ConservationData> fetchBinnedData(
-      String chr, long start, long end, int bins) {
+      String trackName, String chr, long start, long end, int bins) {
     
     long regionSize = end - start;
     if (regionSize > MAX_REGION_SIZE) {
@@ -487,28 +451,27 @@ public class UcscApiClient {
     }
     
     // 1. Check in-memory cache first
-    String memoryCacheKey = chr + ":" + start + "-" + end + ":" + bins;
+    String memoryCacheKey = trackName + ":" + chr + ":" + start + "-" + end + ":" + bins;
     ConservationData memCached = binnedCache.get(memoryCacheKey);
     if (memCached != null) {
       return CompletableFuture.completedFuture(memCached);
     }
     
     // 2. Check file cache
-    String fileCacheKey = DataCacheManager.getCacheKey(chr, start, end, "binned_" + bins);
+    String fileCacheKey = DataCacheManager.getCacheKey(chr, start, end, trackName + "_binned_" + bins);
     Optional<JsonObject> fileCached = DataCacheManager.loadFromCache(CACHE_TYPE, fileCacheKey);
     if (fileCached.isPresent()) {
       ConservationData data = parseBinnedDataFromCache(fileCached.get(), start, end);
-      if (data != null && !data.hasError()) {
+      if (data != null && data.hasData() && !data.hasError()) {
         binnedCache.put(memoryCacheKey, data);
-        System.out.println("Conservation: Loaded binned from file cache: " + fileCacheKey);
         return CompletableFuture.completedFuture(data);
       }
     }
     
     // Build API URL
     String url = String.format(
-        "%s/getData/track?genome=hg38&track=phyloP100way&chrom=%s&start=%d&end=%d",
-        API_BASE, chr, start - 1, end);
+        "%s/getData/track?genome=hg38&track=%s&chrom=%s&start=%d&end=%d",
+        API_BASE, trackName, chr, start - 1, end);
     
     HttpRequest request = HttpRequest.newBuilder()
         .uri(URI.create(url))
@@ -521,24 +484,22 @@ public class UcscApiClient {
     String finalFileCacheKey = fileCacheKey;
     String finalMemoryCacheKey = memoryCacheKey;
     
-    System.out.println("Conservation: Fetching binned from API: " + chr + ":" + start + "-" + end);
     
     return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
         .thenApply(response -> {
           if (response.statusCode() != 200) {
-            System.err.println("UCSC API error: " + response.statusCode());
-            return ConservationData.error(start, end, finalBins, "API error: " + response.statusCode());
+            String msg = response.statusCode() == 403 ? "Track access restricted"
+                : "API error: " + response.statusCode();
+            return ConservationData.error(start, end, finalBins, msg);
           }
           
           ConservationData data = parseBinnedConservationResponse(response.body(), start, end, finalBins, finalChr);
           
-          // Cache the result (don't cache errors)
-          if (!data.hasError()) {
-            // Memory cache
+          // Cache only real data (empty parses used to poison the cache)
+          if (data.hasData() && !data.hasError()) {
             if (binnedCache.size() < MAX_BINNED_CACHE_ENTRIES) {
               binnedCache.put(finalMemoryCacheKey, data);
             }
-            // File cache
             saveBinnedToFileCache(finalFileCacheKey, data);
           }
           
@@ -547,8 +508,6 @@ public class UcscApiClient {
         .exceptionally(e -> {
           Throwable cause = e.getCause();
           String errorMsg = cause != null ? cause.getMessage() : e.getMessage();
-          System.err.println("Failed to fetch conservation data: " + errorMsg);
-          // Provide user-friendly error messages
           String displayMsg = "Connection error";
           if (errorMsg != null) {
             if (errorMsg.contains("UnresolvedAddressException") || errorMsg.contains("UnknownHost")) {
@@ -561,9 +520,6 @@ public class UcscApiClient {
         });
   }
   
-  /**
-   * Save binned conservation data to file cache.
-   */
   private static void saveBinnedToFileCache(String cacheKey, ConservationData data) {
     JsonObject cacheJson = new JsonObject();
     cacheJson.addProperty("start", data.start());
@@ -581,9 +537,6 @@ public class UcscApiClient {
     DataCacheManager.saveToCache(CACHE_TYPE, cacheKey, cacheJson);
   }
   
-  /**
-   * Parse binned conservation data from file cache.
-   */
   private static ConservationData parseBinnedDataFromCache(JsonObject json, long start, long end) {
     try {
       double minScore = json.get("minScore").getAsDouble();
@@ -598,28 +551,16 @@ public class UcscApiClient {
       
       return new ConservationData(start, end, scores, minScore, maxScore, hasData, null);
     } catch (JsonSyntaxException e) {
-      System.err.println("Failed to parse cached binned data: " + e.getMessage());
       return null;
     }
   }
   
-  /**
-   * Parse binned conservation data from UCSC API.
-   */
   private static ConservationData parseBinnedConservationResponse(
       String json, long start, long end, int bins, String chrom) {
     
     try {
       JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-      
-      // The data is stored under the chromosome key (e.g., "chr1"), not the track name
-      String chromKey = chrom.startsWith("chr") ? chrom : "chr" + chrom;
-      if (!root.has(chromKey)) {
-        System.err.println("No data found for chromosome: " + chromKey);
-        return ConservationData.empty(start, end, bins);
-      }
-      
-      JsonArray dataArray = root.getAsJsonArray(chromKey);
+      JsonArray dataArray = extractTrackDataArray(root, chrom);
       if (dataArray == null || dataArray.isEmpty()) {
         return ConservationData.empty(start, end, bins);
       }
@@ -651,10 +592,15 @@ public class UcscApiClient {
       
       // Calculate averages
       double[] scores = new double[bins];
+      boolean hasAny = false;
       for (int i = 0; i < bins; i++) {
         if (binCounts[i] > 0) {
           scores[i] = binValues[i] / binCounts[i];
+          hasAny = true;
         }
+      }
+      if (!hasAny) {
+        return ConservationData.empty(start, end, bins);
       }
       
       // PhyloP scores typically range from -14 to +6
@@ -663,14 +609,10 @@ public class UcscApiClient {
           Math.max(-14, minScore), Math.min(6, maxScore), true, null);
       
     } catch (JsonSyntaxException e) {
-      System.err.println("Failed to parse conservation data: " + e.getMessage());
       return ConservationData.empty(start, end, bins);
     }
   }
   
-  /**
-   * Clear all caches (memory and file).
-   */
   public static void clearCache() {
     chromosomeCache.clear();
     binnedCache.clear();
@@ -678,25 +620,16 @@ public class UcscApiClient {
     DataCacheManager.clearCache(CACHE_TYPE);
   }
   
-  /**
-   * Clear only in-memory caches.
-   */
   public static void clearMemoryCache() {
     chromosomeCache.clear();
     binnedCache.clear();
     tracksListCache.clear();
   }
   
-  /**
-   * Check if a region is suitable for API fetch (not too large).
-   */
   public static boolean isRegionFetchable(long start, long end) {
     return (end - start) <= MAX_REGION_SIZE;
   }
   
-  /**
-   * Get the maximum region size that can be fetched.
-   */
   public static int getMaxRegionSize() {
     return MAX_REGION_SIZE;
   }

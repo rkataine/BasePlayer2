@@ -299,16 +299,11 @@ public class UcscTracksBrowser {
       addBtn.setText("✓ Added");
       addBtn.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-size: 10px;");
       addBtn.setDisable(true);
-      
-      System.out.println("Added UCSC track: " + trackInfo.shortLabel());
     }
   }
   
   private Track createTrackFromInfo(UcscTrackInfo trackInfo) {
-    // For now, create a generic UCSC track
-    // TODO: Create specific track types based on trackInfo.type()
-    return new FeatureTrack(trackInfo.shortLabel(), "UCSC: " + trackInfo.trackName(),
-        UcscApiClient::fetchConservation);
+    return FeatureTrack.forUcscTrack(trackInfo);
   }
   
   public void show() {

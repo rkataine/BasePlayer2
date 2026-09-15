@@ -7,7 +7,6 @@ import org.baseplayer.genome.GenomicRegion;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.draw.ChromosomeCanvas;
-import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.GnomadDataParser;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.alignment.FetchManager;
@@ -198,9 +197,7 @@ public class DrawStack {
     featureTracksCanvas = new FeatureTracksCanvas(new Canvas(), featureTracksStack, this);
     featureTracksStack.getChildren().addAll(featureTracksCanvas, featureTracksCanvas.getReactiveCanvas());
     
-    FeatureTrack conservationTrack = new FeatureTrack(
-        "PhyloP Conservation", "UCSC API", UcscApiClient::fetchConservation);
-    conservationTrack.setCoordinateBase(0); // UCSC is 0-based
+    FeatureTrack conservationTrack = FeatureTrack.forUcscTrack("phyloP100way", "PhyloP Conservation");
     conservationTrack.setVisible(false);
     featureTracksCanvas.addTrack(conservationTrack);
 

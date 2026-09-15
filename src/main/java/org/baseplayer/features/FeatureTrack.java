@@ -4,7 +4,9 @@ import java.util.concurrent.CompletableFuture;
 
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
+import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
+import org.baseplayer.io.UcscTrackInfo;
 
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
@@ -70,6 +72,20 @@ public class FeatureTrack extends AbstractUcscTrack {
     super(displayName, source);
     this.dataFetcher = fetcher;
     this.preferredHeight = 50;
+  }
+
+  /** UCSC bigWig-style track via {@link UcscApiClient#fetchTrack}. */
+  public static FeatureTrack forUcscTrack(String trackId, String displayName) {
+    FeatureTrack track = new FeatureTrack(
+        displayName,
+        "UCSC: " + trackId,
+        (chrom, start, end, bins) -> UcscApiClient.fetchTrack(trackId, chrom, start, end, bins));
+    track.setCoordinateBase(0);
+    return track;
+  }
+
+  public static FeatureTrack forUcscTrack(UcscTrackInfo trackInfo) {
+    return forUcscTrack(trackInfo.trackName(), trackInfo.shortLabel());
   }
 
   /**

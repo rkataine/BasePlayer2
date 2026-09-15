@@ -161,9 +161,15 @@ public class FeatureTracksCanvas extends GenomicCanvas {
     
     if (track instanceof AbstractUcscTrack ucscTrack) {
       ucscTrack.setOnDataLoaded(() -> update.set(!update.get()));
+      if (drawStack != null && track.isVisible()) {
+        String chrom = drawStack.getChromosome();
+        if (chrom != null) {
+          ucscTrack.onRegionChanged(
+              chrom, (long) drawStack.getViewStart(), (long) drawStack.getViewEnd(), drawStack);
+        }
+      }
     }
     
-    notifyRegionChanged();
     notifyPreferredHeightChanged();
     update.set(!update.get());
   }

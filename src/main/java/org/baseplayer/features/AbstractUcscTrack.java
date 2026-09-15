@@ -127,9 +127,6 @@ public abstract class AbstractUcscTrack extends AbstractTrack {
     loading = true;
     fetching = true;
     
-    System.out.println(name + ": Requesting data for " + chromosome + ":" + start + "-" + end + 
-                      " (UcscApiClient will use cache if available)");
-    
     // Trigger UI update to show loading indicator
     if (onDataLoaded != null) {
       Platform.runLater(onDataLoaded);
@@ -150,13 +147,6 @@ public abstract class AbstractUcscTrack extends AbstractTrack {
             if (!ticket.isCancelled()) {
               currentData = data;
               cachedChromosome = chromosome;
-              if (data.hasData()) {
-                System.out.println(name + ": Received data for " + chromosome + ":" + 
-                                  data.start() + "-" + data.end() + 
-                                  " (requested: " + start + "-" + end + ")");
-              } else if (data.hasError()) {
-                System.err.println(name + ": Error: " + data.errorMessage());
-              }
             }
             loading = false;
             fetching = false;
@@ -171,6 +161,9 @@ public abstract class AbstractUcscTrack extends AbstractTrack {
             loading = false;
             fetching = false;
             fm.release(ticket);
+            if (onDataLoaded != null) {
+              onDataLoaded.run();
+            }
           });
           return null;
         });
