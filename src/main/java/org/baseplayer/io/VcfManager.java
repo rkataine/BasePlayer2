@@ -231,10 +231,7 @@ public class VcfManager {
                         registry.getSampleTracks().add(track);
                         registry.getSampleList().add(sampleName);
                     }
-                    if (registry.getFirstVisibleSample() < 0) {
-                        registry.setFirstVisibleSample(0);
-                    }
-                    registry.setLastVisibleSample(registry.getSampleList().size() - 1);
+                    registry.includeNewTracksAtEndResetHeight();
                     vcfData.loader.updateMapping();
                     if (!suppressUiUpdates) {
                         GenomicCanvas.update.set(!GenomicCanvas.update.get());

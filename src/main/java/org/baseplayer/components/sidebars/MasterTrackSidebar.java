@@ -660,14 +660,14 @@ public class MasterTrackSidebar extends SidebarBase {
   private void applyVisibleRange(int first, int last) {
     int trackCount = sampleRegistry.getDisplayedTrackCount();
     if (trackCount <= 0) {
-      sampleRegistry.applyVisibleRangeState(-1, -1, 0);
+      sampleRegistry.fitVisibleRange(-1, -1, 0);
       sampleRegistry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
       return;
     }
 
     double viewportHeight = estimateSampleViewportHeight();
-    sampleRegistry.applyVisibleRangeState(first, last, viewportHeight);
+    sampleRegistry.fitVisibleRange(first, last, viewportHeight);
 
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }

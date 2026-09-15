@@ -183,8 +183,7 @@ public class SampleListPanel extends SidebarContentPanel {
         dragScrollbarWindow = Math.max(1, base[1] - base[0] + 1);
         dragScrollbarLockedSampleHeight = sampleRegistry.getSampleHeight();
         cancelTransientScrollState();
-        sampleRegistry.lockSampleHeight();
-        sampleRegistry.setSampleHeight(dragScrollbarLockedSampleHeight);
+        sampleRegistry.lockAndKeepSampleHeight(dragScrollbarLockedSampleHeight);
         reactiveCanvas.setCursor(Cursor.CLOSED_HAND);
       } else {
         int nextFirst = firstFromScrollbarThumbTop(event.getY() - trackScrollbarThumbHeight * 0.5);
@@ -249,8 +248,7 @@ public class SampleListPanel extends SidebarContentPanel {
         baseLast = Math.max(baseFirst, Math.min(trackCount - 1, sampleRegistry.getLastVisibleSample()));
         if (baseFirst != sampleRegistry.getFirstVisibleSample()
             || baseLast != sampleRegistry.getLastVisibleSample()) {
-          sampleRegistry.setFirstVisibleSample(baseFirst);
-          sampleRegistry.setLastVisibleSample(baseLast);
+          sampleRegistry.setVisibleWindow(baseFirst, baseLast, sampleH);
         }
         window = Math.max(1, Math.min(trackCount, baseLast - baseFirst + 1));
       }
@@ -330,21 +328,14 @@ public class SampleListPanel extends SidebarContentPanel {
           return;
         }
         if (sampleRegistry.getFirstVisibleSample() == sampleRegistry.getLastVisibleSample()) {
-          sampleRegistry.setFirstVisibleSample(0);
-          sampleRegistry.setLastVisibleSample(displayedCount - 1);
+          sampleRegistry.fitVisibleRange(0, displayedCount - 1, viewportHeight);
         } else {
           int hoveredTrackIndex = sampleRegistry.hoverSampleProperty().get();
           int hoveredSlot = sampleRegistry.getDisplayedSlotForTrackIndex(hoveredTrackIndex);
           if (hoveredSlot >= 0) {
-            sampleRegistry.setFirstVisibleSample(hoveredSlot);
-            sampleRegistry.setLastVisibleSample(hoveredSlot);
+            sampleRegistry.fitVisibleRange(hoveredSlot, hoveredSlot, viewportHeight);
           }
         }
-        int visible = sampleRegistry.getVisibleSampleCount();
-        sampleRegistry.setSampleHeight(viewportHeight / Math.max(1, visible));
-        double targetScroll = sampleRegistry.getFirstVisibleSample() * sampleRegistry.getSampleHeight();
-        sampleRegistry.setScrollBarPosition(
-            sampleRegistry.clampScrollBarPosition(targetScroll, viewportHeight));
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     });
@@ -360,16 +351,14 @@ public class SampleListPanel extends SidebarContentPanel {
     animationTargetLast = nextLast;
     animationWindowSize = Math.max(1, windowSize);
 
-    sampleRegistry.setFirstVisibleSample(nextFirst);
-    sampleRegistry.setLastVisibleSample(nextLast);
     sampleRegistry.lockSampleHeight();
-    sampleRegistry.setSampleHeight(lockedSampleHeight);
+    sampleRegistry.setVisibleWindow(nextFirst, nextLast, lockedSampleHeight);
 
     double viewportHeight = getSampleViewportHeight();
     double startScroll = sampleRegistry.getScrollBarPosition();
     double targetScroll = sampleRegistry.clampScrollBarPosition(nextFirst * lockedSampleHeight, viewportHeight);
     if (Math.abs(targetScroll - startScroll) < 0.5) {
-      sampleRegistry.setScrollBarPosition(targetScroll);
+      sampleRegistry.setScrollOffset(targetScroll, viewportHeight);
       sampleRegistry.unlockSampleHeight();
       clearAnimationTargets();
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -382,7 +371,7 @@ public class SampleListPanel extends SidebarContentPanel {
       public void handle(long now) {
         double t = (double) (now - scrollAnimStartNanos) / SCROLL_ANIM_DURATION_NS;
         if (t >= 1.0) {
-          sampleRegistry.setScrollBarPosition(targetScroll);
+          sampleRegistry.setScrollOffset(targetScroll, viewportHeight);
           sampleRegistry.unlockSampleHeight();
           clearAnimationTargets();
           stop();
@@ -393,7 +382,7 @@ public class SampleListPanel extends SidebarContentPanel {
 
         double eased = EASE_OUT_CUBIC.applyAsDouble(Math.max(0.0, t));
         double current = startScroll + (targetScroll - startScroll) * eased;
-        sampleRegistry.setScrollBarPosition(current);
+        sampleRegistry.setScrollOffset(current, viewportHeight);
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       }
     };
@@ -430,18 +419,12 @@ public class SampleListPanel extends SidebarContentPanel {
     }
     clearAnimationTargets();
     sampleRegistry.unlockSampleHeight();
-
-    sampleRegistry.setFirstVisibleSample(clampedFirst);
-    sampleRegistry.setLastVisibleSample(clampedLast);
-
-    double viewportHeight = sampleH * normalizedWindow;
-    double snappedScroll = sampleRegistry.clampScrollBarPosition(clampedFirst * sampleH, viewportHeight);
-    sampleRegistry.setScrollBarPosition(snappedScroll);
+    sampleRegistry.setVisibleWindow(clampedFirst, clampedLast, sampleH);
 
     if (hadTransientState
         || prevFirst != clampedFirst
         || prevLast != clampedLast
-        || Math.abs(prevScroll - snappedScroll) > 0.5) {
+        || Math.abs(prevScroll - sampleRegistry.getScrollBarPosition()) > 0.5) {
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
   }
@@ -481,11 +464,7 @@ public class SampleListPanel extends SidebarContentPanel {
     clearAnimationTargets();
 
     sampleRegistry.unlockSampleHeight();
-    sampleRegistry.setFirstVisibleSample(nextFirst);
-    sampleRegistry.setLastVisibleSample(nextLast);
-    double viewportHeight = getSampleViewportHeight();
-    double targetScroll = sampleRegistry.clampScrollBarPosition(nextFirst * sampleH, viewportHeight);
-    sampleRegistry.setScrollBarPosition(targetScroll);
+    sampleRegistry.setVisibleWindow(nextFirst, nextLast, sampleH);
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
@@ -554,13 +533,9 @@ public class SampleListPanel extends SidebarContentPanel {
     int previewLast = previewFirst + window - 1;
     previewLast = Math.max(previewFirst, Math.min(trackCount - 1, previewLast));
 
-    sampleRegistry.setSampleHeight(sampleH);
-    sampleRegistry.setFirstVisibleSample(previewFirst);
-    sampleRegistry.setLastVisibleSample(previewLast);
-
     double viewportHeight = sampleH * window;
-    double targetScroll = sampleRegistry.clampScrollBarPosition(firstPos * sampleH, viewportHeight);
-    sampleRegistry.setScrollBarPosition(targetScroll);
+    sampleRegistry.setVisibleWindow(
+        previewFirst, previewLast, sampleH, firstPos * sampleH, viewportHeight);
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 

@@ -293,26 +293,7 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     double masterOffset = sampleRegistry.getMasterTrackHeight();
     double available    = getHeight() - masterOffset;
-    if (!sampleRegistry.isSampleHeightLocked()) {
-      int visibleCount = sampleRegistry.getVisibleSampleCount();
-      double rawHeight = available / Math.max(1, visibleCount);
-      // Only auto-resize when height is 0 (initial load).
-      // Once set, preserve user's manual adjustments (squeezed samples, etc.)
-      if (sampleRegistry.getSampleHeight() == 0) {
-        if (rawHeight < 20) {
-          // Window is too large; shrink it to what fits at the minimum height
-          int tracksFit = Math.max(1, (int) (available / 20));
-          int firstVis = sampleRegistry.getFirstVisibleSample();
-          int totalTracks = sampleRegistry.getDisplayedTrackCount();
-          sampleRegistry.setLastVisibleSample(Math.min(firstVis + tracksFit - 1, totalTracks - 1));
-          sampleRegistry.setSampleHeight(20);
-        } else {
-          sampleRegistry.setSampleHeight(rawHeight);
-        }
-      }
-      // else: height already set, don't auto-resize (preserves manual squeeze)
-    }
-    sampleRegistry.clampScrollBarPositionInPlace(available);
+    sampleRegistry.ensureSampleHeightForViewport(available);
 
     drawBamReads();
     masterTrackCanvas.drawMasterAggregates(gc, drawStack, getWidth(), masterOffset);

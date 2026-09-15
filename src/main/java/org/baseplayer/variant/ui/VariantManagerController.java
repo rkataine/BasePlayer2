@@ -750,7 +750,7 @@ public class VariantManagerController implements Initializable {
             int displayedCount = registry.getDisplayedTrackCount();
             if (displayedCount > 0) {
                 double viewportHeight = estimateSampleViewportHeight(registry);
-                registry.applyVisibleRangeState(0, displayedCount - 1, viewportHeight);
+                registry.fitVisibleRange(0, displayedCount - 1, viewportHeight);
             }
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());

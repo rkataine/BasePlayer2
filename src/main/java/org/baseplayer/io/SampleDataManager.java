@@ -101,9 +101,7 @@ public class SampleDataManager {
             // All BAM files loaded; update visible range and redraw
             int trackCount = sampleRegistry.getDisplayedTrackCount();
             if (trackCount > 0) {
-              sampleRegistry.setFirstVisibleSample(0);
-              sampleRegistry.setLastVisibleSample(trackCount - 1);
-              sampleRegistry.setSampleHeight(0);
+              sampleRegistry.showAllTracksResetHeight();
             }
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
             
@@ -161,29 +159,9 @@ public class SampleDataManager {
     // Adjust visible range
     int newCount = sampleRegistry.getDisplayedTrackCount();
     if (sampleRegistry.getSampleTracks().isEmpty() || newCount <= 0) {
-      sampleRegistry.setFirstVisibleSample(-1);
-      sampleRegistry.setLastVisibleSample(-1);
-      sampleRegistry.setScrollBarPosition(0);
+      sampleRegistry.clearVisibleRange();
     } else {
-      int newWindow = Math.min(oldWindow, newCount);
-
-      int newFirst = oldFirst;
-      if (removedSlot >= 0 && removedSlot < oldFirst) {
-        // Removed before viewport in displayed order: shift one slot up.
-        newFirst = oldFirst - 1;
-      }
-
-      int maxFirst = Math.max(0, newCount - newWindow);
-      newFirst = Math.max(0, Math.min(maxFirst, newFirst));
-      int newLast = newFirst + newWindow - 1;
-
-      sampleRegistry.setFirstVisibleSample(newFirst);
-      sampleRegistry.setLastVisibleSample(newLast);
-
-      double viewportHeight = sampleRegistry.getSampleHeight() * Math.max(1, newWindow);
-      double targetScroll = newFirst * sampleRegistry.getSampleHeight();
-      sampleRegistry.setScrollBarPosition(
-          sampleRegistry.clampScrollBarPosition(targetScroll, viewportHeight));
+      sampleRegistry.adjustWindowAfterTrackRemoval(removedSlot, oldFirst, oldWindow);
     }
     
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -333,11 +311,7 @@ public class SampleDataManager {
           SampleTrack track = new SampleTrack(newSample);
           sampleRegistry.getSampleTracks().add(track);
           sampleRegistry.getSampleList().add(newSample.getName());
-          if (sampleRegistry.getFirstVisibleSample() < 0) {
-            sampleRegistry.setFirstVisibleSample(0);
-          }
-          sampleRegistry.setLastVisibleSample(sampleRegistry.getSampleList().size() - 1);
-          sampleRegistry.setSampleHeight(0);
+          sampleRegistry.includeNewTracksAtEndResetHeight();
           UserPreferences.addRecentFile("BED", file);
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
         });
@@ -576,11 +550,7 @@ public class SampleDataManager {
           registry.getSampleTracks().add(track);
           registry.getSampleList().add(sampleName);
         }
-        if (registry.getFirstVisibleSample() < 0) {
-          registry.setFirstVisibleSample(0);
-        }
-        registry.setLastVisibleSample(registry.getSampleList().size() - 1);
-        registry.setSampleHeight(0);
+        registry.includeNewTracksAtEndResetHeight();
         loader.updateMapping();
       }
 
@@ -624,10 +594,7 @@ public class SampleDataManager {
     registry.getSampleList().clear();
     
     registry.clearAllSubsetSources();
-    registry.setFirstVisibleSample(-1);
-    registry.setLastVisibleSample(-1);
-    registry.setScrollBarPosition(0);
-    registry.setSampleHeight(0);
+    registry.clearVisibleRange();
     registry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
     registry.setHoverSample(-1);
 
