@@ -127,6 +127,17 @@ public class GenomicCanvas extends Canvas {
       gc.setLineDashes(0);
     }
   }
+
+  protected final void drawTrackRowTopDivider(double rowTopY) {
+    if (rowTopY < 1.0) {
+      return;
+    }
+    gc.setStroke(DrawColors.BORDER);
+    gc.setLineWidth(1);
+    double snappedY = Math.floor(rowTopY) + 0.5;
+    gc.strokeLine(0, snappedY, getWidth(), snappedY);
+  }
+
   public Canvas getReactiveCanvas() { return reactiveCanvas; }
 
   protected boolean handlesSampleVerticalScroll() {
@@ -697,10 +708,11 @@ public class GenomicCanvas extends Canvas {
   private List<GenomicCanvas> collectStackPreviewCanvases() {
     LinkedHashSet<GenomicCanvas> set = new LinkedHashSet<>();
     set.add(this);
-    if (drawStack.alignmentCanvas != null) set.add(drawStack.alignmentCanvas);
+    if (drawStack.sampleTrackCanvas != null) set.add(drawStack.sampleTrackCanvas);
     if (drawStack.sampleAggregateCanvas != null) set.add(drawStack.sampleAggregateCanvas);
     if (drawStack.chromosomeCanvas != null) set.add(drawStack.chromosomeCanvas);
-    if (drawStack.featureTracksCanvas != null) set.add(drawStack.featureTracksCanvas);
+    if (drawStack.featureAggregateCanvas != null) set.add(drawStack.featureAggregateCanvas);
+    if (drawStack.featureTrackCanvas != null) set.add(drawStack.featureTrackCanvas);
     return new ArrayList<>(set);
   }
 

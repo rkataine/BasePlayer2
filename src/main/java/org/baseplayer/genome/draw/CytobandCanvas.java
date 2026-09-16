@@ -96,7 +96,7 @@ public class CytobandCanvas extends Canvas {
         double dragDelta = event.getX() - indicatorDragStartX;
         double genomeDelta = (dragDelta / cytoWidth) * drawStack.chromSize;
         double newStart = indicatorViewStartPos + genomeDelta;
-        drawStack.alignmentCanvas.setStart(newStart);
+        drawStack.sampleTrackCanvas.setStart(newStart);
         event.consume();
       } else if (selectDragging) {
         selectEndX = event.getX();
@@ -128,7 +128,7 @@ public class CytobandCanvas extends Canvas {
           newEnd = center + 50;
         }
         
-        drawStack.alignmentCanvas.zoomAnimation(newStart, newEnd);
+        drawStack.sampleTrackCanvas.zoomAnimation(newStart, newEnd);
         
         selectDragging = false;
         draw();

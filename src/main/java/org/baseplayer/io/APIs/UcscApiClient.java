@@ -327,7 +327,7 @@ public class UcscApiClient {
       int bins = (int)(end - start);
       double[] scores = new double[bins];
       double minScore = Double.MAX_VALUE;
-      double maxScore = Double.MIN_VALUE;
+      double maxScore = Double.NEGATIVE_INFINITY;
       boolean hasAnyData = false;
       
       JsonArray dataArray = json.getAsJsonArray("data");
@@ -353,8 +353,7 @@ public class UcscApiClient {
         return new ConservationData(start, end, scores, 0, 0, false, null);
       }
       
-      return new ConservationData(start, end, scores, 
-          Math.max(-14, minScore), Math.min(6, maxScore), true, null);
+      return new ConservationData(start, end, scores, minScore, maxScore, true, null);
     } catch (Exception e) {
       return null;
     }
@@ -539,17 +538,26 @@ public class UcscApiClient {
   
   private static ConservationData parseBinnedDataFromCache(JsonObject json, long start, long end) {
     try {
-      double minScore = json.get("minScore").getAsDouble();
-      double maxScore = json.get("maxScore").getAsDouble();
       boolean hasData = json.get("hasData").getAsBoolean();
       
       JsonArray scoresArray = json.getAsJsonArray("scores");
       double[] scores = new double[scoresArray.size()];
+      double minScore = Double.MAX_VALUE;
+      double maxScore = Double.NEGATIVE_INFINITY;
+      boolean hasValues = false;
       for (int i = 0; i < scoresArray.size(); i++) {
         scores[i] = scoresArray.get(i).getAsDouble();
+        if (scores[i] != 0) {
+          minScore = Math.min(minScore, scores[i]);
+          maxScore = Math.max(maxScore, scores[i]);
+          hasValues = true;
+        }
+      }
+      if (!hasData || !hasValues) {
+        return new ConservationData(start, end, scores, 0, 0, false, null);
       }
       
-      return new ConservationData(start, end, scores, minScore, maxScore, hasData, null);
+      return new ConservationData(start, end, scores, minScore, maxScore, true, null);
     } catch (JsonSyntaxException e) {
       return null;
     }
@@ -571,7 +579,7 @@ public class UcscApiClient {
       double binSize = (double)(end - start) / bins;
       
       double minScore = Double.MAX_VALUE;
-      double maxScore = Double.MIN_VALUE;
+      double maxScore = Double.NEGATIVE_INFINITY;
       
       for (JsonElement elem : dataArray) {
         JsonObject entry = elem.getAsJsonObject();
@@ -585,9 +593,6 @@ public class UcscApiClient {
           binValues[binIndex] += value;
           binCounts[binIndex]++;
         }
-        
-        minScore = Math.min(minScore, value);
-        maxScore = Math.max(maxScore, value);
       }
       
       // Calculate averages
@@ -596,6 +601,8 @@ public class UcscApiClient {
       for (int i = 0; i < bins; i++) {
         if (binCounts[i] > 0) {
           scores[i] = binValues[i] / binCounts[i];
+          minScore = Math.min(minScore, scores[i]);
+          maxScore = Math.max(maxScore, scores[i]);
           hasAny = true;
         }
       }
@@ -603,10 +610,8 @@ public class UcscApiClient {
         return ConservationData.empty(start, end, bins);
       }
       
-      // PhyloP scores typically range from -14 to +6
-      // Positive = conserved, Negative = fast-evolving
-      return new ConservationData(start, end, scores, 
-          Math.max(-14, minScore), Math.min(6, maxScore), true, null);
+      // Auto-scale to the values actually drawn in this region
+      return new ConservationData(start, end, scores, minScore, maxScore, true, null);
       
     } catch (JsonSyntaxException e) {
       return ConservationData.empty(start, end, bins);
@@ -704,7 +709,7 @@ public class UcscApiClient {
       int bins = (int)(end - start);
       double[] regionScores = new double[bins];
       double minScore = Double.MAX_VALUE;
-      double maxScore = Double.MIN_VALUE;
+      double maxScore = Double.NEGATIVE_INFINITY;
       boolean hasAnyData = false;
       
       for (int i = 0; i < bins; i++) {
@@ -722,8 +727,7 @@ public class UcscApiClient {
         return new ConservationData(start, end, regionScores, 0, 0, false, null);
       }
       
-      return new ConservationData(start, end, regionScores, 
-          Math.max(-14, minScore), Math.min(6, maxScore), true, null);
+      return new ConservationData(start, end, regionScores, minScore, maxScore, true, null);
     }
   }
   

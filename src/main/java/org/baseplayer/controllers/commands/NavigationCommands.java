@@ -40,13 +40,13 @@ public class NavigationCommands {
     if (maxZoom) {
       // Zoom all the way in (minZoom)
       int flank = GenomicCanvas.minZoom / 2;
-      stack.alignmentCanvas.zoomAnimation(middle - flank, middle + flank);
+      stack.sampleTrackCanvas.zoomAnimation(middle - flank, middle + flank);
     } else {
       // Zoom in by 75% (show 25% of current view)
       double newViewLength = stack.getViewLength() * 0.25;
       double newStart = middle - newViewLength / 2;
       double newEnd = middle + newViewLength / 2;
-      stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
+      stack.sampleTrackCanvas.zoomAnimation(newStart, newEnd);
     }
   }
   
@@ -71,7 +71,7 @@ public class NavigationCommands {
     
     if (fullChrom) {
       // Zoom all the way out to full chromosome
-      stack.alignmentCanvas.zoomAnimation(1, stack.chromSize + 1);
+      stack.sampleTrackCanvas.zoomAnimation(1, stack.chromSize + 1);
     } else {
       // Zoom out by 300% (triple the view)
       double middle = stack.middlePos();
@@ -79,7 +79,7 @@ public class NavigationCommands {
       
       // Don't zoom out if new view would be essentially the same (within 1% of full)
       if (newViewLength >= stack.chromSize * 0.99) {
-        stack.alignmentCanvas.zoomAnimation(1, stack.chromSize + 1);
+        stack.sampleTrackCanvas.zoomAnimation(1, stack.chromSize + 1);
         return;
       }
       
@@ -96,7 +96,7 @@ public class NavigationCommands {
         newStart = newEnd - newViewLength;
       }
       
-      stack.alignmentCanvas.zoomAnimation(newStart, newEnd);
+      stack.sampleTrackCanvas.zoomAnimation(newStart, newEnd);
     }
   }
   

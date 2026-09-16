@@ -260,7 +260,7 @@ public class VcfManager {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty()) return;
         DrawStack firstStack = stackManager.getFirst();
-        if (firstStack.alignmentCanvas != null) {
+        if (firstStack.sampleTrackCanvas != null) {
             loadRegionVariants(firstStack.getChromosome(), 1, (long)(firstStack.chromSize + 1));
         }
     }
@@ -326,7 +326,7 @@ public class VcfManager {
         // Clear canvases and prepare for new load
         DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : sm.getStacks()) {
-            if (stack.alignmentCanvas != null) stack.alignmentCanvas.clearVariantList();
+            if (stack.sampleTrackCanvas != null) stack.sampleTrackCanvas.clearVariantList();
             if (stack.sampleAggregateCanvas != null) stack.sampleAggregateCanvas.clearVariantList();
         }
         lastLoadedChromosome = chromosome;
@@ -498,9 +498,9 @@ public class VcfManager {
         if (variantList == null) return;
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.alignmentCanvas != null) {
-                stack.alignmentCanvas.setVariantList(variantList);
-                stack.alignmentCanvas.draw();
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.setVariantList(variantList);
+                stack.sampleTrackCanvas.draw();
             }
             if (stack.sampleAggregateCanvas != null) {
                 stack.sampleAggregateCanvas.setVariantList(variantList);
@@ -541,8 +541,8 @@ public class VcfManager {
         
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.alignmentCanvas != null) {
-                stack.alignmentCanvas.clearVariantList();
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.clearVariantList();
             }
             if (stack.sampleAggregateCanvas != null) {
                 stack.sampleAggregateCanvas.clearVariantList();
@@ -797,7 +797,7 @@ public class VcfManager {
         Platform.runLater(() -> {
             DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
             for (DrawStack stack : stackManager.getStacks()) {
-                if (stack.alignmentCanvas != null) stack.alignmentCanvas.draw();
+                if (stack.sampleTrackCanvas != null) stack.sampleTrackCanvas.draw();
             }
         });
     }
@@ -894,8 +894,8 @@ public class VcfManager {
 
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.alignmentCanvas != null) {
-                stack.alignmentCanvas.clearVariantList();
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.clearVariantList();
             }
             if (stack.sampleAggregateCanvas != null) {
                 stack.sampleAggregateCanvas.clearVariantList();

@@ -2,7 +2,6 @@ package org.baseplayer.draw;
 
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.features.FeatureTrack;
-import org.baseplayer.features.FeatureTracksCanvas;
 import org.baseplayer.genome.GenomicRegion;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
@@ -10,7 +9,7 @@ import org.baseplayer.genome.gene.draw.ChromosomeCanvas;
 import org.baseplayer.io.GnomadDataParser;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.alignment.FetchManager;
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
+import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.NavigationState;
 import org.baseplayer.services.ServiceRegistry;
@@ -60,16 +59,17 @@ public class DrawStack {
   /** Sample column: master aggregate band above alignment body. */
   public VBox sampleColumn = new VBox();
   public StackPane masterStack = new StackPane();
-  /** Sample body only (AlignmentCanvas); no longer includes the master band. */
+  /** Sample body only (TrackBodyCanvas); no longer includes the master band. */
   public StackPane drawStack = new StackPane();
-  public StackPane featureTracksStack = new StackPane();  // Container for feature tracks
-  // Future: featureTracksStack can gain a FeatureAggregateCanvas above FeatureTracksCanvas
-  // for intersect / subtract / annotate operations.
+  public VBox featureColumn = new VBox();
+  public StackPane featureMasterStack = new StackPane();
+  public StackPane featureBodyStack = new StackPane();
   public CytobandCanvas cytobandCanvas;
   public ChromosomeCanvas chromosomeCanvas;
-  public AlignmentCanvas alignmentCanvas;
+  public TrackBodyCanvas sampleTrackCanvas;
   public SampleAggregateCanvas sampleAggregateCanvas;
-  public FeatureTracksCanvas featureTracksCanvas;
+  public FeatureAggregateCanvas featureAggregateCanvas;
+  public TrackBodyCanvas featureTrackCanvas;
   public ComboBox<String> chromosomeDropdown;
   public Label closeButton;
 
@@ -182,39 +182,60 @@ public class DrawStack {
     masterStack.maxHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
     masterStack.prefHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
 
-    alignmentCanvas = new AlignmentCanvas(new Canvas(), drawStack, this);
-    drawStack.getChildren().addAll(alignmentCanvas, alignmentCanvas.getReactiveCanvas());
+    sampleTrackCanvas = new TrackBodyCanvas(new Canvas(), drawStack, this, sampleRegistry);
+    drawStack.getChildren().addAll(sampleTrackCanvas, sampleTrackCanvas.getReactiveCanvas());
 
     sampleAggregateCanvas = new SampleAggregateCanvas(
-        new Canvas(), masterStack, this, alignmentCanvas.getCoverageDrawer());
+        new Canvas(), masterStack, this, sampleTrackCanvas.getCoverageDrawer());
     masterStack.getChildren().addAll(
         sampleAggregateCanvas, sampleAggregateCanvas.getReactiveCanvas());
 
     VBox.setVgrow(drawStack, Priority.ALWAYS);
     sampleColumn.getChildren().addAll(masterStack, drawStack);
-    
-    featureTracksStack.setMinSize(0, 0);
-    featureTracksCanvas = new FeatureTracksCanvas(new Canvas(), featureTracksStack, this);
-    featureTracksStack.getChildren().addAll(featureTracksCanvas, featureTracksCanvas.getReactiveCanvas());
-    
-    FeatureTrack conservationTrack = FeatureTrack.forUcscTrack("phyloP100way", "PhyloP Conservation");
-    conservationTrack.setVisible(false);
-    featureTracksCanvas.addTrack(conservationTrack);
 
-    GnomadDataParser gnomadParser = new GnomadDataParser();
-    FeatureTrack gnomadTrack = new FeatureTrack(
-        "gnomAD Variants", "gnomAD v4", gnomadParser::fetch);
-    gnomadTrack.setCoordinateBase(1); // gnomAD uses 1-based VCF coordinates
-    gnomadTrack.setPopupContentBuilder(gnomadParser::buildPopupContent);
-    gnomadTrack.setVisible(false);
-    featureTracksCanvas.addTrack(gnomadTrack);
-    
-    featureTracksCanvas.setCollapsed(true);
-    
+    featureColumn.setMinSize(0, 0);
+    featureMasterStack.setMinSize(0, 0);
+    featureBodyStack.setMinSize(0, 0);
+    var featureViewportRegistry =
+        ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
+    featureMasterStack.minHeightProperty().bind(
+        featureViewportRegistry.masterBandHeightProperty());
+    featureMasterStack.maxHeightProperty().bind(
+        featureViewportRegistry.masterBandHeightProperty());
+    featureMasterStack.prefHeightProperty().bind(
+        featureViewportRegistry.masterBandHeightProperty());
+
+    featureAggregateCanvas =
+        new FeatureAggregateCanvas(new Canvas(), featureMasterStack, this);
+    featureMasterStack.getChildren().addAll(
+        featureAggregateCanvas, featureAggregateCanvas.getReactiveCanvas());
+
+    featureTrackCanvas = new TrackBodyCanvas(new Canvas(), featureBodyStack, this, featureViewportRegistry);
+    featureBodyStack.getChildren().addAll(featureTrackCanvas, featureTrackCanvas.getReactiveCanvas());
+    VBox.setVgrow(featureBodyStack, Priority.ALWAYS);
+    featureColumn.getChildren().addAll(featureMasterStack, featureBodyStack);
+
+    if (featureTrackCanvas.getTracks().isEmpty()) {
+      FeatureTrack conservationTrack =
+          FeatureTrack.forUcscTrack("phyloP100way", "PhyloP Conservation");
+      conservationTrack.setVisible(false);
+      featureTrackCanvas.addTrack(conservationTrack);
+
+      GnomadDataParser gnomadParser = new GnomadDataParser();
+      FeatureTrack gnomadTrack = new FeatureTrack(
+          "gnomAD Variants", "gnomAD v4", gnomadParser::fetch);
+      gnomadTrack.setCoordinateBase(1);
+      gnomadTrack.setPopupContentBuilder(gnomadParser::buildPopupContent);
+      gnomadTrack.setVisible(false);
+      featureTrackCanvas.addTrack(gnomadTrack);
+    }
+
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());
     chromContainer.setOnMouseExited(e -> closeButton.setVisible(false));
     sampleColumn.setOnMouseEntered(e -> updateControlsVisibility());
     sampleColumn.setOnMouseExited(e -> closeButton.setVisible(false));
+    featureColumn.setOnMouseEntered(e -> updateControlsVisibility());
+    featureColumn.setOnMouseExited(e -> closeButton.setVisible(false));
   }
   
   public void updateControlsVisibility() {
@@ -234,9 +255,15 @@ public class DrawStack {
     }
     updateChromosomeDropdownWidthByLongestContig();
     updateChromosomeSize();
-    alignmentCanvas.setStartEnd(1.0, chromSize + 1);
+    sampleTrackCanvas.setStartEnd(1.0, chromSize + 1);
     if (sampleAggregateCanvas != null) {
       sampleAggregateCanvas.setStartEnd(1.0, chromSize + 1);
+    }
+    if (featureAggregateCanvas != null) {
+      featureAggregateCanvas.setStartEnd(1.0, chromSize + 1);
+    }
+    if (featureTrackCanvas != null) {
+      featureTrackCanvas.setStartEnd(1.0, chromSize + 1);
     }
     chromosomeCanvas.setStartEnd(1.0, chromSize + 1);
   }
@@ -260,14 +287,20 @@ public class DrawStack {
       updateChromosomeSize();
       setChromosomeDropdownValueSilently(chrom);
     }
-    alignmentCanvas.setStartEnd(start, end);
+    sampleTrackCanvas.setStartEnd(start, end);
     if (sampleAggregateCanvas != null) {
       sampleAggregateCanvas.setStartEnd(start, end);
+    }
+    if (featureAggregateCanvas != null) {
+      featureAggregateCanvas.setStartEnd(start, end);
+    }
+    if (featureTrackCanvas != null) {
+      featureTrackCanvas.setStartEnd(start, end);
     }
     chromosomeCanvas.setStartEnd(start, end);
     
     setRegion(chrom, (long) start, (long) end);
-    alignmentCanvas.zoomAnimation(start, end);
+    sampleTrackCanvas.zoomAnimation(start, end);
   }
 
   public void switchToChromosome(String chrom) {

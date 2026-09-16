@@ -1,7 +1,6 @@
 package org.baseplayer.draw;
 
 import org.baseplayer.components.MasterTrackPainter;
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.samples.alignment.draw.CoverageDrawer;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.variant.VariantList;
@@ -12,7 +11,7 @@ import javafx.scene.layout.StackPane;
 /**
  * Sample-column aggregate band for cohort-level summaries (variant density,
  * comparative methylation, and future non-alignment aggregates).
- * Stacked above {@link AlignmentCanvas}; shares genomic X with other canvases.
+ * Stacked above {@link org.baseplayer.samples.alignment.draw.TrackBodyCanvas}; shares genomic X with other canvases.
  */
 public class SampleAggregateCanvas extends AggregateBandCanvas {
 

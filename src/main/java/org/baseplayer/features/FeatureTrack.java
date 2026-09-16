@@ -131,10 +131,15 @@ public class FeatureTrack extends AbstractUcscTrack {
     if (minValue != null) dataMin = minValue;
     if (maxValue != null) dataMax = maxValue;
     double range = dataMax - dataMin;
-    if (range <= 0) range = 1;
+    // Constant / presence-only scores have no axis — draw fixed-height glyphs.
+    boolean presenceOnly = range <= 0;
+    if (presenceOnly) {
+      range = 1;
+    }
 
     double viewLength = viewEnd - viewStart;
     boolean isBaseLevelData = currentData.isBaseLevelData();
+    double fixedBarHeight = Math.min(10, height);
 
     for (int i = 0; i < bins; i++) {
       double value = scores[i];
@@ -149,11 +154,16 @@ public class FeatureTrack extends AbstractUcscTrack {
       double screenX2 = x + ((binGenomicEnd - viewStart) / viewLength) * width;
       double binWidth = Math.max(1, screenX2 - screenX1);
 
-      double normalized = (value - dataMin) / range;
-      double barHeight = normalized * height;
+      double normalized = presenceOnly
+          ? 1.0
+          : Math.max(0.0, Math.min(1.0, (value - dataMin) / range));
+      double barHeight = presenceOnly ? fixedBarHeight : normalized * height;
+      double barTop = presenceOnly
+          ? y + (height - barHeight) / 2
+          : y + height - barHeight;
 
-      gc.setFill(getColorForValue(Math.max(0.0, Math.min(1.0, normalized))));
-      gc.fillRect(screenX1, y + height - barHeight, binWidth, barHeight);
+      gc.setFill(getColorForValue(normalized));
+      gc.fillRect(screenX1, barTop, binWidth, barHeight);
     }
 
     gc.setStroke(Color.web("#444444"));

@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 import org.baseplayer.draw.DrawStack;
-import org.baseplayer.features.FeatureTracksCanvas;
+import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 
 import javafx.scene.layout.StackPane;
 
@@ -69,12 +69,12 @@ public class DrawStackManager {
   // ── Feature tracks convenience ────────────────────────────────────────────────
 
   /**
-   * Returns the {@link FeatureTracksCanvas} from the first stack,
+   * Returns the feature {@link TrackBodyCanvas} from the first stack,
    * or {@code null} if no stacks exist.
    */
-  public FeatureTracksCanvas getFeatureTracksCanvas() {
+  public TrackBodyCanvas getFeatureTrackCanvas() {
     if (drawStacks.isEmpty()) return null;
-    return drawStacks.getFirst().featureTracksCanvas;
+    return drawStacks.getFirst().featureTrackCanvas;
   }
 
   public void setAlignmentOverlayPane(StackPane pane) {

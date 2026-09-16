@@ -7,14 +7,6 @@ import javafx.scene.layout.StackPane;
 
 import org.baseplayer.utils.DrawColors;
 
-/**
- * Genomic aggregate band: shares pan/zoom with other {@link GenomicCanvas}
- * views but does not drive per-sample vertical read scrolling.
- *
- * <p>Used for the sample master band today. Feature tracks can later add a
- * similar band (intersect / subtract / annotate) by subclassing this class
- * and stacking it above {@link org.baseplayer.features.FeatureTracksCanvas}.
- */
 public abstract class AggregateBandCanvas extends GenomicCanvas {
 
   private final DoubleProperty bandHeight;

@@ -912,7 +912,7 @@ class DrawReads {
 
   // ── Private helpers ──────────────────────────────────────────────────────────
 
-  /** Public wrapper so callers (e.g. AlignmentCanvas) can get the screen Y of a read. */
+  /** Public wrapper so callers (e.g. TrackBodyCanvas) can get the screen Y of a read. */
   public double calcReadScreenY(BAMRecord read, double readsY, double readsH,
                                 double readHeight, double gap, boolean butterfly, int hp2StartRow,
                                 double scrollOffset, double scrollOffsetTop, double scrollOffsetBottom) {

@@ -3,11 +3,10 @@ package org.baseplayer.services;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.baseplayer.components.sidebars.FeatureTracksSidebar;
-import org.baseplayer.components.sidebars.MasterTrackSidebar;
+import org.baseplayer.components.sidebars.FeatureTrackColumnSidebar;
+import org.baseplayer.components.sidebars.SampleTrackColumnSidebar;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.utils.BaseUtils;
 
 import javafx.application.Platform;
@@ -22,18 +21,18 @@ public class EventCoordinator {
   
   private final Runtime runtime = Runtime.getRuntime();
   private final List<DrawStack> drawStacks;
-  private FeatureTracksSidebar featureTracksSidebar;
-  private MasterTrackSidebar sidebarPanel;
+  private FeatureTrackColumnSidebar featureTrackColumnSidebar;
+  private SampleTrackColumnSidebar sidebarPanel;
   
   public EventCoordinator(List<DrawStack> drawStacks) {
     this.drawStacks = drawStacks;
   }
   
-  public void setFeatureTracksSidebar(FeatureTracksSidebar sidebar) {
-    this.featureTracksSidebar = sidebar;
+  public void setFeatureTrackColumnSidebar(FeatureTrackColumnSidebar sidebar) {
+    this.featureTrackColumnSidebar = sidebar;
   }
   
-  public void setSidebarPanel(MasterTrackSidebar sidebarPanel) {
+  public void setSidebarPanel(SampleTrackColumnSidebar sidebarPanel) {
     this.sidebarPanel = sidebarPanel;
   }
   
@@ -49,7 +48,7 @@ public class EventCoordinator {
    */
   public void setupDrawUpdateListener(IntegerProperty memoryUsage) {
     final AtomicBoolean redrawPending = new AtomicBoolean(false);
-    AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
+    GenomicCanvas.update.addListener((observable, oldValue, newValue) -> {
       if (redrawPending.compareAndSet(false, true)) {
         Platform.runLater(() -> {
           redrawPending.set(false);
@@ -63,20 +62,23 @@ public class EventCoordinator {
     for (DrawStack pane : drawStacks) {
       pane.cytobandCanvas.draw();
       pane.chromosomeCanvas.draw();
-      pane.alignmentCanvas.draw();
+      pane.sampleTrackCanvas.draw();
       if (pane.sampleAggregateCanvas != null) {
         pane.sampleAggregateCanvas.draw();
       }
     }
 
     for (DrawStack stack : drawStacks) {
-      if (stack.featureTracksCanvas != null) {
-        stack.featureTracksCanvas.draw();
+      if (stack.featureAggregateCanvas != null) {
+        stack.featureAggregateCanvas.draw();
+      }
+      if (stack.featureTrackCanvas != null) {
+        stack.featureTrackCanvas.draw();
       }
     }
 
-    if (featureTracksSidebar != null) {
-      featureTracksSidebar.draw();
+    if (featureTrackColumnSidebar != null) {
+      featureTrackColumnSidebar.draw();
     }
 
     if (sidebarPanel != null) {
@@ -136,7 +138,7 @@ public class EventCoordinator {
    */
   public void takeCanvasSnapshots() {
     for (DrawStack pane : drawStacks) {
-      pane.alignmentCanvas.snapshot = pane.alignmentCanvas.snapshot(null, null);
+      pane.sampleTrackCanvas.snapshot = pane.sampleTrackCanvas.snapshot(null, null);
     }
   }
   

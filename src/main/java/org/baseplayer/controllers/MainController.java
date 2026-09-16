@@ -2,16 +2,18 @@ package org.baseplayer.controllers;
 
 import java.util.List;
 
-import org.baseplayer.components.sidebars.FeatureTracksSidebar;
+import org.baseplayer.components.sidebars.FeatureTrackColumnSidebar;
 import org.baseplayer.components.sidebars.GenomeSidebar;
-import org.baseplayer.components.sidebars.MasterTrackSidebar;
+import org.baseplayer.components.sidebars.SampleTrackColumnSidebar;
 import org.baseplayer.components.sidebars.SidebarController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.EventCoordinator;
+import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.InitializationService;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.BaseUtils;
 
 import javafx.application.Platform;
@@ -49,8 +51,8 @@ public class MainController {
   public static SplitPane chromSplitPane;
   public static SplitPane drawPane;
   public static SplitPane featureTracksContentPane;
-  private FeatureTracksSidebar featureTracksSidebar;
-  static MasterTrackSidebar sidebarPanel;
+  private FeatureTrackColumnSidebar featureTrackColumnSidebar;
+  static SampleTrackColumnSidebar sidebarPanel;
 
   public static boolean dividerHovered;
   public static boolean isActive = false;
@@ -95,10 +97,6 @@ public class MainController {
       // This makes it available to overlay components like LoadRegionButton
       stackManager.setAlignmentOverlayPane(alignmentOverlayPane);
       
-      sidebarPanel = new MasterTrackSidebar(drawSideBarStackPane);
-      eventCoordinator.setSidebarPanel(sidebarPanel);
-      new GenomeSidebar(genomeSideBarPane, initializationService);
-      
       // Setup unified sidebar controller for all horizontal split panes
       sidebarController.addPane(chromSplit);
       sidebarController.addPane(featureTracksSplit);
@@ -106,10 +104,14 @@ public class MainController {
 
       setupCrossStackOverlay();
       
-      addStack(true);  // Create stack first
+      addStack(true);  // Real DrawStack before sidebars that resolve stacks from manager
+
+      new GenomeSidebar(genomeSideBarPane, initializationService);
+      sidebarPanel = new SampleTrackColumnSidebar(drawSideBarStackPane);
+      eventCoordinator.setSidebarPanel(sidebarPanel);
+      sidebarPanel.draw();
       
-      // Setup feature tracks sidebar (featureTracksSidebar connects to the draw stack)
-      setupFeatureTracksSidebar();
+      setupFeatureTrackColumnSidebar();
       
       addMemUpdateListener();
       eventCoordinator.setupDrawUpdateListener(memoryUsage);
@@ -134,21 +136,30 @@ public class MainController {
       });
   }
 
-  private void setupFeatureTracksSidebar() {
-    // Create the sidebar - it will use the first stack's canvas initially
-    featureTracksSidebar = new FeatureTracksSidebar(featureTracksSideBarPane);
-    eventCoordinator.setFeatureTracksSidebar(featureTracksSidebar);
-    
+  private void setupFeatureTrackColumnSidebar() {
+    featureTrackColumnSidebar = new FeatureTrackColumnSidebar(featureTracksSideBarPane);
+    eventCoordinator.setFeatureTrackColumnSidebar(featureTrackColumnSidebar);
+
     if (!drawStacks.isEmpty()) {
-      featureTracksSidebar.setFeatureTracksCanvas(drawStacks.get(0).featureTracksCanvas);
-      
-      // Update pane height when collapsed state changes
-      drawStacks.get(0).featureTracksCanvas.setOnCollapsedChanged(() -> {
-        updateFeatureTracksPaneHeight();
-        featureTracksSidebar.draw();
-      });
+      featureTrackColumnSidebar.setFeatureTrackCanvas(drawStacks.get(0).featureTrackCanvas);
     }
-    updateFeatureTracksPaneHeight();
+
+    FeatureTrackViewportRegistry featureRegistry =
+        ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
+    int trackCount = featureRegistry.getDisplayedTrackCount();
+    double bodyHeight = TrackViewportRegistry.MINIMUM_TRACK_ROW_HEIGHT_PIXELS
+        * Math.max(1, trackCount);
+    if (trackCount > 0) {
+      featureRegistry.setVisibleTrackRange(0, trackCount - 1, bodyHeight);
+    }
+
+    if (featureTracksPane != null) {
+      featureTracksPane.setMinHeight(0);
+      featureTracksPane.setPrefHeight(82 + bodyHeight);
+    }
+
+    featureTrackColumnSidebar.draw();
+    enforceVerticalDividerBounds();
   }
 
   private void setupCrossStackOverlay() {
@@ -298,18 +309,6 @@ public class MainController {
     return true;
   }
   
-  private void updateFeatureTracksPaneHeight() {
-    if (drawStacks.isEmpty()) return;
-    double height = drawStacks.get(0).featureTracksCanvas.getPreferredHeight();
-    featureTracksPane.setPrefHeight(height);
-    // When collapsed, this will be HEADER_HEIGHT; when expanded, it will be
-    // HEADER_HEIGHT + sum of track heights. enforceVerticalDividerBounds() will
-    // then adjust dividers accordingly to respect this floor.
-    featureTracksPane.setMinHeight(0);
-    enforceVerticalDividerBounds();
-    featureTracksSidebar.draw();
-  }
-
   private void setupVerticalDividerBehavior() {
     if (mainSplit == null || mainSplit.getDividers().size() < 2) return;
 
@@ -350,7 +349,6 @@ public class MainController {
       double pos0 = divider0.getPosition();
       double requestedPos1 = newVal.doubleValue();
 
-      // Divider 1 controls feature-vs-sample split; keep feature above preferred floor.
       double minFeatureNorm = toNorm(getFeatureTracksFloorHeight());
       double minSampleNorm = toNorm(getSamplePaneMinHeight());
 
@@ -410,11 +408,19 @@ public class MainController {
   }
 
   private double getFeatureTracksFloorHeight() {
-    double floor = featureTracksPane != null ? featureTracksPane.getMinHeight() : 0;
-    if (!drawStacks.isEmpty() && drawStacks.get(0).featureTracksCanvas != null) {
-      floor = Math.max(floor, drawStacks.get(0).featureTracksCanvas.getPreferredHeight());
+    var featureRegistry = ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
+    double masterHeight = Math.max(
+        TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
+        featureRegistry.getMasterBandHeightPixels());
+    int bodySlots = featureRegistry.getVisibleTrackSlotCount();
+    if (bodySlots <= 0 && featureRegistry.getDisplayedTrackCount() > 0) {
+      bodySlots = 1;
     }
-    // Keep a small safety margin so labels/buttons don't clip under the divider.
+    double bodyHeight = bodySlots * TrackViewportRegistry.MINIMUM_TRACK_ROW_HEIGHT_PIXELS;
+    double floor = masterHeight + bodyHeight;
+    if (featureTracksPane != null) {
+      floor = Math.max(floor, featureTracksPane.getMinHeight());
+    }
     return Math.max(0, floor + FEATURE_MIN_HEIGHT_PADDING_PX);
   }
 
@@ -436,7 +442,7 @@ public class MainController {
   public static void zoomout() {
     DrawStack hover = stackManager.getHoverStack();
     if (hover == null) return;
-    hover.alignmentCanvas.zoomAnimation(1, hover.chromSize);
+    hover.sampleTrackCanvas.zoomAnimation(1, hover.chromSize);
   }
   
   void addMemUpdateListener() {
@@ -462,7 +468,7 @@ public class MainController {
       
       drawStacks.add(drawStack);
       chromSplitPane.getItems().add(drawStack.chromContainer);
-      featureTracksContentPane.getItems().add(drawStack.featureTracksStack);
+      featureTracksContentPane.getItems().add(drawStack.featureColumn);
       drawPane.getItems().add(drawStack.sampleColumn);
       
       // Update visibility of controls on all stacks
@@ -507,7 +513,7 @@ public class MainController {
 
     drawStacks.add(drawStack);
     chromSplitPane.getItems().add(drawStack.chromContainer);
-    featureTracksContentPane.getItems().add(drawStack.featureTracksStack);
+    featureTracksContentPane.getItems().add(drawStack.featureColumn);
     drawPane.getItems().add(drawStack.sampleColumn);
 
     for (DrawStack stack : drawStacks) {
@@ -527,7 +533,7 @@ public class MainController {
       double viewSize = 1000; // ~1kb window around mate
       double start = Math.max(1, position - viewSize / 2);
       double end = start + viewSize;
-      drawStack.alignmentCanvas.zoomAnimation(start, end);
+      drawStack.sampleTrackCanvas.zoomAnimation(start, end);
     });
   }
   
@@ -591,12 +597,12 @@ public class MainController {
   }
 
   /**
-   * Get the feature tracks canvas (from the first draw stack).
+   * Get the feature tracks body canvas (from the first draw stack).
    * Used by SampleDataManager to add BED/BigWig tracks.
    */
-  public static org.baseplayer.features.FeatureTracksCanvas getFeatureTracksCanvas() {
+  public static org.baseplayer.samples.alignment.draw.TrackBodyCanvas getFeatureTrackCanvas() {
     if (drawStacks.isEmpty()) return null;
-    return drawStacks.get(0).featureTracksCanvas;
+    return drawStacks.get(0).featureTrackCanvas;
   }
 
   public static void initializeLoadRegionButton() {

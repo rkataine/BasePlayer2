@@ -8,6 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.UcscTrackInfo;
 
@@ -41,14 +42,14 @@ public class UcscTracksBrowser {
   private final ProgressIndicator loadingIndicator;
   private final Label statusLabel;
   private final Button refreshBtn;
-  private final FeatureTracksCanvas featureTracksCanvas;
+  private final TrackBodyCanvas featureTrackCanvas;
   private final String genome;
   
   private List<UcscTrackInfo> allTracks = new ArrayList<>();
   private Map<String, List<UcscTrackInfo>> tracksByGroup = new HashMap<>();
   
-  public UcscTracksBrowser(Stage owner, FeatureTracksCanvas featureTracksCanvas, String genome) {
-    this.featureTracksCanvas = featureTracksCanvas;
+  public UcscTracksBrowser(Stage owner, TrackBodyCanvas featureTrackCanvas, String genome) {
+    this.featureTrackCanvas = featureTrackCanvas;
     this.genome = genome != null ? genome : "hg38";
     
     dialog = new Stage(StageStyle.DECORATED);
@@ -287,13 +288,13 @@ public class UcscTracksBrowser {
   }
   
   private void addTrack(UcscTrackInfo trackInfo, Button addBtn) {
-    if (featureTracksCanvas == null) return;
+    if (featureTrackCanvas == null) return;
     
     // Create appropriate track based on type
     Track track = createTrackFromInfo(trackInfo);
     if (track != null) {
-      featureTracksCanvas.addTrack(track);
-      featureTracksCanvas.setCollapsed(false);
+      track.setVisible(true);
+      featureTrackCanvas.addTrack(track);
       
       // Update button to show added
       addBtn.setText("✓ Added");

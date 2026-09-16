@@ -156,7 +156,7 @@ public final class GnomadDataParser {
     double binSize = (double) (end - start) / bins;
 
     double minScore = Double.MAX_VALUE;
-    double maxScore = Double.MIN_VALUE;
+    double maxScore = Double.NEGATIVE_INFINITY;
     boolean hasValues = false;
 
     for (Variant v : variants) {

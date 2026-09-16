@@ -13,7 +13,7 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
-import org.baseplayer.features.FeatureTracksCanvas;
+import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
@@ -148,8 +148,8 @@ public class SampleDataManager {
     // Remove variants for this track from all variant lists
     DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
     for (DrawStack stack : stackManager.getStacks()) {
-      if (stack.alignmentCanvas != null) {
-        org.baseplayer.variant.VariantList variantList = stack.alignmentCanvas.getVariantList();
+      if (stack.sampleTrackCanvas != null) {
+        org.baseplayer.variant.VariantList variantList = stack.sampleTrackCanvas.getVariantList();
         if (variantList != null) {
           variantList.removeTrack(removedTrack);
         }
@@ -349,7 +349,7 @@ public class SampleDataManager {
   public static void addBedFile(File file) {
     if (file == null) return;
     UserPreferences.setLastDirectory("BED", file.getParentFile());
-    FeatureTracksCanvas featureCanvas = MainController.getFeatureTracksCanvas();
+    TrackBodyCanvas featureCanvas = MainController.getFeatureTrackCanvas();
     if (featureCanvas == null) return;
 
     ThreadRunner.get().submit("Loading " + file.getName() + "\u2026",
@@ -359,8 +359,8 @@ public class SampleDataManager {
         },
         bedTrack -> {
           if (bedTrack == null) return;
+          bedTrack.setVisible(true);
           featureCanvas.addTrack(bedTrack);
-          featureCanvas.setCollapsed(false);
           UserPreferences.addRecentFile("BED", file);
         });
   }
@@ -397,7 +397,7 @@ public class SampleDataManager {
   public static void addBigWigFile(File file) {
     if (file == null) return;
     UserPreferences.setLastDirectory("BIGWIG", file.getParentFile());
-    FeatureTracksCanvas featureCanvas = MainController.getFeatureTracksCanvas();
+    TrackBodyCanvas featureCanvas = MainController.getFeatureTrackCanvas();
     if (featureCanvas == null) return;
 
     ThreadRunner.get().submit("Loading " + file.getName() + "\u2026",
@@ -407,8 +407,8 @@ public class SampleDataManager {
         },
         bigWigTrack -> {
           if (bigWigTrack == null) return;
+          bigWigTrack.setVisible(true);
           featureCanvas.addTrack(bigWigTrack);
-          featureCanvas.setCollapsed(false);
           UserPreferences.addRecentFile("BIGWIG", file);
         });
   }
@@ -602,10 +602,10 @@ public class SampleDataManager {
 
     var stackManager = ServiceRegistry.getInstance().getDrawStackManager();
     for (var stack : stackManager.getStacks()) {
-      if (stack.featureTracksCanvas != null) {
-        for (var t : new ArrayList<>(stack.featureTracksCanvas.getTracks())) {
+      if (stack.featureTrackCanvas != null) {
+        for (var t : new ArrayList<>(stack.featureTrackCanvas.getTracks())) {
           if (t instanceof BedTrack || t instanceof BigWigTrack) {
-            stack.featureTracksCanvas.removeTrack(t);
+            stack.featureTrackCanvas.removeTrack(t);
           }
         }
       }

@@ -101,7 +101,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
         double newStart = genomicPos - newViewLength / 2;
         double newEnd = genomicPos + newViewLength / 2;
         
-        drawStack.alignmentCanvas.zoomAnimation(newStart, newEnd);
+        drawStack.sampleTrackCanvas.zoomAnimation(newStart, newEnd);
       } else if (event.getClickCount() == 1) {
         double mouseX = event.getX();
         double mouseY = event.getY();

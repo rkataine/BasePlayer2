@@ -16,6 +16,7 @@ import org.baseplayer.samples.alignment.BaseModification;
 import org.baseplayer.samples.alignment.CoverageCalculator;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -144,8 +145,9 @@ public class CoverageDrawer {
     // Build one SampleRow per visible BAM file
     java.util.List<SampleRow> rowList = new java.util.ArrayList<>();
     java.util.Set<Sample> processedFiles = new java.util.HashSet<>();
-    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
-    for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+    List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
       int sIdx = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
 
@@ -153,7 +155,8 @@ public class CoverageDrawer {
         if (!sf.visible) continue;
         processedFiles.add(sf);
 
-        SampleRow row = buildRow(sf, sIdx, chrom, start, end, coverageOnly, isHoverStack);
+        // sampleIndex is the display slot used for Y placement (not backing index).
+        SampleRow row = buildRow(sf, slot, chrom, start, end, coverageOnly, isHoverStack);
         if (row != null) {
           if (sf.isMethylationData()) {
             row.methylColorIndex = methylColorIdx++;
@@ -772,8 +775,8 @@ public class CoverageDrawer {
     double viewStart = drawStack.getViewStart();
     double viewEnd = drawStack.getViewEnd();
 
-     List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
-     for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+     List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+     for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
       int slot = visibleSlot.slot();
       int sIdx = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);

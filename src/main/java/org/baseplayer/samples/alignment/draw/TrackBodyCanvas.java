@@ -1,5 +1,23 @@
 package org.baseplayer.samples.alignment.draw;
 
+import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
+
+import java.io.IOException;
+import org.baseplayer.features.AbstractUcscTrack;
+import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.features.Track;
+import org.baseplayer.io.UserPreferences;
+import org.baseplayer.services.FeatureTrackViewportRegistry;
+import org.baseplayer.services.SampleRegistry;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.ScrollEvent;
+import javafx.stage.FileChooser;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -8,8 +26,6 @@ import java.util.Map;
 
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.draw.DrawStack;
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.Transcript;
@@ -19,8 +35,8 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.services.DrawStackManager;
-import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
@@ -39,10 +55,21 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.FontWeight;
 import javafx.stage.Window;
 
-public class AlignmentCanvas extends GenomicCanvas {
+/**
+ * Scrollable track body under an aggregate band. Create one instance bound to
+ * {@link SampleRegistry} (sample pane) and one bound to
+ * {@link FeatureTrackViewportRegistry} (feature pane) — same class, same draw
+ * pipeline; availability of variant/coverage/read/feature layers follows the
+ * bound registry and loaded data.
+ */
+public class TrackBodyCanvas extends GenomicCanvas {
+
+  public static final double TRACK_PADDING = 2;
 
   public Image snapshot;
   private final GraphicsContext gc;
+  private final TrackViewportRegistry viewportRegistry;
+  private final FeatureTrackViewportRegistry featureRegistry;
 
   /** Unified coverage data computation and rendering. */
   private final CoverageDrawer coverageDrawer = new CoverageDrawer();
@@ -55,6 +82,11 @@ public class AlignmentCanvas extends GenomicCanvas {
   
   /** Variant list for the current genomic region. */
   private VariantList variantList;
+
+  private ContextMenu featureContextMenu;
+  private String lastNotifiedChrom = "";
+  private long lastNotifiedStart = -1;
+  private long lastNotifiedEnd = -1;
 
   private static final double MIN_COVERAGE_HEIGHT = 30;
   private static final double MAX_COVERAGE_HEIGHT = 60;
@@ -111,10 +143,10 @@ public class AlignmentCanvas extends GenomicCanvas {
   private BAMRecord selectedRead = null;  // currently selected read (kept after popup closes)
   // Read-name highlight propagated from another stack when a cross-stack connector is active.
   private String externalLinkedReadName = null;
-  private AlignmentCanvas externalLinkedOwner = null;
+  private TrackBodyCanvas externalLinkedOwner = null;
   private boolean drawingReadHighlight = false;
   // Last target stack this canvas linked to (used to clear propagated highlight when link ends).
-  private AlignmentCanvas lastCrossStackTargetCanvas = null;
+  private TrackBodyCanvas lastCrossStackTargetCanvas = null;
   private double lastMouseX = -1, lastMouseY = -1;
   private final ReadScrollbarComponent readScrollbarComponent = new ReadScrollbarComponent();
   private final ReadInfoPopup readInfoPopup = new ReadInfoPopup();
@@ -140,21 +172,213 @@ public class AlignmentCanvas extends GenomicCanvas {
 
   private record AltCount(char altBase, double count) {}
 
-  public AlignmentCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
+  public TrackBodyCanvas(
+      Canvas reactiveCanvas,
+      StackPane parent,
+      DrawStack drawStack,
+      TrackViewportRegistry viewportRegistry) {
     super(reactiveCanvas, parent, drawStack);
+    if (viewportRegistry == null) {
+      throw new IllegalArgumentException("viewportRegistry cannot be null");
+    }
+    this.viewportRegistry = viewportRegistry;
+    this.featureRegistry =
+        viewportRegistry instanceof FeatureTrackViewportRegistry feature
+            ? feature
+            : null;
+
     widthProperty().addListener((obs, o, n) -> setStartEnd(drawStack.getViewStart(), drawStack.getViewEnd()));
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
+    gc.setFont(AppFonts.getUIFont());
     drawReads = new DrawReads(gc, drawStack);
-    setupReadMouseHandlers(reactiveCanvas);
+
+    if (isSampleBody()) {
+      setupReadMouseHandlers(reactiveCanvas);
+    } else {
+      setupFeatureContextMenu();
+      setupFeatureMouseHandlers();
+    }
     Platform.runLater(this::draw);
+  }
+
+  public boolean isSampleBody() {
+    return featureRegistry == null;
+  }
+
+  public boolean isFeatureBody() {
+    return featureRegistry != null;
   }
 
   public CoverageDrawer getCoverageDrawer() {
     return coverageDrawer;
   }
 
-  // ── Mouse handlers ────────────────────────────────────────────────────────────
+  @Override
+  public void draw() {
+    double width = getWidth();
+    double height = getHeight();
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+
+    gc.setFill(DrawColors.BACKGROUND);
+    gc.fillRect(0, 0, width + 1, height + 1);
+
+    ensureTrackRowHeightFitsViewport(height);
+    prepareTrackDraw();
+    drawSharedDataLayers();
+    drawTrackRows();
+    finishTrackDraw();
+    super.draw();
+  }
+
+  private void prepareTrackDraw() {
+    if (isSampleBody()) {
+      readScrollbarComponent.beginFrame();
+      return;
+    }
+    notifyRegionChanged();
+  }
+
+  private void finishTrackDraw() {
+    if (!isSampleBody()) {
+      return;
+    }
+    if (lastMouseX >= 0) {
+      if (isScrollbarOverrideActive()) {
+        if (hoveredRead != null) {
+          hoveredRead = null;
+        }
+      } else {
+        BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
+        if (hit != hoveredRead) {
+          hoveredRead = hit;
+        }
+      }
+    }
+    if (!isReactiveOverlayReserved()) {
+      clearReactive();
+      if (isScrollbarOverrideActive()
+          || hoveredRead != null || selectedRead != null || externalLinkedReadName != null
+          || hasCoverageHoverTarget(lastMouseX, lastMouseY)) {
+        drawReadHighlight();
+      }
+    }
+  }
+
+  private void drawSharedDataLayers() {
+    if (canDrawVariantData()) {
+      drawVariantData();
+    }
+    if (canDrawCoverageData()) {
+      drawCoverageData();
+    }
+  }
+
+  private void drawTrackRows() {
+    double rowHeight = getTrackRowHeightPixels();
+    double scroll = getVerticalScrollOffsetPixels();
+    for (TrackViewportRegistry.VisibleTrackSlot slot : getVisibleTrackSlotsForDrawing()) {
+      double rowTopY = slot.slotIndex() * rowHeight - scroll;
+      drawTrackRow(slot, rowTopY, rowHeight);
+      drawTrackRowTopDivider(rowTopY);
+    }
+  }
+
+  private void drawTrackRow(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    if (!isTrackRowPresent(slot)) {
+      return;
+    }
+    if (!isTrackRowVisible(slot)) {
+      drawHiddenTrackPlaceholder(slot, rowTopY, rowHeight);
+      return;
+    }
+    if (canDrawCoverageData(slot)) {
+      drawCoverageData(slot, rowTopY, rowHeight);
+    }
+    if (canDrawReadData(slot)) {
+      drawReadData(slot, rowTopY, rowHeight);
+    }
+    if (canDrawFeatureData(slot)) {
+      drawFeatureData(slot, rowTopY, rowHeight);
+    }
+    if (canDrawVariantData(slot)) {
+      drawVariantData(slot, rowTopY, rowHeight);
+    }
+  }
+
+  private void ensureTrackRowHeightFitsViewport(double viewportHeight) {
+    viewportRegistry.ensureTrackRowHeightFitsViewport(viewportHeight);
+  }
+
+  private List<TrackViewportRegistry.VisibleTrackSlot> getVisibleTrackSlotsForDrawing() {
+    if (featureRegistry != null) {
+      return featureRegistry.getVisibleTrackSlots();
+    }
+    return sampleRegistry.getVisibleTrackSlotsForChecks();
+  }
+
+  private double getTrackRowHeightPixels() {
+    return viewportRegistry.getTrackRowHeightPixels();
+  }
+
+  private double getVerticalScrollOffsetPixels() {
+    return viewportRegistry.getVerticalScrollOffsetPixels();
+  }
+
+  private boolean isTrackRowPresent(TrackViewportRegistry.VisibleTrackSlot slot) {
+    if (featureRegistry != null) {
+      return resolveFeatureTrack(slot) != null;
+    }
+    return resolveSampleTrack(slot) != null;
+  }
+
+  private boolean isTrackRowVisible(TrackViewportRegistry.VisibleTrackSlot slot) {
+    if (featureRegistry != null) {
+      Track track = resolveFeatureTrack(slot);
+      return track != null && track.isVisible();
+    }
+    SampleTrack track = resolveSampleTrack(slot);
+    return track != null && track.isVisible();
+  }
+
+  private void drawHiddenTrackPlaceholder(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    if (featureRegistry == null) {
+      return;
+    }
+    Track track = resolveFeatureTrack(slot);
+    if (track == null) {
+      return;
+    }
+    gc.setFill(Color.rgb(20, 20, 25, 0.6));
+    gc.fillRect(0, rowTopY, getWidth(), rowHeight);
+    gc.setFill(Color.rgb(80, 80, 80));
+    gc.setFont(AppFonts.getUIFont(10));
+    gc.fillText(track.getName() + " (click eye icon to enable)", 10, rowTopY + rowHeight / 2 + 4);
+  }
+
+  @Override
+  protected boolean handlesSampleVerticalScroll() {
+    return isSampleBody();
+  }
+
+  @Override
+  protected void handleScroll(ScrollEvent event) {
+    if (isFeatureBody() && !event.isControlDown() && event.getDeltaY() != 0 && event.getDeltaX() == 0) {
+      double nextOffset =
+          viewportRegistry.getVerticalScrollOffsetPixels() - event.getDeltaY();
+      viewportRegistry.setVerticalScrollOffsetPixels(nextOffset, getHeight());
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      event.consume();
+      return;
+    }
+    super.handleScroll(event);
+  }
+
+  // ── Mouse handlers (sample body) ─────────────────────────────────────────────
 
   private void setupReadMouseHandlers(Canvas reactiveCanvas) {
     reactiveCanvas.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, event -> {
@@ -259,9 +483,6 @@ public class AlignmentCanvas extends GenomicCanvas {
       }
     });
 
-    // Keep lastMouseX/Y current during panning drags so draw() can re-evaluate
-    // hover and update the per-base tooltip as the view scrolls. Use addEventHandler
-    // (not setOnMouseDragged) to avoid replacing the parent GenomicCanvas drag handler.
     reactiveCanvas.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_DRAGGED, event -> {
       lastMouseX = event.getX();
       lastMouseY = event.getY();
@@ -283,141 +504,187 @@ public class AlignmentCanvas extends GenomicCanvas {
     });
   }
 
-  // ── Main draw ─────────────────────────────────────────────────────────────────
+  // ── Variant data (VCF) ───────────────────────────────────────────────────────
 
-  @Override
-  public void draw() {
-    gc.setFill(DrawColors.BACKGROUND);
-    gc.fillRect(0, 0, getWidth() + 1, getHeight() + 1);
-
-    double available = getHeight();
-    sampleRegistry.ensureSampleHeightForViewport(available);
-
-    drawBamReads();
-    drawSampleTrackDividers();
-    super.draw();
-
-    // Re-evaluate hover at last known mouse position (reads may have shifted due to scroll)
-    if (lastMouseX >= 0) {
-      if (isScrollbarOverrideActive()) {
-        if (hoveredRead != null) {
-          hoveredRead = null;
-        }
-      } else {
-        BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
-        if (hit != hoveredRead) {
-          hoveredRead = hit;
-        }
-      }
-    }
-    // Keep read highlight synced during panning/scrolling. Only avoid touching
-    // the reactive canvas while GenomicCanvas is using it for zoom visuals.
-    if (!isReactiveOverlayReserved()) {
-      clearReactive();
-      if (isScrollbarOverrideActive()
-          || hoveredRead != null || selectedRead != null || externalLinkedReadName != null
-          || hasCoverageHoverTarget(lastMouseX, lastMouseY)) {
-        drawReadHighlight();
-      }
-    }
+  private boolean canDrawVariantData() {
+    return isSampleBody() && variantList != null && !variantList.isEmpty();
   }
 
-  /**
-   * Draw horizontal divider lines between sample tracks.
-   * Called from draw() so dividers are always present even after canvas clears.
-   */
-  private void drawSampleTrackDividers() {
+  private void drawVariantData() {
+    VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
+    variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), activeFilter);
+  }
+
+  private boolean canDrawVariantData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    return false;
+  }
+
+  private void drawVariantData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+  }
+
+  // ── Coverage data ────────────────────────────────────────────────────────────
+
+  private boolean canDrawCoverageData() {
+    return isSampleBody()
+        && !sampleRegistry.getSampleList().isEmpty()
+        && !isBeyondCoverageZoom();
+  }
+
+  private void drawCoverageData() {
     double sampleH = sampleRegistry.getSampleHeight();
-    double scrollPos = sampleRegistry.getScrollBarPosition();
-    List<Integer> displayedIndices = sampleRegistry.getDisplayedTrackIndices();
-    
-    gc.setStroke(DrawColors.BORDER);
-    gc.setLineWidth(1.0);
-    
-    for (int slot = 0; slot < displayedIndices.size(); slot++) {
-      double sampleY = slot * sampleH - scrollPos;
-      
-      // Skip if scrolled above visible area
-      if (sampleY + sampleH < 0) continue;
-      // Stop if scrolled below visible area
-      if (sampleY > getHeight()) break;
-      
-      // Draw divider at top of this track (snap to integer Y for crisp rendering)
-      if (sampleY >= 0) {
-        double snappedY = Math.round(sampleY);
-        gc.strokeLine(0, snappedY, getWidth(), snappedY);
-      }
-    }
-  }
-
-  // ── BAM reads / coverage ──────────────────────────────────────────────────────
-
-  /**
-   * Top-level dispatcher for all alignment-related drawing.
-   * Three zoom levels:
-   * <ol>
-   *   <li>Beyond sampled-coverage range → zoom-in message</li>
-   *   <li>Sampled-coverage range → sparse profile via {@link CoverageDrawer#drawSampled}</li>
-   *   <li>Full range → per-base coverage + optional individual reads</li>
-   * </ol>
-   */
-
-  void drawBamReads() {
-    readScrollbarComponent.beginFrame();
-
-    if (sampleRegistry.getSampleList().isEmpty()) return;
-
-    double sampleH      = sampleRegistry.getSampleHeight();
-    String chrom        = drawStack.getChromosome();
-    int    start        = Math.max(0, (int) drawStack.getViewStart());
-    int    end          = (int) drawStack.getViewEnd();
-
-    // ── Draw variants at all zoom levels (before zoom checks) ──
-    if (variantList != null && !variantList.isEmpty()) {
-      VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
-      variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), activeFilter);
-    }
-		// TODO Remove loops in these kind of situations. We already go through the samples when drawing tracks. No need to loop them here again
-    // ── Beyond coverage threshold: show zoom message or sampled coverage ──
-    if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) {
-      if (Settings.get().isEnableSampledCoverage()) {
-        forEachVisibleSample(sampleH, (sampleY, sample) ->
-            coverageDrawer.drawSampled(gc, sample, chrom, start, end,
-                sampleY, sampleH, getWidth(), chromPosToScreenPos, drawStack));
-      } else {
-        forEachVisibleSample(sampleH, (sampleY, sample) -> {
-          if (sample.getDataType() == Sample.DataType.BAM) {
-            DrawReads.drawZoomMessage(gc, sampleY, sampleH, "Zoom in closer to view BAM/CRAM data");
-          }
-        });
-      }
-      return;
-    }
-
-    // ── Normal zoom: per-base coverage + optional reads ──
-    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
+    boolean coverageOnly = !isWithinReadZoom();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
-    boolean freezeDuringNavigation = drawStack.nav.navigating
-        || drawStack.nav.animationRunning
-        || drawStack.nav.lineZoomerActive;
     try {
-      // Recompute coverage positions during genomic navigation, but skip during
-      // scrollbar drag (vertical-only scroll) to avoid allocating large arrays on every mouse move.
       if (!drawStack.nav.scrollbarDragging) {
         coverageDrawer.compute(drawStack, chromPosToScreenPos, (int) getWidth());
       }
       coverageDrawer.render(gc, getWidth(), sampleH,
           sampleRegistry.getScrollBarPosition(), coverageOnly, coverageFractionH);
+    } catch (Exception e) {
+      System.err.println("Error drawing coverage: " + e.getMessage());
+    }
+  }
 
-      if (!coverageOnly) {
-        forEachVisibleSample(sampleH, (sampleY, sample) ->
-            drawSampleReads(sample, chrom, start, end, sampleY, sampleH, coverageFractionH,
-                !freezeDuringNavigation));
+  private boolean canDrawCoverageData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    return isSampleBody()
+        && isBeyondCoverageZoom()
+        && isSampledCoverageEnabled()
+        && hasAnyVisibleSample(slot);
+  }
+
+  private void drawCoverageData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null) {
+      return;
+    }
+    String chrom = drawStack.getChromosome();
+    int start = Math.max(0, (int) drawStack.getViewStart());
+    int end = (int) drawStack.getViewEnd();
+    for (Sample sample : track.getSamples()) {
+      if (!sample.visible) {
+        continue;
+      }
+      coverageDrawer.drawSampled(gc, sample, chrom, start, end,
+          rowTopY, rowHeight, getWidth(), chromPosToScreenPos, drawStack);
+    }
+  }
+
+  // ── Read data (BAM/CRAM) ─────────────────────────────────────────────────────
+
+  private boolean canDrawReadData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    if (!isSampleBody() || !hasVisibleSampleOfType(slot, Sample.DataType.BAM)) {
+      return false;
+    }
+    if (isBeyondCoverageZoom()) {
+      return !isSampledCoverageEnabled();
+    }
+    return isWithinReadZoom();
+  }
+
+  private void drawReadData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    if (isBeyondCoverageZoom()) {
+      DrawReads.drawZoomMessage(gc, rowTopY, rowHeight, "Zoom in closer to view BAM/CRAM data");
+      return;
+    }
+
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null) {
+      return;
+    }
+    String chrom = drawStack.getChromosome();
+    int start = Math.max(0, (int) drawStack.getViewStart());
+    int end = (int) drawStack.getViewEnd();
+    double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
+        Math.min(MAX_COVERAGE_HEIGHT, rowHeight * Settings.get().getCoverageFraction()));
+    boolean allowFetch = !(drawStack.nav.navigating
+        || drawStack.nav.animationRunning
+        || drawStack.nav.lineZoomerActive);
+    try {
+      for (Sample sample : track.getSamples()) {
+        if (sample.visible && sample.getDataType() == Sample.DataType.BAM) {
+          drawSampleReads(sample, chrom, start, end, rowTopY, rowHeight, coverageFractionH, allowFetch);
+        }
       }
     } catch (Exception e) {
       System.err.println("Error drawing BAM reads: " + e.getMessage());
     }
+  }
+
+  // ── Feature data ─────────────────────────────────────────────────────────────
+
+  private boolean canDrawFeatureData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    return isFeatureBody() && isTrackRowVisible(slot);
+  }
+
+  private void drawFeatureData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    Track track = resolveFeatureTrack(slot);
+    if (track == null) {
+      return;
+    }
+    track.draw(
+        gc, 0, rowTopY, getWidth(), rowHeight,
+        drawStack.getChromosome(), drawStack.getViewStart(), drawStack.getViewEnd());
+  }
+
+  private boolean isBeyondCoverageZoom() {
+    return drawStack != null
+        && drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength();
+  }
+
+  private boolean isWithinReadZoom() {
+    return drawStack != null
+        && drawStack.getViewLength() <= Settings.get().getMaxReadViewLength();
+  }
+
+  private boolean isSampledCoverageEnabled() {
+    return Settings.get().isEnableSampledCoverage();
+  }
+
+  private Track resolveFeatureTrack(TrackViewportRegistry.VisibleTrackSlot slot) {
+    if (featureRegistry == null) {
+      return null;
+    }
+    return featureRegistry.getFeatureTrackAtBackingIndex(slot.backingTrackIndex());
+  }
+
+  private SampleTrack resolveSampleTrack(TrackViewportRegistry.VisibleTrackSlot slot) {
+    int trackIndex = slot.backingTrackIndex();
+    if (trackIndex < 0 || trackIndex >= sampleRegistry.getSampleTracks().size()) {
+      return null;
+    }
+    return sampleRegistry.getSampleTracks().get(trackIndex);
+  }
+
+  private boolean hasVisibleSampleOfType(
+      TrackViewportRegistry.VisibleTrackSlot slot, Sample.DataType type) {
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null) {
+      return false;
+    }
+    for (Sample sample : track.getSamples()) {
+      if (sample.visible && sample.getDataType() == type) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean hasAnyVisibleSample(TrackViewportRegistry.VisibleTrackSlot slot) {
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null) {
+      return false;
+    }
+    for (Sample sample : track.getSamples()) {
+      if (sample.visible) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -623,8 +890,8 @@ public class AlignmentCanvas extends GenomicCanvas {
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
-    for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+    List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
       int slot = visibleSlot.slot();
       int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
@@ -686,8 +953,8 @@ public class AlignmentCanvas extends GenomicCanvas {
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
 
-    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
-    for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+    List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
       int slot = visibleSlot.slot();
       int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
@@ -859,8 +1126,8 @@ public class AlignmentCanvas extends GenomicCanvas {
 
     CoverageHoverInfo best = null;
     double bestCov = -1;
-     List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
-      for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+     List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+      for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
       int slot = visibleSlot.slot();
       int i = visibleSlot.trackIndex();
       SampleTrack track = sampleRegistry.getSampleTracks().get(i);
@@ -1059,7 +1326,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     }
   }
 
-  private boolean setExternalMateHighlightFrom(AlignmentCanvas owner, String readName) {
+  private boolean setExternalMateHighlightFrom(TrackBodyCanvas owner, String readName) {
     if (owner == null || readName == null || readName.isEmpty()) return false;
     boolean changed = owner != externalLinkedOwner || !readName.equals(externalLinkedReadName);
     externalLinkedOwner = owner;
@@ -1067,7 +1334,7 @@ public class AlignmentCanvas extends GenomicCanvas {
     return changed;
   }
 
-  private boolean clearExternalMateHighlightFrom(AlignmentCanvas owner) {
+  private boolean clearExternalMateHighlightFrom(TrackBodyCanvas owner) {
     if (owner != null && owner == externalLinkedOwner) {
       externalLinkedOwner = null;
       externalLinkedReadName = null;
@@ -1087,7 +1354,7 @@ public class AlignmentCanvas extends GenomicCanvas {
   }
 
   /** Returns target-stack anchor point (x,y in target canvas coordinates) for selected readName. */
-  private Point2D findCrossStackReadAnchor(AlignmentCanvas targetCanvas, BAMRecord selected, int preferredPos) {
+  private Point2D findCrossStackReadAnchor(TrackBodyCanvas targetCanvas, BAMRecord selected, int preferredPos) {
     if (selected.readName == null || selected.readName.isEmpty()) return null;
 
     double sampleH = targetCanvas.sampleRegistry.getSampleHeight();
@@ -1099,8 +1366,8 @@ public class AlignmentCanvas extends GenomicCanvas {
     double bestSampleY = 0;
     double bestDist = Double.MAX_VALUE;
 
-    List<SampleRegistry.VisibleTrackSlot> targetVisibleSlots = targetCanvas.sampleRegistry.getVisibleTrackSlotsForChecks();
-     for (SampleRegistry.VisibleTrackSlot visibleSlot : targetVisibleSlots) {
+    List<TrackViewportRegistry.VisibleTrackSlot> targetVisibleSlots = targetCanvas.sampleRegistry.getVisibleTrackSlotsForChecks();
+     for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : targetVisibleSlots) {
       int slot = visibleSlot.slot();
       int i = visibleSlot.trackIndex();
       SampleTrack track = targetCanvas.sampleRegistry.getSampleTracks().get(i);
@@ -1178,7 +1445,7 @@ public class AlignmentCanvas extends GenomicCanvas {
       for (int i = 0; i < stacks.size(); i++) {
         if (i == thisIdx) continue;
         DrawStack ds = stacks.get(i);
-        if (ds == null || ds.alignmentCanvas == null) continue;
+        if (ds == null || ds.sampleTrackCanvas == null) continue;
         if (!normalizeChrom(ds.getChromosome()).equals(saChrom)) continue;
         if (saPos < ds.getViewStart() || saPos > ds.getViewEnd()) continue;
         targetStack = ds;
@@ -1187,9 +1454,9 @@ public class AlignmentCanvas extends GenomicCanvas {
       }
     }
 
-    if (targetStack == null || targetPos < 0 || targetStack.alignmentCanvas == null) return false;
+    if (targetStack == null || targetPos < 0 || targetStack.sampleTrackCanvas == null) return false;
 
-    AlignmentCanvas targetCanvas = targetStack.alignmentCanvas;
+    TrackBodyCanvas targetCanvas = targetStack.sampleTrackCanvas;
     if (lastCrossStackTargetCanvas != null && lastCrossStackTargetCanvas != targetCanvas) {
       boolean cleared = lastCrossStackTargetCanvas.clearExternalMateHighlightFrom(this);
       if (cleared) update.set(!update.get());
@@ -1266,9 +1533,9 @@ public class AlignmentCanvas extends GenomicCanvas {
         break;
       }
     }
-    if (targetIdx < 0 || targetStack == null || targetStack.alignmentCanvas == null) return false;
+    if (targetIdx < 0 || targetStack == null || targetStack.sampleTrackCanvas == null) return false;
 
-    AlignmentCanvas targetCanvas = targetStack.alignmentCanvas;
+    TrackBodyCanvas targetCanvas = targetStack.sampleTrackCanvas;
     if (lastCrossStackTargetCanvas != null && lastCrossStackTargetCanvas != targetCanvas) {
       boolean cleared = lastCrossStackTargetCanvas.clearExternalMateHighlightFrom(this);
       if (cleared) update.set(!update.get());
@@ -1307,25 +1574,6 @@ public class AlignmentCanvas extends GenomicCanvas {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
-
-  @FunctionalInterface
-  private interface SampleConsumer { void accept(double sampleY, Sample sample); }
-
-  private void forEachVisibleSample(double sampleH, SampleConsumer consumer) {
-    List<SampleRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
-      for (SampleRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
-      int slot = visibleSlot.slot();
-      int i = visibleSlot.trackIndex();
-      // Skip invalid track indices (can be -1 or out of bounds during concurrent updates)
-      if (i < 0 || i >= sampleRegistry.getSampleTracks().size()) continue;
-      SampleTrack track = sampleRegistry.getSampleTracks().get(i);
-      if (!track.isVisible()) continue;
-      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
-      for (Sample sample : track.getSamples()) {
-        if (sample.visible) consumer.accept(sampleY, sample);
-      }
-    }
-  }
 
   /**
    * Resolves the chromosome name of a read's mate from the BAM reference list.
@@ -1640,5 +1888,183 @@ public class AlignmentCanvas extends GenomicCanvas {
    */
   public VariantDrawer getVariantDrawer() {
     return variantDrawer;
+  }
+
+  // ── Feature track API (feature body instance) ────────────────────────────────
+
+  public void notifyRegionChanged() {
+    notifyRegionChanged(false);
+  }
+
+  public void forceNotifyRegionChanged() {
+    notifyRegionChanged(true);
+  }
+
+  private void notifyRegionChanged(boolean forceFetchForVisibleTracks) {
+    if (featureRegistry == null || drawStack == null) {
+      return;
+    }
+
+    String chrom = drawStack.getChromosome();
+    long start = (long) drawStack.getViewStart();
+    long end = (long) drawStack.getViewEnd();
+    if (!forceFetchForVisibleTracks
+        && chrom != null
+        && chrom.equals(lastNotifiedChrom)
+        && start == lastNotifiedStart
+        && end == lastNotifiedEnd) {
+      return;
+    }
+
+    lastNotifiedChrom = chrom;
+    lastNotifiedStart = start;
+    lastNotifiedEnd = end;
+    for (Track track : featureRegistry.getFeatureTracks()) {
+      if (track.isVisible()) {
+        track.onRegionChanged(chrom, start, end, drawStack);
+      }
+    }
+  }
+
+  public void addTrack(Track track) {
+    if (featureRegistry == null) {
+      throw new IllegalStateException("addTrack is only supported on the feature body canvas");
+    }
+    featureRegistry.addFeatureTrack(track);
+    featureRegistry.includeNewTracksAtEndAndResetRowHeight();
+
+    if (track instanceof AbstractUcscTrack ucscTrack) {
+      ucscTrack.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+      if (drawStack != null && track.isVisible()) {
+        String chrom = drawStack.getChromosome();
+        if (chrom != null) {
+          ucscTrack.onRegionChanged(
+              chrom, (long) drawStack.getViewStart(), (long) drawStack.getViewEnd(), drawStack);
+        }
+      }
+    }
+
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  public void removeTrack(Track track) {
+    if (featureRegistry == null) {
+      return;
+    }
+    featureRegistry.removeFeatureTrack(track);
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  public List<Track> getTracks() {
+    if (featureRegistry == null) {
+      return List.of();
+    }
+    return new ArrayList<>(featureRegistry.getFeatureTracks());
+  }
+
+  private void setupFeatureContextMenu() {
+    featureContextMenu = new ContextMenu();
+
+    MenuItem addBedFile = new MenuItem("Add BED file...");
+    addBedFile.setOnAction(e -> showAddFileDialog("BED", "*.bed", "*.bed.gz"));
+
+    MenuItem addBigWigFile = new MenuItem("Add BigWig file...");
+    addBigWigFile.setOnAction(e -> showAddFileDialog("BigWig", "*.bw", "*.bigwig", "*.bigWig"));
+
+    MenuItem removeAll = new MenuItem("Remove all tracks");
+    removeAll.setOnAction(e -> new ArrayList<>(getTracks()).forEach(this::removeTrack));
+
+    featureContextMenu.getItems().addAll(
+        addBedFile,
+        addBigWigFile,
+        new SeparatorMenuItem(),
+        removeAll);
+
+    getReactiveCanvas().setOnContextMenuRequested(
+        e -> featureContextMenu.show(getReactiveCanvas(), e.getScreenX(), e.getScreenY()));
+  }
+
+  private void setupFeatureMouseHandlers() {
+    getReactiveCanvas().setOnMouseClicked(e -> {
+      if (e.isConsumed() || isDragging()
+          || e.getClickCount() != 1
+          || e.getButton() != MouseButton.PRIMARY) {
+        return;
+      }
+
+      TrackViewportRegistry.VisibleTrackSlot clickedSlot = getVisibleSlotAtY(e.getY());
+      if (clickedSlot == null) {
+        return;
+      }
+
+      Track clickedTrack = resolveFeatureTrack(clickedSlot);
+      if (clickedTrack == null || !clickedTrack.isVisible() || !clickedTrack.supportsClick()) {
+        return;
+      }
+
+      double rowHeight = viewportRegistry.getTrackRowHeightPixels();
+      double rowTopY =
+          clickedSlot.slotIndex() * rowHeight - viewportRegistry.getVerticalScrollOffsetPixels();
+      boolean handled = clickedTrack.handleClick(
+          e.getX(), e.getY() - rowTopY,
+          getWidth(), rowHeight,
+          drawStack.getChromosome(), drawStack.getViewStart(), drawStack.getViewEnd(),
+          getScene().getWindow(), e.getScreenX(), e.getScreenY());
+      if (handled) {
+        e.consume();
+      }
+    });
+  }
+
+  private TrackViewportRegistry.VisibleTrackSlot getVisibleSlotAtY(double y) {
+    double rowHeight = viewportRegistry.getTrackRowHeightPixels();
+    if (rowHeight <= 0) {
+      return null;
+    }
+    for (TrackViewportRegistry.VisibleTrackSlot slot : getVisibleTrackSlotsForDrawing()) {
+      double rowTopY =
+          slot.slotIndex() * rowHeight - viewportRegistry.getVerticalScrollOffsetPixels();
+      if (y >= rowTopY && y < rowTopY + rowHeight) {
+        return slot;
+      }
+    }
+    return null;
+  }
+
+  private void showAddFileDialog(String type, String... extensions) {
+    FileChooser chooser = new FileChooser();
+    chooser.setTitle("Add " + type + " Track");
+
+    String fileType = type.equals("BigWig") ? "BIGWIG" : type.toUpperCase();
+    java.io.File lastDir = UserPreferences.getLastDirectory(fileType);
+    if (lastDir != null) {
+      try {
+        chooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+
+    chooser.getExtensionFilters().add(
+        new FileChooser.ExtensionFilter(type + " files", extensions));
+
+    java.io.File file = chooser.showOpenDialog(getScene().getWindow());
+    if (file == null) {
+      return;
+    }
+
+    UserPreferences.setLastDirectory(fileType, file.getParentFile());
+    try {
+      Track track = switch (type) {
+        case "BED" -> new BedTrack(file.toPath());
+        case "BigWig" -> new BigWigTrack(file.toPath());
+        default -> null;
+      };
+      if (track != null) {
+        addTrack(track);
+      }
+    } catch (IOException ex) {
+      System.err.println("Failed to load track file: " + ex.getMessage());
+    }
   }
 }

@@ -249,12 +249,12 @@ public class GeneInfoPopup {
   // ── Navigation / URL helpers ───────────────────────────────────────────────
 
   private void navigateToGene(Gene gene) {
-    if (drawStack != null && drawStack.alignmentCanvas != null) {
+    if (drawStack != null && drawStack.sampleTrackCanvas != null) {
       long geneLength = gene.end() - gene.start();
       long padding = geneLength / 10;
       long start = Math.max(1, gene.start() - padding);
       long end = Math.min((long) drawStack.chromSize, gene.end() + padding);
-      drawStack.alignmentCanvas.zoomAnimation(start, end);
+      drawStack.sampleTrackCanvas.zoomAnimation(start, end);
     }
   }
 

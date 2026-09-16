@@ -24,6 +24,7 @@ public class ServiceRegistry {
     
     private final ViewportState viewportState;
     private final SampleRegistry sampleRegistry;
+    private final FeatureTrackViewportRegistry featureTrackViewportRegistry;
     private final ReferenceGenomeService referenceGenomeService;
     private final DrawStackManager drawStackManager;
     private final RegionFetchCache regionFetchCache;
@@ -31,6 +32,7 @@ public class ServiceRegistry {
     private ServiceRegistry() {
         this.viewportState = new ViewportState();
         this.sampleRegistry = new SampleRegistry();
+        this.featureTrackViewportRegistry = new FeatureTrackViewportRegistry();
         this.referenceGenomeService = new ReferenceGenomeService();
         this.drawStackManager = new DrawStackManager();
         this.regionFetchCache = new RegionFetchCache();
@@ -51,6 +53,10 @@ public class ServiceRegistry {
     
     public SampleRegistry getSampleRegistry() {
         return sampleRegistry;
+    }
+
+    public FeatureTrackViewportRegistry getFeatureTrackViewportRegistry() {
+        return featureTrackViewportRegistry;
     }
     
     public ReferenceGenomeService getReferenceGenomeService() {

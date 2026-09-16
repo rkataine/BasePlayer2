@@ -759,8 +759,8 @@ public class VariantManagerController implements Initializable {
 
     private double estimateSampleViewportHeight(SampleRegistry registry) {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        if (!stackManager.isEmpty() && stackManager.getFirst().alignmentCanvas != null) {
-            double fromCanvas = stackManager.getFirst().alignmentCanvas.getHeight();
+        if (!stackManager.isEmpty() && stackManager.getFirst().sampleTrackCanvas != null) {
+            double fromCanvas = stackManager.getFirst().sampleTrackCanvas.getHeight();
             if (fromCanvas > 0) {
                 return fromCanvas;
             }

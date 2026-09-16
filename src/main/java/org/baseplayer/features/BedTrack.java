@@ -17,6 +17,8 @@ import javafx.scene.text.TextAlignment;
 
 public class BedTrack extends AbstractTrack {
 
+  private static final double FEATURE_BAR_HEIGHT = 10;
+
   private final Map<String, List<BedFeature>> featuresByChrom;
 
   public BedTrack(Path filePath) throws IOException {
@@ -44,8 +46,10 @@ public class BedTrack extends AbstractTrack {
     List<BedFeature> features = featuresByChrom.get(chromosome);
     if (features == null || features.isEmpty()) return;
     
-    double featureY = y + 14;
-    double featureHeight = height - 18;
+    double plotTop = y + 14;
+    double plotHeight = Math.max(FEATURE_BAR_HEIGHT, height - 18);
+    double featureHeight = Math.min(FEATURE_BAR_HEIGHT, plotHeight);
+    double featureY = plotTop + (plotHeight - featureHeight) / 2;
     double viewLength = end - start;
     
     for (BedFeature feature : features) {

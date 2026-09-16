@@ -12,64 +12,39 @@ import org.baseplayer.samples.SampleTrack;
 
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
-import javafx.beans.property.SimpleDoubleProperty;
-import javafx.beans.property.SimpleIntegerProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 
-/**
- * Manages sample tracks and their visibility state.
- * Replaces SharedModel sample-related fields.
- * 
- * This is the single source of truth for:
- * - All loaded sample tracks
- * - Which samples are currently visible
- * - Hover state
- * - UI layout parameters (scroll position, heights)
- */
-public class SampleRegistry {
+public class SampleRegistry extends TrackViewportRegistry {
 
-    public record VisibleTrackSlot(int slot, int trackIndex) {}
+    public static final double DEFAULT_MASTER_TRACK_HEIGHT = DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
 
     public enum SubsetSource {
         TEXT_FILTER,
         GENE_FOCUS
     }
-    
-    // Observable list for UI binding
+
     private final ObservableList<SampleTrack> sampleTracks = FXCollections.observableArrayList();
-    
-    // Legacy sample names list (consider removing if not needed)
     private final List<String> sampleList = new ArrayList<>();
-    
-    // Hover state - which sample is currently hovered over (-1 = none)
-    private final IntegerProperty hoverSample = new SimpleIntegerProperty(-1);
-    
-    // Visible sample range in the viewport
-    private int firstVisibleSample = -1;
-    private int lastVisibleSample = -1;
-    
-    // UI layout state
-    private double scrollBarPosition = 0;
-    private double sampleHeight = 0;
-    private double sampleViewportHeight = 0;
-    private boolean sampleHeightLocked = false;
     private String activeSampleFilterQuery = "";
-    private Set<SampleTrack> focusedTracks = null; // null = no explicit focus filter
-    private String focusedGeneName = null; // gene name currently focused, or null
+    private Set<SampleTrack> focusedTracks = null;
+    private String focusedGeneName = null;
     private final List<Integer> cachedDisplayedTrackIndices = new ArrayList<>();
     private boolean displayedTrackIndicesDirty = true;
-    public static final double DEFAULT_MASTER_TRACK_HEIGHT = 28;
-    private final DoubleProperty masterTrackHeight = new SimpleDoubleProperty(DEFAULT_MASTER_TRACK_HEIGHT);
-    
+
     public SampleRegistry() {
         sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
             invalidateDisplayedTrackIndicesCache();
-            normalizeVisibleRangeAfterSubsetChange();
+            normalizeVisibleRangeAfterDisplayedTrackCountChange();
         });
     }
-    
+
+    @Override
+    protected void onVisibleTrackRangeOrRowHeightChanged() {
+        notifyVariantIndexDirty();
+    }
+
     public ObservableList<SampleTrack> getSampleTracks() {
         return sampleTracks;
     }
@@ -80,7 +55,7 @@ public class SampleRegistry {
         }
         return sampleTracks.indexOf(track);
     }
-    
+
     public void addSampleTrack(SampleTrack track) {
         if (track == null) {
             throw new IllegalArgumentException("Sample track cannot be null");
@@ -88,12 +63,12 @@ public class SampleRegistry {
         sampleTracks.add(track);
         invalidateDisplayedTrackIndicesCache();
     }
-    
+
     public void removeSampleTrack(SampleTrack track) {
         sampleTracks.remove(track);
         invalidateDisplayedTrackIndicesCache();
     }
-    
+
     public void clearSampleTracks() {
         sampleTracks.clear();
         sampleList.clear();
@@ -102,230 +77,104 @@ public class SampleRegistry {
         focusedGeneName = null;
         invalidateDisplayedTrackIndicesCache();
         clearVisibleRange();
-        hoverSample.set(-1);
+        setHoveredTrackIndex(-1);
     }
-    
+
     public List<String> getSampleList() {
         return sampleList;
     }
-    
+
     public int getHoverSample() {
-        return hoverSample.get();
+        return getHoveredTrackIndex();
     }
-    
+
     public void setHoverSample(int index) {
-        this.hoverSample.set(index);
+        setHoveredTrackIndex(index);
     }
-    
+
     public IntegerProperty hoverSampleProperty() {
-        return hoverSample;
+        return hoveredTrackIndexProperty();
     }
-    
+
     public int getFirstVisibleSample() {
-        return firstVisibleSample;
+        return getFirstVisibleTrackSlot();
     }
 
     public int getLastVisibleSample() {
-        return lastVisibleSample;
+        return getLastVisibleTrackSlot();
     }
 
     public int getVisibleSampleCount() {
-        if (firstVisibleSample < 0 || lastVisibleSample < 0) {
-            return 0;
-        }
-        return Math.max(0, lastVisibleSample - firstVisibleSample + 1);
+        return getVisibleTrackSlotCount();
     }
 
     public double getScrollBarPosition() {
-        return scrollBarPosition;
+        return getVerticalScrollOffsetPixels();
     }
 
     public double getTotalSampleContentHeight() {
-        return getDisplayedTrackCount() * sampleHeight;
+        return getTotalTrackContentHeightPixels();
     }
 
     public double getMaxScrollBarPosition(double viewportHeight) {
-        if (getDisplayedTrackCount() <= 0) {
-            return 0;
-        }
-        return Math.max(0, getTotalSampleContentHeight() - Math.max(0, viewportHeight));
+        return getMaxVerticalScrollOffsetPixels(viewportHeight);
     }
 
     public double clampScrollBarPosition(double position, double viewportHeight) {
-        return Math.max(0, Math.min(position, getMaxScrollBarPosition(viewportHeight)));
+        return clampVerticalScrollOffsetPixels(position, viewportHeight);
     }
 
     public double getSampleHeight() {
-        return sampleHeight;
+        return getTrackRowHeightPixels();
     }
 
     public void lockSampleHeight() {
-        sampleHeightLocked = true;
+        lockTrackRowHeight();
     }
 
     public void unlockSampleHeight() {
-        sampleHeightLocked = false;
+        unlockTrackRowHeight();
     }
 
     public boolean isSampleHeightLocked() {
-        return sampleHeightLocked;
+        return isTrackRowHeightLocked();
     }
 
     public void setVisibleSamples(int first, int last, double viewportHeight) {
-        setVisibleSamples(first, last, Double.NaN, Double.NaN, viewportHeight);
+        setVisibleTrackRange(first, last, viewportHeight);
     }
 
     public void setVisibleSamples(int first, int last, double height, double scroll,
                                   double viewportHeight) {
-        int trackCount = getDisplayedTrackCount();
-
-        if (trackCount <= 0 || first < 0 || last < 0) {
-            boolean rangeChanged = firstVisibleSample != -1 || lastVisibleSample != -1;
-            boolean heightChanged = sampleHeight != 0;
-            firstVisibleSample = -1;
-            lastVisibleSample = -1;
-            sampleHeight = 0;
-            scrollBarPosition = 0;
-            if (viewportHeight > 0) {
-                sampleViewportHeight = viewportHeight;
-            }
-            if (rangeChanged || heightChanged) {
-                notifyVariantIndexDirty();
-            }
-            return;
-        }
-
-        int newFirst = Math.min(first, last);
-        int newLast = Math.max(first, last);
-        newFirst = Math.max(0, Math.min(trackCount - 1, newFirst));
-        newLast = Math.max(newFirst, Math.min(trackCount - 1, newLast));
-        int window = newLast - newFirst + 1;
-
-        double newHeight;
-        double effectiveViewport = viewportHeight;
-        if (Double.isNaN(height)) {
-            if (effectiveViewport <= 0) {
-                effectiveViewport = sampleViewportHeight;
-            }
-            newHeight = effectiveViewport > 0 ? effectiveViewport / window : sampleHeight;
-        } else {
-            newHeight = Math.max(0, height);
-            if (effectiveViewport <= 0) {
-                effectiveViewport = newHeight > 0 ? newHeight * window : sampleViewportHeight;
-            }
-        }
-
-        if (effectiveViewport > 0) {
-            sampleViewportHeight = effectiveViewport;
-        }
-
-        double desiredScroll = Double.isNaN(scroll) ? newFirst * newHeight : scroll;
-        double maxScroll = Math.max(0, trackCount * newHeight - Math.max(0, sampleViewportHeight));
-        double newScroll = Math.max(0, Math.min(desiredScroll, maxScroll));
-
-        boolean rangeChanged = newFirst != firstVisibleSample || newLast != lastVisibleSample;
-        boolean heightChanged = Math.abs(newHeight - sampleHeight) > 1e-9;
-
-        firstVisibleSample = newFirst;
-        lastVisibleSample = newLast;
-        sampleHeight = newHeight;
-        scrollBarPosition = newScroll;
-
-        if (rangeChanged || heightChanged) {
-            notifyVariantIndexDirty();
-        }
+        setVisibleTrackRange(first, last, height, scroll, viewportHeight);
     }
 
-    /** Empty viewport: no visible samples. */
     public void clearVisibleRange() {
-        sampleHeightLocked = false;
-        setVisibleSamples(-1, -1, 0, 0, 0);
+        clearVisibleTrackRange();
     }
 
-    /** Scroll-only update (animation frames). Keeps first/last/height. */
     public void setScrollOffset(double scroll, double viewportHeight) {
-        if (firstVisibleSample < 0 || lastVisibleSample < 0) {
-            return;
-        }
-        setVisibleSamples(firstVisibleSample, lastVisibleSample, sampleHeight, scroll, viewportHeight);
+        setVerticalScrollOffsetPixels(scroll, viewportHeight);
     }
 
-    /** Re-apply current window against an updated viewport height. */
     public void clampScrollToViewport(double viewportHeight) {
-        if (firstVisibleSample < 0 || lastVisibleSample < 0) {
-            setVisibleSamples(-1, -1, 0, 0, viewportHeight);
-            return;
-        }
-        setVisibleSamples(
-            firstVisibleSample, lastVisibleSample, sampleHeight, scrollBarPosition, viewportHeight);
+        clampVerticalScrollOffsetForViewport(viewportHeight);
     }
 
     public void lockAndKeepSampleHeight(double height) {
-        sampleHeightLocked = true;
-        if (firstVisibleSample < 0 || lastVisibleSample < 0) {
-            return;
-        }
-        setVisibleSamples(firstVisibleSample, lastVisibleSample, height, scrollBarPosition, sampleViewportHeight);
+        lockAndKeepTrackRowHeight(height);
     }
 
-    /**
-     * Draw-time height initialization when height is still 0. Shrinks the window
-     * if needed to enforce a minimum row height.
-     */
     public void ensureSampleHeightForViewport(double availableHeight) {
-        if (sampleHeightLocked || sampleHeight != 0 || firstVisibleSample < 0 || lastVisibleSample < 0) {
-            clampScrollToViewport(availableHeight);
-            return;
-        }
-
-        int visibleCount = getVisibleSampleCount();
-        double rawHeight = availableHeight / Math.max(1, visibleCount);
-        if (rawHeight < 20) {
-            int tracksFit = Math.max(1, (int) (availableHeight / 20));
-            int firstVis = Math.max(0, firstVisibleSample);
-            setVisibleSamples(firstVis, firstVis + tracksFit - 1, 20, scrollBarPosition, availableHeight);
-        } else {
-            setVisibleSamples(
-                firstVisibleSample, lastVisibleSample, rawHeight, scrollBarPosition, availableHeight);
-        }
+        ensureTrackRowHeightFitsViewport(availableHeight);
     }
 
-    /** Show all displayed tracks and reset height so layout can recompute. */
     public void showAllTracksResetHeight() {
-        sampleHeightLocked = false;
-        setVisibleSamples(0, Integer.MAX_VALUE, 0, 0, sampleViewportHeight);
+        showAllTracksAndResetRowHeight();
     }
 
     public void includeNewTracksAtEndResetHeight() {
-        sampleHeightLocked = false;
-        int first = firstVisibleSample < 0 ? 0 : firstVisibleSample;
-        setVisibleSamples(
-            first, Integer.MAX_VALUE, 0,
-            firstVisibleSample < 0 ? 0 : scrollBarPosition,
-            sampleViewportHeight);
-    }
-
-    /**
-     * After removing a displayed track, preserve window size and snap scroll.
-     *
-     * @param removedDisplayedSlot slot of the removed track in the pre-removal
-     *        displayed list, or -1 if it was not displayed
-     * @param previousFirst        first visible slot before removal
-     * @param previousWindow       visible window size before removal
-     */
-    public void adjustWindowAfterTrackRemoval(int removedDisplayedSlot, int previousFirst, int previousWindow) {
-        int newCount = getDisplayedTrackCount();
-        if (newCount <= 0) {
-            clearVisibleRange();
-            return;
-        }
-
-        int newWindow = Math.max(1, Math.min(previousWindow, newCount));
-        int newFirst = previousFirst;
-        if (removedDisplayedSlot >= 0 && removedDisplayedSlot < previousFirst) {
-            newFirst = previousFirst - 1;
-        }
-        setVisibleSamples(newFirst, newFirst + newWindow - 1, sampleHeight, Double.NaN, sampleHeight * newWindow);
+        includeNewTracksAtEndAndResetRowHeight();
     }
 
     public String getActiveSampleFilterQuery() {
@@ -342,7 +191,7 @@ public class SampleRegistry {
         this.activeSampleFilterQuery = normalized;
         invalidateDisplayedTrackIndicesCache();
 
-        normalizeVisibleRangeAfterSubsetChange();
+        normalizeVisibleRangeAfterDisplayedTrackCountChange();
         if (!oldQuery.equals(this.activeSampleFilterQuery)) {
             notifyVariantIndexDirty();
         }
@@ -378,8 +227,7 @@ public class SampleRegistry {
         }
 
         invalidateDisplayedTrackIndicesCache();
-
-        normalizeVisibleRangeAfterSubsetChange();
+        normalizeVisibleRangeAfterDisplayedTrackCountChange();
 
         boolean changed = (hadFocusedTracks != hasFocusedTracks)
             || (oldFeatureName == null ? focusedGeneName != null : !oldFeatureName.equals(focusedGeneName));
@@ -420,8 +268,7 @@ public class SampleRegistry {
         }
 
         invalidateDisplayedTrackIndicesCache();
-
-        normalizeVisibleRangeAfterSubsetChange();
+        normalizeVisibleRangeAfterDisplayedTrackCountChange();
         if (changed) {
             notifyVariantIndexDirty();
         }
@@ -431,61 +278,43 @@ public class SampleRegistry {
         return List.copyOf(getDisplayedTrackIndicesCached());
     }
 
+    @Override
     public int getDisplayedTrackCount() {
         return getDisplayedTrackIndicesCached().size();
     }
 
-    /**
-     * Returns visible slots and backing track indices to use for visibility checks.
-     * Rule: if subset is active, iterate subset slots; otherwise iterate all track
-     * slots. In both cases, clamp to current visible slot range.
-     */
     public List<VisibleTrackSlot> getVisibleTrackSlotsForChecks() {
-        List<VisibleTrackSlot> visibleSlots = new ArrayList<>();
         if (sampleTracks.isEmpty()) {
-            return visibleSlots;
+            return List.of();
         }
 
         boolean subsetActive = hasActiveSubset();
         List<Integer> displayed = subsetActive ? getDisplayedTrackIndicesCached() : null;
         int slotCount = subsetActive ? displayed.size() : sampleTracks.size();
         if (slotCount <= 0) {
-            return visibleSlots;
+            return List.of();
         }
 
-        int first = firstVisibleSample;
-        int last = lastVisibleSample;
-        if (first < 0 || last < first) {
-            return visibleSlots;
-        }
-
-        int clampedFirst = Math.max(0, Math.min(slotCount - 1, first));
-        int clampedLast = Math.max(clampedFirst, Math.min(slotCount - 1, last));
-        for (int slot = clampedFirst; slot <= clampedLast; slot++) {
-            int trackIndex = subsetActive ? displayed.get(slot) : slot;
-            if (trackIndex >= 0 && trackIndex < sampleTracks.size()) {
-                visibleSlots.add(new VisibleTrackSlot(slot, trackIndex));
+        List<Integer> indices = new ArrayList<>(slotCount);
+        if (subsetActive) {
+            indices.addAll(displayed);
+        } else {
+            for (int i = 0; i < sampleTracks.size(); i++) {
+                indices.add(i);
             }
         }
-        return visibleSlots;
+        return buildVisibleTrackSlotList(indices);
     }
 
-    /**
-     * Returns backing track indices for currently visible slots, using subset-aware rules.
-     */
     public List<Integer> getVisibleTrackIndicesForChecks() {
         List<VisibleTrackSlot> visibleSlots = getVisibleTrackSlotsForChecks();
         List<Integer> indices = new ArrayList<>(visibleSlots.size());
         for (VisibleTrackSlot slot : visibleSlots) {
-            indices.add(slot.trackIndex());
+            indices.add(slot.backingTrackIndex());
         }
         return indices;
     }
 
-		// TODO Where this is used? Can be replaced?
-    /**
-     * Resolve backing sampleTracks index to displayed slot index, or -1 if hidden by filter.
-     */
     public int getDisplayedSlotForTrackIndex(int trackIndex) {
         if (trackIndex < 0) {
             return -1;
@@ -556,57 +385,27 @@ public class SampleRegistry {
         return false;
     }
 
-    private void normalizeVisibleRangeAfterSubsetChange() {
-        int displayed = getDisplayedTrackCount();
-        if (displayed <= 0) {
-            setVisibleSamples(-1, -1, sampleHeight, 0, sampleViewportHeight);
-            return;
-        }
-
-        int first = firstVisibleSample < 0 ? 0 : firstVisibleSample;
-        int last = lastVisibleSample < 0 ? first : lastVisibleSample;
-        setVisibleSamples(first, last, sampleHeight, scrollBarPosition, sampleViewportHeight);
-    }
-    
-    /**
-     * Get the height of the master track.
-     */
     public double getMasterTrackHeight() {
-        return masterTrackHeight.get();
+        return getMasterBandHeightPixels();
     }
-    
+
     public DoubleProperty masterTrackHeightProperty() {
-        return masterTrackHeight;
+        return masterBandHeightProperty();
     }
-    
-    /**
-     * Set the height of the master track.
-     */
+
     public void setMasterTrackHeight(double height) {
-        this.masterTrackHeight.set(Math.max(0, height));
-        // Mark variant index as dirty since master track height affects variant Y positions
-        notifyVariantIndexDirty();
+        setMasterBandHeightPixels(height);
     }
-    
-    // ── Operations ─────────────────────────────────────────────────────────
-    
-    /**
-     * Notify all alignment canvases to invalidate their variant drawing indices.
-     * Called when sample visibility changes (filter, significant scroll).
-     */
+
     private void notifyVariantIndexDirty() {
-        // Get all DrawStacks and invalidate their variant indices
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        for (org.baseplayer.draw.DrawStack stack : stackManager.getStacks()) {
-            if (stack.alignmentCanvas != null) {
-                stack.alignmentCanvas.invalidateVariantIndex();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.invalidateVariantIndex();
             }
         }
     }
-    /**
-     * Repack cached BAM reads for the given stack to optimize row usage.
-     * Call after zoom operations complete.
-     */
+
     public void repackBamReadsForStack(DrawStack stack) {
         for (SampleTrack track : sampleTracks) {
             for (Sample sample : track.getSamples()) {

@@ -13,7 +13,6 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.MainApp;
 import org.baseplayer.samples.alignment.FetchManager;
-import org.baseplayer.samples.alignment.draw.AlignmentCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -110,7 +109,7 @@ public class MenuBarController {
     setupThemeToggleButton();
     refreshRecentFilesMenu();
     
-    AlignmentCanvas.update.addListener((observable, oldValue, newValue) -> {
+    GenomicCanvas.update.addListener((observable, oldValue, newValue) -> {
       DrawStack hoverStack = stackManager.getHoverStack();
       if(hoverStack == null) return;
       String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
