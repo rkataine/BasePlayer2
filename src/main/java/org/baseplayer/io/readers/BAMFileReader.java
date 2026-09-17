@@ -23,7 +23,7 @@ import org.baseplayer.services.ServiceRegistry;
 public class BAMFileReader implements AlignmentReader {
 
   /** Print raw SAM-like line for the first record only. */
-  private static boolean firstRecordPrinted = false;
+  //private static boolean firstRecordPrinted = false;
   
   /** Common tag processor shared with CRAMFileReader. */
   private final TagProcessor tagProcessor = new TagProcessor();
@@ -319,10 +319,10 @@ public class BAMFileReader implements AlignmentReader {
     }
     
     // Print raw SAM-like line for the very first record
-    if (!firstRecordPrinted) {
+    /* if (!firstRecordPrinted) {
       firstRecordPrinted = true;
       printRawSamLine(rec, seq, tagData);
-    }
+    } */
     
     return rec;
   }
@@ -331,7 +331,7 @@ public class BAMFileReader implements AlignmentReader {
    * Print a SAM-like text representation of a BAM record to stdout.
    * Shows all parsed fields and ALL tags in their raw form.
    */
-  private void printRawSamLine(BAMRecord rec, char[] seq, byte[] tagData) {
+ /*  private void printRawSamLine(BAMRecord rec, char[] seq, byte[] tagData) {
     StringBuilder sb = new StringBuilder();
     sb.append("\n=== First BAM record (SAM-like) ===");
     sb.append("\nQNAME: ").append(rec.readName);
@@ -474,7 +474,7 @@ public class BAMFileReader implements AlignmentReader {
     }
     sb.append("\n===");
     System.out.println(sb);
-  }
+  } */
 
   /**
    * Decode BAM 4-bit encoded sequence into char array.

@@ -527,7 +527,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   private boolean canDrawCoverageData() {
     return isSampleBody()
-        && !sampleRegistry.getSampleList().isEmpty()
+        && !sampleRegistry.getSampleTracks().isEmpty()
         && !isBeyondCoverageZoom();
   }
 

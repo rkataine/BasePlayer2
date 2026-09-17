@@ -3,7 +3,6 @@ package org.baseplayer.services;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.Track;
 
 import javafx.collections.FXCollections;

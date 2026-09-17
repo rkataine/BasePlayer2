@@ -53,15 +53,6 @@ public class VariantDrawer {
         this.visibleIndex = new VisibleVariantIndex();
     }
     
-    /**
-     * Draw variants for all visible samples.
-     * 
-     * @param gc Graphics context to draw on
-     * @param variantList The shared variant list (one per genomic region)
-     * @param drawStack Current view parameters
-     * @param chromPosToScreenPos Function to convert genomic position to screen X
-     * @param canvasWidth Width of the canvas
-     */
     public void draw(GraphicsContext gc,
                     VariantList variantList,
                     DrawStack drawStack,

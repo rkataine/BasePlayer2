@@ -91,6 +91,7 @@ public class SampleDataManager {
                 Sample sample = new Sample(file.toPath());
                 SampleTrack track = new SampleTrack(sample);
                 sampleRegistry.getSampleTracks().add(track);
+                sampleRegistry.getSampleList().add(sample.getName());
               } catch (IOException e) {
                 System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
               }

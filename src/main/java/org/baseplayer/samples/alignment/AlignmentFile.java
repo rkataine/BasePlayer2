@@ -711,8 +711,6 @@ public class AlignmentFile implements Closeable {
         return sc.cachedReads.get();
       }
 
-      System.out.println("Fetching BAM (" + name + "): " + chrom + ":" + fetchStart + "-" + fetchEnd);
-
       // Notify that a real fetch is starting — fired once, lazily creates the loading task.
       if (firstFetchStartedFired.compareAndSet(false, true)) {
         Runnable cb = onFirstFetchStarted;
