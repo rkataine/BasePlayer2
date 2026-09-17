@@ -719,6 +719,32 @@ public class VariantList {
     public int getVcfCountWhenLoaded() {
         return vcfCountWhenLoaded;
     }
+
+    /**
+     * Append a fully-built node from session cache. Caller must add nodes in
+     * non-decreasing genomic position order. Does not rebuild visible chains.
+     */
+    public void appendNodeFromCache(VariantNode node) {
+        if (node == null) return;
+        node.next = null;
+        node.nextVisible = null;
+        node.prevVisible = null;
+
+        if (head == null) {
+            head = node;
+            tail = node;
+            size = 1;
+            startPosition = node.position;
+            endPosition = node.position;
+            return;
+        }
+
+        tail.next = node;
+        tail = node;
+        size++;
+        if (node.position < startPosition) startPosition = node.position;
+        if (node.position > endPosition) endPosition = node.position;
+    }
     
     /**
      * Collect all unique variant types present in this list.

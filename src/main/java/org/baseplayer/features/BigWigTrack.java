@@ -40,12 +40,17 @@ public class BigWigTrack extends AbstractTrack {
   
   public BigWigTrack(Path filePath) throws IOException {
     super(filePath.getFileName().toString(), "BigWig");
-    this.filePath = filePath;
+    this.filePath = filePath.toAbsolutePath().normalize();
     this.preferredHeight = 35;
     this.color = Color.rgb(100, 149, 237); // Cornflower blue
     
     // Validate and read header
     readHeader();
+  }
+
+  @Override
+  public Path getSourcePath() {
+    return filePath;
   }
   
   private void readHeader() {

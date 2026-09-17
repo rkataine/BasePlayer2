@@ -31,6 +31,7 @@ public abstract class SidebarBase {
 
   // ── Layout ────────────────────────────────────────────────────────────────
 
+  protected final VBox rootLayout;
   protected final StackPane headerPane;
   protected final StackPane contentPane;
 
@@ -65,6 +66,7 @@ public abstract class SidebarBase {
     parent.setAlignment(Pos.TOP_LEFT);
 
     VBox layout = new VBox();
+    this.rootLayout = layout;
     layout.setMinWidth(0);
     layout.setMaxWidth(Double.MAX_VALUE);
     layout.setMaxHeight(Double.MAX_VALUE);

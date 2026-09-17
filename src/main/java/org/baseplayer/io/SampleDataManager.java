@@ -15,6 +15,7 @@ import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.readers.VcfReader;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
@@ -80,6 +81,7 @@ public class SampleDataManager {
     runner.submit("Loading BAM/CRAM files",
         () -> {
             final java.util.concurrent.atomic.AtomicInteger fileIndex = new java.util.concurrent.atomic.AtomicInteger(0);
+            List<Sample> loaded = new ArrayList<>();
             for (File file : files) {
               if (file == null) continue;
               int currentIndex = fileIndex.incrementAndGet();
@@ -88,22 +90,27 @@ public class SampleDataManager {
               org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
               
               try {
-                Sample sample = new Sample(file.toPath());
-                SampleTrack track = new SampleTrack(sample);
-                sampleRegistry.getSampleTracks().add(track);
-                sampleRegistry.getSampleList().add(sample.getName());
+                loaded.add(new Sample(file.toPath()));
               } catch (IOException e) {
                 System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
               }
             }
-            return null;
+            return loaded;
         },
-        result -> {
+        loaded -> {
+            if (loaded != null) {
+              for (Sample sample : loaded) {
+                SampleTrack track = new SampleTrack(sample);
+                sampleRegistry.getSampleTracks().add(track);
+                sampleRegistry.getSampleList().add(sample.getName());
+              }
+            }
             // All BAM files loaded; update visible range and redraw
             int trackCount = sampleRegistry.getDisplayedTrackCount();
             if (trackCount > 0) {
               sampleRegistry.showAllTracksResetHeight();
             }
+            ProjectSessionState.get().markDirty();
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
             
             org.baseplayer.controllers.MainController.initializeLoadRegionButton();
@@ -165,6 +172,7 @@ public class SampleDataManager {
       sampleRegistry.adjustWindowAfterTrackRemoval(removedSlot, oldFirst, oldWindow);
     }
     
+    ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
@@ -314,6 +322,7 @@ public class SampleDataManager {
           sampleRegistry.getSampleList().add(newSample.getName());
           sampleRegistry.includeNewTracksAtEndResetHeight();
           UserPreferences.addRecentFile("BED", file);
+          ProjectSessionState.get().markDirty();
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
         });
   }
@@ -363,6 +372,7 @@ public class SampleDataManager {
           bedTrack.setVisible(true);
           featureCanvas.addTrack(bedTrack);
           UserPreferences.addRecentFile("BED", file);
+          ProjectSessionState.get().markDirty();
         });
   }
   
@@ -411,6 +421,7 @@ public class SampleDataManager {
           bigWigTrack.setVisible(true);
           featureCanvas.addTrack(bigWigTrack);
           UserPreferences.addRecentFile("BIGWIG", file);
+          ProjectSessionState.get().markDirty();
         });
   }
   
@@ -558,6 +569,8 @@ public class SampleDataManager {
       if (loader.getMappedSampleCount() == 0) {
         System.err.println("Warning: Could not create or map any VCF samples from: " + file);
       }
+
+      ProjectSessionState.get().markDirty();
       
       // Fire canvas update to render the new track progressively
       // (batch-level updates are fired every 10 files in loadVcfFilesBatch)
@@ -618,6 +631,7 @@ public class SampleDataManager {
       variantController.clearBatchAnnotationResults();
     }
 
+    ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 }

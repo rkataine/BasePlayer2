@@ -301,6 +301,7 @@ public class DrawStack {
     
     setRegion(chrom, (long) start, (long) end);
     sampleTrackCanvas.zoomAnimation(start, end);
+    org.baseplayer.project.ProjectSessionState.get().markDirty();
   }
 
   public void switchToChromosome(String chrom) {

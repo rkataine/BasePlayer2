@@ -2,14 +2,18 @@ package org.baseplayer.components.sidebars;
 
 import java.util.List;
 
+import org.baseplayer.MainApp;
 import org.baseplayer.components.AnnotationOptionsDialog;
 import org.baseplayer.genome.ReferenceGenome;
 import org.baseplayer.io.Settings;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.services.InitializationService;
 
 import javafx.geometry.Insets;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.Separator;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
@@ -25,6 +29,7 @@ public class GenomeSidebar extends SidebarBase {
 
   private final ComboBox<ReferenceGenome> referenceComboBox  = new ComboBox<>();
   private final ComboBox<String>          annotationComboBox = new ComboBox<>();
+  private final Label projectNameLabel = new Label("Untitled");
 
   private final InitializationService initializationService;
 
@@ -33,6 +38,7 @@ public class GenomeSidebar extends SidebarBase {
     this.initializationService = initializationService;
 
     buildContent();
+    setupProjectNameLabel();
     loadAvailableGenomes();
   }
 
@@ -56,6 +62,19 @@ public class GenomeSidebar extends SidebarBase {
   // ── Content layout ────────────────────────────────────────────────────────
 
   private void buildContent() {
+    projectNameLabel.getStyleClass().add("project-name-label");
+    projectNameLabel.setMaxWidth(Double.MAX_VALUE);
+    projectNameLabel.setWrapText(true);
+    Tooltip.install(projectNameLabel, new Tooltip("Current session"));
+
+    Separator projectSeparator = new Separator();
+    projectSeparator.setMaxWidth(Double.MAX_VALUE);
+
+    VBox sessionHeader = new VBox(2, projectNameLabel, projectSeparator);
+    sessionHeader.setPadding(new Insets(6, 5, 4, 5));
+    sessionHeader.setMaxWidth(Double.MAX_VALUE);
+    rootLayout.getChildren().add(0, sessionHeader);
+
     Label annotationLabel = new Label("Gene annotation");
     annotationLabel.getStyleClass().add("sidebar-label");
 
@@ -87,9 +106,30 @@ public class GenomeSidebar extends SidebarBase {
     layout.setMinWidth(0);
     layout.setMaxWidth(Double.MAX_VALUE);
     layout.setMaxHeight(Double.MAX_VALUE);
-    layout.getChildren().addAll(annotationLabel, annotationComboBox, spacer, referenceLabel, referenceComboBox);
+    layout.getChildren().addAll(
+        annotationLabel, annotationComboBox,
+        spacer,
+        referenceLabel, referenceComboBox);
 
     contentPane.getChildren().add(layout);
+  }
+
+  private void setupProjectNameLabel() {
+    ProjectSessionState session = ProjectSessionState.get();
+    Runnable refresh = () -> {
+      projectNameLabel.setText(session.getDisplayLabel());
+      if (MainApp.stage != null) {
+        MainApp.stage.setTitle("BasePlayer — " + session.getDisplayLabel());
+      }
+    };
+    refresh.run();
+    session.addListener(s -> {
+      if (javafx.application.Platform.isFxApplicationThread()) {
+        refresh.run();
+      } else {
+        javafx.application.Platform.runLater(refresh);
+      }
+    });
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────

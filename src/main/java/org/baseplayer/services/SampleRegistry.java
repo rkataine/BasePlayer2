@@ -7,9 +7,11 @@ import java.util.List;
 import java.util.Set;
 
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 
+import javafx.application.Platform;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
 import javafx.collections.FXCollections;
@@ -37,6 +39,13 @@ public class SampleRegistry extends TrackViewportRegistry {
         sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
             invalidateDisplayedTrackIndicesCache();
             normalizeVisibleRangeAfterDisplayedTrackCountChange();
+            // Keep session dirty in sync even when callers forget markDirty().
+            Runnable mark = () -> ProjectSessionState.get().markDirty();
+            if (Platform.isFxApplicationThread()) {
+                mark.run();
+            } else {
+                Platform.runLater(mark);
+            }
         });
     }
 

@@ -91,6 +91,11 @@ public class MainApp extends Application {
         ft.setFromValue(0);
         ft.setToValue(1);
         stage.setMaximized(true);
+        stage.setOnCloseRequest(event -> {
+            if (!org.baseplayer.controllers.commands.FileCommands.confirmDiscardIfDirty()) {
+                event.consume();
+            }
+        });
         stage.show(); 
         splashScreen.close();
         ft.play();
@@ -130,6 +135,7 @@ public class MainApp extends Application {
         DrawColors.lineColor = darkMode 
             ? new Color(0.3, 0.6, 0.6, 0.5) 
             : new Color(0.5, 0.8, 0.8, 0.5);
+        org.baseplayer.project.ProjectSessionState.get().markDirty();
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
     public static URL getResource(String string) {

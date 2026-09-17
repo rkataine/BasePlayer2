@@ -1,5 +1,7 @@
 package org.baseplayer.features;
 
+import java.nio.file.Path;
+
 import org.baseplayer.draw.DrawStack;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -61,6 +63,20 @@ public interface Track {
    * Clean up resources when track is removed.
    */
   default void dispose() {}
+  
+  /**
+   * Local file path for this track, if any.
+   */
+  default Path getSourcePath() {
+    return null;
+  }
+
+  /**
+   * UCSC track id when this track is backed by the UCSC API.
+   */
+  default String getUcscTrackId() {
+    return null;
+  }
   
   /**
    * Get track color (for legend/identification).

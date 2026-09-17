@@ -61,6 +61,7 @@ public class FeatureTrack extends AbstractUcscTrack {
   private final DataFetcher dataFetcher;
   private final InfoPopup popup = new InfoPopup();
   private PopupContentBuilder popupContentBuilder;
+  private String ucscTrackId;
 
   /**
    * Coordinate base of the data source: 0 for 0-based half-open (UCSC), 1 for 1-based (VCF/gnomAD).
@@ -80,8 +81,14 @@ public class FeatureTrack extends AbstractUcscTrack {
         displayName,
         "UCSC: " + trackId,
         (chrom, start, end, bins) -> UcscApiClient.fetchTrack(trackId, chrom, start, end, bins));
+    track.ucscTrackId = trackId;
     track.setCoordinateBase(0);
     return track;
+  }
+
+  @Override
+  public String getUcscTrackId() {
+    return ucscTrackId;
   }
 
   public static FeatureTrack forUcscTrack(UcscTrackInfo trackInfo) {

@@ -962,7 +962,7 @@ public class VariantManagerController implements Initializable {
 
             if (allChromosomeAnnotationTask != null) {
                 allChromosomeAnnotationTask.setProgressSuffix(
-                    "Preparing (0/" + chromosomes.size() + "), rows: 0");
+                    "0/" + chromosomes.size() + " chromosomes, rows: 0");
                 ThreadRunner.get().notifyDescriptionChanged();
             } else {
                 allChromosomeAnnotationRunning = false;
@@ -1686,14 +1686,15 @@ public class VariantManagerController implements Initializable {
         }
 
         int completed = progress.completedChromosomes();
+        String message = progress.chromosome()
+            + " (" + completed + "/" + progress.totalChromosomes() + ")"
+            + ", rows: " + progress.totalRows();
         ThreadRunner.RunnerTask task = allChromosomeAnnotationTask;
         if (task != null) {
-            task.setProgressSuffix(
-                progress.chromosome()
-                    + " (" + completed + "/" + progress.totalChromosomes() + ")"
-                    + ", rows: " + progress.totalRows());
+            task.setProgressSuffix(message);
             ThreadRunner.get().notifyDescriptionChanged();
         }
+        applyLoadingModalVisuals("Annotating all chromosomes… " + message);
     }
 
     private void completeAllChromosomeAnnotation(VcfManager.AllChromosomeAnnotationResult result) {
@@ -1708,6 +1709,9 @@ public class VariantManagerController implements Initializable {
         lockFilterControls(false);
         hideLoadingModal();
         lastSeenVariantsRevision = -1;
+        if (result != null && !result.cancelled() && result.completedChromosomes() > 0) {
+            org.baseplayer.project.ProjectSessionState.get().markDirty();
+        }
         loadData();
     }
 
@@ -1759,7 +1763,14 @@ public class VariantManagerController implements Initializable {
     }
 
     private void showBusyOverlay() {
-        applyLoadingModalVisuals("Loading");
+        String message = "Loading";
+        List<ThreadRunner.RunnerTask> tasks = ThreadRunner.get().getActiveTasks();
+        if (!tasks.isEmpty()) {
+            message = tasks.get(tasks.size() - 1).getDescription();
+        } else if (allChromosomeAnnotationRunning) {
+            message = "Annotating all chromosomes…";
+        }
+        applyLoadingModalVisuals(message);
         if (loadingModal != null) {
             loadingModal.setVisible(true);
             loadingModal.setManaged(true);

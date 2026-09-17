@@ -539,12 +539,17 @@ public class MenuBarController {
   
   public void openFileMenu(ActionEvent event) {
       MenuItem menuItem = (MenuItem) event.getSource();
-      String[] types = menuItem.getId().split("_");
-      String filtertype = types[1];
+      String[] types = menuItem.getId().split("_", 2);
+      if (types.length < 2) {
+        FileCommands.openFile(menuItem.getId());
+        return;
+      }
+      FileCommands.openFile(types[0], types[1]);
+  }
 
-      FileCommands.openFile(filtertype);
-      //boolean multiSelect = !filtertype.equals("SES"); // TODO later: when opening bam or vcf for a track, refactor to work for that too
-      //new FileDialog(menuItem.getText(), types[1], types[0], multiSelect);
+  @FXML
+  public void closeApplication(ActionEvent event) {
+    ViewCommands.closeWindow();
   }
 
   @FXML

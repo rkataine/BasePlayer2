@@ -2,6 +2,9 @@ package org.baseplayer.io;
 
 import java.util.prefs.Preferences;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.samples.alignment.draw.ModificationColorScheme;
 
@@ -200,6 +203,118 @@ public final class Settings {
   public void setMaxReadCoverage(int n)                  { this.maxReadCoverage = n; prefs.putInt(KEY_MAX_READ_COVERAGE, n); }
   public void setLastGenome(String name)                  { this.lastGenome = name; if (name != null) prefs.put(KEY_LAST_GENOME, name); else prefs.remove(KEY_LAST_GENOME); }
   public void setLastAnnotation(String name)              { this.lastAnnotation = name; if (name != null) prefs.put(KEY_LAST_ANNOTATION, name); else prefs.remove(KEY_LAST_ANNOTATION); }
+
+  /**
+   * Export current draw settings for project JSON (excludes machine-local prefs like API keys).
+   * Genome/annotation last-used keys are included so a session can restore them.
+   */
+  public Map<String, Object> toSnapshot() {
+    Map<String, Object> map = new LinkedHashMap<>();
+    map.put("maxReadViewLength", maxReadViewLength);
+    map.put("maxCoverageViewLength", maxCoverageViewLength);
+    map.put("enableSampledCoverage", enableSampledCoverage);
+    map.put("sampledCoveragePoints", sampledCoveragePoints);
+    map.put("coverageFraction", coverageFraction);
+    map.put("readGap", readGap);
+    map.put("readHeight", readHeight);
+    map.put("smoothSmallFiles", smoothSmallFiles);
+    map.put("mismatchMinFraction", mismatchMinFraction);
+    map.put("mismatchMinCount", mismatchMinCount);
+    map.put("readColorMode", readColorMode.name());
+    map.put("modificationColorScheme", modificationColorScheme.name());
+    map.put("readInfoPopupPosition", readInfoPopupPosition.name());
+    map.put("maxReadCoverage", maxReadCoverage);
+    map.put("lastGenome", lastGenome);
+    map.put("lastAnnotation", lastAnnotation);
+    return map;
+  }
+
+  /**
+   * Apply a project settings snapshot into the live singleton (also writes prefs).
+   */
+  public void applySnapshot(Map<String, Object> map) {
+    if (map == null || map.isEmpty()) return;
+    if (map.containsKey("maxReadViewLength")) {
+      setMaxReadViewLength(asInt(map.get("maxReadViewLength"), DEF_MAX_READ_VIEW_LENGTH));
+    }
+    if (map.containsKey("maxCoverageViewLength")) {
+      setMaxCoverageViewLength(asInt(map.get("maxCoverageViewLength"), DEF_MAX_COVERAGE_VIEW_LENGTH));
+    }
+    if (map.containsKey("enableSampledCoverage")) {
+      setEnableSampledCoverage(asBoolean(map.get("enableSampledCoverage"), DEF_ENABLE_SAMPLED_COVERAGE));
+    }
+    if (map.containsKey("sampledCoveragePoints")) {
+      setSampledCoveragePoints(asInt(map.get("sampledCoveragePoints"), DEF_SAMPLED_COVERAGE_POINTS));
+    }
+    if (map.containsKey("coverageFraction")) {
+      setCoverageFraction(asDouble(map.get("coverageFraction"), DEF_COVERAGE_FRACTION));
+    }
+    if (map.containsKey("readGap")) {
+      setReadGap(asDouble(map.get("readGap"), DEF_READ_GAP));
+    }
+    if (map.containsKey("readHeight")) {
+      setReadHeight(asDouble(map.get("readHeight"), DEF_READ_HEIGHT));
+    }
+    if (map.containsKey("smoothSmallFiles")) {
+      setSmoothSmallFiles(asBoolean(map.get("smoothSmallFiles"), DEF_SMOOTH_SMALL_FILES));
+    }
+    if (map.containsKey("mismatchMinFraction")) {
+      setMismatchMinFraction(asDouble(map.get("mismatchMinFraction"), DEF_MISMATCH_MIN_FRACTION));
+    }
+    if (map.containsKey("mismatchMinCount")) {
+      setMismatchMinCount(asInt(map.get("mismatchMinCount"), DEF_MISMATCH_MIN_COUNT));
+    }
+    if (map.containsKey("readColorMode")) {
+      try {
+        setReadColorMode(ReadColorMode.valueOf(String.valueOf(map.get("readColorMode"))));
+      } catch (IllegalArgumentException ignored) { /* keep current */ }
+    }
+    if (map.containsKey("modificationColorScheme")) {
+      try {
+        setModificationColorScheme(
+            ModificationColorScheme.valueOf(String.valueOf(map.get("modificationColorScheme"))));
+      } catch (IllegalArgumentException ignored) { /* keep current */ }
+    }
+    if (map.containsKey("readInfoPopupPosition")) {
+      try {
+        setReadInfoPopupPosition(
+            ReadInfoPopupPosition.valueOf(String.valueOf(map.get("readInfoPopupPosition"))));
+      } catch (IllegalArgumentException ignored) { /* keep current */ }
+    }
+    if (map.containsKey("maxReadCoverage")) {
+      setMaxReadCoverage(asInt(map.get("maxReadCoverage"), DEF_MAX_READ_COVERAGE));
+    }
+    if (map.containsKey("lastGenome")) {
+      Object v = map.get("lastGenome");
+      setLastGenome(v == null ? null : String.valueOf(v));
+    }
+    if (map.containsKey("lastAnnotation")) {
+      Object v = map.get("lastAnnotation");
+      setLastAnnotation(v == null ? null : String.valueOf(v));
+    }
+  }
+
+  private static int asInt(Object value, int fallback) {
+    if (value instanceof Number n) return n.intValue();
+    if (value instanceof String s) {
+      try { return Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) {}
+    }
+    return fallback;
+  }
+
+  private static double asDouble(Object value, double fallback) {
+    if (value instanceof Number n) return n.doubleValue();
+    if (value instanceof String s) {
+      try { return Double.parseDouble(s.trim()); } catch (NumberFormatException ignored) {}
+    }
+    return fallback;
+  }
+
+  private static boolean asBoolean(Object value, boolean fallback) {
+    if (value instanceof Boolean b) return b;
+    if (value instanceof String s) return Boolean.parseBoolean(s.trim());
+    return fallback;
+  }
 
   /** Reset all settings to defaults. */
   public void resetDefaults() {

@@ -19,13 +19,20 @@ public class BedTrack extends AbstractTrack {
 
   private static final double FEATURE_BAR_HEIGHT = 10;
 
+  private final Path sourcePath;
   private final Map<String, List<BedFeature>> featuresByChrom;
 
   public BedTrack(Path filePath) throws IOException {
     super(filePath.getFileName().toString(), "BED");
+    this.sourcePath = filePath.toAbsolutePath().normalize();
     this.preferredHeight = 25;
     this.color = Color.rgb(70, 130, 180);
     this.featuresByChrom = BedFileReader.read(filePath, this.color);
+  }
+
+  @Override
+  public Path getSourcePath() {
+    return sourcePath;
   }
 
   @Override

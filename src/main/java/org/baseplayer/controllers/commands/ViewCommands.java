@@ -92,8 +92,13 @@ public class ViewCommands {
    * Close the application window.
    */
   public static void closeWindow() {
+    if (!org.baseplayer.controllers.commands.FileCommands.confirmDiscardIfDirty()) {
+      return;
+    }
     Window window = MainApp.stage.getScene().getWindow();
     if (window instanceof Stage stage) {
+      // Avoid re-prompting from setOnCloseRequest after user already confirmed.
+      stage.setOnCloseRequest(null);
       stage.close();
     }
   }

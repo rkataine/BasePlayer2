@@ -1932,6 +1932,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     }
     featureRegistry.addFeatureTrack(track);
     featureRegistry.includeNewTracksAtEndAndResetRowHeight();
+    org.baseplayer.project.ProjectSessionState.get().markDirty();
 
     if (track instanceof AbstractUcscTrack ucscTrack) {
       ucscTrack.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));

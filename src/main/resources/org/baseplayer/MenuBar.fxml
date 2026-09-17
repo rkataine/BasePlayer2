@@ -31,10 +31,11 @@
             <SeparatorMenuItem />
             <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open session" />
             <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save session" />
+            <MenuItem id="SAVEAS_SES" onAction="#openFileMenu" text="Save session as…" />
             <SeparatorMenuItem />
             <MenuItem text="Clear all data" onAction="#clearAllData" />
             <SeparatorMenuItem />
-          <MenuItem text="Close" />
+          <MenuItem text="Close" onAction="#closeApplication" />
         </items>
       </Menu>
       <Menu text="Tools">

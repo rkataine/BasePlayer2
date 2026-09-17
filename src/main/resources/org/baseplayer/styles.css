@@ -186,6 +186,13 @@ VBox {
   -fx-padding: 0 8 0 8;
 }
 
+.project-name-label {
+  -fx-text-fill: #c0c0c0;
+  -fx-font-size: 12px;
+  -fx-font-weight: bold;
+  -fx-padding: 2 0 2 0;
+}
+
 .zoom-button {
   -fx-background-color: #3c3c3c;
   -fx-text-fill: #cccccc;
