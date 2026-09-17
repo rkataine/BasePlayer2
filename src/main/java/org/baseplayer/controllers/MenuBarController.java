@@ -561,9 +561,9 @@ public class MenuBarController {
     if (recentFilesMenu == null) return;
 
     recentFilesMenu.getItems().clear();
-    List<UserPreferences.RecentFile> recentFiles = UserPreferences.getRecentFiles();
+    List<UserPreferences.RecentFile> recentFiles = UserPreferences.getRecentSampleFiles();
     if (recentFiles.isEmpty()) {
-      MenuItem emptyItem = new MenuItem("No recent files");
+      MenuItem emptyItem = new MenuItem("No recent sample files");
       emptyItem.setDisable(true);
       recentFilesMenu.getItems().add(emptyItem);
       return;
@@ -579,7 +579,7 @@ public class MenuBarController {
       MenuItem item = new MenuItem(itemText);
       item.setOnAction(e -> {
         if (!file.exists() || !file.isFile()) {
-          UserPreferences.removeRecentFile(rf.path());
+          UserPreferences.removeRecentSampleFile(rf.path());
           refreshRecentFilesMenu();
           System.err.println("Recent file not found: " + rf.path());
           return;
@@ -590,16 +590,16 @@ public class MenuBarController {
     }
 
     if (shown == 0) {
-      MenuItem emptyItem = new MenuItem("No recent files");
+      MenuItem emptyItem = new MenuItem("No recent sample files");
       emptyItem.setDisable(true);
       recentFilesMenu.getItems().add(emptyItem);
       return;
     }
 
     recentFilesMenu.getItems().add(new SeparatorMenuItem());
-    MenuItem clear = new MenuItem("Clear Recent Files");
+    MenuItem clear = new MenuItem("Clear Recent Samples");
     clear.setOnAction(e -> {
-      UserPreferences.clearRecentFiles();
+      UserPreferences.clearRecentSampleFiles();
       refreshRecentFilesMenu();
     });
     recentFilesMenu.getItems().add(clear);
@@ -608,7 +608,8 @@ public class MenuBarController {
   public void removeStack(ActionEvent event) { ViewCommands.removeStack(); }
   public void setDarkMode(ActionEvent event) { ViewCommands.toggleDarkMode(); }
   public void cleanMemory(ActionEvent event) { ViewCommands.cleanMemory(); }
-  public void clearAllData(ActionEvent event) { FileCommands.clearAllData(); }
+  public void clearAllData(ActionEvent event) { FileCommands.newProject(); }
+  public void newProject(ActionEvent event) { FileCommands.newProject(); }
 
   @FXML
   public void openSettings(ActionEvent event) {

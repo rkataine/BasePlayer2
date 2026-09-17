@@ -73,8 +73,12 @@ public class VariantManagerWindow {
             // Keep manager coupled to main app lifecycle without forcing owned-window behavior.
             if (owner != null) {
                 owner.showingProperty().addListener((obs, wasShowing, isShowing) -> {
-                    if (!isShowing && stage.isShowing()) {
-                        stage.hide();
+                    if (!isShowing) {
+                        // Floating minimized chip must not outlive the main app.
+                        MinimizedVariantManagerWindow.handleCleanup();
+                        if (stage.isShowing()) {
+                            stage.hide();
+                        }
                     }
                 });
             }

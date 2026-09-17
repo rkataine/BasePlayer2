@@ -20,6 +20,7 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TableView;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
@@ -38,6 +39,7 @@ public class VariantTable {
     private static final String TAB_GENE = "Gene";
     private static final String TAB_INTRONIC = "Intronic";
     private static final String TAB_INTERGENIC = "Intergenic";
+    private static final double GENE_COLUMN_WIDTH = 150;
 
     private final Tab codingTab;
     private final Tab intronicTab;
@@ -275,12 +277,8 @@ public class VariantTable {
             HBox header = new HBox(8);
             header.getStyleClass().add("variant-list-header");
 
-            HBox geneBox = new HBox(4);
-            geneBox.setAlignment(Pos.CENTER_LEFT);
-            geneBox.getChildren().add(createHeaderLabel("Gene", 130));
-
             header.getChildren().addAll(
-                geneBox,
+                createHeaderLabel("Gene", GENE_COLUMN_WIDTH),
                 createHeaderLabel("Position", 150),
                 createHeaderLabel("Ref/Alt", 90),
                 createHeaderLabel("Type", 65)
@@ -321,7 +319,7 @@ public class VariantTable {
 
         private final HBox root = new HBox(8);
         private final HBox geneBox = new HBox(4);
-        private final Label gene = createCellLabel(130);
+        private final Label gene = createGeneNameLabel();
         private final Label tier = createTierLabel();
         private final Label position = createCellLabel(150);
         private final Label refAlt = createCellLabel(90);
@@ -345,6 +343,9 @@ public class VariantTable {
 
             root.setAlignment(Pos.CENTER_LEFT);
             geneBox.setAlignment(Pos.CENTER_LEFT);
+            geneBox.setMinWidth(GENE_COLUMN_WIDTH);
+            geneBox.setPrefWidth(GENE_COLUMN_WIDTH);
+            geneBox.setMaxWidth(GENE_COLUMN_WIDTH);
             geneBox.getChildren().addAll(gene, tier);
             root.getChildren().addAll(geneBox, position, refAlt, type);
             if (includeCodingColumns) {
@@ -425,10 +426,23 @@ public class VariantTable {
             return label;
         }
 
+        /** Gene name sizes to text so the census tier badge sits immediately after it. */
+        private static Label createGeneNameLabel() {
+            Label label = new Label();
+            label.setAlignment(Pos.CENTER_LEFT);
+            label.setMinWidth(Region.USE_PREF_SIZE);
+            label.setPrefWidth(Region.USE_COMPUTED_SIZE);
+            label.setMaxWidth(GENE_COLUMN_WIDTH - 28);
+            return label;
+        }
+
         private static Label createTierLabel() {
             Label label = new Label();
             label.setStyle("-fx-background-color: " + CANCER_COLOR + "; -fx-text-fill: white;"
                 + " -fx-padding: 0 3 0 3; -fx-font-size: 9; -fx-background-radius: 3;");
+            label.setMinWidth(Region.USE_PREF_SIZE);
+            label.setPrefWidth(Region.USE_COMPUTED_SIZE);
+            label.setMaxWidth(Region.USE_PREF_SIZE);
             label.setManaged(false);
             label.setVisible(false);
             return label;

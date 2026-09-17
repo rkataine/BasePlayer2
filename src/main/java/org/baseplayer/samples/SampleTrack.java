@@ -51,6 +51,27 @@ public class SampleTrack implements Closeable {
   /** Set the raw name. */
   public void setName(String name) { this.name = name; }
 
+  // ── Sample group ──
+
+  /** {@code -1} = ungrouped; otherwise matches {@link SampleGroup#getId()}. */
+  private int groupId = -1;
+
+  public int getGroupId() {
+    return groupId;
+  }
+
+  public void setGroupId(int groupId) {
+    this.groupId = groupId;
+  }
+
+  public boolean hasGroup() {
+    return groupId >= 0;
+  }
+
+  public void clearGroup() {
+    this.groupId = -1;
+  }
+
   // ── Samples (data files) ──
 
   /** Get all data files under this individual. */

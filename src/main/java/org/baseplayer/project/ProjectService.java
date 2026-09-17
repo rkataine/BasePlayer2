@@ -15,16 +15,19 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.features.DefaultFeatureTracks;
 import org.baseplayer.features.FeatureTrack;
 import org.baseplayer.features.AbstractTrack;
 import org.baseplayer.features.Track;
 import org.baseplayer.genome.ReferenceGenome;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.Settings;
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
@@ -78,6 +81,10 @@ public final class ProjectService {
     doc.ui.darkMode = MainApp.darkMode;
     if (!stacks.getStacks().isEmpty() && stacks.getStacks().get(0).chromosomeCanvas != null) {
       doc.ui.maneOnly = stacks.getStacks().get(0).chromosomeCanvas.isShowManeOnly();
+    }
+    MainController main = MainController.get();
+    if (main != null) {
+      main.captureDividerPositions(doc.ui);
     }
 
     doc.variantFilter = captureFilter(VcfManager.getInstance().getCurrentFilter());
@@ -147,19 +154,79 @@ public final class ProjectService {
       throw new IllegalArgumentException("projectFile is required");
     }
     ProjectDocument doc = capture(projectFile);
+    finalizeDocumentName(doc, projectFile);
+    writeDocumentAndCache(doc, projectFile);
+    ProjectSessionState.get().setOpened(projectFile, doc.name);
+    UserPreferences.addRecentProject(projectFile.toFile());
+  }
+
+  /**
+   * Capture on the FX thread, then write JSON + variant cache in the background
+   * with the shared loading popup.
+   */
+  public static void saveAsync(Path projectFile, Runnable onSuccess, java.util.function.Consumer<Exception> onError) {
+    if (projectFile == null) {
+      if (onError != null) {
+        onError.accept(new IllegalArgumentException("projectFile is required"));
+      }
+      return;
+    }
+
+    ProjectDocument doc;
+    try {
+      doc = capture(projectFile);
+      finalizeDocumentName(doc, projectFile);
+    } catch (Exception e) {
+      if (onError != null) onError.accept(e);
+      return;
+    }
+
+    final ProjectDocument snapshot = doc;
+    final Exception[] writeError = new Exception[1];
+    ThreadRunner.get().submit("Saving project…",
+        () -> {
+          try {
+            writeDocumentAndCache(snapshot, projectFile);
+            return Boolean.TRUE;
+          } catch (Exception e) {
+            writeError[0] = e;
+            return null;
+          }
+        },
+        ok -> {
+          if (ok == null || writeError[0] != null) {
+            Exception err = writeError[0] != null
+                ? writeError[0]
+                : new IOException("Session save failed");
+            if (onError != null) onError.accept(err);
+            return;
+          }
+          ProjectSessionState.get().setOpened(projectFile, snapshot.name);
+          UserPreferences.addRecentProject(projectFile.toFile());
+          if (onSuccess != null) onSuccess.run();
+        });
+  }
+
+  private static void finalizeDocumentName(ProjectDocument doc, Path projectFile) {
     if (doc.name == null || doc.name.isBlank()) {
       String fn = projectFile.getFileName().toString();
       int dot = fn.lastIndexOf('.');
       doc.name = dot > 0 ? fn.substring(0, dot) : fn;
     }
+  }
+
+  private static void writeDocumentAndCache(ProjectDocument doc, Path projectFile) throws IOException {
     ProjectSerializer.write(doc, projectFile);
     try {
       VariantCacheStore.writeSessionCache(projectFile);
     } catch (Exception e) {
       System.err.println("Failed to write variant session cache: " + e.getMessage());
       e.printStackTrace();
+      if (e instanceof IOException io) {
+        throw io;
+      }
+      throw new IOException("Failed to write variant session cache", e);
     }
-    ProjectSessionState.get().setOpened(projectFile, doc.name);
   }
 
   /**
@@ -187,12 +254,13 @@ public final class ProjectService {
       applyDarkMode(document.ui != null && document.ui.darkMode);
       applyManeOnly(document.ui == null || document.ui.maneOnly);
 
-      ThreadRunner.get().submit("Opening session…",
+      ThreadRunner.get().submit("Opening project…",
           () -> {
             restoreSampleTracks(document, projectFile, warnings);
             restoreVcfs(document, projectFile, warnings);
             Map<String, VariantList> cachedVariants = Map.of();
             try {
+              org.baseplayer.services.LoadingManager.get().setProgress(0, 1);
               cachedVariants = VariantCacheStore.readSessionCache(projectFile, warnings);
             } catch (Exception e) {
               warnings.add("Failed to read variant cache: " + e.getMessage());
@@ -204,8 +272,12 @@ public final class ProjectService {
               restoreFeatureTracks(document, projectFile, warnings);
               restoreFiltersAndViewports(document);
               restoreStacks(document);
+              restoreUiDividers(document);
               String name = document.name;
               ProjectSessionState.get().setOpened(projectFile, name);
+              if (projectFile != null) {
+                UserPreferences.addRecentProject(projectFile.toFile());
+              }
               GenomicCanvas.update.set(!GenomicCanvas.update.get());
 
               boolean usedCache = false;
@@ -255,6 +327,10 @@ public final class ProjectService {
     spec.minDepth = filter.getMinDepth();
     spec.minAlleleFraction = filter.getMinAlleleFraction();
     spec.cancerGenesOnly = filter.isCancerGenesOnly();
+    spec.minSharedSamples = filter.getMinSharedSamples();
+    spec.maxSharedSamples = filter.getMaxSharedSamples();
+    spec.geneLevel = filter.isGeneLevel();
+    spec.comparisonWindowBp = filter.getComparisonWindowBp();
     for (VcfVariantType t : filter.getAllowedTypes()) {
       if (t != null) spec.allowedTypes.add(t.name());
     }
@@ -277,6 +353,10 @@ public final class ProjectService {
     filter.setMinDepth(spec.minDepth);
     filter.setMinAlleleFraction(spec.minAlleleFraction);
     filter.setCancerGenesOnly(spec.cancerGenesOnly);
+    filter.setMinSharedSamples(spec.minSharedSamples > 0 ? spec.minSharedSamples : 1);
+    filter.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
+    filter.setGeneLevel(spec.geneLevel);
+    filter.setComparisonWindowBp(Math.max(0, spec.comparisonWindowBp));
     if (spec.allowedTypes != null && !spec.allowedTypes.isEmpty()) {
       EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
       for (String name : spec.allowedTypes) {
@@ -381,7 +461,7 @@ public final class ProjectService {
       spec.kind = "ucsc";
       spec.ucscTrackId = track.getUcscTrackId();
     } else if (track.getName() != null
-        && track.getName().toLowerCase(Locale.ROOT).contains("gnomad")) {
+        && DefaultFeatureTracks.isGnomad(track)) {
       spec.kind = "gnomad";
     } else {
       spec.kind = "feature";
@@ -431,20 +511,14 @@ public final class ProjectService {
   }
 
   private static void clearUserFeatureTracks() {
+    ServiceRegistry.getInstance().getFeatureTrackViewportRegistry().clearFeatureTracks();
+  }
+
+  private static void seedDefaultFeatureTracks() {
     FeatureTrackViewportRegistry features =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
-    List<Track> toRemove = new ArrayList<>();
-    for (Track track : features.getFeatureTracks()) {
-      if (track instanceof BedTrack || track instanceof BigWigTrack) {
-        toRemove.add(track);
-      } else if (track.getUcscTrackId() != null
-          && !"phyloP100way".equals(track.getUcscTrackId())) {
-        toRemove.add(track);
-      }
-    }
-    for (Track track : toRemove) {
-      features.removeFeatureTrack(track);
-    }
+    features.addFeatureTrack(DefaultFeatureTracks.createPhyloP());
+    features.addFeatureTrack(DefaultFeatureTracks.createGnomad());
   }
 
   private static void restoreSampleTracks(
@@ -567,9 +641,14 @@ public final class ProjectService {
 
   private static void restoreFeatureTracks(
       ProjectDocument document, Path projectFile, List<String> warnings) {
-    if (document.featureTracks == null) return;
     FeatureTrackViewportRegistry features =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
+
+    // Legacy sessions without a featureTracks section keep the built-in defaults.
+    if (document.featureTracks == null) {
+      seedDefaultFeatureTracks();
+      return;
+    }
 
     for (ProjectDocument.FeatureTrackSpec spec : document.featureTracks) {
       if (spec == null || spec.kind == null) continue;
@@ -611,6 +690,10 @@ public final class ProjectService {
             Track existing = findGnomadTrack(features);
             if (existing != null) {
               applyFeatureAppearance(existing, spec);
+            } else {
+              FeatureTrack gnomad = DefaultFeatureTracks.createGnomad();
+              applyFeatureAppearance(gnomad, spec);
+              features.addFeatureTrack(gnomad);
             }
           }
           default -> { /* ignore unknown kinds */ }
@@ -631,8 +714,7 @@ public final class ProjectService {
 
   private static Track findGnomadTrack(FeatureTrackViewportRegistry features) {
     for (Track track : features.getFeatureTracks()) {
-      if (track.getName() != null
-          && track.getName().toLowerCase(Locale.ROOT).contains("gnomad")) {
+      if (DefaultFeatureTracks.isGnomad(track)) {
         return track;
       }
     }
@@ -693,6 +775,13 @@ public final class ProjectService {
           spec.scroll,
           viewportHeight);
     }
+  }
+
+  private static void restoreUiDividers(ProjectDocument document) {
+    if (document.ui == null) return;
+    MainController main = MainController.get();
+    if (main == null) return;
+    main.applyDividerPositions(document.ui);
   }
 
   private static void restoreStacks(ProjectDocument document) {

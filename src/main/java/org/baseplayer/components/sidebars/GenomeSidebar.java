@@ -65,7 +65,7 @@ public class GenomeSidebar extends SidebarBase {
     projectNameLabel.getStyleClass().add("project-name-label");
     projectNameLabel.setMaxWidth(Double.MAX_VALUE);
     projectNameLabel.setWrapText(true);
-    Tooltip.install(projectNameLabel, new Tooltip("Current session"));
+    Tooltip.install(projectNameLabel, new Tooltip("Current project"));
 
     Separator projectSeparator = new Separator();
     projectSeparator.setMaxWidth(Double.MAX_VALUE);

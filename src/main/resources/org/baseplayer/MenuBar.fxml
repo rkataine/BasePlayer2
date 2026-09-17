@@ -23,17 +23,17 @@
     <menus>
       <Menu text="File">
         <items>
+            <MenuItem text="New Project" onAction="#newProject" />
+            <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open Project…" />
+            <SeparatorMenuItem />
             <MenuItem id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM/CRAM file(s)" />
             <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open BED track file(s)" />
             <MenuItem id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig track file(s)" />
             <MenuItem id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF file(s)" />
-            <Menu fx:id="recentFilesMenu" text="Open Recent" onShowing="#populateRecentFilesMenu" />
+            <Menu fx:id="recentFilesMenu" text="Open Recent Samples" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />
-            <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open session" />
-            <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save session" />
-            <MenuItem id="SAVEAS_SES" onAction="#openFileMenu" text="Save session as…" />
-            <SeparatorMenuItem />
-            <MenuItem text="Clear all data" onAction="#clearAllData" />
+            <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save Project" />
+            <MenuItem id="SAVEAS_SES" onAction="#openFileMenu" text="Save Project as…" />
             <SeparatorMenuItem />
           <MenuItem text="Close" onAction="#closeApplication" />
         </items>

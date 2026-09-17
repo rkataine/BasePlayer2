@@ -1,5 +1,6 @@
 package org.baseplayer.controllers;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.components.sidebars.FeatureTrackColumnSidebar;
@@ -9,6 +10,8 @@ import org.baseplayer.components.sidebars.SidebarController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.project.ProjectDocument;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.services.EventCoordinator;
 import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.InitializationService;
@@ -19,6 +22,7 @@ import org.baseplayer.utils.BaseUtils;
 import javafx.application.Platform;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
+import javafx.collections.ListChangeListener;
 import javafx.fxml.FXML;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
@@ -33,6 +37,8 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 
 public class MainController {
+  private static MainController instance;
+
   @FXML private SplitPane alignmentSplitPane;
   @FXML private SplitPane chromosomeSplitPane;
   @FXML private SplitPane chromSplit;
@@ -56,7 +62,7 @@ public class MainController {
 
   public static boolean dividerHovered;
   public static boolean isActive = false;
-  Runtime instance = Runtime.getRuntime();
+  Runtime instanceRuntime = Runtime.getRuntime();
   IntegerProperty memoryUsage = new SimpleIntegerProperty(0);
   
   public static boolean showOnlyCancerGenes = false;
@@ -73,6 +79,7 @@ public class MainController {
   // Unified sidebar controller for all horizontal split panes
   private final SidebarController sidebarController = new SidebarController();
   private boolean updatingVerticalDividers = false;
+  private boolean applyingDividers = false;
   private static final double FEATURE_MIN_HEIGHT_PADDING_PX = 12;
 
   // Shared glasspane over the alignment split area for cross-stack connector arcs.
@@ -87,8 +94,13 @@ public class MainController {
     this.initializationService = new InitializationService();
     this.eventCoordinator = new EventCoordinator(drawStacks);
   }
+
+  public static MainController get() {
+    return instance;
+  }
   
   public void initialize() {
+      instance = this;
       chromSplitPane = chromosomeSplitPane;
       drawPane = alignmentSplitPane;
       featureTracksContentPane = featureTracksContentSplit;
@@ -147,7 +159,7 @@ public class MainController {
     FeatureTrackViewportRegistry featureRegistry =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
     int trackCount = featureRegistry.getDisplayedTrackCount();
-    double bodyHeight = TrackViewportRegistry.MINIMUM_TRACK_ROW_HEIGHT_PIXELS
+    double bodyHeight = TrackViewportRegistry.DEFAULT_TRACK_ROW_HEIGHT_PIXELS
         * Math.max(1, trackCount);
     if (trackCount > 0) {
       featureRegistry.setVisibleTrackRange(0, trackCount - 1, bodyHeight);
@@ -157,6 +169,9 @@ public class MainController {
       featureTracksPane.setMinHeight(0);
       featureTracksPane.setPrefHeight(82 + bodyHeight);
     }
+
+    featureRegistry.getFeatureTracks().addListener((ListChangeListener<? super org.baseplayer.features.Track>) change ->
+        Platform.runLater(this::enforceVerticalDividerBounds));
 
     featureTrackColumnSidebar.draw();
     enforceVerticalDividerBounds();
@@ -341,6 +356,9 @@ public class MainController {
           || Math.abs(clampedPos1 - currentPos1) > 1e-9) {
         setVerticalDividerPositions(clampedPos0, clampedPos1);
       }
+      if (!applyingDividers) {
+        ProjectSessionState.get().markDirty();
+      }
     });
 
     divider1.positionProperty().addListener((obs, oldVal, newVal) -> {
@@ -359,6 +377,9 @@ public class MainController {
       double clampedPos1 = clamp(requestedPos1, minPos1, maxPos1);
       if (Math.abs(clampedPos1 - requestedPos1) > 1e-9) {
         setVerticalDividerPositions(pos0, clampedPos1);
+      }
+      if (!applyingDividers) {
+        ProjectSessionState.get().markDirty();
       }
     });
 
@@ -409,14 +430,18 @@ public class MainController {
 
   private double getFeatureTracksFloorHeight() {
     var featureRegistry = ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
+    // No tracks: allow the feature pane to collapse fully.
+    if (featureRegistry.getDisplayedTrackCount() <= 0) {
+      return 0;
+    }
     double masterHeight = Math.max(
         TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
         featureRegistry.getMasterBandHeightPixels());
     int bodySlots = featureRegistry.getVisibleTrackSlotCount();
-    if (bodySlots <= 0 && featureRegistry.getDisplayedTrackCount() > 0) {
+    if (bodySlots <= 0) {
       bodySlots = 1;
     }
-    double bodyHeight = bodySlots * TrackViewportRegistry.MINIMUM_TRACK_ROW_HEIGHT_PIXELS;
+    double bodyHeight = bodySlots * TrackViewportRegistry.DEFAULT_TRACK_ROW_HEIGHT_PIXELS;
     double floor = masterHeight + bodyHeight;
     if (featureTracksPane != null) {
       floor = Math.max(floor, featureTracksPane.getMinHeight());
@@ -447,7 +472,7 @@ public class MainController {
   
   void addMemUpdateListener() {
     memoryUsage.addListener((observable, oldValue, newValue) -> {
-      int maxMem = BaseUtils.toMegabytes.apply(instance.maxMemory());
+      int maxMem = BaseUtils.toMegabytes.apply(instanceRuntime.maxMemory());
       MenuBarController.updateMemoryBar(newValue.intValue(), maxMem);
     });
   }
@@ -591,7 +616,85 @@ public class MainController {
   }
   static void setDividerListeners() {
     EventCoordinator.synchronizeDividers(drawPane, chromSplitPane, featureTracksContentPane);
+    if (drawPane != null) {
+      for (SplitPane.Divider divider : drawPane.getDividers()) {
+        divider.positionProperty().addListener((obs, oldVal, newVal) -> {
+          MainController ctrl = instance;
+          if (ctrl == null || ctrl.applyingDividers) return;
+          ProjectSessionState.get().markDirty();
+        });
+      }
+    }
   }
+
+  /**
+   * Snapshot vertical + horizontal SplitPane divider positions into {@code ui}.
+   */
+  public void captureDividerPositions(ProjectDocument.UiSpec ui) {
+    if (ui == null) return;
+    if (mainSplit != null && !mainSplit.getDividers().isEmpty()) {
+      ui.mainSplitDividers = toDividerList(mainSplit.getDividerPositions());
+    }
+    ui.sidebarDivider = sidebarController.getDividerPosition();
+    if (drawPane != null && drawPane.getDividers().size() > 0) {
+      ui.columnDividers = toDividerList(drawPane.getDividerPositions());
+    }
+  }
+
+  /**
+   * Restore divider positions from a session. Call after tracks/stacks are restored;
+   * applies twice via {@code runLater} so SplitPane layout accepts the values.
+   */
+  public void applyDividerPositions(ProjectDocument.UiSpec ui) {
+    if (ui == null) return;
+    applyingDividers = true;
+    sidebarController.setSuppressSessionDirty(true);
+    try {
+      applyDividerPositionsNow(ui);
+    } catch (RuntimeException e) {
+      applyingDividers = false;
+      sidebarController.setSuppressSessionDirty(false);
+      throw e;
+    }
+    Platform.runLater(() -> {
+      try {
+        applyDividerPositionsNow(ui);
+        enforceVerticalDividerBounds();
+      } finally {
+        applyingDividers = false;
+        sidebarController.setSuppressSessionDirty(false);
+      }
+    });
+  }
+
+  private void applyDividerPositionsNow(ProjectDocument.UiSpec ui) {
+    if (ui.mainSplitDividers != null && ui.mainSplitDividers.size() >= 2 && mainSplit != null) {
+      double pos0 = ui.mainSplitDividers.get(0);
+      double pos1 = ui.mainSplitDividers.get(1);
+      setVerticalDividerPositions(pos0, pos1);
+    }
+    if (ui.sidebarDivider != null) {
+      sidebarController.setDividerPosition(ui.sidebarDivider);
+    }
+    if (ui.columnDividers != null && !ui.columnDividers.isEmpty()
+        && drawPane != null && chromSplitPane != null && featureTracksContentPane != null) {
+      double[] positions = ui.columnDividers.stream().mapToDouble(Double::doubleValue).toArray();
+      if (positions.length == drawPane.getDividers().size()) {
+        drawPane.setDividerPositions(positions);
+        featureTracksContentPane.setDividerPositions(positions);
+        chromSplitPane.setDividerPositions(positions);
+      }
+    }
+  }
+
+  private static List<Double> toDividerList(double[] positions) {
+    List<Double> list = new ArrayList<>(positions.length);
+    for (double p : positions) {
+      list.add(p);
+    }
+    return list;
+  }
+
   void takeSnapshot() {
     eventCoordinator.takeCanvasSnapshots();
   }

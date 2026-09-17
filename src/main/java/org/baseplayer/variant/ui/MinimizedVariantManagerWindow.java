@@ -1,5 +1,6 @@
 package org.baseplayer.variant.ui;
 
+import javafx.beans.value.ChangeListener;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
@@ -11,6 +12,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
+import org.baseplayer.MainApp;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
@@ -24,6 +26,7 @@ public class MinimizedVariantManagerWindow {
     private static Stage managedMainStage;
 
     private Stage minimizedStage;
+    private ChangeListener<Boolean> mainAppShowingListener;
 
     private MinimizedVariantManagerWindow(Stage mainStage) {
         managedMainStage = mainStage;
@@ -35,6 +38,9 @@ public class MinimizedVariantManagerWindow {
         }
 
         if (instance == null || !Objects.equals(MinimizedVariantManagerWindow.managedMainStage, mainStage)) {
+            if (instance != null) {
+                instance.cleanup();
+            }
             instance = new MinimizedVariantManagerWindow(mainStage);
         }
 
@@ -55,6 +61,13 @@ public class MinimizedVariantManagerWindow {
         }
     }
 
+    /** True when the floating minimized widget is currently showing. */
+    public static boolean isShowing() {
+        return instance != null
+            && instance.minimizedStage != null
+            && instance.minimizedStage.isShowing();
+    }
+
     private void minimize() {
         if (minimizedStage != null && minimizedStage.isShowing()) {
             minimizedStage.toFront();
@@ -67,23 +80,36 @@ public class MinimizedVariantManagerWindow {
     }
 
     private void expand() {
-        if (!managedMainStage.isShowing()) {
+        if (managedMainStage != null && !managedMainStage.isShowing()) {
             managedMainStage.show();
         }
-        managedMainStage.toFront();
-        managedMainStage.requestFocus();
+        if (managedMainStage != null) {
+            managedMainStage.toFront();
+            managedMainStage.requestFocus();
+        }
 
+        closeMinimizedStage();
+    }
+
+    private void cleanup() {
+        detachMainAppListener();
+        closeMinimizedStage();
+    }
+
+    private void closeMinimizedStage() {
         if (minimizedStage != null) {
+            minimizedStage.setOnCloseRequest(null);
             minimizedStage.close();
             minimizedStage = null;
         }
     }
 
-    private void cleanup() {
-        if (minimizedStage != null) {
-            minimizedStage.close();
-            minimizedStage = null;
+    private void detachMainAppListener() {
+        Stage appStage = MainApp.stage;
+        if (appStage != null && mainAppShowingListener != null) {
+            appStage.showingProperty().removeListener(mainAppShowingListener);
         }
+        mainAppShowingListener = null;
     }
 
     private void createAndShowWindow() {
@@ -91,6 +117,10 @@ public class MinimizedVariantManagerWindow {
         minimizedStage.initStyle(StageStyle.TRANSPARENT);
         minimizedStage.setResizable(false);
         minimizedStage.setAlwaysOnTop(true);
+        // Keep the floating chip tied to the main app so it cannot outlive it.
+        if (MainApp.stage != null) {
+            minimizedStage.initOwner(MainApp.stage);
+        }
 
         FontIcon expandIcon = new FontIcon(FontAwesomeSolid.EXPAND);
         expandIcon.setIconSize(18);
@@ -158,6 +188,21 @@ public class MinimizedVariantManagerWindow {
             handleExpand();
         });
 
+        attachMainAppCloseListener();
         minimizedStage.show();
+    }
+
+    private void attachMainAppCloseListener() {
+        Stage appStage = MainApp.stage;
+        if (appStage == null) {
+            return;
+        }
+        detachMainAppListener();
+        mainAppShowingListener = (obs, wasShowing, isShowing) -> {
+            if (!isShowing) {
+                handleCleanup();
+            }
+        };
+        appStage.showingProperty().addListener(mainAppShowingListener);
     }
 }

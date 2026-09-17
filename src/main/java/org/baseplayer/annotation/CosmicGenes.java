@@ -110,8 +110,6 @@ public final class CosmicGenes {
         censusData.put(entry.geneSymbol(), entry);
       }
       
-      System.out.println("Loaded " + censusData.size() + " COSMIC census genes from TSV");
-      
     } catch (IOException e) {
       System.err.println("Failed to load COSMIC census TSV: " + e.getMessage());
     }
@@ -211,7 +209,6 @@ public final class CosmicGenes {
         censusData.put(entry.geneSymbol(), entry);
       }
       
-      System.out.println("Loaded " + censusData.size() + " COSMIC census genes from cache");
       return true;
       
     } catch (IOException e) {

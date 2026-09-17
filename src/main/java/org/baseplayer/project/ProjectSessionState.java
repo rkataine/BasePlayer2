@@ -8,6 +8,7 @@ import java.util.function.Consumer;
 
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.features.DefaultFeatureTracks;
 import org.baseplayer.features.Track;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.services.ServiceRegistry;
@@ -150,7 +151,7 @@ public final class ProjectSessionState {
         return true;
       }
       String ucscId = track.getUcscTrackId();
-      if (ucscId != null && !"phyloP100way".equals(ucscId)) {
+      if (ucscId != null && !DefaultFeatureTracks.PHYLOP_UCSC_ID.equals(ucscId)) {
         return true;
       }
     }

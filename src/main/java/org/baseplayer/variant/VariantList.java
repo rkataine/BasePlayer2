@@ -1,7 +1,12 @@
 package org.baseplayer.variant;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.BiPredicate;
 
 import org.baseplayer.samples.SampleTrack;
@@ -57,6 +62,21 @@ public class VariantList {
     private String visibleFilterKey;
     /** Bumped on every visible-chain clear/rebuild so draw seekers can detect staleness. */
     private int visibleChainGeneration;
+
+    /**
+     * Gene name (lower case) → track indices of samples with a qualifying mutation in that gene.
+     * Built for the current {@link #geneSampleIndexFilterKey}; used for gene-level filtering
+     * and gene-click sample subsets. Not stored on annotation gene objects.
+     */
+    private Map<String, Set<Integer>> geneSampleIndex = Map.of();
+    private String geneSampleIndexFilterKey;
+
+    /**
+     * Soft-match cluster → union of mutated sample track indices (identity-keyed by node).
+     * Built when {@link VariantFilter#hasComparisonWindow()} is true.
+     */
+    private Map<VariantNode, Set<Integer>> clusterSampleIndex = Map.of();
+    private String clusterSampleIndexFilterKey;
     
     /**
      * Tracks a genomic region that has been loaded.
@@ -104,6 +124,7 @@ public class VariantList {
             head.addSample(call);
             tail = head;
             size = 1;
+            invalidateSampleIndexes();
             return head;
         }
 
@@ -118,6 +139,7 @@ public class VariantList {
         if (current != null && current.position == position &&
             current.ref.equals(ref) && current.alt.equals(alt)) {
             current.addSample(call);
+            invalidateSampleIndexes();
             return current;
         }
 
@@ -136,6 +158,7 @@ public class VariantList {
         }
 
         size++;
+        invalidateSampleIndexes();
         return newNode;
     }
 
@@ -161,6 +184,7 @@ public class VariantList {
             head.addSample(call);
             tail = head;
             size = 1;
+            invalidateSampleIndexes();
             return head;
         }
 
@@ -182,6 +206,7 @@ public class VariantList {
         if (current != null && current.position == position
                 && current.ref.equals(ref) && current.alt.equals(alt)) {
             current.addSample(call);
+            invalidateSampleIndexes();
             return current;
         }
 
@@ -196,6 +221,7 @@ public class VariantList {
             if (current == null) tail = newNode;
         }
         size++;
+        invalidateSampleIndexes();
         return newNode;
     }
 
@@ -231,7 +257,6 @@ public class VariantList {
      * Invalidate the filter-visible skip chain. Next {@link #ensureVisibleChain} rebuilds it.
      */
     public void clearVisibleChain() {
-        int previousCount = visibleByPosition.size();
         for (VariantNode node : visibleByPosition) {
             node.nextVisible = null;
             node.prevVisible = null;
@@ -241,9 +266,9 @@ public class VariantList {
         visibleSvByPosition.clear();
         visibleFilterKey = null;
         visibleChainGeneration++;
-        System.out.println("[VisibleChain] CLEAR chrom=" + chromosome
-            + " clearedNodes=" + previousCount
-            + " gen=" + visibleChainGeneration);
+        // Mutations and filter rebuilds both go through here; drop stale gene→sample unions.
+        clearGeneSampleIndex();
+        clearClusterSampleIndex();
     }
 
     /**
@@ -252,15 +277,20 @@ public class VariantList {
      * sample call passing sample thresholds (same rule as drawing).
      */
     public void rebuildVisibleChain(VariantFilter filter) {
-        long t0 = System.nanoTime();
         clearVisibleChain();
+
+        Map<String, Set<Integer>> geneTracks = null;
+        Map<VariantNode, Set<Integer>> clusterTracks = null;
+        if (filter != null && filter.isGeneLevel()) {
+            geneTracks = ensureGeneSampleIndex(filter);
+        } else if (filter != null && filter.hasComparisonWindow()) {
+            clusterTracks = ensureClusterSampleIndex(filter);
+        }
 
         VariantNode prevVisible = null;
         VariantNode current = head;
-        int scanned = 0;
         while (current != null) {
-            scanned++;
-            if (isDrawableUnderFilter(current, filter)) {
+            if (isDrawableUnderFilter(current, filter, geneTracks, clusterTracks)) {
                 current.nextVisible = null;
                 current.prevVisible = prevVisible;
                 if (prevVisible == null) {
@@ -281,15 +311,200 @@ public class VariantList {
         }
 
         visibleFilterKey = filterKeyOf(filter);
-        long ms = (System.nanoTime() - t0) / 1_000_000L;
-        System.out.println("[VisibleChain] REBUILD chrom=" + chromosome
-            + " scanned=" + scanned
-            + " visible=" + visibleByPosition.size()
-            + " sv=" + visibleSvByPosition.size()
-            + " head=" + (visibleHead == null ? "null" : ("pos=" + visibleHead.position))
-            + " filterKey=" + visibleFilterKey
-            + " gen=" + visibleChainGeneration
-            + " " + ms + "ms");
+    }
+
+    /**
+     * Build or reuse gene → mutated sample track indices under {@code filter}'s base
+     * (type/effect/Q/DP/AF) rules. Safe to call when gene-level mode is off (still useful
+     * for gene-click subsets).
+     */
+    public Map<String, Set<Integer>> ensureGeneSampleIndex(VariantFilter filter) {
+        String key = geneSampleIndexKey(filter);
+        if (key.equals(geneSampleIndexFilterKey) && geneSampleIndex != null) {
+            return geneSampleIndex;
+        }
+        Map<String, Set<Integer>> index = new HashMap<>();
+        VariantNode current = head;
+        while (current != null) {
+            if (filter == null || filter.passesBaseNodeLevel(current)) {
+                String gene = geneKeyOf(current);
+                if (gene != null) {
+                    Set<Integer> tracks = index.computeIfAbsent(gene, g -> new HashSet<>());
+                    for (VariantNode.SampleCall call : current.getSamples()) {
+                        if (call == null) continue;
+                        if (filter != null && !filter.passesSampleThresholds(current, call)) {
+                            continue;
+                        }
+                        int trackIndex = call.getTrackIndex();
+                        if (trackIndex >= 0) {
+                            tracks.add(trackIndex);
+                        }
+                    }
+                }
+            }
+            current = current.next;
+        }
+        geneSampleIndex = index;
+        geneSampleIndexFilterKey = key;
+        return index;
+    }
+
+    /** Track indices mutated in {@code geneName} under the filter's base sample rules. */
+    public Set<Integer> getGeneSampleTracks(String geneName, VariantFilter filter) {
+        if (geneName == null || geneName.isBlank()) {
+            return Set.of();
+        }
+        Map<String, Set<Integer>> index = ensureGeneSampleIndex(filter);
+        Set<Integer> tracks = index.get(geneName.toLowerCase(Locale.ROOT));
+        return tracks != null ? tracks : Set.of();
+    }
+
+    public void clearGeneSampleIndex() {
+        geneSampleIndex = Map.of();
+        geneSampleIndexFilterKey = null;
+    }
+
+    /**
+     * Build or reuse per-variant local window → sample track unions for comparison window.
+     * For each allele, samples are the union of all soft-matching alleles within the window
+     * (non-transitive), so min/max shared-sample bounds apply to local hotspot density —
+     * including dropping fragile/repeat clusters via the max thumb.
+     * Gene-level mode takes precedence and should not call this.
+     */
+    public Map<VariantNode, Set<Integer>> ensureClusterSampleIndex(VariantFilter filter) {
+        if (filter == null || !filter.hasComparisonWindow()) {
+            return Map.of();
+        }
+        String key = clusterSampleIndexKey(filter);
+        if (key.equals(clusterSampleIndexFilterKey) && clusterSampleIndex != null) {
+            return clusterSampleIndex;
+        }
+
+        ArrayList<VariantNode> nodes = new ArrayList<>();
+        VariantNode current = head;
+        while (current != null) {
+            if (filter.passesBaseNodeLevel(current)) {
+                nodes.add(current);
+            }
+            current = current.next;
+        }
+
+        int n = nodes.size();
+        @SuppressWarnings("unchecked")
+        Set<Integer>[] nodeTracks = new Set[n];
+        for (int i = 0; i < n; i++) {
+            Set<Integer> tracks = new HashSet<>();
+            for (VariantNode.SampleCall call : nodes.get(i).getSamples()) {
+                if (call == null) continue;
+                if (!filter.passesSampleThresholds(nodes.get(i), call)) continue;
+                int trackIndex = call.getTrackIndex();
+                if (trackIndex >= 0) {
+                    tracks.add(trackIndex);
+                }
+            }
+            nodeTracks[i] = tracks;
+        }
+
+        // Sweep within compatible families; indel/SV cross-match uses a shared "svish" bucket.
+        Map<String, ArrayList<Integer>> byFamily = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            String family = sweepBucket(nodes.get(i).type);
+            byFamily.computeIfAbsent(family, f -> new ArrayList<>()).add(i);
+        }
+
+        int windowBp = filter.getComparisonWindowBp();
+        Map<VariantNode, Set<Integer>> index = new java.util.IdentityHashMap<>(Math.max(16, n * 2));
+        for (ArrayList<Integer> idxs : byFamily.values()) {
+            for (int a = 0; a < idxs.size(); a++) {
+                int i = idxs.get(a);
+                VariantNode ni = nodes.get(i);
+                Set<Integer> union = new HashSet<>(nodeTracks[i]);
+                long iStart = ni.position;
+                long iEnd = VariantComparisonClusters.clusterEnd(ni);
+                long leftBound = iStart - 2L * windowBp;
+                long rightBound = iEnd + 2L * windowBp;
+
+                for (int b = a - 1; b >= 0; b--) {
+                    int j = idxs.get(b);
+                    VariantNode nj = nodes.get(j);
+                    if (VariantComparisonClusters.clusterEnd(nj) < leftBound) {
+                        break;
+                    }
+                    if (VariantComparisonClusters.softMatch(ni, nj, windowBp)) {
+                        union.addAll(nodeTracks[j]);
+                    }
+                }
+                for (int b = a + 1; b < idxs.size(); b++) {
+                    int j = idxs.get(b);
+                    VariantNode nj = nodes.get(j);
+                    if (nj.position > rightBound) {
+                        break;
+                    }
+                    if (VariantComparisonClusters.softMatch(ni, nj, windowBp)) {
+                        union.addAll(nodeTracks[j]);
+                    }
+                }
+                index.put(ni, union);
+            }
+        }
+
+        clusterSampleIndex = index;
+        clusterSampleIndexFilterKey = key;
+        return index;
+    }
+
+    /** Sweep bucket: SNVs alone; indels+SVs together for fragile-site soft-match. */
+    private static String sweepBucket(VcfVariantType type) {
+        String family = VariantComparisonClusters.typeFamily(type);
+        if ("del".equals(family) || "ins".equals(family) || "sv".equals(family)) {
+            return "svish";
+        }
+        return family;
+    }
+
+    public void clearClusterSampleIndex() {
+        clusterSampleIndex = Map.of();
+        clusterSampleIndexFilterKey = null;
+    }
+
+    private void invalidateSampleIndexes() {
+        geneSampleIndexFilterKey = null;
+        clusterSampleIndexFilterKey = null;
+    }
+
+    private static String geneKeyOf(VariantNode node) {
+        if (node == null || node.annotation == null || node.annotation.geneName() == null) {
+            return null;
+        }
+        String name = node.annotation.geneName().trim();
+        return name.isEmpty() ? null : name.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Index key ignores shared-sample / group / geneLevel / window flags so the same index
+     * serves gene-level filtering and gene-click extraction.
+     */
+    private static String geneSampleIndexKey(VariantFilter filter) {
+        if (filter == null) {
+            return "";
+        }
+        return "base|"
+            + filter.getMinQuality()
+            + "|" + filter.getMinDepth()
+            + "|" + filter.getMinAlleleFraction()
+            + "|" + filter.isCancerGenesOnly()
+            + "|" + filter.isShowCoding()
+            + "|" + filter.isShowIntronic()
+            + "|" + filter.isShowIntergenic()
+            + "|" + filter.getAllowedTypes()
+            + "|" + filter.getAllowedEffects()
+            + "|" + filter.getInfoFieldFilters()
+            + "|" + filter.getAllowedFilterValues()
+            + "|" + filter.isFilterFieldsActive();
+    }
+
+    private static String clusterSampleIndexKey(VariantFilter filter) {
+        return geneSampleIndexKey(filter) + "|cmpWindow=" + (filter == null ? 0 : filter.getComparisonWindowBp());
     }
 
     /** Generation counter for the filter-visible skip chain; seekers use this to invalidate. */
@@ -310,9 +525,6 @@ public class VariantList {
         if (key.equals(visibleFilterKey)) {
             return;
         }
-        System.out.println("[VisibleChain] ENSURE rebuild needed chrom=" + chromosome
-            + " oldKey=" + visibleFilterKey
-            + " newKey=" + key);
         rebuildVisibleChain(filter);
     }
 
@@ -356,14 +568,30 @@ public class VariantList {
         return filter == null ? "" : filter.toStableKey();
     }
 
-    private static boolean isDrawableUnderFilter(VariantNode node, VariantFilter filter) {
+
+    private static boolean isDrawableUnderFilter(
+            VariantNode node,
+            VariantFilter filter,
+            Map<String, Set<Integer>> geneSampleIndex,
+            Map<VariantNode, Set<Integer>> clusterSampleIndex) {
         if (node == null || node.getSampleCount() == 0) {
             return false;
         }
         if (filter == null) {
             return true;
         }
-        if (!filter.passesNodeLevel(node)) {
+        Set<Integer> aggregatedTracks = null;
+        if (filter.isGeneLevel() && geneSampleIndex != null) {
+            String gene = geneKeyOf(node);
+            if (gene != null) {
+                aggregatedTracks = geneSampleIndex.getOrDefault(gene, Set.of());
+            } else {
+                aggregatedTracks = Set.of();
+            }
+        } else if (filter.hasComparisonWindow() && clusterSampleIndex != null) {
+            aggregatedTracks = clusterSampleIndex.getOrDefault(node, Set.of());
+        }
+        if (!filter.passesNodeLevel(node, aggregatedTracks)) {
             return false;
         }
         for (VariantNode.SampleCall call : node.getSamples()) {
@@ -547,6 +775,7 @@ public class VariantList {
      */
     public void clear() {
         clearVisibleChain();
+        clearGeneSampleIndex();
         head = null;
         tail = null;
         size = 0;
@@ -703,6 +932,8 @@ public class VariantList {
      */
     public void setAnnotated(boolean annotated) {
         this.annotated = annotated;
+        // Gene names drive the sample index; invalidate when annotation state changes.
+        clearGeneSampleIndex();
     }
     
     /**

@@ -1,13 +1,13 @@
 package org.baseplayer.draw;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.features.FeatureTrack;
+import org.baseplayer.features.DefaultFeatureTracks;
 import org.baseplayer.genome.GenomicRegion;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.draw.ChromosomeCanvas;
-import org.baseplayer.io.GnomadDataParser;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.services.DrawStackManager;
@@ -215,19 +215,12 @@ public class DrawStack {
     VBox.setVgrow(featureBodyStack, Priority.ALWAYS);
     featureColumn.getChildren().addAll(featureMasterStack, featureBodyStack);
 
-    if (featureTrackCanvas.getTracks().isEmpty()) {
-      FeatureTrack conservationTrack =
-          FeatureTrack.forUcscTrack("phyloP100way", "PhyloP Conservation");
-      conservationTrack.setVisible(false);
-      featureTrackCanvas.addTrack(conservationTrack);
-
-      GnomadDataParser gnomadParser = new GnomadDataParser();
-      FeatureTrack gnomadTrack = new FeatureTrack(
-          "gnomAD Variants", "gnomAD v4", gnomadParser::fetch);
-      gnomadTrack.setCoordinateBase(1);
-      gnomadTrack.setPopupContentBuilder(gnomadParser::buildPopupContent);
-      gnomadTrack.setVisible(false);
-      featureTrackCanvas.addTrack(gnomadTrack);
+    // Seed defaults only for a fresh untitled session. An open project file owns
+    // its feature-track list — absence there must not be refilled by a new stack.
+    if (featureTrackCanvas.getTracks().isEmpty()
+        && ProjectSessionState.get().getFile() == null) {
+      featureTrackCanvas.addTrack(DefaultFeatureTracks.createPhyloP());
+      featureTrackCanvas.addTrack(DefaultFeatureTracks.createGnomad());
     }
 
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());

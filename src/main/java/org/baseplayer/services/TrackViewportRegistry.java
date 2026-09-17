@@ -21,7 +21,8 @@ public abstract class TrackViewportRegistry {
   }
 
   public static final double DEFAULT_MASTER_BAND_HEIGHT_PIXELS = 28;
-  public static final double MINIMUM_TRACK_ROW_HEIGHT_PIXELS = 20;
+  public static final double DEFAULT_TRACK_ROW_HEIGHT_PIXELS = 20;
+  public static final double MINIMUM_TRACK_ROW_HEIGHT_PIXELS = 1;
 
   private final IntegerProperty hoveredTrackIndex = new SimpleIntegerProperty(-1);
   private final DoubleProperty masterBandHeightPixels =
@@ -33,6 +34,7 @@ public abstract class TrackViewportRegistry {
   private double trackRowHeightPixels = 0;
   private double trackViewportHeightPixels = 0;
   private boolean trackRowHeightLocked = false;
+  private boolean pendingDefaultRowHeightFit = false;
 
   public abstract int getDisplayedTrackCount();
 
@@ -177,6 +179,7 @@ public abstract class TrackViewportRegistry {
 
   public void clearVisibleTrackRange() {
     trackRowHeightLocked = false;
+    pendingDefaultRowHeightFit = false;
     setVisibleTrackRange(-1, -1, 0, 0, 0);
   }
 
@@ -209,14 +212,6 @@ public abstract class TrackViewportRegistry {
         rowHeightPixels, verticalScrollOffsetPixels, trackViewportHeightPixels);
   }
 
-  /**
-   * Sync viewport math to the current body-canvas height.
-   *
-   * <p>When row height is unlocked, visible rows are refit so they always fill
-   * {@code availableHeightPixels} (or the visible window is shrunk if the pane
-   * is shorter than {@link #MINIMUM_TRACK_ROW_HEIGHT_PIXELS} per row). When
-   * locked (e.g. during scrollbar drag), only scroll is clamped.
-   */
   public void ensureTrackRowHeightFitsViewport(double availableHeightPixels) {
     if (firstVisibleTrackSlot < 0 || lastVisibleTrackSlot < 0) {
       clampVerticalScrollOffsetForViewport(availableHeightPixels);
@@ -228,16 +223,19 @@ public abstract class TrackViewportRegistry {
       return;
     }
 
+    double minRowHeight = pendingDefaultRowHeightFit
+        ? DEFAULT_TRACK_ROW_HEIGHT_PIXELS
+        : MINIMUM_TRACK_ROW_HEIGHT_PIXELS;
+    pendingDefaultRowHeightFit = false;
+
     int visibleCount = getVisibleTrackSlotCount();
     double rawHeight = availableHeightPixels / Math.max(1, visibleCount);
-    if (rawHeight < MINIMUM_TRACK_ROW_HEIGHT_PIXELS) {
-      int tracksFit = Math.max(1, (int) (availableHeightPixels / MINIMUM_TRACK_ROW_HEIGHT_PIXELS));
+    if (rawHeight < minRowHeight) {
+      int tracksFit = Math.max(1, (int) (availableHeightPixels / minRowHeight));
       int firstVis = Math.max(0, firstVisibleTrackSlot);
-      // NaN scroll: snap to first*height. Passing a stale offset after a height/window
-      // change desyncs the window from the rail and looks like the range was cleared.
       setVisibleTrackRange(
           firstVis, firstVis + tracksFit - 1,
-          MINIMUM_TRACK_ROW_HEIGHT_PIXELS, Double.NaN, availableHeightPixels);
+          minRowHeight, Double.NaN, availableHeightPixels);
     } else {
       double alignedScroll = firstVisibleTrackSlot * rawHeight;
       boolean heightUnchanged = Math.abs(rawHeight - trackRowHeightPixels) <= 1e-9
@@ -254,11 +252,13 @@ public abstract class TrackViewportRegistry {
 
   public void showAllTracksAndResetRowHeight() {
     trackRowHeightLocked = false;
+    pendingDefaultRowHeightFit = true;
     setVisibleTrackRange(0, Integer.MAX_VALUE, 0, 0, trackViewportHeightPixels);
   }
 
   public void includeNewTracksAtEndAndResetRowHeight() {
     trackRowHeightLocked = false;
+    pendingDefaultRowHeightFit = true;
     int first = firstVisibleTrackSlot < 0 ? 0 : firstVisibleTrackSlot;
     setVisibleTrackRange(
         first, Integer.MAX_VALUE, 0,

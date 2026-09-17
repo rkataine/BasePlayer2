@@ -99,6 +99,7 @@ public class ViewCommands {
     if (window instanceof Stage stage) {
       // Avoid re-prompting from setOnCloseRequest after user already confirmed.
       stage.setOnCloseRequest(null);
+      org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleCleanup();
       stage.close();
     }
   }

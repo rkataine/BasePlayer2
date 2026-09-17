@@ -1953,6 +1953,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return;
     }
     featureRegistry.removeFeatureTrack(track);
+    org.baseplayer.project.ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 

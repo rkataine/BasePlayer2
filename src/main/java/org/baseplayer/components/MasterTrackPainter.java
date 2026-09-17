@@ -106,11 +106,14 @@ public class MasterTrackPainter {
       double masterTrackHeight) {
     drawVariantDensityOverview(gc, drawStack, canvasWidth, masterTrackHeight);
     renderMasterMethylation(gc, canvasWidth, masterTrackHeight);
-    
-    // Single separator line at the bottom
-    gc.setStroke(DrawColors.COVERAGE_SEPARATOR);
-    gc.setLineWidth(1.0);
-    gc.strokeLine(0, masterTrackHeight, canvasWidth, masterTrackHeight);
+
+    if (!sampleRegistry.getDisplayedTrackIndices().isEmpty() && masterTrackHeight > 1) {
+      // Inside the band (y == height is clipped); separates aggregate from track body.
+      gc.setStroke(DrawColors.BORDER);
+      gc.setLineWidth(1.0);
+      double y = Math.floor(masterTrackHeight) - 0.5;
+      gc.strokeLine(0, y, canvasWidth, y);
+    }
   }
 
   private void renderMasterMethylation(GraphicsContext gc, double canvasWidth, double masterTrackHeight) {

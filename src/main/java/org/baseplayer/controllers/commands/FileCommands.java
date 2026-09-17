@@ -28,7 +28,7 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 /**
- * Handles file operations: loading BAM, VCF, BED, BigWig files and session open/save.
+ * Handles file operations: loading BAM, VCF, BED, BigWig files and project open/save.
  */
 public class FileCommands {
 
@@ -73,9 +73,16 @@ public class FileCommands {
   }
 
   public static void openSession() {
-    if (!confirmDiscardIfDirty()) return;
+    openSessionFromChooser();
+  }
 
-    FileChooser chooser = sessionChooser("Open session");
+  /**
+   * @return true if a session was chosen and load started
+   */
+  public static boolean openSessionFromChooser() {
+    if (!confirmDiscardIfDirty()) return false;
+
+    FileChooser chooser = sessionChooser("Open Project");
     File lastDir = UserPreferences.getLastDirectory("JSON");
     if (lastDir != null) {
       try {
@@ -83,15 +90,38 @@ public class FileCommands {
       } catch (IllegalArgumentException ignored) { /* default */ }
     }
     File file = chooser.showOpenDialog(MainApp.stage);
-    if (file == null) return;
+    if (file == null) return false;
     UserPreferences.setLastDirectory("JSON", file.getParentFile());
+    return loadSessionFile(file.toPath());
+  }
+
+  /**
+   * Open a project file. Does not show a chooser.
+   *
+   * @return true if load started successfully
+   */
+  public static boolean openSession(Path path) {
+    if (path == null) return false;
+    if (!confirmDiscardIfDirty()) return false;
+    return loadSessionFile(path);
+  }
+
+  private static boolean loadSessionFile(Path path) {
+    File file = path.toFile();
+    if (!file.exists() || !file.isFile()) {
+      showError("Could not open project", "File not found:\n" + path);
+      return false;
+    }
 
     try {
-      Path path = file.toPath();
       ProjectDocument doc = ProjectSerializer.read(path);
       ProjectService.loadAsync(path, doc, null);
+      UserPreferences.addRecentProject(file);
+      UserPreferences.setLastDirectory("JSON", file.getParentFile());
+      return true;
     } catch (Exception e) {
-      showError("Could not open session", e.getMessage());
+      showError("Could not open project", e.getMessage());
+      return false;
     }
   }
 
@@ -99,16 +129,14 @@ public class FileCommands {
     ProjectSessionState session = ProjectSessionState.get();
     Path existing = session.getFile();
     if (!forceSaveAs && existing != null) {
-      try {
-        ProjectService.save(existing);
-        UserPreferences.addRecentFile("JSON", existing.toFile());
-      } catch (Exception e) {
-        showError("Could not save session", e.getMessage());
-      }
+      ProjectService.saveAsync(
+          existing,
+          null,
+          e -> showError("Could not save project", e != null ? e.getMessage() : null));
       return;
     }
 
-    FileChooser chooser = sessionChooser("Save session");
+    FileChooser chooser = sessionChooser("Save Project");
     File lastDir = UserPreferences.getLastDirectory("JSON");
     if (lastDir != null) {
       try {
@@ -120,7 +148,7 @@ public class FileCommands {
     } else if (session.getName() != null && !"Untitled".equals(session.getName())) {
       chooser.setInitialFileName(session.getName() + ".bpproj");
     } else {
-      chooser.setInitialFileName("session.bpproj");
+      chooser.setInitialFileName("project.bpproj");
     }
 
     File file = chooser.showSaveDialog(MainApp.stage);
@@ -129,12 +157,10 @@ public class FileCommands {
       file = new File(file.getParentFile(), file.getName() + ".bpproj");
     }
     UserPreferences.setLastDirectory("JSON", file.getParentFile());
-    try {
-      ProjectService.save(file.toPath());
-      UserPreferences.addRecentFile("JSON", file);
-    } catch (Exception e) {
-      showError("Could not save session", e.getMessage());
-    }
+    ProjectService.saveAsync(
+        file.toPath(),
+        null,
+        e -> showError("Could not save project", e != null ? e.getMessage() : null));
   }
 
   /**
@@ -149,7 +175,7 @@ public class FileCommands {
     Stage dialog = new Stage();
     dialog.initModality(Modality.APPLICATION_MODAL);
     dialog.initOwner(MainApp.stage);
-    dialog.setTitle("Unsaved session");
+    dialog.setTitle("Unsaved project");
     dialog.setResizable(false);
 
     VBox root = new VBox(12);
@@ -161,7 +187,7 @@ public class FileCommands {
     title.setWrapText(true);
     title.setMaxWidth(360);
 
-    Label detail = new Label("Your session has unsaved changes.");
+    Label detail = new Label("Your project has unsaved changes.");
     detail.setStyle("-fx-font-size: 12px; -fx-text-fill: #cccccc;");
     detail.setWrapText(true);
     detail.setMaxWidth(360);
@@ -205,19 +231,85 @@ public class FileCommands {
     dialog.showAndWait();
 
     return switch (choice.get()) {
-      case "save" -> {
-        saveSession(false);
-        yield !session.isDirty();
-      }
+      case "save" -> saveSessionAndWait();
       case "discard" -> true;
       default -> false;
     };
   }
 
-  public static void clearAllData() {
+  /** Resolve path (chooser if needed) and save with loading UI; wait until finished. */
+  private static boolean saveSessionAndWait() {
+    ProjectSessionState session = ProjectSessionState.get();
+    Path target = session.getFile();
+    if (target == null) {
+      FileChooser chooser = sessionChooser("Save Project");
+      File lastDir = UserPreferences.getLastDirectory("JSON");
+      if (lastDir != null) {
+        try {
+          chooser.setInitialDirectory(lastDir);
+        } catch (IllegalArgumentException ignored) { /* default */ }
+      }
+      if (session.getName() != null && !"Untitled".equals(session.getName())) {
+        chooser.setInitialFileName(session.getName() + ".bpproj");
+      } else {
+        chooser.setInitialFileName("project.bpproj");
+      }
+      File file = chooser.showSaveDialog(MainApp.stage);
+      if (file == null) return false;
+      if (!file.getName().contains(".")) {
+        file = new File(file.getParentFile(), file.getName() + ".bpproj");
+      }
+      UserPreferences.setLastDirectory("JSON", file.getParentFile());
+      target = file.toPath();
+    }
+
+    AtomicReference<Exception> error = new AtomicReference<>();
+    AtomicReference<Boolean> finished = new AtomicReference<>(false);
+
+    Stage wait = new Stage();
+    wait.initModality(Modality.APPLICATION_MODAL);
+    wait.initOwner(MainApp.stage);
+    wait.setTitle("Saving");
+    wait.setResizable(false);
+    Label waitLabel = new Label("Saving project…");
+    waitLabel.setStyle("-fx-text-fill: #cccccc;");
+    VBox waitRoot = new VBox(waitLabel);
+    waitRoot.setPadding(new Insets(24));
+    waitRoot.setStyle("-fx-background-color: #2b2b2b;");
+    wait.setScene(new Scene(waitRoot));
+
+    Path savePath = target;
+    wait.setOnShown(e -> ProjectService.saveAsync(
+        savePath,
+        () -> {
+          finished.set(true);
+          wait.close();
+        },
+        ex -> {
+          error.set(ex);
+          finished.set(true);
+          wait.close();
+        }));
+
+    wait.showAndWait();
+    if (error.get() != null) {
+      showError("Could not save project", error.get().getMessage());
+      return false;
+    }
+    return Boolean.TRUE.equals(finished.get()) && !session.isDirty();
+  }
+
+  /** Clear loaded samples/VCFs and detach from the current project file (untitled). */
+  public static void newProject() {
     if (!confirmDiscardIfDirty()) return;
     SampleDataManager.clearAllData();
     ProjectSessionState.get().clearSession();
+  }
+
+  /** @deprecated use {@link #newProject()} */
+  @Deprecated
+  public static void clearAllData() {
+    newProject();
   }
 
   /**
@@ -246,14 +338,7 @@ public class FileCommands {
       case "BED" -> SampleDataManager.addBedSampleFile(file);
       case "BIGWIG" -> SampleDataManager.addBigWigFile(file);
       case "SES", "JSON" -> {
-        if (!confirmDiscardIfDirty()) return;
-        try {
-          Path projectPath = file.toPath();
-          ProjectDocument doc = ProjectSerializer.read(projectPath);
-          ProjectService.loadAsync(projectPath, doc, null);
-        } catch (Exception e) {
-          showError("Could not open session", e.getMessage());
-        }
+        openSession(file.toPath());
       }
       default -> System.out.println("Unsupported recent file type: " + resolvedType + " (" + path + ")");
     }
@@ -266,7 +351,7 @@ public class FileCommands {
     FileChooser chooser = new FileChooser();
     chooser.setTitle(title);
     chooser.getExtensionFilters().addAll(
-        new ExtensionFilter("BasePlayer session", "*.bpproj", "*.json"),
+        new ExtensionFilter("BasePlayer project", "*.bpproj", "*.json"),
         new ExtensionFilter("All files", "*.*")
     );
     return chooser;

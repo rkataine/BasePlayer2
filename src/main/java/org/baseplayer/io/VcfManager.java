@@ -30,6 +30,8 @@ import org.baseplayer.variant.VariantLoader;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.annotation.VariantAnnotator;
 import org.baseplayer.variant.annotation.TranscriptCdsCache;
+import org.baseplayer.variant.ui.VariantManagerController;
+import org.baseplayer.variant.ui.VariantManagerWindow;
 
 import javafx.application.Platform;
 
@@ -168,8 +170,6 @@ public class VcfManager {
      *                          caller is responsible for triggering those once all files are loaded.
      */
     public void loadVcfFileWithCallback(File file, Runnable onComplete, boolean suppressUiUpdates) {
-        System.out.println("[VcfManager] Loading VCF file: " + (file != null ? file.getName() : "null"));
-        
         if (file == null || !file.exists()) {
             System.err.println("VCF file not found: " + file);
             if (onComplete != null) onComplete.run();
@@ -177,7 +177,6 @@ public class VcfManager {
         }
 
         if (isVcfFileLoaded(file)) {
-            System.out.println("[VcfManager] VCF file already loaded: " + file.getName());
             if (onComplete != null) {
                 Platform.runLater(onComplete);
             }
@@ -259,6 +258,7 @@ public class VcfManager {
 
     /** Trigger variant load for current chromosome when a new VCF is added. */
     public void loadVariantsForCurrentView() {
+        syncCurrentFilterFromOpenVariantManager();
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty()) return;
         DrawStack firstStack = stackManager.getFirst();
@@ -286,6 +286,7 @@ public class VcfManager {
         long start,
         long end,
         boolean manualChromosomeSelection) {
+        syncCurrentFilterFromOpenVariantManager();
         if (!manualChromosomeSelection) {
             pendingManualChromosomeScrollTarget = null;
         }
@@ -303,8 +304,8 @@ public class VcfManager {
         VariantFilter requestFilterSnapshot = currentFilter.copy();
         VariantList cachedVariants = findCachedVariantList(chromosome);
         
-        // Simple logic: if variants are cached and valid, display them; otherwise load from VCF
         if (shouldReuseCachedVariants(chromosome, start, end, cachedVariants, requestFilterSnapshot)) {
+            putVariantList(chromosome, cachedVariants);
             displayCachedVariants(chromosome, cachedVariants);
             return;
         }
@@ -319,9 +320,33 @@ public class VcfManager {
         }
         loading = false;
 
-        // Get or create VariantList for this chromosome
-        VariantList variantList = variantCache.computeIfAbsent(chromosome, k -> new VariantList(k));
-        if (shouldResetVariantListBeforeLoad(cachedVariants, requestFilterSnapshot)) {
+        // Prefer the existing aliased list; never create a parallel empty list under chr/non-chr.
+        VariantList variantList = cachedVariants;
+        if (variantList == null) {
+            variantList = new VariantList(chromosome);
+        }
+        putVariantList(chromosome, variantList);
+
+        boolean fullChromCached = isFullChromosomeCached(variantList);
+        boolean partialRequest = !isFullChromosomeRequest(chromosome, start, end);
+        boolean vcfCountMatches = variantList.getVcfCountWhenLoaded() == loadedVcfs.size();
+
+        if (fullChromCached
+            && partialRequest
+            && variantList.isAnnotated()
+            && vcfCountMatches
+            && !variantList.isEmpty()) {
+            displayCachedVariants(chromosome, variantList);
+            return;
+        }
+
+        if (shouldResetVariantListBeforeLoad(variantList, requestFilterSnapshot)) {
+            // If we must reload, expand partial requests to full chromosome so we keep a reusable cache.
+            if (partialRequest) {
+                long fullEnd = resolveChromosomeLoadEnd(chromosome);
+                start = 1;
+                end = fullEnd;
+            }
             variantList.clear();
         }
         
@@ -444,6 +469,17 @@ public class VcfManager {
             });
     }
 
+    private void syncCurrentFilterFromOpenVariantManager() {
+        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        if (controller == null) {
+            return;
+        }
+        VariantFilter fromUi = controller.snapshotUiFilter();
+        if (fromUi != null) {
+            this.currentFilter = fromUi;
+        }
+    }
+
     private void fireAndClearChromosomeReadyCallback() {
         Runnable cb = onChromosomeVariantsReady;
         if (cb != null) {
@@ -482,10 +518,51 @@ public class VcfManager {
         String requestedKey = requestedFilter != null ? requestedFilter.toStableKey() : null;
         String loadedKey = cachedVariants.getLoadedFilterKey();
         if (!java.util.Objects.equals(requestedKey, loadedKey)) {
-            return false;  // Filter is incompatible - must reload with new filter
+            return false;
         }
 
-        return true;  // All checks passed - safe to reuse cached variants
+        return true;
+    }
+
+    private static boolean isFullChromosomeCached(VariantList list) {
+        if (list == null) {
+            return false;
+        }
+        // Session install and full-chrom loads mark coverage with end = Long.MAX_VALUE.
+        return list.isRegionLoaded(1, Long.MAX_VALUE / 4);
+    }
+
+    private boolean isFullChromosomeRequest(String chromosome, long start, long end) {
+        if (start > 1) {
+            return false;
+        }
+        long fullEnd = resolveChromosomeLoadEnd(chromosome);
+        return end >= (fullEnd - 1);
+    }
+
+    /**
+     * Store {@code list} under a single canonical chromosome key.
+     * Alias resolution belongs in {@link #findCachedVariantList} — never dual-index
+     * the same instance (that duplicates rows in Variant Manager).
+     */
+    private void putVariantList(String requestedChromosome, VariantList list) {
+        if (list == null) {
+            return;
+        }
+        String canonical = canonicalChromosomeKey(requestedChromosome, list);
+        // Drop any stale alias keys that still point at this instance.
+        variantCache.entrySet().removeIf(entry -> entry.getValue() == list);
+        variantCache.put(canonical, list);
+    }
+
+    private static String canonicalChromosomeKey(String requestedChromosome, VariantList list) {
+        if (list != null) {
+            String fromList = list.getChromosome();
+            if (fromList != null && !fromList.isBlank()) {
+                return fromList;
+            }
+        }
+        return requestedChromosome;
     }
 
     private void displayCachedVariants(String chromosome, VariantList cachedVariants) {
@@ -538,7 +615,10 @@ public class VcfManager {
         lastLoadedChromosome = null;
         loading = false;
         activeChromosomeLoadTask = null;
+        // New Project / Clear All: return to pass-all so the next VCF is not hidden by
+        // the previous project's type/effect/comparison thresholds.
         currentFilter = new VariantFilter();
+        filterGeneration.incrementAndGet();
         onChromosomeVariantsReady = null;
         TranscriptCdsCache.getInstance().clearMemory();
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
@@ -683,6 +763,32 @@ public class VcfManager {
                 }
 
                 boolean cancelled = Thread.currentThread().isInterrupted();
+                if (!cancelled) {
+                    // Ensure the chromosome currently on screen matches the annotate-all filter.
+                    // Soft filter changes leave loadedFilterKey stale; skip-compatible chroms are fine,
+                    // but the active view must never keep pre-filter rows after annotate-all.
+                    String active = lastLoadedChromosome;
+                    if (active != null && !active.isBlank()) {
+                        VariantList activeList = findCachedVariantList(active);
+                        String requestedKey = filterSnapshot.toStableKey();
+                        boolean needsRefresh = activeList == null
+                            || !java.util.Objects.equals(requestedKey, activeList.getLoadedFilterKey())
+                            || !activeList.isAnnotated();
+                        if (needsRefresh) {
+                            buildChromosomeCacheForAnnotation(
+                                active,
+                                filesSnapshot,
+                                filterSnapshot,
+                                annotator,
+                                warnings,
+                                null);
+                        } else {
+                            variantsRevision.incrementAndGet();
+                        }
+                    } else {
+                        variantsRevision.incrementAndGet();
+                    }
+                }
                 return new AllChromosomeAnnotationResult(
                     cancelled,
                     completedChromosomes,
@@ -722,7 +828,7 @@ public class VcfManager {
         java.util.function.BiConsumer<Integer, Integer> onSampleProgress) {
 
         long loadEnd = resolveChromosomeLoadEnd(chromosome);
-        VariantList cachedVariants = variantCache.get(chromosome);
+        VariantList cachedVariants = findCachedVariantList(chromosome);
         boolean hasCache = cachedVariants != null;
         boolean annotated = hasCache && cachedVariants.isAnnotated();
         boolean nonEmpty = hasCache && !cachedVariants.isEmpty();
@@ -743,7 +849,7 @@ public class VcfManager {
 
         VariantList variants = cachedVariants != null ? cachedVariants : new VariantList(chromosome);
         variants.clear();
-        variantCache.put(chromosome, variants);
+        putVariantList(chromosome, variants);
         VariantNode cursor = null;
 
         int samplesDoneBeforeFile = 0;
@@ -826,6 +932,7 @@ public class VcfManager {
         variants.setAnnotated(true);
         variants.addLoadedRegion(1, loadEnd);
         variants.setVcfCountWhenLoaded(files.size());
+        variantsRevision.incrementAndGet();
 
         if (onSampleProgress != null) {
             onSampleProgress.accept(samplesTotalInChrom, samplesTotalInChrom);
@@ -892,7 +999,7 @@ public class VcfManager {
     /** Returns true if variants for this chromosome have already been annotated. */
     public boolean isAnnotated(String chromosome) {
         if (chromosome == null || chromosome.isBlank()) return false;
-        VariantList variants = variantCache.get(chromosome);
+        VariantList variants = findCachedVariantList(chromosome);
         return variants != null && variants.isAnnotated();
     }
 
@@ -917,10 +1024,12 @@ public class VcfManager {
 
     /** Rebuild drawable skip chains on all cached chromosome lists for {@code filter}. */
     private void rebuildVisibleChainsForCache(VariantFilter filter) {
+        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
         for (VariantList list : variantCache.values()) {
-            if (list != null && !list.isEmpty()) {
-                list.rebuildVisibleChain(filter);
+            if (list == null || list.isEmpty() || seen.put(list, Boolean.TRUE) != null) {
+                continue;
             }
+            list.rebuildVisibleChain(filter);
         }
     }
 
@@ -1039,12 +1148,22 @@ public class VcfManager {
 
     public VariantList getCachedVariants(String chromosome) {
         if (chromosome == null || chromosome.isBlank()) return null;
-        return variantCache.get(chromosome);
+        return findCachedVariantList(chromosome);
     }
 
-    /** Snapshot of chromosome → variant list for session cache write. */
+    /** Snapshot of chromosome → variant list for session cache write (one entry per list). */
     public synchronized Map<String, VariantList> snapshotVariantCache() {
-        return new HashMap<>(variantCache);
+        Map<String, VariantList> snapshot = new HashMap<>();
+        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
+        for (Map.Entry<String, VariantList> entry : variantCache.entrySet()) {
+            VariantList list = entry.getValue();
+            if (list == null || seen.put(list, Boolean.TRUE) != null) {
+                continue;
+            }
+            String key = canonicalChromosomeKey(entry.getKey(), list);
+            snapshot.put(key, list);
+        }
+        return snapshot;
     }
 
     /**
@@ -1069,12 +1188,7 @@ public class VcfManager {
                 VariantList list = entry.getValue();
                 if (list == null) continue;
                 prepareSessionCachedListForReuse(list, filterSnapshot, filterKey, vcfCount);
-                variantCache.put(entry.getKey(), list);
-                // Also index under the list's own chromosome name if it differs.
-                String listChrom = list.getChromosome();
-                if (listChrom != null && !listChrom.isBlank() && !variantCache.containsKey(listChrom)) {
-                    variantCache.put(listChrom, list);
-                }
+                putVariantList(entry.getKey(), list);
             }
         }
 
@@ -1100,7 +1214,8 @@ public class VcfManager {
 
     /**
      * Mark a session-restored list so {@link #shouldReuseCachedVariants} accepts it
-     * for any full-chromosome request under the restored filter.
+     * for full-chromosome requests under the filter that was used when the cache was written.
+     * Do not overwrite that identity with the project UI filter — content must match the key.
      */
     private static void prepareSessionCachedListForReuse(
         VariantList list,
@@ -1112,10 +1227,14 @@ public class VcfManager {
         list.addLoadedRegion(1, Long.MAX_VALUE);
         list.setAnnotated(true);
         list.setVcfCountWhenLoaded(vcfCount);
-        if (filterKey != null) {
-            list.setLoadedFilterKey(filterKey);
+        // Keep the sidecar's baked key when present — it describes how the list was pruned.
+        String bakedKey = list.getLoadedFilterKey();
+        if (bakedKey == null || bakedKey.isBlank()) {
+            if (filterKey != null && !filterKey.isBlank()) {
+                list.setLoadedFilterKey(filterKey);
+            }
         }
-        if (filter != null) {
+        if (list.getLoadedFilter() == null && filter != null) {
             list.setLoadedFilter(filter.copy());
         }
     }
@@ -1139,16 +1258,19 @@ public class VcfManager {
      * Return cached chromosome names in a deterministic order.
      * Preferred order is taken from the provided chromosome list (typically UI dropdown order),
      * then any extra cached chromosomes are appended in lexicographic order.
+     * Each {@link VariantList} instance appears at most once (alias-safe).
      */
     public synchronized List<String> getCachedChromosomesInOrder(List<String> preferredOrder) {
         LinkedHashSet<String> ordered = new LinkedHashSet<>();
+        java.util.IdentityHashMap<VariantList, Boolean> seenLists = new java.util.IdentityHashMap<>();
+
         if (preferredOrder != null) {
             for (String chromosome : preferredOrder) {
                 if (chromosome == null || chromosome.isBlank()) {
                     continue;
                 }
-                VariantList variants = variantCache.get(chromosome);
-                if (variants != null && !variants.isEmpty()) {
+                VariantList variants = findCachedVariantList(chromosome);
+                if (variants != null && !variants.isEmpty() && seenLists.put(variants, Boolean.TRUE) == null) {
                     ordered.add(chromosome);
                 }
             }
@@ -1161,9 +1283,10 @@ public class VcfManager {
             if (chromosome == null || chromosome.isBlank() || variants == null || variants.isEmpty()) {
                 continue;
             }
-            if (!ordered.contains(chromosome)) {
-                remaining.add(chromosome);
+            if (seenLists.put(variants, Boolean.TRUE) != null) {
+                continue;
             }
+            remaining.add(chromosome);
         }
         remaining.sort(Comparator.naturalOrder());
         ordered.addAll(remaining);
@@ -1173,6 +1296,7 @@ public class VcfManager {
 
     /**
      * Return non-empty cached variant lists paired with chromosome in deterministic order.
+     * Guarantees one entry per list instance.
      */
     public synchronized List<CachedChromosomeVariants> getCachedVariantListsInOrder(List<String> preferredOrder) {
         List<String> chromosomes = getCachedChromosomesInOrder(preferredOrder);
@@ -1181,9 +1305,10 @@ public class VcfManager {
         }
 
         List<CachedChromosomeVariants> result = new ArrayList<>(chromosomes.size());
+        java.util.IdentityHashMap<VariantList, Boolean> seenLists = new java.util.IdentityHashMap<>();
         for (String chromosome : chromosomes) {
-            VariantList variants = variantCache.get(chromosome);
-            if (variants != null && !variants.isEmpty()) {
+            VariantList variants = findCachedVariantList(chromosome);
+            if (variants != null && !variants.isEmpty() && seenLists.put(variants, Boolean.TRUE) == null) {
                 result.add(new CachedChromosomeVariants(chromosome, variants));
             }
         }
@@ -1193,7 +1318,7 @@ public class VcfManager {
     /** Returns the currently loaded variants for the lastLoadedChromosome. */
     public VariantList getCachedVariants() {
         if (lastLoadedChromosome == null) return null;
-        return variantCache.get(lastLoadedChromosome);
+        return findCachedVariantList(lastLoadedChromosome);
     }
 
     public boolean hasLoadedVcf() {

@@ -1,22 +1,28 @@
 package org.baseplayer.services;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.SimpleIntegerProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
+import javafx.scene.paint.Color;
 
 public class SampleRegistry extends TrackViewportRegistry {
 
@@ -34,6 +40,10 @@ public class SampleRegistry extends TrackViewportRegistry {
     private String focusedGeneName = null;
     private final List<Integer> cachedDisplayedTrackIndices = new ArrayList<>();
     private boolean displayedTrackIndicesDirty = true;
+    private final Map<Integer, SampleGroup> sampleGroups = new LinkedHashMap<>();
+    private int nextSampleGroupId = 1;
+    /** Bumps whenever sample groups are created, assigned, cleared, recolored, or removed. */
+    private final IntegerProperty sampleGroupsRevision = new SimpleIntegerProperty(0);
 
     public SampleRegistry() {
         sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
@@ -212,6 +222,14 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     public String getFocusedGeneName() {
         return focusedGeneName;
+    }
+
+    /** Suggested group name: focused gene if any, otherwise {@code Group N} for the next id. */
+    public String suggestNextGroupName() {
+        if (focusedGeneName != null && !focusedGeneName.isBlank()) {
+            return focusedGeneName.trim();
+        }
+        return "Group " + nextSampleGroupId;
     }
 
     public void applyGeneSubset(List<SampleTrack> tracks, String featureName) {
@@ -422,6 +440,178 @@ public class SampleRegistry extends TrackViewportRegistry {
                     sample.getBamFile().repackReads(stack);
                 }
             }
+        }
+    }
+
+    // ── Sample groups (sidebar coloring; independent of text/gene subsets) ──
+
+    public IntegerProperty sampleGroupsRevisionProperty() {
+        return sampleGroupsRevision;
+    }
+
+    private void bumpSampleGroupsRevision() {
+        sampleGroupsRevision.set(sampleGroupsRevision.get() + 1);
+    }
+
+    public List<SampleGroup> getSampleGroups() {
+        return List.copyOf(sampleGroups.values());
+    }
+
+    public SampleGroup getSampleGroup(int groupId) {
+        return sampleGroups.get(groupId);
+    }
+
+    public SampleGroup getGroupForTrack(SampleTrack track) {
+        if (track == null || !track.hasGroup()) {
+            return null;
+        }
+        return sampleGroups.get(track.getGroupId());
+    }
+
+    public Color getSidebarColorForTrack(SampleTrack track) {
+        SampleGroup group = getGroupForTrack(track);
+        return group != null ? group.getColor() : null;
+    }
+
+    public int countTracksInGroup(int groupId) {
+        int count = 0;
+        for (SampleTrack track : sampleTracks) {
+            if (track.getGroupId() == groupId) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public SampleGroup createSampleGroup(String name, Color color) {
+        int id = nextSampleGroupId++;
+        Color resolved = color != null
+            ? color
+            : DrawColors.SAMPLE_GROUP_COLORS[(id - 1) % DrawColors.SAMPLE_GROUP_COLORS.length];
+        String resolvedName = (name == null || name.isBlank()) ? ("Group " + id) : name.trim();
+        SampleGroup group = new SampleGroup(id, resolvedName, resolved);
+        sampleGroups.put(id, group);
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+        return group;
+    }
+
+    public SampleGroup createSampleGroup(String name) {
+        return createSampleGroup(name, null);
+    }
+
+    public void assignTracksToGroup(List<SampleTrack> tracks, int groupId) {
+        if (tracks == null || !sampleGroups.containsKey(groupId)) {
+            return;
+        }
+        Set<Integer> vacatedGroups = new LinkedHashSet<>();
+        for (SampleTrack track : tracks) {
+            if (track == null) {
+                continue;
+            }
+            if (track.hasGroup() && track.getGroupId() != groupId) {
+                vacatedGroups.add(track.getGroupId());
+            }
+            track.setGroupId(groupId);
+        }
+        for (int vacatedId : vacatedGroups) {
+            pruneEmptyGroup(vacatedId);
+        }
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+    }
+
+    public void assignTrackToGroup(SampleTrack track, int groupId) {
+        if (track == null) {
+            return;
+        }
+        if (groupId < 0) {
+            clearTrackGroup(track);
+            return;
+        }
+        if (!sampleGroups.containsKey(groupId)) {
+            return;
+        }
+        int previousGroupId = track.getGroupId();
+        track.setGroupId(groupId);
+        if (previousGroupId >= 0 && previousGroupId != groupId) {
+            pruneEmptyGroup(previousGroupId);
+        }
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+    }
+
+    public SampleGroup createGroupForTracks(List<SampleTrack> tracks, String name, Color color) {
+        if (tracks == null || tracks.isEmpty()) {
+            return null;
+        }
+        SampleGroup group = createSampleGroup(name, color);
+        assignTracksToGroup(tracks, group.getId());
+        return group;
+    }
+
+    public void clearTrackGroup(SampleTrack track) {
+        if (track == null || !track.hasGroup()) {
+            return;
+        }
+        int groupId = track.getGroupId();
+        track.clearGroup();
+        pruneEmptyGroup(groupId);
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+    }
+
+    /** Remove several tracks from whatever groups they belong to; delete emptied groups. */
+    public void clearTracksFromGroups(List<SampleTrack> tracks) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        Set<Integer> touchedGroups = new LinkedHashSet<>();
+        for (SampleTrack track : tracks) {
+            if (track != null && track.hasGroup()) {
+                touchedGroups.add(track.getGroupId());
+                track.clearGroup();
+            }
+        }
+        for (int groupId : touchedGroups) {
+            pruneEmptyGroup(groupId);
+        }
+        if (!touchedGroups.isEmpty()) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
+    }
+
+    public void setGroupColor(int groupId, Color color) {
+        SampleGroup group = sampleGroups.get(groupId);
+        if (group != null && color != null) {
+            group.setColor(color);
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
+    }
+
+    public void removeSampleGroup(int groupId) {
+        if (!sampleGroups.containsKey(groupId)) {
+            return;
+        }
+        for (SampleTrack track : sampleTracks) {
+            if (track.getGroupId() == groupId) {
+                track.clearGroup();
+            }
+        }
+        sampleGroups.remove(groupId);
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+    }
+
+    /** Drop a group definition when it no longer has any member tracks. */
+    private void pruneEmptyGroup(int groupId) {
+        if (!sampleGroups.containsKey(groupId)) {
+            return;
+        }
+        if (countTracksInGroup(groupId) == 0) {
+            sampleGroups.remove(groupId);
         }
     }
 }

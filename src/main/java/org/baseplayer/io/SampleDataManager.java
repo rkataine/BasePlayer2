@@ -613,6 +613,7 @@ public class SampleDataManager {
     registry.setHoverSample(-1);
 
     VcfManager.getInstance().closeCurrentVcf();
+    org.baseplayer.io.Settings.get().resetDefaults();
 
     var stackManager = ServiceRegistry.getInstance().getDrawStackManager();
     for (var stack : stackManager.getStacks()) {
@@ -628,7 +629,7 @@ public class SampleDataManager {
     org.baseplayer.variant.ui.VariantManagerController variantController = 
         org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
     if (variantController != null) {
-      variantController.clearBatchAnnotationResults();
+      variantController.resetToProjectDefaults();
     }
 
     ProjectSessionState.get().markDirty();

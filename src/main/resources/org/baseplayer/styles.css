@@ -260,3 +260,152 @@ VBox {
 .dark-checkbox:hover .box {
   -fx-border-color: #888888;
 }
+
+/* ── Start Hub ───────────────────────────────────────────────────────────── */
+
+.start-hub-backdrop {
+  -fx-background-color: rgba(8, 10, 12, 0.72);
+}
+
+.start-hub-panel {
+  -fx-background-color: linear-gradient(to bottom, #2a2e33 0%, #1f2328 55%, #1a1d21 100%);
+  -fx-background-radius: 10;
+  -fx-border-color: #3a424a;
+  -fx-border-radius: 10;
+  -fx-border-width: 1;
+  -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.55), 28, 0.2, 0, 10);
+}
+
+.start-hub-left {
+  -fx-background-color: rgba(0, 0, 0, 0.18);
+  -fx-background-radius: 10 0 0 10;
+  -fx-border-color: transparent #343a40 transparent transparent;
+  -fx-border-width: 0 1 0 0;
+}
+
+.start-hub-right {
+  -fx-background-color: transparent;
+}
+
+.start-hub-section-title {
+  -fx-text-fill: #e8e8e8;
+  -fx-font-size: 15px;
+  -fx-font-weight: bold;
+  -fx-padding: 0 0 4 0;
+  -fx-border-color: transparent transparent #3d454d transparent;
+  -fx-border-width: 0 0 1 0;
+}
+
+.start-hub-tagline {
+  -fx-text-fill: #9aa3ab;
+  -fx-font-size: 12px;
+}
+
+.start-hub-funding {
+  -fx-text-fill: #6e7880;
+  -fx-font-size: 11px;
+}
+
+.start-hub-tip-row {
+  -fx-padding: 2 0 2 0;
+}
+
+.start-hub-tip-accent {
+  -fx-text-fill: #4db8c4;
+  -fx-font-size: 13px;
+  -fx-font-weight: bold;
+  -fx-padding: 1 0 0 0;
+}
+
+.start-hub-tip-title {
+  -fx-text-fill: #f0f0f0;
+  -fx-font-size: 13px;
+  -fx-font-weight: bold;
+}
+
+.start-hub-tip-body {
+  -fx-text-fill: #9aa3ab;
+  -fx-font-size: 11.5px;
+}
+
+.start-hub-scroll {
+  -fx-background-color: transparent;
+  -fx-background: transparent;
+  -fx-padding: 0;
+  -fx-border-color: transparent;
+}
+
+.start-hub-scroll > .viewport {
+  -fx-background-color: transparent;
+}
+
+.start-hub-scroll .scroll-bar:vertical {
+  -fx-background-color: transparent;
+  -fx-pref-width: 10px;
+}
+
+.start-hub-scroll .scroll-bar .thumb {
+  -fx-background-color: #555555;
+  -fx-background-radius: 5;
+}
+
+.start-hub-empty {
+  -fx-text-fill: #8a939b;
+  -fx-font-size: 13px;
+  -fx-padding: 24 8 8 8;
+}
+
+.start-hub-recent-row {
+  -fx-background-color: transparent;
+  -fx-background-radius: 6;
+  -fx-cursor: hand;
+}
+
+.start-hub-recent-row-hover {
+  -fx-background-color: rgba(77, 184, 196, 0.12);
+}
+
+.start-hub-recent-name {
+  -fx-text-fill: #f2f2f2;
+  -fx-font-size: 15px;
+  -fx-font-weight: bold;
+}
+
+.start-hub-recent-path {
+  -fx-text-fill: #7a848c;
+  -fx-font-size: 11px;
+}
+
+.start-hub-actions {
+  -fx-padding: 8 0 0 0;
+}
+
+.start-hub-button {
+  -fx-font-size: 12px;
+  -fx-padding: 8 16 8 16;
+  -fx-background-radius: 5;
+  -fx-border-radius: 5;
+  -fx-cursor: hand;
+}
+
+.start-hub-button-primary {
+  -fx-background-color: linear-gradient(to bottom, #2f9eac 0%, #1f7f8a 100%);
+  -fx-text-fill: #ffffff;
+  -fx-border-color: #3bb0bd;
+  -fx-border-width: 1;
+}
+
+.start-hub-button-primary:hover {
+  -fx-background-color: linear-gradient(to bottom, #3bb0bd 0%, #258f9b 100%);
+}
+
+.start-hub-button-secondary {
+  -fx-background-color: linear-gradient(to bottom, #3a4046 0%, #2e3338 100%);
+  -fx-text-fill: #d8d8d8;
+  -fx-border-color: #4a525a;
+  -fx-border-width: 1;
+}
+
+.start-hub-button-secondary:hover {
+  -fx-background-color: linear-gradient(to bottom, #454c53 0%, #363c42 100%);
+}

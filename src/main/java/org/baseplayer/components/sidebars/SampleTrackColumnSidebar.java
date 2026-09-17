@@ -234,6 +234,20 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   @Override
+  protected boolean shouldAutoExpandMasterHeader(int displayedTrackCount) {
+    // Keep filter/group controls reachable even when only one sample matches a subset.
+    return displayedTrackCount >= 1;
+  }
+
+  @Override
+  protected void onMasterHeaderBarClicked(double screenX, double screenY) {
+    // Fallback when controls are collapsed: open the range/filter popup from the title bar.
+    if (!isControlsExpanded()) {
+      showRangeInputPopup(screenX, screenY);
+    }
+  }
+
+  @Override
   protected String getTitle() {
     return "Sample Tracks";
   }

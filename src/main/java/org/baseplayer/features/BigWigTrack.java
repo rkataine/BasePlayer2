@@ -78,8 +78,6 @@ public class BigWigTrack extends AbstractTrack {
       version = header.getShort() & 0xFFFF;
       zoomLevels = header.getShort() & 0xFFFF;
       
-      System.out.println("Loaded BigWig: " + name + " (v" + version + ", " + zoomLevels + " zoom levels)");
-      
     } catch (IOException e) {
       errorMessage = "Failed to read file: " + e.getMessage();
       validFile = false;

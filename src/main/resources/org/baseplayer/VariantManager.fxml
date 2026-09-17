@@ -3,6 +3,7 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
+<?import org.baseplayer.variant.ui.IntegerRangeSlider?>
 
 <StackPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
          fx:controller="org.baseplayer.variant.ui.VariantManagerController"
@@ -185,24 +186,20 @@
                         <Insets top="16" right="16" bottom="16" left="16"/>
                     </padding>
 
-                    <!-- Comparison Mode Section -->
+                    <!-- Common Variants Range -->
                     <VBox spacing="8">
-                        <Label text="Comparison Mode" styleClass="section-header"/>
-                        <VBox spacing="5">
-                            <RadioButton fx:id="showAllSamplesRadio" text="Show all samples" selected="true" styleClass="filter-radio"/>
-                            <RadioButton fx:id="sharedVariantsRadio" text="Variants shared across all samples" styleClass="filter-radio"/>
-                            <RadioButton fx:id="uniqueVariantsRadio" text="Variants unique to selected samples" styleClass="filter-radio"/>
-                            <RadioButton fx:id="differentialRadio" text="Differential variants (present in A, absent in B)" styleClass="filter-radio"/>
-                        </VBox>
-                    </VBox>
-
-                    <!-- Zygosity Filter -->
-                    <VBox spacing="8">
-                        <Label text="Zygosity Filter" styleClass="section-header"/>
-                        <HBox spacing="12" alignment="CENTER_LEFT">
-                            <CheckBox fx:id="homozygousCheckBox" text="Homozygous" selected="true" styleClass="filter-checkbox"/>
-                            <CheckBox fx:id="heterozygousCheckBox" text="Heterozygous" selected="true" styleClass="filter-checkbox"/>
+                        <Label text="Common Variants" styleClass="section-header"/>
+                        <Label fx:id="commonVariantsHelpLabel" text="Keep variants shared by at least this many samples (left) and at most this many (right). Use this to drop private variants or those shared by everyone."
+                               styleClass="subsection-label" wrapText="true"/>
+                        <CheckBox fx:id="geneLevelComparisonCheckBox" text="Gene level (count samples mutated anywhere in the gene)"
+                                  styleClass="filter-checkbox"/>
+                        <HBox spacing="8" alignment="CENTER_LEFT">
+                            <Label text="Window size (bp)" styleClass="subsection-label"/>
+                            <TextField fx:id="comparisonWindowField" text="0" prefWidth="80" styleClass="filter-field"/>
+                            <Label text="0 = exact allele; &gt;0 soft-matches nearby / overlapping SVs"
+                                   styleClass="subsection-label" wrapText="true" HBox.hgrow="ALWAYS"/>
                         </HBox>
+                        <IntegerRangeSlider fx:id="sharedSampleRangeSlider"/>
                     </VBox>
                 </VBox>
                 </ScrollPane>
@@ -213,18 +210,24 @@
                         <Insets top="16" right="16" bottom="16" left="16"/>
                     </padding>
 
-                    <!-- Sample Selection Section -->
+                    <!-- Sample Groups for comparison -->
                     <VBox spacing="8" VBox.vgrow="ALWAYS">
-                        <Label text="Sample Selection" styleClass="section-header"/>
-                        <HBox spacing="12" VBox.vgrow="ALWAYS">
-                            <VBox spacing="5" HBox.hgrow="ALWAYS">
-                                <Label text="Group A (Include)" styleClass="subsection-label"/>
-                                <ListView fx:id="groupASampleList" prefHeight="150" styleClass="sample-list" VBox.vgrow="ALWAYS"/>
-                            </VBox>
-                            <VBox spacing="5" HBox.hgrow="ALWAYS">
-                                <Label text="Group B (Exclude)" styleClass="subsection-label"/>
-                                <ListView fx:id="groupBSampleList" prefHeight="150" styleClass="sample-list" VBox.vgrow="ALWAYS"/>
-                            </VBox>
+                        <HBox spacing="8" alignment="CENTER_LEFT">
+                            <Label text="Sample Groups" styleClass="section-header"/>
+                            <Region HBox.hgrow="ALWAYS"/>
+                            <Button fx:id="refreshComparisonGroupsButton" text="Refresh" styleClass="secondary-button" onAction="#handleRefreshComparisonGroups"/>
+                        </HBox>
+                        <Label text="For each named group, choose whether the variant (or gene / window cluster) must be present, must be absent, or is ignored."
+                               styleClass="subsection-label" wrapText="true"/>
+                        <VBox fx:id="comparisonGroupsContainer" spacing="6" VBox.vgrow="ALWAYS"/>
+                        <Label fx:id="groupComparisonSummaryLabel" text="No group constraints" styleClass="value-label" wrapText="true"/>
+                    </VBox>
+
+                    <VBox spacing="6">
+                        <Label text="When multiple groups require present" styleClass="section-header"/>
+                        <HBox spacing="16" alignment="CENTER_LEFT">
+                            <RadioButton fx:id="presentMatchAllRadio" text="All of them (AND)" selected="true" styleClass="filter-radio"/>
+                            <RadioButton fx:id="presentMatchAnyRadio" text="Any of them (OR)" styleClass="filter-radio"/>
                         </HBox>
                     </VBox>
 

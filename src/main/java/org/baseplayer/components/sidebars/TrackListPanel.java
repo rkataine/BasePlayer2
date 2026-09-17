@@ -298,12 +298,22 @@ public abstract class TrackListPanel extends SidebarContentPanel {
             iconId, backingTrackIndex, event.getScreenX(), event.getScreenY())) {
           return;
         }
+        if (handleTrackRowClick(event, backingTrackIndex)) {
+          return;
+        }
       }
 
       if (event.getClickCount() == 2) {
         toggleSingleTrackZoom(backingTrackIndex);
       }
     });
+  }
+
+  /**
+   * Optional row-click handling (e.g. multi-select). Return true if the click was consumed.
+   */
+  protected boolean handleTrackRowClick(MouseEvent event, int backingTrackIndex) {
+    return false;
   }
 
   private void toggleSingleTrackZoom(int backingTrackIndex) {

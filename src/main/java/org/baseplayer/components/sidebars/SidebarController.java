@@ -3,6 +3,8 @@ package org.baseplayer.components.sidebars;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.project.ProjectSessionState;
+
 import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.scene.control.SplitPane;
@@ -20,6 +22,7 @@ public class SidebarController {
   private double targetPosition = DEFAULT_DIVIDER_POSITION;
   private boolean isUpdating = false;
   private boolean isActive = false;
+  private boolean suppressSessionDirty = false;
   
   // Corruption prevention listeners (removed after initial layout stabilizes)
   private final List<ChangeListener<Number>> corruptionListeners = new ArrayList<>();
@@ -71,6 +74,14 @@ public class SidebarController {
     }
     
     isUpdating = false;
+    if (isActive && !suppressSessionDirty) {
+      ProjectSessionState.get().markDirty();
+    }
+  }
+
+  /** Skip dirty notifications while restoring layout from a session. */
+  public void setSuppressSessionDirty(boolean suppress) {
+    this.suppressSessionDirty = suppress;
   }
   
   /**

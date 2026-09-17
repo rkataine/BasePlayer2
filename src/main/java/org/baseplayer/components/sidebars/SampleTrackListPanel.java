@@ -1,11 +1,15 @@
 package org.baseplayer.components.sidebars;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.samples.Sample;
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
@@ -17,12 +21,14 @@ import org.baseplayer.utils.DrawColors;
 
 import javafx.geometry.Insets;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ColorPicker;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -30,6 +36,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
+import javafx.stage.Window;
 
 public class SampleTrackListPanel extends TrackListPanel {
 
@@ -43,8 +50,11 @@ public class SampleTrackListPanel extends TrackListPanel {
   private static final Color NAME_VISIBLE = Color.web("#aaaaaa");
   private static final Color NAME_DIM = Color.web("#555555");
   private static final Color OVERLAY_DOT = Color.color(0.6, 0.8, 0.6);
+  private static final Color SELECTION_FILL = Color.rgb(77, 184, 255, 0.18);
 
   private final SampleRegistry sampleRegistry;
+  private final Set<Integer> selectedTrackIndices = new LinkedHashSet<>();
+  private int selectionAnchorIndex = -1;
 
   public SampleTrackListPanel(StackPane parent) {
     this(parent, ServiceRegistry.getInstance().getSampleRegistry());
@@ -119,6 +129,91 @@ public class SampleTrackListPanel extends TrackListPanel {
   }
 
   @Override
+  protected boolean handleTrackRowClick(MouseEvent event, int backingTrackIndex) {
+    if (backingTrackIndex < 0 || backingTrackIndex >= sampleRegistry.getSampleTracks().size()) {
+      return false;
+    }
+    // Double-click still zooms via TrackListPanel.
+    if (event.getClickCount() > 1) {
+      return false;
+    }
+
+    if (event.isShiftDown() && selectionAnchorIndex >= 0) {
+      selectDisplayedRange(selectionAnchorIndex, backingTrackIndex);
+      draw();
+      drawReactive();
+      if (selectedTrackIndices.size() >= 2) {
+        promptGroupSelectedTracks(event.getScreenX(), event.getScreenY());
+      }
+      return true;
+    }
+
+    selectedTrackIndices.clear();
+    selectedTrackIndices.add(backingTrackIndex);
+    selectionAnchorIndex = backingTrackIndex;
+    draw();
+    drawReactive();
+    return true;
+  }
+
+  private void selectDisplayedRange(int anchorBackingIndex, int targetBackingIndex) {
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    int anchorSlot = displayed.indexOf(anchorBackingIndex);
+    int targetSlot = displayed.indexOf(targetBackingIndex);
+    if (anchorSlot < 0 || targetSlot < 0) {
+      selectedTrackIndices.clear();
+      selectedTrackIndices.add(targetBackingIndex);
+      selectionAnchorIndex = targetBackingIndex;
+      return;
+    }
+    int from = Math.min(anchorSlot, targetSlot);
+    int to = Math.max(anchorSlot, targetSlot);
+    selectedTrackIndices.clear();
+    for (int slot = from; slot <= to; slot++) {
+      selectedTrackIndices.add(displayed.get(slot));
+    }
+  }
+
+  private void promptGroupSelectedTracks(double screenX, double screenY) {
+    List<SampleTrack> tracks = selectedTracks();
+    if (tracks.size() < 2) {
+      return;
+    }
+    Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
+    Color initial = DrawColors.SAMPLE_GROUP_COLORS[
+        sampleRegistry.getSampleGroups().size() % DrawColors.SAMPLE_GROUP_COLORS.length];
+    String suggested = sampleRegistry.suggestNextGroupName();
+    int groupedCount = countGroupedSelectedTracks();
+    SampleGroupDialog.show(
+            owner, tracks.size(), suggested, initial, groupedCount > 0, groupedCount)
+        .ifPresent(outcome -> {
+          if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
+            sampleRegistry.createGroupForTracks(tracks, add.name(), add.color());
+          } else if (outcome instanceof SampleGroupDialog.Outcome.Remove) {
+            sampleRegistry.clearTracksFromGroups(tracks);
+          }
+          clearSelection();
+          draw();
+          onAfterVisibleTrackRangeChanged();
+        });
+  }
+
+  private List<SampleTrack> selectedTracks() {
+    List<SampleTrack> tracks = new ArrayList<>();
+    for (int index : selectedTrackIndices) {
+      if (index >= 0 && index < sampleRegistry.getSampleTracks().size()) {
+        tracks.add(sampleRegistry.getSampleTracks().get(index));
+      }
+    }
+    return tracks;
+  }
+
+  private void clearSelection() {
+    selectedTrackIndices.clear();
+    selectionAnchorIndex = -1;
+  }
+
+  @Override
   protected void drawTrackRows(
       double panelWidthPixels, double panelHeightPixels, double rightUiInsetPixels) {
     gc.setStroke(DrawColors.BORDER);
@@ -140,19 +235,36 @@ public class SampleTrackListPanel extends TrackListPanel {
       }
 
       boolean hasTrack = backingTrackIndex < sampleRegistry.getSampleTracks().size();
-      boolean trackVisible =
-          !hasTrack || sampleRegistry.getSampleTracks().get(backingTrackIndex).isVisible();
+      SampleTrack sampleTrack = hasTrack
+          ? sampleRegistry.getSampleTracks().get(backingTrackIndex)
+          : null;
+      boolean trackVisible = sampleTrack == null || sampleTrack.isVisible();
       if (rowY >= 0) {
         double snappedY = Math.round(rowY);
         gc.setStroke(DrawColors.BORDER);
         gc.strokeLine(0, snappedY, panelWidthPixels, snappedY);
       }
 
+      double fillY = Math.max(rowY, 0);
+      double fillH = Math.min(rowY + rowHeight, panelHeightPixels) - fillY;
+      if (fillH > 0) {
+        if (selectedTrackIndices.contains(backingTrackIndex)) {
+          gc.setFill(SELECTION_FILL);
+          gc.fillRect(0, fillY, panelWidthPixels, fillH);
+        }
+        Color groupColor = sampleTrack != null
+            ? sampleRegistry.getSidebarColorForTrack(sampleTrack)
+            : null;
+        if (groupColor != null) {
+          // Accent only — a thin stripe on the left edge of the sample sidebar.
+          gc.setFill(groupColor);
+          gc.fillRect(0, fillY, 4, fillH);
+        }
+      }
+
       double textY = rowY + NAME_FONT.getSize() + 2;
       if (textY > 0) {
-        String displayName = hasTrack
-            ? sampleRegistry.getSampleTracks().get(backingTrackIndex).getDisplayName()
-            : "";
+        String displayName = sampleTrack != null ? sampleTrack.getDisplayName() : "";
         if (backingTrackIndex == hoverIndex) {
           gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
           double textWidth = displayName.length() * 7.5;
@@ -331,10 +443,129 @@ public class SampleTrackListPanel extends TrackListPanel {
       settingsMenu.getItems().add(
           buildTrackRow(track.getSamples().get(fileIndex), track, fileIndex, sampleIndex));
     }
+    addSampleGroupMenuItems(settingsMenu, track, sampleIndex);
     addMethylationSettings(settingsMenu, track);
     addHaplotypeInformation(settingsMenu, track);
     addReadRenderingSettings(settingsMenu, track);
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  private void addSampleGroupMenuItems(ContextMenu settingsMenu, SampleTrack track, int sampleIndex) {
+    settingsMenu.getItems().add(new SeparatorMenuItem());
+
+    VBox groupBox = new VBox(6);
+    groupBox.setPadding(new Insets(4, 8, 4, 8));
+
+    Label header = new Label("Sample group");
+    header.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
+    groupBox.getChildren().add(header);
+
+    SampleGroup current = sampleRegistry.getGroupForTrack(track);
+    ColorPicker colorPicker = new ColorPicker(
+        current != null
+            ? current.getColor()
+            : DrawColors.SAMPLE_GROUP_COLORS[
+                sampleRegistry.getSampleGroups().size() % DrawColors.SAMPLE_GROUP_COLORS.length]);
+    colorPicker.setPrefWidth(150);
+
+    if (current != null) {
+      Label currentLabel = new Label("In: " + current.getName());
+      currentLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+      groupBox.getChildren().add(currentLabel);
+
+      colorPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
+        if (newColor != null) {
+          sampleRegistry.setGroupColor(current.getId(), newColor);
+          draw();
+        }
+      });
+      Label colorHint = new Label("Group color");
+      colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+      groupBox.getChildren().addAll(colorHint, colorPicker);
+    } else {
+      Label colorHint = new Label("Color for new group");
+      colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+      groupBox.getChildren().addAll(colorHint, colorPicker);
+    }
+
+    settingsMenu.getItems().add(new CustomMenuItem(groupBox, false));
+
+    MenuItem addThis = new MenuItem(
+        current == null ? "Add this sample to a group…" : "Move to a new group…");
+    addThis.setOnAction(event -> {
+      Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
+      SampleGroupDialog.show(
+          owner, 1, sampleRegistry.suggestNextGroupName(), colorPicker.getValue()).ifPresent(outcome -> {
+        if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
+          sampleRegistry.createGroupForTracks(List.of(track), add.name(), add.color());
+          clearSelection();
+          draw();
+          onAfterVisibleTrackRangeChanged();
+        }
+      });
+    });
+    settingsMenu.getItems().add(addThis);
+
+    if (selectedTrackIndices.size() >= 2 && selectedTrackIndices.contains(sampleIndex)) {
+      MenuItem addSelected = new MenuItem(
+          "Add " + selectedTrackIndices.size() + " selected samples to a group…");
+      addSelected.setOnAction(event -> promptGroupSelectedTracks(0, 0));
+      settingsMenu.getItems().add(addSelected);
+    }
+
+    int groupedSelectedCount = countGroupedSelectedTracks();
+    if (groupedSelectedCount >= 2 && selectedTrackIndices.contains(sampleIndex)) {
+      MenuItem removeSelected = new MenuItem(
+          "Remove " + groupedSelectedCount + " selected from group");
+      removeSelected.setOnAction(event -> {
+        sampleRegistry.clearTracksFromGroups(selectedTracks());
+        clearSelection();
+        draw();
+        onAfterVisibleTrackRangeChanged();
+      });
+      settingsMenu.getItems().add(removeSelected);
+    }
+
+    for (SampleGroup group : sampleRegistry.getSampleGroups()) {
+      if (current != null && current.getId() == group.getId()) {
+        continue;
+      }
+      MenuItem assign = new MenuItem("Add to " + group.getName());
+      assign.setOnAction(event -> {
+        List<SampleTrack> targets = selectedTrackIndices.contains(sampleIndex)
+                && selectedTrackIndices.size() > 1
+            ? selectedTracks()
+            : List.of(track);
+        sampleRegistry.assignTracksToGroup(targets, group.getId());
+        clearSelection();
+        draw();
+        onAfterVisibleTrackRangeChanged();
+      });
+      settingsMenu.getItems().add(assign);
+    }
+
+    if (current != null) {
+      MenuItem clear = new MenuItem(
+          selectedTrackIndices.size() > 1 && selectedTrackIndices.contains(sampleIndex)
+              ? "Remove this sample from group"
+              : "Remove from group");
+      clear.setOnAction(event -> {
+        sampleRegistry.clearTrackGroup(track);
+        draw();
+        onAfterVisibleTrackRangeChanged();
+      });
+      settingsMenu.getItems().add(clear);
+    }
+  }
+
+  private int countGroupedSelectedTracks() {
+    int count = 0;
+    for (SampleTrack selected : selectedTracks()) {
+      if (selected.hasGroup()) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private void addMethylationSettings(ContextMenu settingsMenu, SampleTrack track) {

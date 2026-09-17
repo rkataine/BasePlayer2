@@ -104,6 +104,18 @@ public final class DrawColors {
     Color.rgb(120, 160, 40),   // Olive
   };
 
+  /** Distinct sidebar accent colors for sample groups. */
+  public static final Color[] SAMPLE_GROUP_COLORS = {
+    Color.web("#4db8ff"),
+    Color.web("#7ed957"),
+    Color.web("#f0a030"),
+    Color.web("#e060c0"),
+    Color.web("#50d0c0"),
+    Color.web("#d05050"),
+    Color.web("#b080ff"),
+    Color.web("#e0d040"),
+  };
+
   // ── Mismatch base colors ──
   public static final Color MISMATCH_A = Color.rgb(100, 200, 100);
   public static final Color MISMATCH_C = Color.rgb(100, 100, 220);

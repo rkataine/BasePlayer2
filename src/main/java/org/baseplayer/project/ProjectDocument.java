@@ -36,6 +36,12 @@ public class ProjectDocument {
   public static class UiSpec {
     public boolean darkMode = true;
     public boolean maneOnly = true;
+    /** Vertical main split (gene / feature / sample) divider positions. */
+    public List<Double> mainSplitDividers;
+    /** Shared horizontal sidebar width ratio (gene, feature, sample sidebars). */
+    public Double sidebarDivider;
+    /** Horizontal multi-column content divider positions. */
+    public List<Double> columnDividers;
   }
 
   public static class VariantFilterSpec {
@@ -43,6 +49,10 @@ public class ProjectDocument {
     public int minDepth;
     public double minAlleleFraction;
     public boolean cancerGenesOnly;
+    public int minSharedSamples = 1;
+    public int maxSharedSamples = Integer.MAX_VALUE;
+    public boolean geneLevel;
+    public int comparisonWindowBp;
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();

@@ -21,99 +21,126 @@ import org.baseplayer.variant.VcfSnvIndel;
 import org.baseplayer.variant.VcfStructuralVariant;
 import org.baseplayer.variant.VcfVariantType;
 
-/**
- * VCF 4.2 file reader for bgzipped and tabix/csi indexed VCF files.
- * Provides separate methods for reading SNVs/indels and structural variants.
- */
 public class VcfReader implements AutoCloseable {
     
     private final Path vcfPath;
     private final AbstractFeatureReader<VariantContext, LineIterator> reader;
     private final VCFHeader header;
     private final List<String> sampleNames;
+    private final boolean canTabixQuery;
+    private final boolean hasTbiOrCsiIndex;
 
-    /**
-     * Open a VCF file. The file must be bgzipped and have a .tbi or .csi index.
-     * 
-     * @param vcfPath Path to the .vcf.gz file
-     * @throws IOException if file cannot be opened or is not indexed
-     */
     public VcfReader(Path vcfPath) throws IOException {
         this.vcfPath = vcfPath;
-        // System.err.println("[VcfReader] Opening VCF file: " + vcfPath);
         
-        // Validate that file exists and is bgzipped
         if (!Files.exists(vcfPath)) {
             throw new IOException("VCF file not found: " + vcfPath);
         }
-        // System.err.println("[VcfReader] File exists: " + vcfPath);
-        
-        // Check for index (.tbi or .csi), looking in multiple locations
-        // Try multiple naming conventions: file.vcf.gz.tbi, file.vcf.gz.csi, file.vcf.tbi, file.vcf.csi
-        Path tbiPath = Path.of(vcfPath.toString() + ".tbi");
-        Path csiPath = Path.of(vcfPath.toString() + ".csi");
-        
-        // For .gz files, also check without the .gz extension
-        Path tbiPathNoGz = null;
-        Path csiPathNoGz = null;
-        if (vcfPath.toString().endsWith(".gz")) {
-            String pathNoGz = vcfPath.toString().substring(0, vcfPath.toString().length() - 3);
-            tbiPathNoGz = Path.of(pathNoGz + ".tbi");
-            csiPathNoGz = Path.of(pathNoGz + ".csi");
+
+        Path tabixIndex = findSiblingIndex(vcfPath, ".tbi");
+        Path csiIndex = findSiblingIndex(vcfPath, ".csi");
+        this.hasTbiOrCsiIndex = tabixIndex != null || csiIndex != null;
+
+        if (tabixIndex != null) {
+            this.reader = AbstractFeatureReader.getFeatureReader(
+                vcfPath.toString(),
+                tabixIndex.toString(),
+                new VCFCodec(),
+                true);
+            this.canTabixQuery = true;
+        } else {
+            this.reader = AbstractFeatureReader.getFeatureReader(
+                vcfPath.toString(),
+                new VCFCodec(),
+                false);
+            this.canTabixQuery = false;
         }
-        
-        boolean hasIndex = Files.exists(tbiPath) || Files.exists(csiPath) || 
-                          (tbiPathNoGz != null && Files.exists(tbiPathNoGz)) ||
-                          (csiPathNoGz != null && Files.exists(csiPathNoGz));
-        
-        if (!hasIndex) {
-            // Index file not found - report which locations were checked
-            String msg = "VCF index not found for " + vcfPath.getFileName() + ". Checked: " +
-                         tbiPath.getFileName();
-            if (csiPath != null) msg += ", " + csiPath.getFileName();
-            if (tbiPathNoGz != null) msg += ", " + tbiPathNoGz.getFileName();
-            if (csiPathNoGz != null) msg += ", " + csiPathNoGz.getFileName();
-            throw new IOException(msg);
-        }
-        // System.err.println("[VcfReader] Index found (tbi=" + Files.exists(tbiPath) + ", csi=" + Files.exists(csiPath) + ")");
-        
-        // Open with htsjdk - don't require index format to be .idx specifically
-        // htsjdk can work with .csi, .tbi, or even without an index for bgzipped files
-        this.reader = AbstractFeatureReader.getFeatureReader(
-            vcfPath.toString(),
-            new VCFCodec(),
-            false  // don't require index (htsjdk will use .csi/.tbi if available)
-        );
-        // System.err.println("[VcfReader] Reader opened successfully");
         
         this.header = (VCFHeader) reader.getHeader();
         this.sampleNames = header.getSampleNamesInOrder();
-        // System.err.println("[VcfReader] VCF has " + sampleNames.size() + " samples: " + sampleNames);
     }
 
-    /**
-     * Get the VCF header.
-     */
+    private static Path findSiblingIndex(Path vcfPath, String extension) {
+        Path direct = Path.of(vcfPath.toString() + extension);
+        if (Files.exists(direct)) {
+            return direct;
+        }
+        String name = vcfPath.toString();
+        if (name.endsWith(".gz")) {
+            Path withoutGz = Path.of(name.substring(0, name.length() - 3) + extension);
+            if (Files.exists(withoutGz)) {
+                return withoutGz;
+            }
+        }
+        return null;
+    }
+
+    public boolean canTabixQuery() {
+        return canTabixQuery;
+    }
+
+    public boolean hasTbiOrCsiIndex() {
+        return hasTbiOrCsiIndex;
+    }
+
     public VCFHeader getHeader() {
         return header;
     }
 
-    /**
-     * Get sample names from the VCF.
-     */
     public List<String> getSampleNames() {
         return sampleNames;
     }
 
-    /**
-     * Query all SNVs and small indels for an entire chromosome.
-     * This method filters out structural variants.
-     * More efficient than region queries when loading a whole chromosome.
-     * 
-     * @param chromosome Chromosome name (e.g., "chr1" or "1")
-     * @return List of SNVs and indels
-     * @throws IOException if query fails
-     */
+    private void visitOverlappingVariants(String chromosome, long start, long end,
+            Consumer<VariantContext> consumer) throws IOException {
+        String normalizedChrom = normalizeChromosomeName(chromosome);
+        int queryStart = (int) Math.max(1, start);
+        int queryEnd = (int) Math.min(Integer.MAX_VALUE, Math.max(queryStart, end));
+
+        if (canTabixQuery) {
+            visitWithTabixQuery(normalizedChrom, queryStart, queryEnd, consumer);
+        } else {
+            visitWithSortedScan(normalizedChrom, queryStart, queryEnd, consumer);
+        }
+    }
+
+    private void visitWithTabixQuery(String chromosome, int start, int end,
+            Consumer<VariantContext> consumer) throws IOException {
+        try (var iterator = reader.query(chromosome, start, end)) {
+            while (iterator.hasNext()) {
+                consumer.accept(iterator.next());
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed to query VCF: " + e.getMessage(), e);
+        }
+    }
+
+    private void visitWithSortedScan(String chromosome, int start, int end,
+            Consumer<VariantContext> consumer) throws IOException {
+        try (var iterator = reader.iterator()) {
+            boolean reachedChromosome = false;
+            while (iterator.hasNext()) {
+                VariantContext ctx = iterator.next();
+                if (!ctx.getContig().equals(chromosome)) {
+                    if (reachedChromosome) {
+                        break;
+                    }
+                    continue;
+                }
+                reachedChromosome = true;
+                if (ctx.getEnd() < start) {
+                    continue;
+                }
+                if (ctx.getStart() > end) {
+                    break;
+                }
+                consumer.accept(ctx);
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed to scan VCF: " + e.getMessage(), e);
+        }
+    }
+
     public List<VcfSnvIndel> querySnvsAndIndelsForChromosome(String chromosome) 
             throws IOException {
         List<VcfSnvIndel> variants = new ArrayList<>();
@@ -153,57 +180,17 @@ public class VcfReader implements AutoCloseable {
         return variants;
     }
     
-    /**
-     * Query SNVs and small indels in a genomic region.
-     * For loading entire chromosomes, use querySnvsAndIndelsForChromosome() instead.
-     * 
-     * @param chromosome Chromosome name (e.g., "chr1" or "1")
-     * @param start Start position (1-based, inclusive)
-     * @param end End position (1-based, inclusive)
-     * @return List of SNVs and indels
-     * @throws IOException if query fails
-     */
     public List<VcfSnvIndel> querySnvsAndIndels(String chromosome, long start, long end) 
             throws IOException {
         List<VcfSnvIndel> variants = new ArrayList<>();
-        
-        // Normalize chromosome name to match VCF file
-        String normalizedChrom = normalizeChromosomeName(chromosome);
-        
-        // VCF files use 1-based coordinates
-        int queryStart = (int) start;
-        int queryEnd = (int) end;
-        
-        try (var iterator = reader.query(normalizedChrom, queryStart, queryEnd)) {
-            while (iterator.hasNext()) {
-                VariantContext ctx = iterator.next();
-                
-                // Skip structural variants
-                if (isStructuralVariant(ctx)) {
-                    continue;
-                }
-                
-                VcfVariantType type = classifySnvIndel(ctx);
-                VcfSnvIndel variant = parseSnvIndel(ctx, type);
-                variants.add(variant);
+        visitOverlappingVariants(chromosome, start, end, ctx -> {
+            if (!isStructuralVariant(ctx)) {
+                variants.add(parseSnvIndel(ctx, classifySnvIndel(ctx)));
             }
-        } catch (Exception e) {
-            // System.err.println("VCF query error for " + chromosome + ":" + start + "-" + end);
-            throw new IOException("Failed to query VCF: " + e.getMessage(), e);
-        }
-        
+        });
         return variants;
     }
 
-    /**
-     * Query all structural variants for an entire chromosome.
-     * This method only returns structural variants.
-     * More efficient than region queries when loading a whole chromosome.
-     * 
-     * @param chromosome Chromosome name (e.g., "chr1" or "1")
-     * @return List of structural variants
-     * @throws IOException if query fails
-     */
     public List<VcfStructuralVariant> queryStructuralVariantsForChromosome(String chromosome) 
             throws IOException {
         // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Querying SVs for: " + chromosome);
@@ -248,114 +235,46 @@ public class VcfReader implements AutoCloseable {
             Consumer<VcfSnvIndel> snvConsumer,
             Consumer<VcfStructuralVariant> svConsumer,
             long chromosomeLength) throws IOException {
-        String normalizedChrom = normalizeChromosomeName(chromosome);
-        
-        try (var iterator = reader.query(normalizedChrom, 0, (int) chromosomeLength)) {
-            while (iterator.hasNext()) {
-                VariantContext ctx = iterator.next();
-                
-                if (isStructuralVariant(ctx)) {
-                    if (svConsumer != null) {
-                        svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
-                    }
-                } else {
-                    if (snvConsumer != null) {
-                        snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
-                    }
+        long end = chromosomeLength > 0 ? chromosomeLength : Integer.MAX_VALUE;
+        visitOverlappingVariants(chromosome, 1, end, ctx -> {
+            if (isStructuralVariant(ctx)) {
+                if (svConsumer != null) {
+                    svConsumer.accept(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
                 }
+            } else if (snvConsumer != null) {
+                snvConsumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
             }
-        } catch (Exception e) {
-            throw new IOException("Failed to iterate VCF: " + e.getMessage(), e);
-        }
+        });
     }
 
-    /**
-     * Query structural variants in a genomic region.
-     * For loading entire chromosomes, use queryStructuralVariantsForChromosome() instead.
-     * 
-     * @param chromosome Chromosome name (e.g., "chr1" or "1")
-     * @param start Start position (1-based, inclusive)
-     * @param end End position (1-based, inclusive)
-     * @return List of structural variants
-     * @throws IOException if query fails
-     */
     public List<VcfStructuralVariant> queryStructuralVariants(String chromosome, long start, long end) 
             throws IOException {
         List<VcfStructuralVariant> variants = new ArrayList<>();
-        
-        // Normalize chromosome name to match VCF file
-        String normalizedChrom = normalizeChromosomeName(chromosome);
-        
-        // VCF files use 1-based coordinates
-        int queryStart = (int) start;
-        int queryEnd = (int) end;
-        
-        try (var iterator = reader.query(normalizedChrom, queryStart, queryEnd)) {
-            while (iterator.hasNext()) {
-                VariantContext ctx = iterator.next();
-                
-                // Only include structural variants
-                if (!isStructuralVariant(ctx)) {
-                    continue;
-                }
-                
-                VcfVariantType type = classifyStructuralVariant(ctx);
-                VcfStructuralVariant variant = parseStructuralVariant(ctx, type);
-                variants.add(variant);
+        visitOverlappingVariants(chromosome, start, end, ctx -> {
+            if (isStructuralVariant(ctx)) {
+                variants.add(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
             }
-        }
-        
+        });
         return variants;
     }
 
-    /**
-     * Query all variants (both SNVs/indels and structural variants) in a region.
-     * Returns two separate lists for cleaner handling.
-     * 
-     * @param chromosome Chromosome name
-     * @param start Start position (1-based, inclusive)
-     * @param end End position (1-based, inclusive)
-     * @return Map with "snvs" and "svs" keys
-     * @throws IOException if query fails
-     */
     public Map<String, Object> queryAllVariants(String chromosome, long start, long end) 
             throws IOException {
         List<VcfSnvIndel> snvs = new ArrayList<>();
         List<VcfStructuralVariant> svs = new ArrayList<>();
-        
-        // Normalize chromosome name to match VCF file
-        String normalizedChrom = normalizeChromosomeName(chromosome);
-        
-        // VCF files use 1-based coordinates
-        int queryStart = (int) start;
-        int queryEnd = (int) end;
-        
-        try (var iterator = reader.query(normalizedChrom, queryStart, queryEnd)) {
-            while (iterator.hasNext()) {
-                VariantContext ctx = iterator.next();
-                
-                if (isStructuralVariant(ctx)) {
-                    VcfVariantType type = classifyStructuralVariant(ctx);
-                    svs.add(parseStructuralVariant(ctx, type));
-                } else {
-                    VcfVariantType type = classifySnvIndel(ctx);
-                    snvs.add(parseSnvIndel(ctx, type));
-                }
+        visitOverlappingVariants(chromosome, start, end, ctx -> {
+            if (isStructuralVariant(ctx)) {
+                svs.add(parseStructuralVariant(ctx, classifyStructuralVariant(ctx)));
+            } else {
+                snvs.add(parseSnvIndel(ctx, classifySnvIndel(ctx)));
             }
-        }
-        
+        });
         Map<String, Object> result = new HashMap<>();
         result.put("snvs", snvs);
         result.put("svs", svs);
         return result;
     }
 
-    // ── Classification ────────────────────────────────────────────────────────
-
-    /**
-     * Check if a variant is a structural variant.
-     * SV criteria: symbolic alleles, SVTYPE in INFO, or large size.
-     */
     private boolean isStructuralVariant(VariantContext ctx) {
         // Check for symbolic alleles (e.g., <DEL>, <INS>, <DUP>)
         if (ctx.isSymbolic()) {
@@ -380,9 +299,6 @@ public class VcfReader implements AutoCloseable {
         return false;
     }
 
-    /**
-     * Classify a SNV/indel variant.
-     */
     private VcfVariantType classifySnvIndel(VariantContext ctx) {
         // Check if it's a simple variant
         if (ctx.isSNP()) {
@@ -702,6 +618,7 @@ public class VcfReader implements AutoCloseable {
         }
         
         Map<String, Map<String, Object>> genotypes = new HashMap<>();
+        boolean structural = isStructuralVariant(ctx);
         
         for (Genotype gt : ctx.getGenotypes()) {
             Map<String, Object> gtMap = new HashMap<>();
@@ -730,15 +647,43 @@ public class VcfReader implements AutoCloseable {
                 gtMap.put("PL", gt.getPL());
             }
             
-            // Add any extended attributes
             for (String key : gt.getExtendedAttributes().keySet()) {
                 gtMap.put(key, gt.getExtendedAttribute(key));
+            }
+
+            if (structural && (Boolean.TRUE.equals(gtMap.get("isNoCall")) || gt.isHomRef())
+                    && hasPositiveSvEvidenceCount(gtMap)) {
+                gtMap.put("isNoCall", false);
+                gtMap.put("isHomRef", false);
+                gtMap.put("GT", "NA");
             }
             
             genotypes.put(gt.getSampleName(), gtMap);
         }
         
         return genotypes;
+    }
+
+    private static boolean hasPositiveSvEvidenceCount(Map<String, Object> gtMap) {
+        String[] evidenceFields = {"PS", "RC", "PR", "SR", "DV", "VR", "DR", "RR", "ASRQ", "PE", "BE"};
+        for (String field : evidenceFields) {
+            Object value = gtMap.get(field);
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof Number number && number.doubleValue() > 0) {
+                return true;
+            }
+            if (value instanceof String text) {
+                try {
+                    if (Double.parseDouble(text.trim()) > 0) {
+                        return true;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return false;
     }
 
     @Override

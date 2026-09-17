@@ -80,24 +80,166 @@ public final class VariantCacheStore {
       fingerprints.add(VcfFingerprint.from(vcf));
     }
 
-    List<String> chromosomes = new ArrayList<>();
     Map<String, VariantList> cached = VcfManager.getInstance().snapshotVariantCache();
+    // One entry per list instance — alias keys (chr1 / 1) must not double-count.
+    Map<VariantList, String> uniqueLists = new java.util.IdentityHashMap<>();
     for (Map.Entry<String, VariantList> entry : cached.entrySet()) {
       String chrom = entry.getKey();
       VariantList list = entry.getValue();
       if (chrom == null || list == null || list.isEmpty()) continue;
-      writeChromosomeFile(dir.resolve(safeChromFileName(chrom) + CHROM_SUFFIX), list, sampleNames);
-      chromosomes.add(chrom);
+      String preferred = list.getChromosome();
+      if (preferred == null || preferred.isBlank()) {
+        preferred = chrom;
+      }
+      uniqueLists.merge(list, preferred, (existing, incoming) ->
+          existing.length() >= incoming.length() ? existing : incoming);
     }
 
-    CacheMeta meta = new CacheMeta();
-    meta.schemaVersion = SCHEMA_VERSION;
-    meta.sampleNames = sampleNames;
-    meta.chromosomes = chromosomes;
-    meta.vcfFingerprints = fingerprints;
+    List<Map.Entry<String, VariantList>> entries = new ArrayList<>();
+    for (Map.Entry<VariantList, String> entry : uniqueLists.entrySet()) {
+      entries.add(Map.entry(entry.getValue(), entry.getKey()));
+    }
+    entries.sort((a, b) -> a.getKey().compareToIgnoreCase(b.getKey()));
+
+    // Stable VCF fingerprint order for signature comparison.
+    fingerprints.sort((a, b) -> {
+      String pa = a != null && a.path != null ? a.path : "";
+      String pb = b != null && b.path != null ? b.path : "";
+      return pa.compareToIgnoreCase(pb);
+    });
+
+    CacheMeta desired = buildMeta(sampleNames, fingerprints, entries);
+    if (canSkipRewrite(dir, desired)) {
+      org.baseplayer.services.LoadingManager.get().setProgress(1, 1);
+      return;
+    }
+
+    int total = Math.max(1, entries.size());
+    org.baseplayer.services.LoadingManager.get().setProgress(0, total);
+    int index = 0;
+    for (Map.Entry<String, VariantList> entry : entries) {
+      String chrom = entry.getKey();
+      VariantList list = entry.getValue();
+      writeChromosomeFile(dir.resolve(safeChromFileName(chrom) + CHROM_SUFFIX), list, sampleNames);
+      index++;
+      org.baseplayer.services.LoadingManager.get().setProgress(index, total);
+    }
+
+    // Drop stale chromosome files that are no longer in the in-memory cache.
+    removeStaleChromosomeFiles(dir, desired.chromosomes);
 
     try (Writer writer = Files.newBufferedWriter(dir.resolve(META_FILE), StandardCharsets.UTF_8)) {
-      GSON.toJson(meta, writer);
+      GSON.toJson(desired, writer);
+    }
+  }
+
+  /**
+   * True when on-disk cache already matches current in-memory variants
+   * (same VCFs, samples, chromosomes, filters, annotation flags, and counts).
+   */
+  private static boolean canSkipRewrite(Path dir, CacheMeta desired) {
+    Path metaPath = dir.resolve(META_FILE);
+    if (!Files.isRegularFile(metaPath)) {
+      return false;
+    }
+    try (Reader reader = Files.newBufferedReader(metaPath, StandardCharsets.UTF_8)) {
+      CacheMeta existing = GSON.fromJson(reader, CacheMeta.class);
+      if (existing == null || existing.schemaVersion != SCHEMA_VERSION) {
+        return false;
+      }
+      if (!java.util.Objects.equals(desired.contentSignature, existing.contentSignature)) {
+        return false;
+      }
+      if (desired.chromosomes == null) {
+        return true;
+      }
+      for (String chrom : desired.chromosomes) {
+        if (!Files.isRegularFile(dir.resolve(safeChromFileName(chrom) + CHROM_SUFFIX))) {
+          return false;
+        }
+      }
+      return true;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  private static CacheMeta buildMeta(
+      List<String> sampleNames,
+      List<VcfFingerprint> fingerprints,
+      List<Map.Entry<String, VariantList>> entries) {
+    CacheMeta meta = new CacheMeta();
+    meta.schemaVersion = SCHEMA_VERSION;
+    // Defensive copy so later mutations can't affect signature stability.
+    meta.sampleNames = sampleNames == null ? new ArrayList<>() : new ArrayList<>(sampleNames);
+    meta.vcfFingerprints = fingerprints == null ? new ArrayList<>() : new ArrayList<>(fingerprints);
+    meta.chromosomes = new ArrayList<>();
+    meta.chromosomeDetails = new ArrayList<>();
+
+    StringBuilder signature = new StringBuilder();
+    signature.append("v").append(SCHEMA_VERSION).append('|');
+    signature.append("samples:");
+    for (String name : meta.sampleNames) {
+      signature.append(name == null ? "" : name).append(';');
+    }
+    signature.append("|vcfs:");
+    for (VcfFingerprint fp : meta.vcfFingerprints) {
+      if (fp == null) continue;
+      // Normalize path so absolute vs resolved forms don't bust the signature.
+      String path = "";
+      if (fp.path != null && !fp.path.isBlank()) {
+        try {
+          path = Path.of(fp.path).toAbsolutePath().normalize().toString();
+        } catch (Exception e) {
+          path = fp.path;
+        }
+      }
+      signature.append(path).append('@').append(fp.size).append('@').append(fp.mtime).append(';');
+    }
+    signature.append("|chroms:");
+
+    for (Map.Entry<String, VariantList> entry : entries) {
+      String chrom = entry.getKey();
+      VariantList list = entry.getValue();
+      ChromDetail detail = new ChromDetail();
+      detail.name = chrom;
+      detail.variantCount = list.size();
+      detail.filterKey = list.getLoadedFilterKey();
+      detail.annotated = list.isAnnotated();
+      detail.vcfCount = list.getVcfCountWhenLoaded();
+      meta.chromosomes.add(chrom);
+      meta.chromosomeDetails.add(detail);
+
+      signature.append(chrom)
+          .append('#')
+          .append(detail.variantCount)
+          .append('#')
+          .append(detail.filterKey == null ? "" : detail.filterKey)
+          .append('#')
+          .append(detail.annotated)
+          .append('#')
+          .append(detail.vcfCount)
+          .append(';');
+    }
+    meta.contentSignature = signature.toString();
+    return meta;
+  }
+
+  private static void removeStaleChromosomeFiles(Path dir, List<String> keepChromosomes) throws IOException {
+    if (!Files.isDirectory(dir)) return;
+    java.util.Set<String> keep = new java.util.HashSet<>();
+    if (keepChromosomes != null) {
+      for (String chrom : keepChromosomes) {
+        keep.add(safeChromFileName(chrom) + CHROM_SUFFIX);
+      }
+    }
+    try (var stream = Files.list(dir)) {
+      for (Path file : stream.toList()) {
+        String name = file.getFileName().toString();
+        if (name.endsWith(CHROM_SUFFIX) && !keep.contains(name)) {
+          Files.deleteIfExists(file);
+        }
+      }
     }
   }
 
@@ -139,10 +281,15 @@ public final class VariantCacheStore {
     List<String> chroms = meta.chromosomes != null ? meta.chromosomes : List.of();
     List<String> sampleNames = meta.sampleNames != null ? meta.sampleNames : List.of();
 
+    int total = Math.max(1, chroms.size());
+    org.baseplayer.services.LoadingManager.get().setProgress(0, total);
+    int index = 0;
     for (String chrom : chroms) {
       Path file = dir.resolve(safeChromFileName(chrom) + CHROM_SUFFIX);
       if (!Files.isRegularFile(file)) {
         if (warnings != null) warnings.add("Missing variant cache file for chr" + chrom);
+        index++;
+        org.baseplayer.services.LoadingManager.get().setProgress(index, total);
         continue;
       }
       try {
@@ -155,6 +302,8 @@ public final class VariantCacheStore {
           warnings.add("Failed to read variant cache for " + chrom + ": " + e.getMessage());
         }
       }
+      index++;
+      org.baseplayer.services.LoadingManager.get().setProgress(index, total);
     }
     return out;
   }
@@ -412,6 +561,17 @@ public final class VariantCacheStore {
     public List<String> sampleNames = new ArrayList<>();
     public List<String> chromosomes = new ArrayList<>();
     public List<VcfFingerprint> vcfFingerprints = new ArrayList<>();
+    /** Stable fingerprint of cache contents; used to skip rewrite when unchanged. */
+    public String contentSignature;
+    public List<ChromDetail> chromosomeDetails = new ArrayList<>();
+  }
+
+  public static final class ChromDetail {
+    public String name;
+    public int variantCount;
+    public String filterKey;
+    public boolean annotated;
+    public int vcfCount;
   }
 
   public static final class VcfFingerprint {

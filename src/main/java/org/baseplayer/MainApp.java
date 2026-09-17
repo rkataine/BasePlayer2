@@ -46,9 +46,6 @@ public class MainApp extends Application {
                 scene.setFill(Color.BLACK);
                 // Load theme first, then application styles
                 applyTheme();
-                stage.initStyle(StageStyle.UNDECORATED);
-                stage.getIcons().add(icon);
-                stage.setTitle("BasePlayer 2");
                 
                 // Ensure minimum splash screen display time (1.5 seconds)
                 long elapsed = System.currentTimeMillis() - startTime;
@@ -86,6 +83,13 @@ public class MainApp extends Application {
     }
    
     void showMainStage(Stage primaryStage) {
+        // Stage chrome must be configured on the FX thread before show().
+        if (primaryStage.getStyle() != StageStyle.UNDECORATED) {
+            primaryStage.initStyle(StageStyle.UNDECORATED);
+        }
+        applyStageIcons(primaryStage);
+        primaryStage.setTitle("BasePlayer 2");
+
         stage.setScene(scene);
         FadeTransition ft = new FadeTransition(Duration.seconds(1), stage.getScene().getRoot());
         ft.setFromValue(0);
@@ -94,16 +98,42 @@ public class MainApp extends Application {
         stage.setOnCloseRequest(event -> {
             if (!org.baseplayer.controllers.commands.FileCommands.confirmDiscardIfDirty()) {
                 event.consume();
+                return;
             }
+            org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleCleanup();
         });
-        stage.show(); 
+        stage.show();
+        stage.setMaximized(true);
         splashScreen.close();
+        ft.setOnFinished(e -> StartHub.show(primaryStage));
         ft.play();
         
         // Auto-open Variant Manager if VCFs are already loaded
         if (VcfManager.getInstance().hasLoadedVcf()) {
             org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
                 MainApp.stage, VcfManager.getInstance(), null);
+        }
+    }
+
+    @Override
+    public void stop() {
+        org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleCleanup();
+    }
+
+    /** Taskbar / window icons: several sizes help Linux desktop environments. */
+    private static void applyStageIcons(Stage target) {
+        if (target == null) return;
+        String url = getResource("BasePlayer_icon.png").toExternalForm();
+        target.getIcons().setAll(
+            new Image(url, 16, 16, true, true),
+            new Image(url, 32, 32, true, true),
+            new Image(url, 48, 48, true, true),
+            new Image(url, 64, 64, true, true),
+            new Image(url, 128, 128, true, true),
+            new Image(url, 256, 256, true, true)
+        );
+        if (icon == null) {
+            icon = new Image(url);
         }
     }
     private static Parent loadFXML(String fxml) throws IOException {

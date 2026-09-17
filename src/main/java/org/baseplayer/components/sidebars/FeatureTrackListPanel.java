@@ -72,6 +72,7 @@ public class FeatureTrackListPanel extends TrackListPanel {
     }
     if ("eye".equals(iconId)) {
       track.setVisible(!track.isVisible());
+      org.baseplayer.project.ProjectSessionState.get().markDirty();
       if (track.isVisible()) {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (org.baseplayer.draw.DrawStack stack : stackManager.getStacks()) {
@@ -91,6 +92,7 @@ public class FeatureTrackListPanel extends TrackListPanel {
     }
     if ("remove".equals(iconId)) {
       featureTrackViewportRegistry.removeFeatureTrack(track);
+      org.baseplayer.project.ProjectSessionState.get().markDirty();
       draw();
       drawReactive();
       onAfterVisibleTrackRangeChanged();

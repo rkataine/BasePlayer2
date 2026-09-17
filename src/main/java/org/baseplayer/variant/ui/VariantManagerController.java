@@ -6,6 +6,7 @@ import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
@@ -38,6 +39,8 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.layout.GridPane;
+import javafx.scene.paint.Color;
+import javafx.geometry.Pos;
 import javafx.stage.Stage;
 
 import java.net.URI;
@@ -88,10 +91,17 @@ public class VariantManagerController implements Initializable {
     @FXML private Button minimizeButton;
 
     // Filter Tab: Sample Comparison
-    @FXML private RadioButton showAllSamplesRadio, sharedVariantsRadio, uniqueVariantsRadio, differentialRadio;
-    @FXML private ListView<String> groupASampleList, groupBSampleList;
-    @FXML private CheckBox homozygousCheckBox, heterozygousCheckBox;
-    private ToggleGroup comparisonModeGroup;
+    @FXML private IntegerRangeSlider sharedSampleRangeSlider;
+    @FXML private CheckBox geneLevelComparisonCheckBox;
+    @FXML private TextField comparisonWindowField;
+    @FXML private Label commonVariantsHelpLabel;
+    @FXML private VBox comparisonGroupsContainer;
+    @FXML private Label groupComparisonSummaryLabel;
+    @FXML private Button refreshComparisonGroupsButton;
+    @FXML private RadioButton presentMatchAllRadio, presentMatchAnyRadio;
+    private ToggleGroup presentMatchModeGroup;
+    /** Role per group id: IGNORE / PRESENT / ABSENT */
+    private final Map<Integer, VariantFilter.GroupRole> comparisonGroupRoles = new HashMap<>();
 
     // Filter Tab: Control Files
     @FXML private CheckBox filterByPopFreqCheckBox, useGnomadCheckBox, use1000GenomesCheckBox, useExacCheckBox;
@@ -174,14 +184,9 @@ public class VariantManagerController implements Initializable {
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
-        // Initialize radio button group for comparison mode
-        comparisonModeGroup = new ToggleGroup();
-        showAllSamplesRadio.setToggleGroup(comparisonModeGroup);
-        sharedVariantsRadio.setToggleGroup(comparisonModeGroup);
-        uniqueVariantsRadio.setToggleGroup(comparisonModeGroup);
-        differentialRadio.setToggleGroup(comparisonModeGroup);
-
         setupSliderBindings();
+        setupSampleComparisonBindings();
+        refreshComparisonGroupsUI();
 
         initializeVariantTable();
 
@@ -212,6 +217,24 @@ public class VariantManagerController implements Initializable {
 
         // Load initial data
         loadData();
+
+        syncSharedSampleRangeBounds();
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        registry.getSampleTracks().addListener((javafx.collections.ListChangeListener<SampleTrack>) c ->
+            Platform.runLater(() -> {
+                syncSharedSampleRangeBounds();
+                refreshComparisonGroupsUI();
+            }));
+        registry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) ->
+            Platform.runLater(this::refreshComparisonGroupsUI));
+
+        if (filterTabPane != null) {
+            filterTabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+                if (newTab != null && "Sample Comparison".equals(newTab.getText())) {
+                    refreshComparisonGroupsUI();
+                }
+            });
+        }
 
         setupWindowVisibilityListeners();
         syncBusyOverlay();
@@ -274,6 +297,48 @@ public class VariantManagerController implements Initializable {
             FXCollections.<VariantTable.TableRow>observableArrayList());
     }
 
+    /** Re-sync checkboxes from {@link VcfManager#getCurrentFilter()} after Clear All. */
+    public void reloadFilterUiFromManager() {
+        if (vcfManager == null) {
+            return;
+        }
+        loadFilterState(vcfManager.getCurrentFilter());
+    }
+
+    /**
+     * New Project / Clear All: wipe dynamic type checkboxes and restore pass-all filter UI
+     * so the next VCF is not hidden by the previous project's type selections.
+     */
+    public void resetToProjectDefaults() {
+        clearBatchAnnotationResults();
+        cancelPendingFilterTimers();
+        pendingReloadFilter = null;
+        hideReloadBanner();
+
+        variantTypeCheckBoxes.clear();
+        if (variantTypesContainer != null) {
+            variantTypesContainer.getChildren().clear();
+        }
+        if (selectAllTypesCheckBox != null) {
+            selectAllTypesCheckBox.setSelected(true);
+        }
+
+        VariantFilter defaults = vcfManager != null
+            ? vcfManager.getCurrentFilter()
+            : new VariantFilter();
+        if (defaults == null) {
+            defaults = new VariantFilter();
+        }
+        loadFilterState(defaults);
+        clearTableItemsForChromosomeSwitch();
+        setPlaceholder("Open a VCF to see variants");
+    }
+
+    /** Snapshot of the filter currently expressed by the Variant Manager UI. */
+    public VariantFilter snapshotUiFilter() {
+        return buildFilterFromUI();
+    }
+
     public void handleMinimize() {
         MinimizedVariantManagerWindow.handleMinimize(stage);
     }
@@ -332,7 +397,310 @@ public class VariantManagerController implements Initializable {
             } catch (NumberFormatException ignored) {}
         });
     }
-    
+
+    private void setupSampleComparisonBindings() {
+        presentMatchModeGroup = new ToggleGroup();
+        if (presentMatchAllRadio != null) {
+            presentMatchAllRadio.setToggleGroup(presentMatchModeGroup);
+            presentMatchAnyRadio.setToggleGroup(presentMatchModeGroup);
+            presentMatchModeGroup.selectedToggleProperty().addListener((obs, oldToggle, newToggle) -> {
+                updateGroupComparisonSummaryLabel();
+                if (!suppressFilterApplyEvents) {
+                    scheduleImmediateFilterApply();
+                }
+            });
+        }
+
+        if (geneLevelComparisonCheckBox != null) {
+            geneLevelComparisonCheckBox.selectedProperty().addListener((obs, oldVal, newVal) -> {
+                updateComparisonWindowEnabled();
+                updateCommonVariantsHelpLabel();
+                if (!suppressFilterApplyEvents) {
+                    scheduleImmediateFilterApply();
+                }
+            });
+            updateComparisonWindowEnabled();
+            updateCommonVariantsHelpLabel();
+        }
+
+        if (comparisonWindowField != null) {
+            comparisonWindowField.textProperty().addListener((obs, oldVal, newVal) -> {
+                updateCommonVariantsHelpLabel();
+                if (suppressFilterApplyEvents) {
+                    return;
+                }
+                scheduleFilterUpdate();
+            });
+        }
+
+        if (sharedSampleRangeSlider == null) {
+            return;
+        }
+
+        ChangeListener<Number> rangeListener = (obs, oldVal, newVal) -> {
+            if (suppressFilterApplyEvents) {
+                return;
+            }
+            scheduleFilterUpdate();
+        };
+        sharedSampleRangeSlider.lowValueProperty().addListener(rangeListener);
+        sharedSampleRangeSlider.highValueProperty().addListener(rangeListener);
+    }
+
+    private void updateCommonVariantsHelpLabel() {
+        if (commonVariantsHelpLabel == null) {
+            return;
+        }
+        boolean geneLevel = geneLevelComparisonCheckBox != null && geneLevelComparisonCheckBox.isSelected();
+        int windowBp = readComparisonWindowBp();
+        if (sharedSampleRangeSlider != null) {
+            if (geneLevel) {
+                sharedSampleRangeSlider.setSummaryUnit("samples (gene)");
+            } else if (windowBp > 0) {
+                sharedSampleRangeSlider.setSummaryUnit("samples (window)");
+            } else {
+                sharedSampleRangeSlider.setSummaryUnit("samples");
+            }
+        }
+        if (geneLevel) {
+            commonVariantsHelpLabel.setText(
+                "Keep genes mutated in at least this many samples (left) and at most this many (right). All variants in a matching gene are shown.");
+        } else if (windowBp > 0) {
+            commonVariantsHelpLabel.setText(
+                "Counts samples with a soft-matching call within " + windowBp
+                    + " bp (same type family; indels/SVs may match across types). "
+                    + "Use the right thumb to drop hotspot / fragile / repeat clusters shared by too many samples.");
+        } else {
+            commonVariantsHelpLabel.setText(
+                "Keep variants shared by at least this many samples (left) and at most this many (right). Use this to drop private variants or those shared by everyone.");
+        }
+    }
+
+    private void updateComparisonWindowEnabled() {
+        if (comparisonWindowField == null) {
+            return;
+        }
+        boolean geneLevel = geneLevelComparisonCheckBox != null && geneLevelComparisonCheckBox.isSelected();
+        comparisonWindowField.setDisable(geneLevel);
+    }
+
+    private int readComparisonWindowBp() {
+        if (comparisonWindowField == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(comparisonWindowField.getText().trim()));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private void syncSharedSampleRangeBounds() {
+        if (sharedSampleRangeSlider == null) {
+            return;
+        }
+        int sampleCount = Math.max(1, ServiceRegistry.getInstance().getSampleRegistry().getSampleTracks().size());
+        boolean previousSuppress = suppressFilterApplyEvents;
+        suppressFilterApplyEvents = true;
+        try {
+            sharedSampleRangeSlider.setAbsoluteMax(sampleCount);
+        } finally {
+            suppressFilterApplyEvents = previousSuppress;
+        }
+    }
+
+    @FXML
+    private void handleRefreshComparisonGroups() {
+        refreshComparisonGroupsUI();
+    }
+
+    private void refreshComparisonGroupsUI() {
+        if (comparisonGroupsContainer == null) {
+            return;
+        }
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        comparisonGroupsContainer.getChildren().clear();
+
+        // Preserve roles for groups that still exist.
+        Set<Integer> validIds = new HashSet<>();
+        validIds.add(VariantFilter.UNGROUPED_COHORT_ID);
+        for (SampleGroup group : registry.getSampleGroups()) {
+            validIds.add(group.getId());
+        }
+        comparisonGroupRoles.keySet().removeIf(id -> !validIds.contains(id));
+
+        int ungroupedCount = 0;
+        for (SampleTrack track : registry.getSampleTracks()) {
+            if (!track.hasGroup()) {
+                ungroupedCount++;
+            }
+        }
+        comparisonGroupsContainer.getChildren().add(
+            buildComparisonGroupRow(
+                VariantFilter.UNGROUPED_COHORT_ID,
+                "Ungrouped",
+                ungroupedCount,
+                Color.web("#888888")));
+
+        for (SampleGroup group : registry.getSampleGroups()) {
+            comparisonGroupsContainer.getChildren().add(
+                buildComparisonGroupRow(
+                    group.getId(),
+                    group.getName(),
+                    registry.countTracksInGroup(group.getId()),
+                    group.getColor()));
+        }
+
+        if (registry.getSampleGroups().isEmpty() && ungroupedCount == 0) {
+            Label empty = new Label("No samples loaded yet.");
+            empty.getStyleClass().add("subsection-label");
+            comparisonGroupsContainer.getChildren().add(empty);
+        }
+
+        updateGroupComparisonSummaryLabel();
+    }
+
+    private HBox buildComparisonGroupRow(int groupId, String name, int memberCount, Color color) {
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_LEFT);
+
+        Label swatch = new Label("  ");
+        String hex = String.format("#%02x%02x%02x",
+            (int) Math.round(color.getRed() * 255),
+            (int) Math.round(color.getGreen() * 255),
+            (int) Math.round(color.getBlue() * 255));
+        swatch.setStyle(
+            "-fx-background-color: " + hex + "; -fx-background-radius: 2;"
+                + "-fx-min-width: 12; -fx-min-height: 12;");
+
+        Label nameLabel = new Label(name + " (" + memberCount + ")");
+        nameLabel.getStyleClass().add("subsection-label");
+        nameLabel.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(nameLabel, Priority.ALWAYS);
+
+        ComboBox<String> roleBox = new ComboBox<>();
+        roleBox.getItems().addAll("Ignore", "Must be present", "Must be absent");
+        VariantFilter.GroupRole currentRole =
+            comparisonGroupRoles.getOrDefault(groupId, VariantFilter.GroupRole.IGNORE);
+        roleBox.setValue(roleLabel(currentRole));
+        roleBox.setPrefWidth(140);
+        roleBox.valueProperty().addListener((obs, oldVal, newVal) -> {
+            VariantFilter.GroupRole role = roleFromLabel(newVal);
+            if (role == VariantFilter.GroupRole.IGNORE) {
+                comparisonGroupRoles.remove(groupId);
+            } else {
+                comparisonGroupRoles.put(groupId, role);
+            }
+            updateGroupComparisonSummaryLabel();
+            if (!suppressFilterApplyEvents) {
+                scheduleImmediateFilterApply();
+            }
+        });
+
+        row.getChildren().addAll(swatch, nameLabel, roleBox);
+        return row;
+    }
+
+    private static String roleLabel(VariantFilter.GroupRole role) {
+        if (role == null) {
+            return "Ignore";
+        }
+        return switch (role) {
+            case PRESENT -> "Must be present";
+            case ABSENT -> "Must be absent";
+            default -> "Ignore";
+        };
+    }
+
+    private static VariantFilter.GroupRole roleFromLabel(String label) {
+        if ("Must be present".equals(label)) {
+            return VariantFilter.GroupRole.PRESENT;
+        }
+        if ("Must be absent".equals(label)) {
+            return VariantFilter.GroupRole.ABSENT;
+        }
+        return VariantFilter.GroupRole.IGNORE;
+    }
+
+    private void updateGroupComparisonSummaryLabel() {
+        if (groupComparisonSummaryLabel == null) {
+            return;
+        }
+        List<String> present = new ArrayList<>();
+        List<String> absent = new ArrayList<>();
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        for (Map.Entry<Integer, VariantFilter.GroupRole> entry : comparisonGroupRoles.entrySet()) {
+            String label = groupDisplayName(registry, entry.getKey());
+            if (entry.getValue() == VariantFilter.GroupRole.PRESENT) {
+                present.add(label);
+            } else if (entry.getValue() == VariantFilter.GroupRole.ABSENT) {
+                absent.add(label);
+            }
+        }
+        if (present.isEmpty() && absent.isEmpty()) {
+            groupComparisonSummaryLabel.setText("No group constraints");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (!present.isEmpty()) {
+            String joiner = selectedPresentMatchMode() == VariantFilter.PresentMatchMode.ANY
+                ? " or " : " and ";
+            sb.append("Present: ").append(String.join(joiner, present));
+        }
+        if (!absent.isEmpty()) {
+            if (sb.length() > 0) sb.append("  ·  ");
+            sb.append("Absent: ").append(String.join(" and ", absent));
+        }
+        groupComparisonSummaryLabel.setText(sb.toString());
+    }
+
+    private static String groupDisplayName(SampleRegistry registry, int groupId) {
+        if (groupId == VariantFilter.UNGROUPED_COHORT_ID) {
+            return "Ungrouped";
+        }
+        SampleGroup group = registry.getSampleGroup(groupId);
+        return group != null ? group.getName() : ("Group " + groupId);
+    }
+
+    private VariantFilter.PresentMatchMode selectedPresentMatchMode() {
+        if (presentMatchAnyRadio != null && presentMatchAnyRadio.isSelected()) {
+            return VariantFilter.PresentMatchMode.ANY;
+        }
+        return VariantFilter.PresentMatchMode.ALL;
+    }
+
+    private void applyPresentMatchModeToRadios(VariantFilter.PresentMatchMode mode) {
+        if (presentMatchAllRadio == null) {
+            return;
+        }
+        if (mode == VariantFilter.PresentMatchMode.ANY) {
+            presentMatchAnyRadio.setSelected(true);
+        } else {
+            presentMatchAllRadio.setSelected(true);
+        }
+    }
+
+    private Map<Integer, Set<Integer>> resolveGroupTrackIndices(Set<Integer> groupIds) {
+        Map<Integer, Set<Integer>> byGroup = new HashMap<>();
+        if (groupIds == null || groupIds.isEmpty()) {
+            return byGroup;
+        }
+        for (Integer id : groupIds) {
+            byGroup.put(id, new HashSet<>());
+        }
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        List<SampleTrack> tracks = registry.getSampleTracks();
+        for (int i = 0; i < tracks.size(); i++) {
+            SampleTrack track = tracks.get(i);
+            int cohortId = track.hasGroup() ? track.getGroupId() : VariantFilter.UNGROUPED_COHORT_ID;
+            Set<Integer> indices = byGroup.get(cohortId);
+            if (indices != null) {
+                indices.add(i);
+            }
+        }
+        return byGroup;
+    }
+
     /**
      * Schedule a debounced filter update. Restarts the timer on each call,
      * so rapid slider movements only trigger one update 200ms after the last change.
@@ -411,31 +779,39 @@ public class VariantManagerController implements Initializable {
     
     /** Update the "select all effects" checkbox state based on individual effect checkboxes. */
     private void updateSelectAllEffectsState() {
+        boolean previousSuppressState = suppressFilterApplyEvents;
         suppressFilterApplyEvents = true;
-        boolean allSelected = missenseCheckBox.isSelected()
-            && synonymousCheckBox.isSelected()
-            && stopFrameshiftCheckBox.isSelected()
-            && spliceSiteCheckBox.isSelected()
-            && utrCheckBox.isSelected()
-            && noncodingCheckBox.isSelected()
-            && intronicCheckBox.isSelected()
-            && intergenicCheckBox.isSelected();
-        selectAllEffectsCheckBox.setSelected(allSelected);
-        suppressFilterApplyEvents = false;
+        try {
+            boolean allSelected = missenseCheckBox.isSelected()
+                && synonymousCheckBox.isSelected()
+                && stopFrameshiftCheckBox.isSelected()
+                && spliceSiteCheckBox.isSelected()
+                && utrCheckBox.isSelected()
+                && noncodingCheckBox.isSelected()
+                && intronicCheckBox.isSelected()
+                && intergenicCheckBox.isSelected();
+            selectAllEffectsCheckBox.setSelected(allSelected);
+        } finally {
+            suppressFilterApplyEvents = previousSuppressState;
+        }
     }
     
     /** Update the "select all types" checkbox state based on individual type checkboxes. */
     private void updateSelectAllTypesState() {
+        boolean previousSuppressState = suppressFilterApplyEvents;
         suppressFilterApplyEvents = true;
-        boolean allSelected = true;
-        for (CheckBox cb : variantTypeCheckBoxes.values()) {
-            if (!cb.isSelected()) {
-                allSelected = false;
-                break;
+        try {
+            boolean allSelected = true;
+            for (CheckBox cb : variantTypeCheckBoxes.values()) {
+                if (!cb.isSelected()) {
+                    allSelected = false;
+                    break;
+                }
             }
+            selectAllTypesCheckBox.setSelected(allSelected);
+        } finally {
+            suppressFilterApplyEvents = previousSuppressState;
         }
-        selectAllTypesCheckBox.setSelected(allSelected);
-        suppressFilterApplyEvents = false;
     }
     
     /**
@@ -671,52 +1047,66 @@ public class VariantManagerController implements Initializable {
             return Collections.emptyList();
         }
 
-        // Step 1: Get gene location (chromosome and bounds)
-        GeneLocation geneLoc = AnnotationData.getGeneLocation(geneName);
-        if (geneLoc == null) {
-            return Collections.emptyList();
-        }
-
-        // Step 2: Get cached variants for the gene's chromosome
-        VcfManager vcfManager = VcfManager.getInstance();
-        VariantList variantList = vcfManager.getCachedVariants(geneLoc.chrom());
-        if (variantList == null || variantList.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        // Step 3: Collect unique sample tracks from variants matching the gene name
+        VariantFilter filter = resolveActiveDisplayFilter();
         Set<SampleTrack> tracksWithGeneVariant = new LinkedHashSet<>();
 
-        for (VariantNode node = variantList.getFirst(); node != null; node = node.next) {
-            // Check if variant is annotated with this gene
-            if (node.annotation == null || node.annotation.geneName() == null) {
-                continue;
+        // Prefer Variant Manager's currently loaded/annotated chromosome lists.
+        List<VcfManager.CachedChromosomeVariants> sources = sourceVariantLists;
+        if (sources == null || sources.isEmpty()) {
+            sources = getCachedVariantSources();
+        }
+        if (sources != null) {
+            for (VcfManager.CachedChromosomeVariants cached : sources) {
+                collectTracksForGene(cached.variants(), geneName, filter, tracksWithGeneVariant);
             }
+        }
 
-            // Compare gene names (case-insensitive)
-            if (!node.annotation.geneName().equalsIgnoreCase(geneName)) {
-                continue;
-            }
-
-            // Collect samples from this variant
-            List<VariantNode.SampleCall> calls = node.getSamples();
-            if (calls != null) {
-                for (VariantNode.SampleCall call : calls) {
-                    SampleTrack track = call.getTrack();
-                    if (track != null) {
-                        tracksWithGeneVariant.add(track);
-                    }
-                }
+        // Fallback: gene chromosome cache (may be unannotated if never opened).
+        if (tracksWithGeneVariant.isEmpty()) {
+            GeneLocation geneLoc = AnnotationData.getGeneLocation(geneName);
+            if (geneLoc != null) {
+                VariantList variantList = VcfManager.getInstance().getCachedVariants(geneLoc.chrom());
+                collectTracksForGene(variantList, geneName, filter, tracksWithGeneVariant);
             }
         }
 
         return new ArrayList<>(tracksWithGeneVariant);
     }
 
+    private VariantFilter resolveActiveDisplayFilter() {
+        if (vcfManager != null && vcfManager.getCurrentFilter() != null) {
+            return vcfManager.getCurrentFilter();
+        }
+        return buildFilterFromUI();
+    }
+
+    private static void collectTracksForGene(
+            VariantList variantList,
+            String geneName,
+            VariantFilter filter,
+            Set<SampleTrack> out) {
+        if (variantList == null || variantList.isEmpty() || geneName == null || out == null) {
+            return;
+        }
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        List<SampleTrack> allTracks = registry.getSampleTracks();
+        Set<Integer> trackIndices = variantList.getGeneSampleTracks(geneName, filter);
+        for (Integer trackIndex : trackIndices) {
+            if (trackIndex == null || trackIndex < 0 || trackIndex >= allTracks.size()) {
+                continue;
+            }
+            out.add(allTracks.get(trackIndex));
+        }
+    }
+
     private void navigateAndApplySampleFilterForGene(String geneName) {
+        // Extract from currently loaded/annotated data BEFORE navigation, which
+        // switches chromosome and starts an async region load that would otherwise
+        // leave the cache empty or unannotated at extract time.
+        List<SampleTrack> tracks = extractSamplesWithGeneVariants(geneName);
         navigateAndApplySampleFilter(
-            () -> NavigationCommands.navigateToGene(geneName, true),  // true = load variants
-            null,  // samples will be extracted after navigation
+            () -> NavigationCommands.navigateToGene(geneName, true),
+            tracks,
             geneName);
     }
 
@@ -725,7 +1115,7 @@ public class VariantManagerController implements Initializable {
      * Accepts sample objects directly; SampleRegistry handles track index extraction.
      *
      * @param navigationAction The navigation action to perform
-         * @param tracksWithFeature List of sample tracks containing the feature (may be null for gene filtering)
+     * @param tracksWithFeature List of sample tracks containing the feature (may be null for gene filtering)
      * @param featureName Human-readable name of the feature for the sample subset
      */
     private void navigateAndApplySampleFilter(
@@ -733,16 +1123,17 @@ public class VariantManagerController implements Initializable {
              List<SampleTrack> tracksWithFeature,
             String featureName) {
 
-        // Perform the navigation
-        navigationAction.run();
-
         List<SampleTrack> finalTracks = tracksWithFeature;
-        if (finalTracks == null && featureName != null && !featureName.isBlank() 
+        if ((finalTracks == null || finalTracks.isEmpty())
+            && featureName != null
+            && !featureName.isBlank()
             && !featureName.startsWith("Position:")) {
             finalTracks = extractSamplesWithGeneVariants(featureName);
         }
 
-        // Apply sample filtering (SampleRegistry extracts track indices internally)
+        // Perform the navigation after extracting tracks from current caches.
+        navigationAction.run();
+
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
         if (finalTracks != null && !finalTracks.isEmpty()) {
             registry.applyGeneSubset(finalTracks, featureName);
@@ -785,45 +1176,84 @@ public class VariantManagerController implements Initializable {
 
     private void loadFilterState(VariantFilter filter) {
         suppressFilterApplyEvents = true;
-        Set<VcfVariantType> types = filter.getAllowedTypes();
-        
-        // Update dynamic type checkboxes
-        for (java.util.Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
-            entry.getValue().setSelected(types.contains(entry.getKey()));
-        }
-
-        // Load effect checkboxes based on allowedEffects
-        Set<VariantEffect> effects = filter.getAllowedEffects();
-        
-        // Set specific coding sub-checkboxes
-        missenseCheckBox.setSelected(effects.contains(VariantEffect.CODING_MISSENSE));
-        synonymousCheckBox.setSelected(effects.contains(VariantEffect.CODING_SYNONYMOUS));
-        stopFrameshiftCheckBox.setSelected(effects.contains(VariantEffect.CODING_STOP_GAIN) || effects.contains(VariantEffect.CODING_FRAMESHIFT));
-        spliceSiteCheckBox.setSelected(effects.contains(VariantEffect.SPLICE_SITE));
-        utrCheckBox.setSelected(effects.contains(VariantEffect.UTR5) || effects.contains(VariantEffect.UTR3));
-        noncodingCheckBox.setSelected(effects.contains(VariantEffect.NONCODING_GENE));
-        intronicCheckBox.setSelected(effects.contains(VariantEffect.INTRONIC));
-        intergenicCheckBox.setSelected(effects.contains(VariantEffect.INTERGENIC));
-
-        qualitySlider.setValue(filter.getMinQuality());
-        coverageSlider.setValue(filter.getMinDepth());
-        alleleFreqSlider.setValue(filter.getMinAlleleFraction());
-        cancerOnlyCheckBox.setSelected(filter.isCancerGenesOnly());
-        
-        // Load advanced filters
-        if (advancedFiltersContainer != null) {
-            advancedFiltersContainer.getChildren().clear();
-            for (java.util.Map.Entry<String, String> entry : filter.getInfoFieldFilters().entrySet()) {
-                addInfoFilterRule(entry.getKey(), entry.getValue());
+        try {
+            Set<VcfVariantType> types = filter.getAllowedTypes();
+            
+            // Update dynamic type checkboxes
+            for (java.util.Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+                entry.getValue().setSelected(types.contains(entry.getKey()));
             }
-            for (String filterValue : filter.getAllowedFilterValues()) {
-                addFilterFieldRule(filterValue);
+
+            // Load effect checkboxes based on allowedEffects
+            Set<VariantEffect> effects = filter.getAllowedEffects();
+            
+            // Set specific coding sub-checkboxes
+            missenseCheckBox.setSelected(effects.contains(VariantEffect.CODING_MISSENSE));
+            synonymousCheckBox.setSelected(effects.contains(VariantEffect.CODING_SYNONYMOUS));
+            stopFrameshiftCheckBox.setSelected(effects.contains(VariantEffect.CODING_STOP_GAIN) || effects.contains(VariantEffect.CODING_FRAMESHIFT));
+            spliceSiteCheckBox.setSelected(effects.contains(VariantEffect.SPLICE_SITE));
+            utrCheckBox.setSelected(effects.contains(VariantEffect.UTR5) || effects.contains(VariantEffect.UTR3));
+            noncodingCheckBox.setSelected(effects.contains(VariantEffect.NONCODING_GENE));
+            intronicCheckBox.setSelected(effects.contains(VariantEffect.INTRONIC));
+            intergenicCheckBox.setSelected(effects.contains(VariantEffect.INTERGENIC));
+
+            qualitySlider.setValue(filter.getMinQuality());
+            coverageSlider.setValue(filter.getMinDepth());
+            alleleFreqSlider.setValue(filter.getMinAlleleFraction());
+            cancerOnlyCheckBox.setSelected(filter.isCancerGenesOnly());
+
+            if (sharedSampleRangeSlider != null) {
+                syncSharedSampleRangeBounds();
+                int maxShare = filter.getMaxSharedSamples();
+                if (maxShare == Integer.MAX_VALUE) {
+                    maxShare = sharedSampleRangeSlider.getAbsoluteMax();
+                }
+                sharedSampleRangeSlider.setRange(filter.getMinSharedSamples(), maxShare);
             }
+
+            if (geneLevelComparisonCheckBox != null) {
+                geneLevelComparisonCheckBox.setSelected(filter.isGeneLevel());
+                updateComparisonWindowEnabled();
+                updateCommonVariantsHelpLabel();
+            }
+            if (comparisonWindowField != null) {
+                comparisonWindowField.setText(Integer.toString(Math.max(0, filter.getComparisonWindowBp())));
+            }
+
+            // Restore group comparison UI
+            comparisonGroupRoles.clear();
+            comparisonGroupRoles.putAll(filter.getGroupRoles());
+            applyPresentMatchModeToRadios(filter.getPresentMatchMode());
+            refreshComparisonGroupsUI();
+            
+            // Load advanced filters
+            if (advancedFiltersContainer != null) {
+                advancedFiltersContainer.getChildren().clear();
+                for (java.util.Map.Entry<String, String> entry : filter.getInfoFieldFilters().entrySet()) {
+                    addInfoFilterRule(entry.getKey(), entry.getValue());
+                }
+                for (String filterValue : filter.getAllowedFilterValues()) {
+                    addFilterFieldRule(filterValue);
+                }
+            }
+            
+            // Update select all effects checkbox state
+            updateSelectAllEffectsState();
+        } finally {
+            suppressFilterApplyEvents = false;
+            cancelPendingFilterTimers();
+            pendingReloadFilter = null;
+            hideReloadBanner();
         }
-        
-        // Update select all effects checkbox state
-        updateSelectAllEffectsState();
-        suppressFilterApplyEvents = false;
+    }
+
+    private void cancelPendingFilterTimers() {
+        if (filterDebounceTimer != null) {
+            filterDebounceTimer.stop();
+        }
+        if (immediateFilterApplyTimer != null) {
+            immediateFilterApplyTimer.stop();
+        }
     }
 
     private VariantFilter buildFilterFromUI() {
@@ -886,6 +1316,29 @@ public class VariantManagerController implements Initializable {
 
         // Cancer genes
         filter.setCancerGenesOnly(cancerOnlyCheckBox.isSelected());
+
+        // Shared sample count range
+        if (sharedSampleRangeSlider != null) {
+            filter.setMinSharedSamples(sharedSampleRangeSlider.getLowValue());
+            int high = sharedSampleRangeSlider.getHighValue();
+            int total = sharedSampleRangeSlider.getAbsoluteMax();
+            // Full range means no upper bound so new samples do not silently filter out
+            filter.setMaxSharedSamples(high >= total ? Integer.MAX_VALUE : high);
+        }
+
+        filter.setGeneLevel(geneLevelComparisonCheckBox != null && geneLevelComparisonCheckBox.isSelected());
+        filter.setComparisonWindowBp(readComparisonWindowBp());
+
+        // Named-group comparison roles
+        Map<Integer, VariantFilter.GroupRole> roles = new HashMap<>();
+        for (Map.Entry<Integer, VariantFilter.GroupRole> entry : comparisonGroupRoles.entrySet()) {
+            if (entry.getValue() != null && entry.getValue() != VariantFilter.GroupRole.IGNORE) {
+                roles.put(entry.getKey(), entry.getValue());
+            }
+        }
+        filter.setGroupRoles(roles);
+        filter.setGroupTrackIndices(resolveGroupTrackIndices(roles.keySet()));
+        filter.setPresentMatchMode(selectedPresentMatchMode());
 
         // Advanced filters - extract from UI
         java.util.Map<String, String> infoFilters = new java.util.HashMap<>();
@@ -1040,6 +1493,22 @@ public class VariantManagerController implements Initializable {
         coverageSlider.setValue(0);
         alleleFreqSlider.setValue(0);
         cancerOnlyCheckBox.setSelected(false);
+
+        if (sharedSampleRangeSlider != null) {
+            syncSharedSampleRangeBounds();
+            sharedSampleRangeSlider.resetToFullRange();
+        }
+        if (geneLevelComparisonCheckBox != null) {
+            geneLevelComparisonCheckBox.setSelected(false);
+            updateComparisonWindowEnabled();
+            updateCommonVariantsHelpLabel();
+        }
+        if (comparisonWindowField != null) {
+            comparisonWindowField.setText("0");
+        }
+        comparisonGroupRoles.clear();
+        applyPresentMatchModeToRadios(VariantFilter.PresentMatchMode.ALL);
+        refreshComparisonGroupsUI();
         
         // Clear advanced filters
         if (advancedFiltersContainer != null) {
@@ -1051,8 +1520,7 @@ public class VariantManagerController implements Initializable {
 
     @FXML
     private void handleApplyComparison() {
-        // TODO: Implement sample comparison logic
-        System.out.println("Sample comparison not yet implemented");
+        scheduleImmediateFilterApply();
     }
 
     @FXML
@@ -1523,8 +1991,26 @@ public class VariantManagerController implements Initializable {
                     }
 
                     VariantNode node = variants.getFirst();
+                    Map<String, Set<Integer>> geneTracks = filterSnapshot.isGeneLevel()
+                        ? variants.ensureGeneSampleIndex(filterSnapshot)
+                        : null;
+                    Map<VariantNode, Set<Integer>> clusterTracks =
+                        !filterSnapshot.isGeneLevel() && filterSnapshot.hasComparisonWindow()
+                            ? variants.ensureClusterSampleIndex(filterSnapshot)
+                            : null;
                     while (node != null) {
-                        if (!filterSnapshot.passesNodeLevel(node)) {
+                        Set<Integer> aggregatedTracks = null;
+                        if (geneTracks != null) {
+                            String gene = node.annotation != null && node.annotation.geneName() != null
+                                ? node.annotation.geneName().trim().toLowerCase(java.util.Locale.ROOT)
+                                : null;
+                            aggregatedTracks = gene != null && !gene.isEmpty()
+                                ? geneTracks.getOrDefault(gene, Set.of())
+                                : Set.of();
+                        } else if (clusterTracks != null) {
+                            aggregatedTracks = clusterTracks.getOrDefault(node, Set.of());
+                        }
+                        if (!filterSnapshot.passesNodeLevel(node, aggregatedTracks)) {
                             node = node.next;
                             continue;
                         }
@@ -1708,6 +2194,20 @@ public class VariantManagerController implements Initializable {
         allChromosomeAnnotationTask = null;
         lockFilterControls(false);
         hideLoadingModal();
+
+        // Annotate-all already materializes every chromosome with the current UI filter,
+        // so a leftover "Reload needed" banner from soft filter apply is stale.
+        if (result != null && !result.cancelled()) {
+            pendingReloadFilter = null;
+            hideReloadBanner();
+            if (vcfManager != null) {
+                VariantFilter filter = buildFilterFromUI();
+                vcfManager.setCurrentFilterForNextLoad(filter);
+                vcfManager.applyFilter(filter);
+            }
+        }
+
+        sourceVariants = null;
         lastSeenVariantsRevision = -1;
         if (result != null && !result.cancelled() && result.completedChromosomes() > 0) {
             org.baseplayer.project.ProjectSessionState.get().markDirty();
