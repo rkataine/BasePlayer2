@@ -233,13 +233,22 @@ public abstract class TrackViewportRegistry {
     if (rawHeight < MINIMUM_TRACK_ROW_HEIGHT_PIXELS) {
       int tracksFit = Math.max(1, (int) (availableHeightPixels / MINIMUM_TRACK_ROW_HEIGHT_PIXELS));
       int firstVis = Math.max(0, firstVisibleTrackSlot);
+      // NaN scroll: snap to first*height. Passing a stale offset after a height/window
+      // change desyncs the window from the rail and looks like the range was cleared.
       setVisibleTrackRange(
           firstVis, firstVis + tracksFit - 1,
-          MINIMUM_TRACK_ROW_HEIGHT_PIXELS, verticalScrollOffsetPixels, availableHeightPixels);
+          MINIMUM_TRACK_ROW_HEIGHT_PIXELS, Double.NaN, availableHeightPixels);
     } else {
+      double alignedScroll = firstVisibleTrackSlot * rawHeight;
+      boolean heightUnchanged = Math.abs(rawHeight - trackRowHeightPixels) <= 1e-9
+          && Math.abs(availableHeightPixels - trackViewportHeightPixels) <= 1e-9;
+      boolean scrollAligned = Math.abs(verticalScrollOffsetPixels - alignedScroll) <= 0.5;
+      if (heightUnchanged && scrollAligned) {
+        return;
+      }
       setVisibleTrackRange(
           firstVisibleTrackSlot, lastVisibleTrackSlot,
-          rawHeight, verticalScrollOffsetPixels, availableHeightPixels);
+          rawHeight, Double.NaN, availableHeightPixels);
     }
   }
 

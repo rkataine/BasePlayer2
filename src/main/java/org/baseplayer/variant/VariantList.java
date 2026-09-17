@@ -46,6 +46,17 @@ public class VariantList {
     private boolean annotated = false;
     
     private int vcfCountWhenLoaded = 0;
+
+    /** First drawable node under {@link #visibleFilterKey}. */
+    private VariantNode visibleHead;
+    /** Drawable nodes in genomic order (for binary seek). */
+    private final ArrayList<VariantNode> visibleByPosition = new ArrayList<>();
+    /** Drawable spanning SVs in genomic order. */
+    private final ArrayList<VariantNode> visibleSvByPosition = new ArrayList<>();
+    /** Stable key of the filter used to build the visible chain; null if unset/dirty. */
+    private String visibleFilterKey;
+    /** Bumped on every visible-chain clear/rebuild so draw seekers can detect staleness. */
+    private int visibleChainGeneration;
     
     /**
      * Tracks a genomic region that has been loaded.
@@ -205,6 +216,7 @@ public class VariantList {
     /**
      * Find the first variant node at or after the given position.
      * Returns null if no such node exists.
+     * Prefer {@link #findFirstVisibleAtOrAfter(long)} for drawing.
      */
     public VariantNode findFirstAfter(long position) {
         VariantNode current = head;
@@ -213,6 +225,153 @@ public class VariantList {
         }
         
         return current;
+    }
+
+    /**
+     * Invalidate the filter-visible skip chain. Next {@link #ensureVisibleChain} rebuilds it.
+     */
+    public void clearVisibleChain() {
+        int previousCount = visibleByPosition.size();
+        for (VariantNode node : visibleByPosition) {
+            node.nextVisible = null;
+            node.prevVisible = null;
+        }
+        visibleHead = null;
+        visibleByPosition.clear();
+        visibleSvByPosition.clear();
+        visibleFilterKey = null;
+        visibleChainGeneration++;
+        System.out.println("[VisibleChain] CLEAR chrom=" + chromosome
+            + " clearedNodes=" + previousCount
+            + " gen=" + visibleChainGeneration);
+    }
+
+    /**
+     * Rebuild {@link VariantNode#nextVisible}/{@link VariantNode#prevVisible} and seek indexes
+     * for {@code filter}. A node is visible if it passes node-level checks and has at least one
+     * sample call passing sample thresholds (same rule as drawing).
+     */
+    public void rebuildVisibleChain(VariantFilter filter) {
+        long t0 = System.nanoTime();
+        clearVisibleChain();
+
+        VariantNode prevVisible = null;
+        VariantNode current = head;
+        int scanned = 0;
+        while (current != null) {
+            scanned++;
+            if (isDrawableUnderFilter(current, filter)) {
+                current.nextVisible = null;
+                current.prevVisible = prevVisible;
+                if (prevVisible == null) {
+                    visibleHead = current;
+                } else {
+                    prevVisible.nextVisible = current;
+                }
+                prevVisible = current;
+                visibleByPosition.add(current);
+                if (current.svEnd > current.position) {
+                    visibleSvByPosition.add(current);
+                }
+            } else {
+                current.nextVisible = null;
+                current.prevVisible = null;
+            }
+            current = current.next;
+        }
+
+        visibleFilterKey = filterKeyOf(filter);
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+        System.out.println("[VisibleChain] REBUILD chrom=" + chromosome
+            + " scanned=" + scanned
+            + " visible=" + visibleByPosition.size()
+            + " sv=" + visibleSvByPosition.size()
+            + " head=" + (visibleHead == null ? "null" : ("pos=" + visibleHead.position))
+            + " filterKey=" + visibleFilterKey
+            + " gen=" + visibleChainGeneration
+            + " " + ms + "ms");
+    }
+
+    /** Generation counter for the filter-visible skip chain; seekers use this to invalidate. */
+    public int getVisibleChainGeneration() {
+        return visibleChainGeneration;
+    }
+
+    /** Number of nodes currently linked in the filter-visible skip chain. */
+    public int getVisibleNodeCount() {
+        return visibleByPosition.size();
+    }
+
+    /**
+     * Rebuild the visible chain if it is missing or built for a different filter.
+     */
+    public void ensureVisibleChain(VariantFilter filter) {
+        String key = filterKeyOf(filter);
+        if (key.equals(visibleFilterKey)) {
+            return;
+        }
+        System.out.println("[VisibleChain] ENSURE rebuild needed chrom=" + chromosome
+            + " oldKey=" + visibleFilterKey
+            + " newKey=" + key);
+        rebuildVisibleChain(filter);
+    }
+
+    /**
+     * First drawable node at or after {@code position}, via binary seek on the visible index.
+     */
+    public VariantNode findFirstVisibleAtOrAfter(long position) {
+        if (visibleByPosition.isEmpty()) {
+            return null;
+        }
+        int lo = 0;
+        int hi = visibleByPosition.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (visibleByPosition.get(mid).position < position) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo < visibleByPosition.size() ? visibleByPosition.get(lo) : null;
+    }
+
+    public VariantNode getVisibleHead() {
+        return visibleHead;
+    }
+
+    /**
+     * Drawable spanning SVs (svEnd &gt; position), genomic order. Used to paint
+     * spans that start upstream of the view without scanning from chromosome start.
+     */
+    public List<VariantNode> getVisibleSvByPosition() {
+        return visibleSvByPosition;
+    }
+
+    public String getVisibleFilterKey() {
+        return visibleFilterKey;
+    }
+
+    private static String filterKeyOf(VariantFilter filter) {
+        return filter == null ? "" : filter.toStableKey();
+    }
+
+    private static boolean isDrawableUnderFilter(VariantNode node, VariantFilter filter) {
+        if (node == null || node.getSampleCount() == 0) {
+            return false;
+        }
+        if (filter == null) {
+            return true;
+        }
+        if (!filter.passesNodeLevel(node)) {
+            return false;
+        }
+        for (VariantNode.SampleCall call : node.getSamples()) {
+            if (filter.passesSampleThresholds(node, call)) {
+                return true;
+            }
+        }
+        return false;
     }
     
     /**
@@ -282,6 +441,7 @@ public class VariantList {
             current = next;
         }
 
+        clearVisibleChain();
         return nodesRemoved;
     }
 
@@ -324,6 +484,7 @@ public class VariantList {
         }
 
         recalculateBounds();
+        clearVisibleChain();
     }
 
     /**
@@ -358,6 +519,7 @@ public class VariantList {
         }
 
         recalculateBounds();
+        clearVisibleChain();
     }
 
     private void recalculateBounds() {
@@ -384,6 +546,7 @@ public class VariantList {
      * Clear all variants from the list and reset all metadata.
      */
     public void clear() {
+        clearVisibleChain();
         head = null;
         tail = null;
         size = 0;

@@ -51,9 +51,16 @@ public class BedTrack extends AbstractTrack {
     double featureHeight = Math.min(FEATURE_BAR_HEIGHT, plotHeight);
     double featureY = plotTop + (plotHeight - featureHeight) / 2;
     double viewLength = end - start;
-    
-    for (BedFeature feature : features) {
-      if (feature.end() < start || feature.start() + 1 > end) continue;
+
+    int from = findFirstOverlappingIndex(features, start, end);
+    for (int i = from; i < features.size(); i++) {
+      BedFeature feature = features.get(i);
+      if (feature.start() + 1 > end) {
+        break;
+      }
+      if (feature.end() < start) {
+        continue;
+      }
       
       double featureX1 = Math.max(x, x + ((feature.start() + 1 - start) / viewLength) * width);
       double featureX2 = Math.min(x + width, x + ((feature.end() - start) / viewLength) * width);
@@ -70,6 +77,34 @@ public class BedTrack extends AbstractTrack {
     }
     
     gc.setTextAlign(TextAlignment.LEFT);
+  }
+
+  /**
+   * Index of the first feature that may overlap [{@code viewStart}, {@code viewEnd}]
+   * in a list sorted by {@code start} (then {@code end}). Returns {@code features.size()}
+   * if none. Caller should scan forward and stop when {@code start + 1 > viewEnd}.
+   */
+  public static int findFirstOverlappingIndex(
+      List<BedFeature> features, double viewStart, double viewEnd) {
+    if (features == null || features.isEmpty()) {
+      return 0;
+    }
+    // First index with start+1 > viewStart (features before may still overlap if end >= viewStart).
+    int lo = 0;
+    int hi = features.size();
+    while (lo < hi) {
+      int mid = (lo + hi) >>> 1;
+      if (features.get(mid).start() + 1 <= viewStart) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    int i = lo;
+    while (i > 0 && features.get(i - 1).end() >= viewStart) {
+      i--;
+    }
+    return i;
   }
   
   public List<BedFeature> getFeatures(String chromosome) {

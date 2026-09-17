@@ -9,6 +9,7 @@ import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
+import org.baseplayer.variant.VariantDrawSeek;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
@@ -298,7 +299,7 @@ public class MasterTrackPainter {
 
     final double viewStart = drawStack.getViewStart();
     final double viewEnd = drawStack.getViewEnd();
-    final List<Integer> visibleTrackIndices = sampleRegistry.getVisibleTrackIndicesForChecks();
+    final List<Integer> aggregateTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     final VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
 
     Thread t = new Thread(() -> {
@@ -323,86 +324,31 @@ public class MasterTrackPainter {
         List<SvSpan> spans = new ArrayList<>();
         double viewLen = Math.max(1, viewEnd - viewStart);
 
-        VariantNode node = variants.getFirst();
-        while (node != null) {
-          if (activeFilter != null && !activeFilter.passesNodeLevel(node)) {
-            node = node.next;
+        variants.ensureVisibleChain(activeFilter);
+
+        // Upstream SV spans that overlap the view.
+        for (VariantNode node : variants.getVisibleSvByPosition()) {
+          if (node.position >= viewStart) {
+            break;
+          }
+          if (node.svEnd < viewStart || node.position > viewEnd) {
             continue;
           }
-					// TODO check visible track indices code so that it is run only when changing track visibility
-          List<Integer> passingIndices = new ArrayList<>();
-          for (int idx : visibleTrackIndices) {
-            VariantNode.SampleCall call = node.getSampleCall(idx);
-            if (call != null && (activeFilter == null || activeFilter.passesSampleThresholds(node, call))) {
-              passingIndices.add(idx);
-            }
-          }
+          accumulateDensityNode(
+              node, activeFilter, aggregateTrackIndices, viewStart, viewEnd, viewLen,
+              snvBySample, indelBySample, delBySample, invBySample, dupBySample,
+              insBySample, traBySample, bndBySample, spans, true);
+        }
 
-          if (!passingIndices.isEmpty()) {
-            boolean isSvWithSpan = node.svEnd > node.position
-                && (node.type == VcfVariantType.SV_DELETION
-                    || node.type == VcfVariantType.SV_INSERTION
-                    || node.type == VcfVariantType.SV_DUPLICATION
-                    || node.type == VcfVariantType.SV_INVERSION);
-
-            if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
-              long s = Math.max((long) viewStart, node.position);
-              long e = Math.min((long) viewEnd, node.svEnd);
-              int b0 = (int) Math.max(0,
-                  Math.min(DENSITY_BINS - 1, (s - viewStart) * DENSITY_BINS / viewLen));
-              int b1 = (int) Math.max(0,
-                  Math.min(DENSITY_BINS - 1, (e - viewStart) * DENSITY_BINS / viewLen));
-
-              java.util.Set<Integer>[] targetArray = switch (node.type) {
-                case SV_DELETION -> delBySample;
-                case SV_INVERSION -> invBySample;
-                case SV_DUPLICATION -> dupBySample;
-                case SV_INSERTION -> insBySample;
-                default -> delBySample;
-              };
-
-              for (int b = b0; b <= b1; b++) {
-                if (targetArray[b] == null) {
-                  targetArray[b] = new java.util.HashSet<>();
-                }
-                targetArray[b].addAll(passingIndices);
-              }
-              spans.add(new SvSpan(node.position, node.svEnd, node.type, passingIndices.size()));
-            } else if (node.position >= viewStart && node.position <= viewEnd) {
-              int bin = (int) Math.max(0,
-                  Math.min(DENSITY_BINS - 1, (node.position - viewStart) * DENSITY_BINS / viewLen));
-
-              switch (node.type) {
-                case SNV -> {
-                  if (snvBySample[bin] == null) {
-                    snvBySample[bin] = new java.util.HashSet<>();
-                  }
-                  snvBySample[bin].addAll(passingIndices);
-                }
-                case INSERTION, DELETION, MNV -> {
-                  if (indelBySample[bin] == null) {
-                    indelBySample[bin] = new java.util.HashSet<>();
-                  }
-                  indelBySample[bin].addAll(passingIndices);
-                }
-                case SV_TRANSLOCATION -> {
-                  if (traBySample[bin] == null) {
-                    traBySample[bin] = new java.util.HashSet<>();
-                  }
-                  traBySample[bin].addAll(passingIndices);
-                }
-                case SV_BREAKEND -> {
-                  if (bndBySample[bin] == null) {
-                    bndBySample[bin] = new java.util.HashSet<>();
-                  }
-                  bndBySample[bin].addAll(passingIndices);
-                }
-                default -> {
-                }
-              }
-            }
-          }
-          node = node.next;
+        // Thread-local seek: density runs off the FX thread and must not share drawer state.
+        VariantDrawSeek densitySeek = new VariantDrawSeek();
+        VariantNode node = densitySeek.seek(variants, (long) viewStart);
+        while (node != null && node.position <= viewEnd) {
+          accumulateDensityNode(
+              node, activeFilter, aggregateTrackIndices, viewStart, viewEnd, viewLen,
+              snvBySample, indelBySample, delBySample, invBySample, dupBySample,
+              insBySample, traBySample, bndBySample, spans, false);
+          node = node.nextVisible;
         }
 
         int[] snv = new int[DENSITY_BINS];
@@ -493,6 +439,99 @@ public class MasterTrackPainter {
     }, "density-compute");
     t.setDaemon(true);
     t.start();
+  }
+
+  private void accumulateDensityNode(
+      VariantNode node,
+      VariantFilter activeFilter,
+      List<Integer> aggregateTrackIndices,
+      double viewStart,
+      double viewEnd,
+      double viewLen,
+      java.util.Set<Integer>[] snvBySample,
+      java.util.Set<Integer>[] indelBySample,
+      java.util.Set<Integer>[] delBySample,
+      java.util.Set<Integer>[] invBySample,
+      java.util.Set<Integer>[] dupBySample,
+      java.util.Set<Integer>[] insBySample,
+      java.util.Set<Integer>[] traBySample,
+      java.util.Set<Integer>[] bndBySample,
+      List<SvSpan> spans,
+      boolean treatAsSvSpan) {
+    List<Integer> passingIndices = new ArrayList<>();
+    for (int idx : aggregateTrackIndices) {
+      VariantNode.SampleCall call = node.getSampleCall(idx);
+      if (call != null && (activeFilter == null || activeFilter.passesSampleThresholds(node, call))) {
+        passingIndices.add(idx);
+      }
+    }
+    if (passingIndices.isEmpty()) {
+      return;
+    }
+
+    boolean isSvWithSpan = treatAsSvSpan
+        || (node.svEnd > node.position
+            && (node.type == VcfVariantType.SV_DELETION
+                || node.type == VcfVariantType.SV_INSERTION
+                || node.type == VcfVariantType.SV_DUPLICATION
+                || node.type == VcfVariantType.SV_INVERSION));
+
+    if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
+      long s = Math.max((long) viewStart, node.position);
+      long e = Math.min((long) viewEnd, node.svEnd);
+      int b0 = (int) Math.max(0,
+          Math.min(DENSITY_BINS - 1, (s - viewStart) * DENSITY_BINS / viewLen));
+      int b1 = (int) Math.max(0,
+          Math.min(DENSITY_BINS - 1, (e - viewStart) * DENSITY_BINS / viewLen));
+
+      java.util.Set<Integer>[] targetArray = switch (node.type) {
+        case SV_DELETION -> delBySample;
+        case SV_INVERSION -> invBySample;
+        case SV_DUPLICATION -> dupBySample;
+        case SV_INSERTION -> insBySample;
+        default -> delBySample;
+      };
+
+      for (int b = b0; b <= b1; b++) {
+        if (targetArray[b] == null) {
+          targetArray[b] = new java.util.HashSet<>();
+        }
+        targetArray[b].addAll(passingIndices);
+      }
+      spans.add(new SvSpan(node.position, node.svEnd, node.type, passingIndices.size()));
+    } else if (node.position >= viewStart && node.position <= viewEnd) {
+      int bin = (int) Math.max(0,
+          Math.min(DENSITY_BINS - 1, (node.position - viewStart) * DENSITY_BINS / viewLen));
+
+      switch (node.type) {
+        case SNV -> {
+          if (snvBySample[bin] == null) {
+            snvBySample[bin] = new java.util.HashSet<>();
+          }
+          snvBySample[bin].addAll(passingIndices);
+        }
+        case INSERTION, DELETION, MNV -> {
+          if (indelBySample[bin] == null) {
+            indelBySample[bin] = new java.util.HashSet<>();
+          }
+          indelBySample[bin].addAll(passingIndices);
+        }
+        case SV_TRANSLOCATION -> {
+          if (traBySample[bin] == null) {
+            traBySample[bin] = new java.util.HashSet<>();
+          }
+          traBySample[bin].addAll(passingIndices);
+        }
+        case SV_BREAKEND -> {
+          if (bndBySample[bin] == null) {
+            bndBySample[bin] = new java.util.HashSet<>();
+          }
+          bndBySample[bin].addAll(passingIndices);
+        }
+        default -> {
+        }
+      }
+    }
   }
 
   private void drawDensityBars(

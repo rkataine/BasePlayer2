@@ -215,8 +215,14 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       return;
     }
 
-    trackViewportRegistry.setVisibleTrackRange(
-        firstSlot, lastSlot, estimateTrackBodyViewportHeightPixels());
+    double viewportHeight = estimateTrackBodyViewportHeightPixels();
+    trackViewportRegistry.setVisibleTrackRange(firstSlot, lastSlot, viewportHeight);
+    // While the range handles are dragging, height stays locked so the window can
+    // temporarily violate min row height. Outside that, settle immediately so a
+    // later track-body mouse-enter redraw cannot rewrite the range.
+    if (!trackViewportRegistry.isTrackRowHeightLocked() && viewportHeight > 0) {
+      trackViewportRegistry.ensureTrackRowHeightFitsViewport(viewportHeight);
+    }
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
@@ -403,8 +409,19 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       masterHeaderReactiveCanvas.setCursor(Cursor.DEFAULT);
     }
 
-    if (draggingRangeStart || draggingRangeEnd || pendingSingleHandleResolve) {
+    boolean finishedRangeDrag =
+        draggingRangeStart || draggingRangeEnd || pendingSingleHandleResolve;
+    if (finishedRangeDrag) {
       trackViewportRegistry.unlockTrackRowHeight();
+      // Apply min-height / scroll snap now. Range drag keeps height locked so
+      // ensure() cannot fight the handles; without this, the first body redraw
+      // (e.g. mouse-enter on tracks) would rewrite the window and look like the
+      // visibility slider was cancelled.
+      double viewportHeight = estimateTrackBodyViewportHeightPixels();
+      if (viewportHeight > 0) {
+        trackViewportRegistry.ensureTrackRowHeightFitsViewport(viewportHeight);
+      }
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
 
     boolean shouldHandleClick = event.getButton() == MouseButton.PRIMARY

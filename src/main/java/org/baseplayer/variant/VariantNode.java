@@ -23,7 +23,11 @@ public class VariantNode {
     private final BitSet samplePresence;  // O(1) presence check for drawing
     private List<SampleCall> samples;     // null until first sample added
 
-    public volatile VariantNode next;    /** End position for structural variants (from INFO/END); -1 for SNVs/indels. */
+    public volatile VariantNode next;
+    public volatile VariantNode nextVisible;
+    /** Previous drawable node under the current filter-visible skip chain; null if unset. */
+    public volatile VariantNode prevVisible;
+    /** End position for structural variants (from INFO/END); -1 for SNVs/indels. */
     public volatile long svEnd = -1;
     /** Record-level VCF QUAL value; -1 when missing/unknown. */
     public volatile double siteQuality = -1.0;

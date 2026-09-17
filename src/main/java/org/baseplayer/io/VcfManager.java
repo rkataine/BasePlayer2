@@ -396,6 +396,7 @@ public class VcfManager {
                         }
                         return false;
                     });
+                    result.rebuildVisibleChain(loadFilterSnapshot);
 
                     return result;
                 } catch (InterruptedException e) {
@@ -496,6 +497,7 @@ public class VcfManager {
 
 		private void updateCanvasesWithVariants(VariantList variantList) {
         if (variantList == null) return;
+        variantList.ensureVisibleChain(currentFilter);
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.sampleTrackCanvas != null) {
@@ -711,6 +713,7 @@ public class VcfManager {
             }
             return false;
         });
+        variants.rebuildVisibleChain(filter);
 
         // Mark the variants as annotated and store the filter info
         String filterKey = filter.toStableKey();
@@ -793,13 +796,23 @@ public class VcfManager {
     public void applyFilter(VariantFilter filter, String chromosome) {
         this.currentFilter = filter;
         filterGeneration.incrementAndGet();
-        // The filter is applied at draw-time in VariantDrawer; just trigger a redraw.
+        // Rebuild visible skip chains for cached lists, then redraw.
         Platform.runLater(() -> {
+            rebuildVisibleChainsForCache(filter);
             DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
             for (DrawStack stack : stackManager.getStacks()) {
                 if (stack.sampleTrackCanvas != null) stack.sampleTrackCanvas.draw();
             }
         });
+    }
+
+    /** Rebuild drawable skip chains on all cached chromosome lists for {@code filter}. */
+    private void rebuildVisibleChainsForCache(VariantFilter filter) {
+        for (VariantList list : variantCache.values()) {
+            if (list != null && !list.isEmpty()) {
+                list.rebuildVisibleChain(filter);
+            }
+        }
     }
 
     /**

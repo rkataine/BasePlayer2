@@ -68,6 +68,12 @@ public class BedFileReader {
       }
     }
 
+    for (List<BedFeature> features : featuresByChrom.values()) {
+      features.sort(java.util.Comparator
+          .comparingLong(BedFeature::start)
+          .thenComparingLong(BedFeature::end));
+    }
+
     return featuresByChrom;
   }
 

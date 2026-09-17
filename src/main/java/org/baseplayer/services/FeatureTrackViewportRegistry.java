@@ -22,7 +22,9 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
 
   @Override
   protected void onVisibleTrackRangeOrRowHeightChanged() {
-    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    // Callers that need a frame (range apply, sidebar scroll, add/remove) already
+    // toggle GenomicCanvas.update. Avoid toggling here — ensure() runs during draw
+    // and a nested update would re-enter redrawAll on every height refit.
   }
 
   public ObservableList<Track> getFeatureTracks() {

@@ -3,6 +3,7 @@ package org.baseplayer.variant.draw;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.VariantDrawSeek;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
@@ -27,6 +28,7 @@ public class VariantDrawer {
     
     private final SampleRegistry sampleRegistry;
     private final VisibleVariantIndex visibleIndex;
+    private final VariantDrawSeek drawSeek = new VariantDrawSeek();
     
     // Color scheme for different variant types
     private static final Color COLOR_SNV = Color.web("#4A90E2");          // Blue
@@ -104,67 +106,82 @@ public class VariantDrawer {
         
         long screenStart = Math.max(0, (long) drawStack.getViewStart());
         long screenEnd = (long) drawStack.getViewEnd();
-        
-        // For SVs with spans, we need to start earlier to catch variants that start before
-        // the screen but span into it. Use a generous lookback (e.g., 10x view length).
-        long lookbackDistance = Math.min(screenStart, (screenEnd - screenStart) * 10);
-        long searchStart = screenStart - lookbackDistance;
-        
-        VariantNode node = variantList.findFirstAfter(searchStart);
-        
-        // Draw variants in screen range (or spanning into it)
+
+        variantList.ensureVisibleChain(filter);
+
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
-        
+
         // Track last drawn X pixel per sample to avoid overdraw of point variants when zoomed out
         // (SV spans are exempt from this deduplication as they span multiple pixels)
         int[] lastDrawnPixelX = new int[visibleTrackIndices.length];
         for (int i = 0; i < lastDrawnPixelX.length; i++) {
             lastDrawnPixelX[i] = -1;
         }
-        
-        while (node != null && node.position <= screenEnd) {
-            if (filter != null && !filter.passesNodeLevel(node)) {
-                node = node.next;
+
+        // Spanning SVs that start upstream of the view (no chromosome-start scan).
+        for (VariantNode node : variantList.getVisibleSvByPosition()) {
+            if (node.position >= screenStart) {
+                break;
+            }
+            if (node.svEnd < screenStart || node.position > screenEnd) {
                 continue;
             }
+            if (!isSvWithSpan(node)) {
+                continue;
+            }
+            drawNodeForVisibleSamples(
+                gc, node, filter, true, chromPosToScreenPos, canvasWidth,
+                chromPosToScreenPos.apply((double) node.position),
+                visibleTrackIndices, yPositions, sampleHeight, lastDrawnPixelX);
+        }
 
+        // Point variants and in-window SV starts via nextVisible skip chain.
+        VariantNode node = drawSeek.seek(variantList, screenStart);
+        while (node != null && node.position <= screenEnd) {
             double x = chromPosToScreenPos.apply((double) node.position);
-            
-            // For SVs with spans, check if span overlaps screen even if start is off-screen
-            boolean isVisible = (x >= 0 && x <= canvasWidth);
-            if (!isVisible && isSvWithSpan(node)) {
-                // Check if SV span overlaps the screen
-                isVisible = node.svEnd >= screenStart && node.position <= screenEnd;
-            }
-            
+            boolean isSvSpan = isSvWithSpan(node);
+            boolean isVisible = (x >= 0 && x <= canvasWidth)
+                || (isSvSpan && node.svEnd >= screenStart && node.position <= screenEnd);
+
             if (isVisible) {
-                int xPixel = (int) x;
-                boolean isSvSpan = isSvWithSpan(node);
-                
-                for (int i = 0; i < visibleTrackIndices.length; i++) {
-                    int trackIndex = visibleTrackIndices[i];
-                    VariantNode.SampleCall call = node.getSampleCall(trackIndex);
-                    if (call == null) continue;
-                    if (filter != null && !filter.passesSampleThresholds(node, call)) continue;
-
-                    // Skip point variants if this sample already has one at this X pixel
-                    // SV spans are never skipped—they span multiple pixels and always need to be drawn
-                    if (!isSvSpan && xPixel == lastDrawnPixelX[i]) continue;
-
-                    double y = yPositions[i];
-
-                    // Check if this is an SV with a span
-                    if (isSvSpan) {
-                        drawSvSpan(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
-                    } else {
-                        drawVariantLine(gc, node, call, x, y, sampleHeight);
-                        lastDrawnPixelX[i] = xPixel;
-                    }
-                }
+                drawNodeForVisibleSamples(
+                    gc, node, filter, isSvSpan, chromPosToScreenPos, canvasWidth, x,
+                    visibleTrackIndices, yPositions, sampleHeight, lastDrawnPixelX);
             }
-            
-            node = node.next;
+
+            node = node.nextVisible;
+        }
+    }
+
+    private void drawNodeForVisibleSamples(
+            GraphicsContext gc,
+            VariantNode node,
+            VariantFilter filter,
+            boolean isSvSpan,
+            Function<Double, Double> chromPosToScreenPos,
+            double canvasWidth,
+            double x,
+            int[] visibleTrackIndices,
+            double[] yPositions,
+            double sampleHeight,
+            int[] lastDrawnPixelX) {
+        int xPixel = (int) x;
+        for (int i = 0; i < visibleTrackIndices.length; i++) {
+            int trackIndex = visibleTrackIndices[i];
+            VariantNode.SampleCall call = node.getSampleCall(trackIndex);
+            if (call == null) continue;
+            if (filter != null && !filter.passesSampleThresholds(node, call)) continue;
+
+            if (!isSvSpan && xPixel == lastDrawnPixelX[i]) continue;
+
+            double y = yPositions[i];
+            if (isSvSpan) {
+                drawSvSpan(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
+            } else {
+                drawVariantLine(gc, node, call, x, y, sampleHeight);
+                lastDrawnPixelX[i] = xPixel;
+            }
         }
     }
     

@@ -823,8 +823,16 @@ public class CoverageDrawer {
         if (features == null || features.isEmpty()) continue;
 
         double alpha = sample.overlay ? 0.45 : 0.8;
-        for (BedFeature feature : features) {
-          if (feature.end() < viewStart || feature.start() + 1 > viewEnd) continue;
+        int from = org.baseplayer.features.BedTrack.findFirstOverlappingIndex(
+            features, viewStart, viewEnd);
+        for (int fi = from; fi < features.size(); fi++) {
+          BedFeature feature = features.get(fi);
+          if (feature.start() + 1 > viewEnd) {
+            break;
+          }
+          if (feature.end() < viewStart) {
+            continue;
+          }
 
           double sx1 = chromPosToScreenPos.apply((double) feature.start() + 1);
           double sx2 = chromPosToScreenPos.apply((double) feature.end());
