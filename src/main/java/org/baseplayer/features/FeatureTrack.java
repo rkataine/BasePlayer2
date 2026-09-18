@@ -7,6 +7,7 @@ import org.baseplayer.components.PopupContent;
 import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
 import org.baseplayer.io.UcscTrackInfo;
+import org.baseplayer.utils.ChromosomeNames;
 
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
@@ -83,6 +84,7 @@ public class FeatureTrack extends AbstractUcscTrack {
         (chrom, start, end, bins) -> UcscApiClient.fetchTrack(trackId, chrom, start, end, bins));
     track.ucscTrackId = trackId;
     track.setCoordinateBase(0);
+    track.setChromPrefix(ChromosomeNames.CHR_PREFIX);
     return track;
   }
 
@@ -119,7 +121,7 @@ public class FeatureTrack extends AbstractUcscTrack {
   @Override
   protected CompletableFuture<ConservationData> fetchDataFromApi(
       String chromosome, long start, long end, int bins) {
-    return dataFetcher.fetch(chromosome, start, end, bins);
+    return dataFetcher.fetch(toDataChrom(chromosome), start, end, bins);
   }
 
   @Override

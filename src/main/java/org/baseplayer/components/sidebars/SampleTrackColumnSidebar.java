@@ -754,17 +754,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   private static boolean sameChromosomeName(String a, String b) {
-    return stripChrPrefix(a).equalsIgnoreCase(stripChrPrefix(b));
-  }
-
-  private static String stripChrPrefix(String chrom) {
-    if (chrom == null) {
-      return "";
-    }
-    if (chrom.length() > 3 && chrom.regionMatches(true, 0, "chr", 0, 3)) {
-      return chrom.substring(3);
-    }
-    return chrom;
+    return org.baseplayer.utils.ChromosomeNames.equals(a, b);
   }
 
   private static int clampGenomicPos(long pos) {

@@ -98,7 +98,7 @@ public class VariantList {
     }
     
     public VariantList(String chromosome) {
-        this.chromosome = chromosome;
+        this.chromosome = org.baseplayer.utils.ChromosomeNames.strip(chromosome);
         this.head = null;
         this.tail = null;
         this.size = 0;

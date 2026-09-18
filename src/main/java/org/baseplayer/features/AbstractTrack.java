@@ -1,5 +1,7 @@
 package org.baseplayer.features;
 
+import org.baseplayer.utils.ChromosomeNames;
+
 import javafx.scene.paint.Color;
 
 /**
@@ -12,6 +14,11 @@ public abstract class AbstractTrack implements Track {
   protected double preferredHeight = 30;
   protected boolean visible = false;  // Disabled by default - user must click eye icon
   protected Color color = Color.GRAY;
+  /**
+   * Contig name prefix used by this track's data source ({@code ""} or {@code "chr"}).
+   * Internal chromosome names are always unprefixed; prepend this when querying the source.
+   */
+  protected String chromPrefix = ChromosomeNames.NONE;
   
   // Display scaling settings
   protected Double minValue = null;  // null = auto-scale
@@ -25,6 +32,19 @@ public abstract class AbstractTrack implements Track {
   protected AbstractTrack(String name, String type) {
     this.name = name;
     this.type = type;
+  }
+
+  public String getChromPrefix() {
+    return chromPrefix;
+  }
+
+  public void setChromPrefix(String chromPrefix) {
+    this.chromPrefix = chromPrefix != null ? chromPrefix : ChromosomeNames.NONE;
+  }
+
+  /** Internal chrom → name expected by this track's data source. */
+  public String toDataChrom(String chromosome) {
+    return ChromosomeNames.forData(chromosome, chromPrefix);
   }
   
   @Override

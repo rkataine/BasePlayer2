@@ -11,11 +11,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
+import org.baseplayer.utils.ChromosomeNames;
+
 import javafx.scene.paint.Color;
 
 /**
  * Reads BED format files (BED3, BED6, BED12) into {@link BedFeature} records.
- * Supports both plain and gzipped files.
+ * Supports both plain and gzipped files. Chromosome keys are stored without a
+ * {@code chr} prefix; {@link BedLoad#chromPrefix()} records whether the file used one.
  */
 public class BedFileReader {
 
@@ -31,13 +34,20 @@ public class BedFileReader {
       Color color
   ) {}
 
+  public record BedLoad(Map<String, List<BedFeature>> featuresByChrom, String chromPrefix) {}
+
   public static Map<String, List<BedFeature>> read(Path filePath) throws IOException {
-    return read(filePath, DEFAULT_FEATURE_COLOR);
+    return readLoad(filePath, DEFAULT_FEATURE_COLOR).featuresByChrom();
   }
 
   public static Map<String, List<BedFeature>> read(Path filePath, Color defaultColor) throws IOException {
+    return readLoad(filePath, defaultColor).featuresByChrom();
+  }
+
+  public static BedLoad readLoad(Path filePath, Color defaultColor) throws IOException {
     Map<String, List<BedFeature>> featuresByChrom = new HashMap<>();
     boolean isGzipped = filePath.toString().endsWith(".gz");
+    java.util.ArrayList<String> rawChromNames = new java.util.ArrayList<>();
 
     try (BufferedReader reader = isGzipped
         ? new BufferedReader(new InputStreamReader(new GZIPInputStream(Files.newInputStream(filePath))))
@@ -52,7 +62,9 @@ public class BedFileReader {
         if (parts.length < 3) continue;
 
         try {
-          String chrom = parts[0].replace("chr", "");
+          String rawChrom = parts[0];
+          rawChromNames.add(rawChrom);
+          String chrom = ChromosomeNames.strip(rawChrom);
           long start = Long.parseLong(parts[1]);
           long end = Long.parseLong(parts[2]);
           String name = parts.length > 3 ? parts[3] : "";
@@ -74,7 +86,7 @@ public class BedFileReader {
           .thenComparingLong(BedFeature::end));
     }
 
-    return featuresByChrom;
+    return new BedLoad(featuresByChrom, ChromosomeNames.detectPrefix(rawChromNames));
   }
 
   private static double parseScore(String s) {

@@ -49,6 +49,14 @@ public interface AlignmentReader extends Closeable {
 
   /** Get the path to the alignment file. */
   Path getPath();
+
+  /**
+   * Contig prefix used in this file ({@code ""} or {@code "chr"}).
+   * Internal chromosome names are unprefixed; query with {@code prefix + chrom}.
+   */
+  default String getChromPrefix() {
+    return "";
+  }
   
   /** Set which signal tag to parse: 'c' for uc, 'd' for ud, '\0' for none. */
   default void setActiveSignalTag(char tag) {}

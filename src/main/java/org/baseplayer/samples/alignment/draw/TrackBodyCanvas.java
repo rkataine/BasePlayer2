@@ -514,9 +514,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     String viewChrom = drawStack != null ? drawStack.getChromosome() : null;
     String listChrom = variantList.getChromosome();
     if (viewChrom != null && listChrom != null
-        && !viewChrom.equalsIgnoreCase(listChrom)
-        && !("chr" + viewChrom).equalsIgnoreCase(listChrom)
-        && !viewChrom.equalsIgnoreCase("chr" + listChrom)) {
+        && !org.baseplayer.utils.ChromosomeNames.equals(viewChrom, listChrom)) {
       return false;
     }
     return true;
@@ -1582,14 +1580,14 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   private static String normalizeChrom(String chrom) {
     if (chrom == null) return "";
-    return chrom.startsWith("chr") ? chrom.substring(3) : chrom;
+    return org.baseplayer.utils.ChromosomeNames.strip(chrom);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
   /**
    * Resolves the chromosome name of a read's mate from the BAM reference list.
-   * Returns the name without "chr" prefix, or {@code null}.
+   * Returns the internal (unprefixed) name, or {@code null}.
    */
   private String resolveMateChromName(BAMRecord read) {
     if (read.mateRefID < 0) return null;
@@ -1599,9 +1597,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
         if (sample.getBamFile() == null) continue;
         String[] refNames = sample.getBamFile().getReader().getRefNames();
         if (read.mateRefID < refNames.length) {
-          String name = refNames[read.mateRefID];
-          if (name.startsWith("chr")) name = name.substring(3);
-          return name;
+          return org.baseplayer.utils.ChromosomeNames.strip(refNames[read.mateRefID]);
         }
       }
     }

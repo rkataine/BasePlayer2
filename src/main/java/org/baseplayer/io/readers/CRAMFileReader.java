@@ -20,6 +20,7 @@ import java.util.zip.GZIPInputStream;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.samples.alignment.BAMRecord;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.utils.ChromosomeNames;
 
 /**
  * Custom CRAM file reader.
@@ -38,6 +39,7 @@ public class CRAMFileReader implements AlignmentReader {
   private final Map<String, Integer> refNameToId;
   private final TagProcessor tagProcessor = new TagProcessor();
   private final CRAMDecoder decoder;
+  private final String chromPrefix;
 
   // ── public constructor ──────────────────────────────────────────
 
@@ -89,6 +91,7 @@ public class CRAMFileReader implements AlignmentReader {
       refLengths[i] = lengths.get(i);
       refNameToId.put(refNames[i], i);
     }
+    this.chromPrefix = ChromosomeNames.detectPrefix(refNames);
 
     // 3) Load CRAI index
     Path craiPath = Path.of(cramPath + ".crai");
@@ -289,15 +292,22 @@ public class CRAMFileReader implements AlignmentReader {
   // ── Utility ────────────────────────────────────────────────────
 
   private Integer resolveRefId(String chrom) {
-    Integer refId = refNameToId.get(chrom);
-    if (refId == null) refId = refNameToId.get("chr" + chrom);
-    if (refId == null && chrom.startsWith("chr")) refId = refNameToId.get(chrom.substring(3));
-    // Handle M <-> MT mapping for mitochondrial chromosome
-    if (refId == null && chrom.equals("MT")) refId = refNameToId.get("M");
-    if (refId == null && chrom.equals("M")) refId = refNameToId.get("MT");
-    if (refId == null && chrom.equals("chrMT")) refId = refNameToId.get("chrM");
-    if (refId == null && chrom.equals("chrM")) refId = refNameToId.get("chrMT");
+    String dataChrom = ChromosomeNames.forData(chrom, chromPrefix);
+    Integer refId = refNameToId.get(dataChrom);
+    if (refId == null) {
+      String bare = ChromosomeNames.strip(chrom);
+      if ("MT".equals(bare)) {
+        refId = refNameToId.get(ChromosomeNames.forData("M", chromPrefix));
+      } else if ("M".equals(bare)) {
+        refId = refNameToId.get(ChromosomeNames.forData("MT", chromPrefix));
+      }
+    }
     return refId;
+  }
+
+  @Override
+  public String getChromPrefix() {
+    return chromPrefix;
   }
 
   private static String parseSampleName(String headerText, Path path) {

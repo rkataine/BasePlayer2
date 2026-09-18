@@ -71,8 +71,8 @@ public class GeneInfoPopup {
     c.link("Ensembl ID", gene.id().replace("gene:", ""), () -> openEnsembl(gene.id()));
     c.link("GeneCards", gene.name(), () -> openGeneCards(gene.name()));
 
-    String location = String.format("chr%s:%s-%s (%s)",
-        gene.chrom(),
+    String location = String.format("%s:%s-%s (%s)",
+        org.baseplayer.utils.ChromosomeNames.forDisplay(gene.chrom()),
         BaseUtils.formatNumber(gene.start()),
         BaseUtils.formatNumber(gene.end()),
         gene.strand().equals("+") ? "forward" : "reverse");

@@ -9,11 +9,14 @@ import java.util.List;
 import java.util.Map;
 
 import org.baseplayer.utils.BaseUtils;
+import org.baseplayer.utils.ChromosomeNames;
 
 public class ReferenceGenome {
     private final Path fastaPath;
     private final Map<String, ChromosomeIndex> chromosomes = new LinkedHashMap<>();
     private RandomAccessFile fastaFile;
+    /** {@code "chr"} if the FASTA uses chr-prefixed contigs; otherwise {@code ""}. */
+    private String chromPrefix = ChromosomeNames.NONE;
     
     public record ChromosomeIndex(String name, long length, long offset, int lineBytes, int lineChars) {}
     
@@ -28,17 +31,27 @@ public class ReferenceGenome {
         if (!Files.exists(indexPath)) throw new IOException("Fasta index file not found: " + indexPath);
         
         List<String> lines = Files.readAllLines(indexPath);
+        List<String> rawNames = new java.util.ArrayList<>();
         for (String line : lines) {
             String[] parts = line.split("\t");
             if (parts.length >= 5) {
-                String name = parts[0];
+                String rawName = parts[0];
+                rawNames.add(rawName);
+                String name = ChromosomeNames.strip(rawName);
                 long length = Long.parseLong(parts[1]);
                 long offset = Long.parseLong(parts[2]);
                 int lineBytes = Integer.parseInt(parts[3]);
                 int lineChars = Integer.parseInt(parts[4]);
+                // Internal map always keyed without chr prefix.
                 chromosomes.put(name, new ChromosomeIndex(name, length, offset, lineBytes, lineChars));
             }
         }
+        this.chromPrefix = ChromosomeNames.detectPrefix(rawNames);
+    }
+
+    /** Data-source prefix for this FASTA ({@code ""} or {@code "chr"}). */
+    public String getChromPrefix() {
+        return chromPrefix;
     }
     
     private void openFasta() throws IOException {
@@ -62,24 +75,18 @@ public class ReferenceGenome {
     }
     
     private int compareChromosomes(String chr1, String chr2) {
-        // Remove "chr" prefix if present for comparison
-        String name1 = chr1.startsWith("chr") ? chr1.substring(3) : chr1;
-        String name2 = chr2.startsWith("chr") ? chr2.substring(3) : chr2;
+        String name1 = ChromosomeNames.strip(chr1);
+        String name2 = ChromosomeNames.strip(chr2);
         
-        // Parse numeric chromosomes
         Integer num1 = BaseUtils.tryParseInt(name1);
         Integer num2 = BaseUtils.tryParseInt(name2);
         
-        // Both numeric: compare numerically
         if (num1 != null && num2 != null) {
             return num1.compareTo(num2);
         }
-        
-        // One numeric, one not: numeric comes first
         if (num1 != null) return -1;
         if (num2 != null) return 1;
         
-        // Neither numeric: explicit order X, Y, MT, M
         int order1 = getChromosomeOrder(name1);
         int order2 = getChromosomeOrder(name2);
         return Integer.compare(order1, order2);
@@ -90,24 +97,21 @@ public class ReferenceGenome {
             case "X" -> 0;
             case "Y" -> 1;
             case "MT", "M" -> 2;
-            default -> 3; // Other chromosomes come last
+            default -> 3;
         };
     }
-    
 
-    
     private boolean isStandardChromosome(String name) {
-        // Match chromosomes with or without "chr" prefix: 1-22, X, Y, MT/M
-        return name.matches("^(chr)?(\\d{1,2}|X|Y|MT?)$");
+        return ChromosomeNames.isStandardBare(ChromosomeNames.strip(name));
     }
     
     public long getChromosomeLength(String chromosome) {
-        ChromosomeIndex idx = chromosomes.get(chromosome);
+        ChromosomeIndex idx = chromosomes.get(ChromosomeNames.strip(chromosome));
         return idx != null ? idx.length() : 0;
     }
     
     public String getBases(String chromosome, int start, int end) {
-        ChromosomeIndex idx = chromosomes.get(chromosome);
+        ChromosomeIndex idx = chromosomes.get(ChromosomeNames.strip(chromosome));
         if (idx == null) return "";
         
         start = Math.max(1, start);

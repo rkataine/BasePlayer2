@@ -117,8 +117,7 @@ public class MenuBarController {
       DrawStack hoverStack = stackManager.getHoverStack();
       if(hoverStack == null) return;
       String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
-      String chromDisplay = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
-      chromosomeLabel.setText(chromDisplay + ":");
+      chromosomeLabel.setText(org.baseplayer.utils.ChromosomeNames.forDisplay(chrom) + ":");
       if (!isEditingPositionField()) {
         syncPositionFieldFromHoverStack();
       }
@@ -225,7 +224,7 @@ public class MenuBarController {
     });
 
     for (String chrom : chroms) {
-      String label = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
+      String label = org.baseplayer.utils.ChromosomeNames.forDisplay(chrom);
       MenuItem item = new MenuItem(label);
       item.setOnAction(event -> onChromosomeSelected(chrom));
       chromosomeLabelMenu.getItems().add(item);
@@ -391,23 +390,18 @@ public class MenuBarController {
   private String resolveChromosomeToken(String chromToken) {
     if (chromToken == null || chromToken.isBlank()) return null;
 
-    String requested = normalizeChromToken(chromToken);
+    String requested = org.baseplayer.utils.ChromosomeNames.strip(chromToken.trim());
     var refGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
     if (!refGenomeService.hasGenome()) {
       return requested;
     }
 
     for (String chrom : refGenomeService.getCurrentGenome().getChromosomeNames()) {
-      if (normalizeChromToken(chrom).equalsIgnoreCase(requested)) {
-        return chrom;
+      if (org.baseplayer.utils.ChromosomeNames.equals(chrom, requested)) {
+        return org.baseplayer.utils.ChromosomeNames.strip(chrom);
       }
     }
     return requested;
-  }
-
-  private String normalizeChromToken(String chrom) {
-    String c = chrom.trim();
-    return c.regionMatches(true, 0, "chr", 0, 3) ? c.substring(3) : c;
   }
 
   @FXML
@@ -416,7 +410,7 @@ public class MenuBarController {
     if (hoverStack == null) return;
 
     String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
-    String withChr = chrom.regionMatches(true, 0, "chr", 0, 3) ? chrom : "chr" + chrom;
+    String withChr = org.baseplayer.utils.ChromosomeNames.forDisplay(chrom);
     String locus = withChr + ":" + (int) hoverStack.getViewStart() + "-" + (int) (hoverStack.getViewEnd() - 1);
 
     ClipboardContent content = new ClipboardContent();
@@ -590,10 +584,10 @@ public class MenuBarController {
       }
     }
     
-    viewportState.setCurrentChromosome(chromosome);
+    viewportState.setCurrentChromosome(org.baseplayer.utils.ChromosomeNames.strip(chromosome));
     
     // Delegate to NavigationCommands for global chromosome switch
-    NavigationCommands.switchChromosome(chromosome);
+    NavigationCommands.switchChromosome(org.baseplayer.utils.ChromosomeNames.strip(chromosome));
   }
   
   private void updateViewLengthLabel() {

@@ -32,7 +32,7 @@ public class ViewportState {
         if (chromosome == null || chromosome.isEmpty()) {
             throw new IllegalArgumentException("Chromosome cannot be null or empty");
         }
-        this.currentChromosome.set(chromosome);
+        this.currentChromosome.set(org.baseplayer.utils.ChromosomeNames.strip(chromosome));
     }
     
     /**

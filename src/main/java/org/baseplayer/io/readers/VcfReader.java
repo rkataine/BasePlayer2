@@ -21,6 +21,7 @@ import org.baseplayer.variant.BreakendAlt;
 import org.baseplayer.variant.VcfSnvIndel;
 import org.baseplayer.variant.VcfStructuralVariant;
 import org.baseplayer.variant.VcfVariantType;
+import org.baseplayer.utils.ChromosomeNames;
 
 public class VcfReader implements AutoCloseable {
     
@@ -30,6 +31,7 @@ public class VcfReader implements AutoCloseable {
     private final List<String> sampleNames;
     private final boolean canTabixQuery;
     private final boolean hasTbiOrCsiIndex;
+    private final String chromPrefix;
 
     public VcfReader(Path vcfPath) throws IOException {
         this.vcfPath = vcfPath;
@@ -59,6 +61,17 @@ public class VcfReader implements AutoCloseable {
         
         this.header = (VCFHeader) reader.getHeader();
         this.sampleNames = header.getSampleNamesInOrder();
+        this.chromPrefix = ChromosomeNames.detectPrefix(getAvailableChromosomes());
+    }
+
+    /** Contig prefix in this VCF ({@code ""} or {@code "chr"}). */
+    public String getChromPrefix() {
+        return chromPrefix;
+    }
+
+    /** Internal chrom → contig name used in this VCF file. */
+    public String toDataChrom(String chromosome) {
+        return ChromosomeNames.forData(chromosome, chromPrefix);
     }
 
     private static Path findSiblingIndex(Path vcfPath, String extension) {
@@ -94,14 +107,14 @@ public class VcfReader implements AutoCloseable {
 
     private void visitOverlappingVariants(String chromosome, long start, long end,
             Consumer<VariantContext> consumer) throws IOException {
-        String normalizedChrom = normalizeChromosomeName(chromosome);
+        String dataChrom = toDataChromosome(chromosome);
         int queryStart = (int) Math.max(1, start);
         int queryEnd = (int) Math.min(Integer.MAX_VALUE, Math.max(queryStart, end));
 
         if (canTabixQuery) {
-            visitWithTabixQuery(normalizedChrom, queryStart, queryEnd, consumer);
+            visitWithTabixQuery(dataChrom, queryStart, queryEnd, consumer);
         } else {
-            visitWithSortedScan(normalizedChrom, queryStart, queryEnd, consumer);
+            visitWithSortedScan(dataChrom, queryStart, queryEnd, consumer);
         }
     }
 
@@ -146,8 +159,8 @@ public class VcfReader implements AutoCloseable {
             throws IOException {
         List<VcfSnvIndel> variants = new ArrayList<>();
         
-        // Normalize chromosome name to match VCF file
-        String normalizedChrom = normalizeChromosomeName(chromosome);
+        // Map internal chrom to this VCF's contig naming
+        String dataChrom = toDataChromosome(chromosome);
         
         // Iterate through entire VCF and collect variants for this chromosome
         try (var iterator = reader.iterator()) {
@@ -157,7 +170,7 @@ public class VcfReader implements AutoCloseable {
                 VariantContext ctx = iterator.next();
                 
                 // Check if we're on the target chromosome
-                if (ctx.getContig().equals(normalizedChrom)) {
+                if (ctx.getContig().equals(dataChrom)) {
                     foundChromosome = true;
                     
                     // Skip structural variants
@@ -197,9 +210,8 @@ public class VcfReader implements AutoCloseable {
         // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Querying SVs for: " + chromosome);
         List<VcfStructuralVariant> variants = new ArrayList<>();
         
-        // Normalize chromosome name to match VCF file
-        String normalizedChrom = normalizeChromosomeName(chromosome);
-        // System.err.println("[VcfReader.queryStructuralVariantsForChromosome] Normalized chrom: " + normalizedChrom);
+        // Map internal chrom to this VCF's contig naming
+        String dataChrom = toDataChromosome(chromosome);
         
         // Iterate through entire VCF and collect structural variants for this chromosome
         try (var iterator = reader.iterator()) {
@@ -209,7 +221,7 @@ public class VcfReader implements AutoCloseable {
                 VariantContext ctx = iterator.next();
                 
                 // Check if we're on the target chromosome
-                if (ctx.getContig().equals(normalizedChrom)) {
+                if (ctx.getContig().equals(dataChrom)) {
                     foundChromosome = true;
                     
                     // Only include structural variants
@@ -422,17 +434,7 @@ public class VcfReader implements AutoCloseable {
     }
     
     private static boolean sameChromosome(String a, String b) {
-        if (a == null || b == null) {
-            return false;
-        }
-        return stripChrPrefix(a).equalsIgnoreCase(stripChrPrefix(b));
-    }
-
-    private static String stripChrPrefix(String chrom) {
-        if (chrom.length() > 3 && chrom.regionMatches(true, 0, "chr", 0, 3)) {
-            return chrom.substring(3);
-        }
-        return chrom;
+        return ChromosomeNames.equals(a, b);
     }
 
     // ── Parsing ───────────────────────────────────────────────────────────────
@@ -442,7 +444,7 @@ public class VcfReader implements AutoCloseable {
      */
     private VcfSnvIndel parseSnvIndel(VariantContext ctx, VcfVariantType type) {
         return new VcfSnvIndel(
-            ctx.getContig(),
+            ChromosomeNames.strip(ctx.getContig()),
             ctx.getStart(),
             ctx.getID(),
             ctx.getReference().getDisplayString(),
@@ -507,7 +509,7 @@ public class VcfReader implements AutoCloseable {
         }
         
         return new VcfStructuralVariant(
-            ctx.getContig(),
+            ChromosomeNames.strip(ctx.getContig()),
             ctx.getStart(),
             ctx.getID(),
             ctx.getReference().getDisplayString(),
@@ -521,7 +523,7 @@ public class VcfReader implements AutoCloseable {
             end,
             svLen,
             svType,
-            chr2,
+            chr2 != null ? ChromosomeNames.strip(chr2) : null,
             end2,
             parseGenotypes(ctx)
         );
@@ -662,38 +664,20 @@ public class VcfReader implements AutoCloseable {
     }
     
     /**
-     * Normalize chromosome name to match VCF file conventions.
-     * Tries the original name first, then adds/removes "chr" prefix if needed.
-     * 
-     * @param chromosome Original chromosome name
-     * @return Normalized chromosome name that exists in VCF
-     * @throws IOException if chromosome cannot be found in VCF
+     * Map an internal (unprefixed) chromosome name to this VCF's contig naming.
      */
-    private String normalizeChromosomeName(String chromosome) throws IOException {
+    private String toDataChromosome(String chromosome) throws IOException {
+        String dataChrom = toDataChrom(chromosome);
         List<String> availableChromosomes = getAvailableChromosomes();
-        
-        // Try original name first
-        if (availableChromosomes.contains(chromosome)) {
-            return chromosome;
+        if (availableChromosomes.contains(dataChrom)) {
+            return dataChrom;
         }
-        
-        // Try adding "chr" prefix if not present
-        if (!chromosome.startsWith("chr")) {
-            String withChr = "chr" + chromosome;
-            if (availableChromosomes.contains(withChr)) {
-                return withChr;
+        // Contig list may use a different casing / M vs MT — fall back to strip-equality.
+        for (String available : availableChromosomes) {
+            if (ChromosomeNames.equals(available, chromosome)) {
+                return available;
             }
         }
-        
-        // Try removing "chr" prefix if present
-        if (chromosome.startsWith("chr")) {
-            String withoutChr = chromosome.substring(3);
-            if (availableChromosomes.contains(withoutChr)) {
-                return withoutChr;
-            }
-        }
-        
-        // Chromosome not found - show helpful error
         throw new IOException("Chromosome '" + chromosome + "' not found in VCF. " +
             "Available chromosomes: " + availableChromosomes);
     }

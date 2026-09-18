@@ -95,7 +95,8 @@ public final class GnomadDataParser {
     String variantLabel = v.ref() + " > " + v.alt();
     c.title(variantLabel, v.impact() != null ? v.impact() : "", impactColor);
 
-    c.row("Position", String.format("chr%s:%,d", chromosome, v.position()));
+    c.row("Position", String.format("%s:%,d",
+        org.baseplayer.utils.ChromosomeNames.forDisplay(chromosome), v.position()));
     if (v.geneSymbol() != null && !v.geneSymbol().isEmpty()) {
       c.link("Gene", v.geneSymbol(),
           () -> InfoPopup.openUrl(

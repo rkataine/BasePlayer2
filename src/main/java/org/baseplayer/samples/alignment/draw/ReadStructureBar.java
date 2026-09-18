@@ -254,8 +254,7 @@ public class ReadStructureBar extends Pane {
     }
 
     private static Color colorFor(String chrom) {
-        String c = chrom;
-        if (c.startsWith("chr")) c = c.substring(3);
+        String c = org.baseplayer.utils.ChromosomeNames.strip(chrom);
         int h = Math.abs(c.hashCode());
         return CHROM_COLORS[h % CHROM_COLORS.length];
     }

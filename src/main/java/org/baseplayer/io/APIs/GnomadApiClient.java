@@ -161,8 +161,8 @@ public class GnomadApiClient {
   public static CompletableFuture<VariantData> fetchVariants(
       String chrom, long start, long end, String dataset) {
     
-    // Normalize chromosome name (gnomAD uses "1" not "chr1")
-    String chr = chrom.startsWith("chr") ? chrom.substring(3) : chrom;
+    // Caller already applied chromPrefix (gnomAD uses unprefixed names).
+    String chr = org.baseplayer.utils.ChromosomeNames.strip(chrom);
     long regionSize = end - start;
     
     if (regionSize > MAX_REGION_SIZE) {

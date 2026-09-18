@@ -533,9 +533,7 @@ public class MainController {
 
   public static DrawStack addStackAtRegion(String chrom, double start, double end) {
     clearCrossStackMateArc();
-    if (chrom != null && chrom.startsWith("chr")) {
-      chrom = chrom.substring(3);
-    }
+    chrom = org.baseplayer.utils.ChromosomeNames.strip(chrom);
     final String finalChrom = chrom;
 
     DrawStack drawStack = new DrawStack(finalChrom);

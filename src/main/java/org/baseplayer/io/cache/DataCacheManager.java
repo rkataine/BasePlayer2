@@ -93,8 +93,8 @@ public class DataCacheManager {
    * Generate a cache key for a genomic region.
    */
   public static String getCacheKey(String chrom, long start, long end) {
-    // Normalize chromosome name
-    String chr = chrom.startsWith("chr") ? chrom : "chr" + chrom;
+    // Internal cache keys always use unprefixed chrom names.
+    String chr = org.baseplayer.utils.ChromosomeNames.strip(chrom);
     return String.format("%s_%d_%d", chr, start, end);
   }
   
@@ -102,7 +102,7 @@ public class DataCacheManager {
    * Generate a cache key with additional suffix (e.g., bin count).
    */
   public static String getCacheKey(String chrom, long start, long end, String suffix) {
-    String chr = chrom.startsWith("chr") ? chrom : "chr" + chrom;
+    String chr = org.baseplayer.utils.ChromosomeNames.strip(chrom);
     return String.format("%s_%d_%d_%s", chr, start, end, suffix);
   }
   
@@ -191,7 +191,7 @@ public class DataCacheManager {
     Path typeDir = getDataTypeDir(dataType);
     if (typeDir == null) return Optional.empty();
     
-    String chr = chrom.startsWith("chr") ? chrom : "chr" + chrom;
+    String chr = org.baseplayer.utils.ChromosomeNames.strip(chrom);
     
     try {
       // List all cache files for this chromosome

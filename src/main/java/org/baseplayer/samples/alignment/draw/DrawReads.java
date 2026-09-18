@@ -1126,12 +1126,11 @@ class DrawReads {
   }
 
   /**
-   * Returns the first SA chromosome that differs from {@code currentChrom},
-   * normalizing both by stripping a leading "chr" prefix before comparing.
+   * Returns the first SA chromosome that differs from {@code currentChrom}.
    * Returns {@code null} if all SA entries map to the same chromosome.
    */
   private static String parseSaChrom(String saTag, String currentChrom) {
-    String normCurrent = stripChr(currentChrom);
+    String normCurrent = org.baseplayer.utils.ChromosomeNames.strip(currentChrom);
     int start = 0;
     int len = saTag.length();
     while (start < len) {
@@ -1140,14 +1139,12 @@ class DrawReads {
       int comma = saTag.indexOf(',', start);
       if (comma > 0 && comma < semi) {
         String saChrom = saTag.substring(start, comma);
-        if (!stripChr(saChrom).equals(normCurrent)) return saChrom;
+        if (!org.baseplayer.utils.ChromosomeNames.equals(saChrom, normCurrent)) {
+          return org.baseplayer.utils.ChromosomeNames.strip(saChrom);
+        }
       }
       start = semi + 1;
     }
     return null;
-  }
-
-  private static String stripChr(String s) {
-    return (s != null && s.startsWith("chr")) ? s.substring(3) : s;
   }
 }

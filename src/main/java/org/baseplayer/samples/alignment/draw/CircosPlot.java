@@ -218,7 +218,9 @@ public final class CircosPlot {
             String n = normalize(raw);
             Long len = lengths.get(raw);
             if (len == null) len = lengths.get(n);
-            if (len == null) len = lengths.get("chr" + n);
+            if (len == null) {
+              len = lengths.get(org.baseplayer.utils.ChromosomeNames.forData(n, org.baseplayer.utils.ChromosomeNames.CHR_PREFIX));
+            }
             if (len == null || len <= 0) continue;
             keep.add(n);
             total += len;
@@ -230,7 +232,9 @@ public final class CircosPlot {
         double cursor   = -Math.PI / 2;
         for (String n : keep) {
             Long len = lengths.get(n);
-            if (len == null) len = lengths.get("chr" + n);
+            if (len == null) {
+              len = lengths.get(org.baseplayer.utils.ChromosomeNames.forData(n, org.baseplayer.utils.ChromosomeNames.CHR_PREFIX));
+            }
             double span = usable * ((double) len / total);
             arcs.put(n, new ChromArc(n, len, cursor, span));
             cursor += span + Math.toRadians(GAP_ANGLE_DEG);
@@ -464,7 +468,7 @@ public final class CircosPlot {
 
     private static String normalize(String chrom) {
         if (chrom == null) return "";
-        return chrom.startsWith("chr") ? chrom.substring(3) : chrom;
+        return org.baseplayer.utils.ChromosomeNames.strip(chrom);
     }
 
     private static Color colorFor(String chrom) {

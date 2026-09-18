@@ -206,8 +206,8 @@ public class UcscApiClient {
   public static CompletableFuture<ConservationData> fetchTrack(
       String trackName, String chrom, long start, long end, int bins) {
     
-    // Normalize chromosome name
-    String chr = chrom.startsWith("chr") ? chrom : "chr" + chrom;
+    // Caller (FeatureTrack) already applied chromPrefix; use as-is.
+    String chr = chrom;
     long regionSize = end - start;
     
     // For small regions, use per-base data with smart caching
@@ -391,7 +391,10 @@ public class UcscApiClient {
       }
     }
 
-    String chromKey = chrom != null && chrom.startsWith("chr") ? chrom : "chr" + chrom;
+    String chromKey = chrom;
+    if (chrom != null && !chrom.regionMatches(true, 0, "chr", 0, 3)) {
+      chromKey = "chr" + chrom;
+    }
     if (root.has(chromKey) && root.get(chromKey).isJsonArray()) {
       return root.getAsJsonArray(chromKey);
     }

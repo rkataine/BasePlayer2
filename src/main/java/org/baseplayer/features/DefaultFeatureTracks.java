@@ -23,6 +23,7 @@ public final class DefaultFeatureTracks {
     FeatureTrack track = new FeatureTrack(
         "gnomAD Variants", "gnomAD v4", gnomadParser::fetch);
     track.setCoordinateBase(1);
+    track.setChromPrefix(org.baseplayer.utils.ChromosomeNames.NONE);
     track.setPopupContentBuilder(gnomadParser::buildPopupContent);
     track.setVisible(false);
     return track;

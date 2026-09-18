@@ -85,7 +85,7 @@ public class ReadInfoPopup {
 
     // Alignment section
     c.section("Alignment");
-    c.row("Chromosome", "chr" + chromosome);
+    c.row("Chromosome", org.baseplayer.utils.ChromosomeNames.forDisplay(chromosome));
     c.row("Position", String.format("%,d - %,d", read.pos + 1, read.end));
     c.row("Length", String.format("%,d bp", read.end - read.pos));
     c.row("Read length", String.format("%,d bp", read.readLength));
@@ -106,7 +106,7 @@ public class ReadInfoPopup {
         c.row("Mate chr", mateChr != null ? mateChr : "refID=" + read.mateRefID, Color.web("#cc8888"));
       } else {
         mateChr = chromosome;
-        c.row("Mate chr", "chr" + chromosome);
+        c.row("Mate chr", org.baseplayer.utils.ChromosomeNames.forDisplay(chromosome));
       }
       c.row("Mate pos", String.format("%,d", read.matePos + 1));
       c.row("Insert size", String.format("%,d", read.insertSize));

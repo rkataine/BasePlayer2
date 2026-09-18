@@ -32,17 +32,12 @@ public class VariantAnnotator {
         if (variants == null || variants.isEmpty()) return;
 
         Map<String, List<Gene>> byChrom = AnnotationData.getGenesByChrom();
-        String chromKey = chromosome;
-        if (!byChrom.containsKey(chromKey) && chromKey.startsWith("chr")) {
-            chromKey = chromKey.substring(3);
-        } else if (!byChrom.containsKey(chromKey)) {
-            chromKey = "chr" + chromKey;
-        }
+        String chromKey = org.baseplayer.utils.ChromosomeNames.strip(chromosome);
         List<Gene> genes = byChrom.getOrDefault(chromKey, List.of());
 
         VariantNode node = variants.getFirst();
         while (node != null) {
-            node.annotation = annotateVariant(node, chromosome, genes);
+            node.annotation = annotateVariant(node, chromKey, genes);
             node = node.next;
         }
     }

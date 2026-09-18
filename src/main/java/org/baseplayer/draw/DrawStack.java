@@ -274,6 +274,10 @@ public class DrawStack {
   }
 
   public void navigateTo(String chrom, double start, double end) {
+    chrom = org.baseplayer.utils.ChromosomeNames.strip(chrom);
+    if (chrom == null || chrom.isBlank()) {
+      return;
+    }
     if (!chrom.equals(chromosome)) {
       FetchManager.get().cancelAll();
       chromosome = chrom;

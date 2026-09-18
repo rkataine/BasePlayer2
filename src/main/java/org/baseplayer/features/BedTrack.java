@@ -27,7 +27,9 @@ public class BedTrack extends AbstractTrack {
     this.sourcePath = filePath.toAbsolutePath().normalize();
     this.preferredHeight = 25;
     this.color = Color.rgb(70, 130, 180);
-    this.featuresByChrom = BedFileReader.read(filePath, this.color);
+    BedFileReader.BedLoad load = BedFileReader.readLoad(filePath, this.color);
+    this.featuresByChrom = load.featuresByChrom();
+    this.chromPrefix = load.chromPrefix();
   }
 
   @Override

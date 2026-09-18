@@ -61,6 +61,8 @@ public class AlignmentFile implements Closeable {
   public final String name;
   public final Path path;
   private final AlignmentReader reader;
+  /** Contig prefix in this BAM/CRAM ({@code ""} or {@code "chr"}). */
+  private final String chromPrefix;
 
   // Per-stack caching — each DrawStack has its own cached region and fetch state
   private final ConcurrentHashMap<DrawStack, StackCache> stackCaches = new ConcurrentHashMap<>();
@@ -514,11 +516,22 @@ public class AlignmentFile implements Closeable {
       this.reader = new BAMFileReader(filePath);
     }
     this.name = reader.getSampleName();
+    this.chromPrefix = reader.getChromPrefix();
     this.readColorMode = Settings.get().getReadColorMode();
     this.fetchPool = Executors.newSingleThreadExecutor(
         r -> { Thread t = new Thread(r, "fetch-" + this.name); t.setDaemon(true); return t; }
     );
     this.coverageCalculator = new CoverageCalculator(reader, name, fetchPool, this);
+  }
+
+  /** Contig prefix used by this alignment file ({@code ""} or {@code "chr"}). */
+  public String getChromPrefix() {
+    return chromPrefix;
+  }
+
+  /** Internal chrom → contig name expected by this file. */
+  public String toDataChrom(String chrom) {
+    return org.baseplayer.utils.ChromosomeNames.forData(chrom, chromPrefix);
   }
 
   private StackCache getCache(DrawStack stack) {

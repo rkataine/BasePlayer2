@@ -8,6 +8,7 @@ import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.services.ViewportState;
+import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.utils.GeneColors;
 
 import javafx.geometry.Side;
@@ -78,7 +79,7 @@ public class GeneSearchComponent {
                   .setStyle("-fx-background-color: #444444;");
               String selectedGene = currentSuggestions.get(selectedSuggestionIndex);
               GeneLocation loc = AnnotationData.getGeneLocation(selectedGene);
-              if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
+              if (loc != null && ChromosomeNames.equals(loc.chrom(), viewportState.getCurrentChromosome())) {
                 AnnotationData.setHighlightedGene(loc);
               }
             }
@@ -98,7 +99,7 @@ public class GeneSearchComponent {
                   .setStyle("-fx-background-color: #444444;");
               String selectedGene = currentSuggestions.get(selectedSuggestionIndex);
               GeneLocation loc = AnnotationData.getGeneLocation(selectedGene);
-              if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
+              if (loc != null && ChromosomeNames.equals(loc.chrom(), viewportState.getCurrentChromosome())) {
                 AnnotationData.setHighlightedGene(loc);
               }
             }
@@ -148,7 +149,7 @@ public class GeneSearchComponent {
           .orElse(null);
       if (exactMatch != null) {
         GeneLocation loc = AnnotationData.getGeneLocation(exactMatch);
-        if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
+        if (loc != null && ChromosomeNames.equals(loc.chrom(), viewportState.getCurrentChromosome())) {
           AnnotationData.setHighlightedGene(loc);
         }
       } else {
@@ -181,7 +182,7 @@ public class GeneSearchComponent {
         }
 
         container.setOnMouseEntered(e -> {
-          if (loc != null && loc.chrom().equals(viewportState.getCurrentChromosome())) {
+          if (loc != null && ChromosomeNames.equals(loc.chrom(), viewportState.getCurrentChromosome())) {
             AnnotationData.setHighlightedGene(loc);
           }
         });
@@ -190,7 +191,7 @@ public class GeneSearchComponent {
           String currentToken = lastToken(currentText);
           if (!currentToken.isEmpty()) {
             GeneLocation exactLoc = AnnotationData.getGeneLocation(currentToken);
-            if (exactLoc != null && exactLoc.chrom().equals(viewportState.getCurrentChromosome())) {
+            if (exactLoc != null && ChromosomeNames.equals(exactLoc.chrom(), viewportState.getCurrentChromosome())) {
               AnnotationData.setHighlightedGene(exactLoc);
               return;
             }

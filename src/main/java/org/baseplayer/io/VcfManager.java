@@ -10,7 +10,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -34,6 +33,7 @@ import org.baseplayer.variant.annotation.VariantAnnotator;
 import org.baseplayer.variant.annotation.TranscriptCdsCache;
 import org.baseplayer.variant.ui.VariantManagerController;
 import org.baseplayer.variant.ui.VariantManagerWindow;
+import org.baseplayer.utils.ChromosomeNames;
 
 import javafx.application.Platform;
 
@@ -329,6 +329,7 @@ public class VcfManager {
         }
         lastLoadManualChromosomeSelection = false;
 
+        chromosome = ChromosomeNames.strip(chromosome);
         if (chromosome == null || chromosome.isBlank() || loadedVcfs.isEmpty()) {
             return;
         }
@@ -610,10 +611,10 @@ public class VcfManager {
         if (list != null) {
             String fromList = list.getChromosome();
             if (fromList != null && !fromList.isBlank()) {
-                return fromList;
+                return ChromosomeNames.strip(fromList);
             }
         }
-        return requestedChromosome;
+        return ChromosomeNames.strip(requestedChromosome);
     }
 
     private void displayCachedVariants(String chromosome, VariantList cachedVariants) {
@@ -714,7 +715,7 @@ public class VcfManager {
     }
 
     private void enqueuePendingLoad(String chromosome, long start, long end) {
-        String key = chromosomeAliasKey(chromosome);
+        String key = ChromosomeNames.key(chromosome);
         PendingLoad existing = pendingChromosomeLoads.get(key);
         if (existing == null) {
             pendingChromosomeLoads.put(key, new PendingLoad(chromosome, start, end));
@@ -729,21 +730,11 @@ public class VcfManager {
     private record PendingLoad(String chromosome, long start, long end) {}
 
     private static boolean sameChromosomeName(String a, String b) {
-        if (a == null || b == null) {
-            return false;
-        }
-        return chromosomeAliasKey(a).equals(chromosomeAliasKey(b));
+        return ChromosomeNames.equals(a, b);
     }
 
     private static String chromosomeAliasKey(String chrom) {
-        if (chrom == null) {
-            return "";
-        }
-        String trimmed = chrom.trim();
-        if (trimmed.length() > 3 && trimmed.regionMatches(true, 0, "chr", 0, 3)) {
-            trimmed = trimmed.substring(3);
-        }
-        return trimmed.toLowerCase(Locale.ROOT);
+        return ChromosomeNames.key(chrom);
     }
 
     private void calculateDensityOnAllCanvases() {
@@ -1399,19 +1390,12 @@ public class VcfManager {
         }
     }
 
-    /** Lookup cached list allowing {@code chr} / non-{@code chr} aliases. */
+    /** Lookup cached list by internal (unprefixed) chromosome name. */
     private VariantList findCachedVariantList(String chromosome) {
         if (chromosome == null || chromosome.isBlank()) {
             return null;
         }
-        VariantList direct = variantCache.get(chromosome);
-        if (direct != null) {
-            return direct;
-        }
-        if (chromosome.regionMatches(true, 0, "chr", 0, 3) && chromosome.length() > 3) {
-            return variantCache.get(chromosome.substring(3));
-        }
-        return variantCache.get("chr" + chromosome);
+        return variantCache.get(ChromosomeNames.strip(chromosome));
     }
 
     /**
@@ -1533,11 +1517,14 @@ public class VcfManager {
         public VcfReader reader; // public: closed after header parse, null thereafter
         final VariantLoader loader;
         final File file;
+        /** Contig prefix in this VCF ({@code ""} or {@code "chr"}). */
+        public final String chromPrefix;
         
         public VcfData(VcfReader reader, VariantLoader loader, File file) {
             this.reader = reader;
             this.loader = loader;
             this.file = file;
+            this.chromPrefix = reader != null ? reader.getChromPrefix() : org.baseplayer.utils.ChromosomeNames.NONE;
         }
     }
 }

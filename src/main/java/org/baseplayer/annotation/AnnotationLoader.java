@@ -18,6 +18,7 @@ import java.util.zip.GZIPOutputStream;
 
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.Cytoband;
+import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.genome.gene.Transcript;
@@ -45,7 +46,7 @@ public final class AnnotationLoader {
         String[] parts = line.split("\t");
         if (parts.length >= 5) {
           AnnotationData.getCytobands().add(new Cytoband(
-            parts[0].replace("chr", ""),
+            ChromosomeNames.strip(parts[0]),
             Long.parseLong(parts[1]),
             Long.parseLong(parts[2]),
             parts[3],
@@ -121,7 +122,7 @@ public final class AnnotationLoader {
         String[] parts = line.split("\t");
         if (parts.length < 9) continue;
         
-        String chrom = parts[0];
+        String chrom = ChromosomeNames.strip(parts[0]);
         String type = parts[2];
         long start = Long.parseLong(parts[3]);
         long end = Long.parseLong(parts[4]);
@@ -438,7 +439,7 @@ public final class AnnotationLoader {
       int geneCount = in.readInt();
       
       for (int i = 0; i < geneCount; i++) {
-        String chrom = in.readUTF();
+        String chrom = ChromosomeNames.strip(in.readUTF());
         long start = in.readLong();
         long end = in.readLong();
         String name = in.readUTF();
