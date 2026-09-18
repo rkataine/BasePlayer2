@@ -279,6 +279,13 @@ public class DrawStack {
       chromosome = chrom;
       updateChromosomeSize();
       setChromosomeDropdownValueSilently(chrom);
+      // Drop previous chromosome's variants immediately; VcfManager reattaches after load.
+      if (sampleTrackCanvas != null) {
+        sampleTrackCanvas.clearVariantList();
+      }
+      if (sampleAggregateCanvas != null) {
+        sampleAggregateCanvas.clearVariantList();
+      }
     }
     sampleTrackCanvas.setStartEnd(start, end);
     if (sampleAggregateCanvas != null) {

@@ -347,20 +347,19 @@ public class VcfManager {
             return;
         }
 
-        // Another stack's chromosome (or another window) waits; do not cancel a different chrom.
+        // Another visible stack's chromosome waits; preempt loads no stack still needs
+        // (e.g. gene search switched the only stack to a different chromosome).
         if (loading && activeChromosomeLoadTask != null && !activeChromosomeLoadTask.isCompleted()) {
             if (!sameChromosomeName(loadingChromosome, chromosome)) {
-                enqueuePendingLoad(chromosome, start, end);
+                if (isChromosomeVisibleOnAnyStack(loadingChromosome)) {
+                    enqueuePendingLoad(chromosome, start, end);
+                    return;
+                }
+                cancelActiveChromosomeLoad();
+            } else if (loadingRegionStart <= start && loadingRegionEnd >= end) {
                 return;
-            }
-            if (loadingRegionStart <= start && loadingRegionEnd >= end) {
-                return;
-            }
-            if (shouldResetVariantListBeforeLoad(cachedVariants, requestFilterSnapshot)) {
-                activeChromosomeLoadTask.cancel();
-                activeChromosomeLoadTask = null;
-                loading = false;
-                loadingChromosome = null;
+            } else if (shouldResetVariantListBeforeLoad(cachedVariants, requestFilterSnapshot)) {
+                cancelActiveChromosomeLoad();
             } else {
                 enqueuePendingLoad(chromosome, start, end);
                 return;
@@ -675,6 +674,10 @@ public class VcfManager {
             if (next == null || next.chromosome() == null || next.chromosome().isBlank()) {
                 continue;
             }
+            // Drop pending loads for chromosomes no stack still shows (e.g. after gene search).
+            if (!isChromosomeVisibleOnAnyStack(next.chromosome())) {
+                continue;
+            }
             VariantList cached = findCachedVariantList(next.chromosome());
             if (cached != null && shouldReuseCachedVariants(next.chromosome(), next.start(), next.end(),
                     cached, currentFilter.copy())) {
@@ -684,6 +687,30 @@ public class VcfManager {
             loadRegionVariants(next.chromosome(), next.start(), next.end());
             return;
         }
+    }
+
+    /** Cancel the in-flight load and invalidate its generation so stale results are dropped. */
+    private void cancelActiveChromosomeLoad() {
+        if (activeChromosomeLoadTask != null && !activeChromosomeLoadTask.isCompleted()) {
+            activeChromosomeLoadTask.cancel();
+        }
+        chromosomeLoadGeneration.incrementAndGet();
+        activeChromosomeLoadTask = null;
+        loading = false;
+        loadingChromosome = null;
+    }
+
+    private boolean isChromosomeVisibleOnAnyStack(String chromosome) {
+        if (chromosome == null || chromosome.isBlank()) {
+            return false;
+        }
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (sameChromosomeName(stack.getChromosome(), chromosome)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void enqueuePendingLoad(String chromosome, long start, long end) {

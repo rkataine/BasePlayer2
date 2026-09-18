@@ -507,7 +507,19 @@ public class TrackBodyCanvas extends GenomicCanvas {
   // ── Variant data (VCF) ───────────────────────────────────────────────────────
 
   private boolean canDrawVariantData() {
-    return isSampleBody() && variantList != null && !variantList.isEmpty();
+    if (!isSampleBody() || variantList == null || variantList.isEmpty()) {
+      return false;
+    }
+    // Guard against a stale list from a previous chromosome after navigation.
+    String viewChrom = drawStack != null ? drawStack.getChromosome() : null;
+    String listChrom = variantList.getChromosome();
+    if (viewChrom != null && listChrom != null
+        && !viewChrom.equalsIgnoreCase(listChrom)
+        && !("chr" + viewChrom).equalsIgnoreCase(listChrom)
+        && !viewChrom.equalsIgnoreCase("chr" + listChrom)) {
+      return false;
+    }
+    return true;
   }
 
   private void drawVariantData() {
