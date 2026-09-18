@@ -7,8 +7,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -65,6 +67,12 @@ public class VcfManager {
 
     // Track currently running chromosome load task so we can preempt on chromosome switch
     private ThreadRunner.RunnerTask activeChromosomeLoadTask;
+    /** Chromosome currently being streamed; null when idle. */
+    private String loadingChromosome;
+    private long loadingRegionStart;
+    private long loadingRegionEnd;
+    /** Other visible regions waiting while {@link #activeChromosomeLoadTask} runs. */
+    private final LinkedHashMap<String, PendingLoad> pendingChromosomeLoads = new LinkedHashMap<>();
 
     // Increments on each chromosome load request; stale workers/results are discarded
     private final AtomicLong chromosomeLoadGeneration = new AtomicLong(0);
@@ -256,15 +264,44 @@ public class VcfManager {
             });
     }
 
-    /** Trigger variant load for current chromosome when a new VCF is added. */
+    /** Trigger variant load for every visible stack: cached chromosome, else the on-screen window. */
     public void loadVariantsForCurrentView() {
         syncCurrentFilterFromOpenVariantManager();
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        if (stackManager.isEmpty()) return;
-        DrawStack firstStack = stackManager.getFirst();
-        if (firstStack.sampleTrackCanvas != null) {
-            loadRegionVariants(firstStack.getChromosome(), 1, (long)(firstStack.chromSize + 1));
+        if (stackManager.isEmpty() || loadedVcfs.isEmpty()) return;
+        for (DrawStack stack : stackManager.getStacks()) {
+            loadVariantsForStack(stack);
         }
+    }
+
+    /**
+     * Attach or load variants for one stack. Reuses a chromosome cache when present;
+     * otherwise streams only the current view (same as gene-search region loads).
+     */
+    public void loadVariantsForStack(DrawStack stack) {
+        if (stack == null || loadedVcfs.isEmpty()) {
+            return;
+        }
+        String chrom = stack.getChromosome();
+        if (chrom == null || chrom.isBlank()) {
+            return;
+        }
+        long[] range = variantLoadRangeForStack(stack);
+        loadRegionVariants(chrom, range[0], range[1]);
+    }
+
+    /** Full chromosome when the stack is at chrom scale; otherwise the visible window. */
+    private static long[] variantLoadRangeForStack(DrawStack stack) {
+        long viewStart = Math.max(1L, (long) stack.getViewStart());
+        long viewEnd = (long) stack.getViewEnd();
+        if (viewEnd <= viewStart) {
+            viewEnd = viewStart + 1;
+        }
+        boolean fullChromosomeView = viewStart <= 1 && viewEnd >= (long) stack.chromSize;
+        if (fullChromosomeView) {
+            return new long[] { 1L, Math.max(2L, (long) (stack.chromSize + 1)) };
+        }
+        return new long[] { viewStart, viewEnd };
     }
 
     
@@ -310,15 +347,28 @@ public class VcfManager {
             return;
         }
 
+        // Another stack's chromosome (or another window) waits; do not cancel a different chrom.
+        if (loading && activeChromosomeLoadTask != null && !activeChromosomeLoadTask.isCompleted()) {
+            if (!sameChromosomeName(loadingChromosome, chromosome)) {
+                enqueuePendingLoad(chromosome, start, end);
+                return;
+            }
+            if (loadingRegionStart <= start && loadingRegionEnd >= end) {
+                return;
+            }
+            if (shouldResetVariantListBeforeLoad(cachedVariants, requestFilterSnapshot)) {
+                activeChromosomeLoadTask.cancel();
+                activeChromosomeLoadTask = null;
+                loading = false;
+                loadingChromosome = null;
+            } else {
+                enqueuePendingLoad(chromosome, start, end);
+                return;
+            }
+        }
+
         // No valid cache - proceed to load variants from VCF files
         RegionFetchCache cache = ServiceRegistry.getInstance().getRegionFetchCache();
-
-        // Cancel any ongoing chromosome or region load by bumping the generation
-        if (activeChromosomeLoadTask != null && !activeChromosomeLoadTask.isCompleted()) {
-            activeChromosomeLoadTask.cancel();
-            activeChromosomeLoadTask = null;
-        }
-        loading = false;
 
         // Prefer the existing aliased list; never create a parallel empty list under chr/non-chr.
         VariantList variantList = cachedVariants;
@@ -350,13 +400,12 @@ public class VcfManager {
             variantList.clear();
         }
         
-        // Clear canvases and prepare for new load
-        DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
-        for (DrawStack stack : sm.getStacks()) {
-            if (stack.sampleTrackCanvas != null) stack.sampleTrackCanvas.clearVariantList();
-            if (stack.sampleAggregateCanvas != null) stack.sampleAggregateCanvas.clearVariantList();
-        }
+        // Clear canvases only for stacks showing this chromosome; other stacks keep theirs.
+        clearVariantListsForChromosome(chromosome);
         lastLoadedChromosome = chromosome;
+        loadingChromosome = chromosome;
+        loadingRegionStart = start;
+        loadingRegionEnd = end;
         variantsRevision.incrementAndGet();
         Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
 
@@ -437,8 +486,10 @@ public class VcfManager {
                 }
 
                 loading = false;
+                loadingChromosome = null;
                 activeChromosomeLoadTask = null;
                 if (result == null) {
+                    startNextPendingChromosomeLoad();
                     return;
                 }
 
@@ -466,6 +517,7 @@ public class VcfManager {
                 GenomicCanvas.update.set(!GenomicCanvas.update.get());
 
                 fireAndClearChromosomeReadyCallback();
+                startNextPendingChromosomeLoad();
             });
     }
 
@@ -574,20 +626,97 @@ public class VcfManager {
         fireAndClearChromosomeReadyCallback();
     }
 
-		private void updateCanvasesWithVariants(VariantList variantList) {
-        if (variantList == null) return;
-        variantList.ensureVisibleChain(currentFilter);
+    private void updateCanvasesWithVariants(VariantList justLoaded) {
+        if (justLoaded != null) {
+            justLoaded.ensureVisibleChain(currentFilter);
+        }
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
+            VariantList list = findCachedVariantList(stack.getChromosome());
+            if (list == null) {
+                if (stack.sampleTrackCanvas != null) {
+                    stack.sampleTrackCanvas.clearVariantList();
+                }
+                if (stack.sampleAggregateCanvas != null) {
+                    stack.sampleAggregateCanvas.clearVariantList();
+                }
+                continue;
+            }
+            list.ensureVisibleChain(currentFilter);
             if (stack.sampleTrackCanvas != null) {
-                stack.sampleTrackCanvas.setVariantList(variantList);
+                stack.sampleTrackCanvas.setVariantList(list);
                 stack.sampleTrackCanvas.draw();
             }
             if (stack.sampleAggregateCanvas != null) {
-                stack.sampleAggregateCanvas.setVariantList(variantList);
+                stack.sampleAggregateCanvas.setVariantList(list);
                 stack.sampleAggregateCanvas.draw();
             }
         }
+    }
+
+    private void clearVariantListsForChromosome(String chromosome) {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (!sameChromosomeName(stack.getChromosome(), chromosome)) {
+                continue;
+            }
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.clearVariantList();
+            }
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.clearVariantList();
+            }
+        }
+    }
+
+    private void startNextPendingChromosomeLoad() {
+        while (!pendingChromosomeLoads.isEmpty()) {
+            PendingLoad next = pendingChromosomeLoads.remove(pendingChromosomeLoads.keySet().iterator().next());
+            if (next == null || next.chromosome() == null || next.chromosome().isBlank()) {
+                continue;
+            }
+            VariantList cached = findCachedVariantList(next.chromosome());
+            if (cached != null && shouldReuseCachedVariants(next.chromosome(), next.start(), next.end(),
+                    cached, currentFilter.copy())) {
+                displayCachedVariants(next.chromosome(), cached);
+                continue;
+            }
+            loadRegionVariants(next.chromosome(), next.start(), next.end());
+            return;
+        }
+    }
+
+    private void enqueuePendingLoad(String chromosome, long start, long end) {
+        String key = chromosomeAliasKey(chromosome);
+        PendingLoad existing = pendingChromosomeLoads.get(key);
+        if (existing == null) {
+            pendingChromosomeLoads.put(key, new PendingLoad(chromosome, start, end));
+            return;
+        }
+        pendingChromosomeLoads.put(key, new PendingLoad(
+            existing.chromosome(),
+            Math.min(existing.start(), start),
+            Math.max(existing.end(), end)));
+    }
+
+    private record PendingLoad(String chromosome, long start, long end) {}
+
+    private static boolean sameChromosomeName(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return chromosomeAliasKey(a).equals(chromosomeAliasKey(b));
+    }
+
+    private static String chromosomeAliasKey(String chrom) {
+        if (chrom == null) {
+            return "";
+        }
+        String trimmed = chrom.trim();
+        if (trimmed.length() > 3 && trimmed.regionMatches(true, 0, "chr", 0, 3)) {
+            trimmed = trimmed.substring(3);
+        }
+        return trimmed.toLowerCase(Locale.ROOT);
     }
 
     private void calculateDensityOnAllCanvases() {
@@ -614,6 +743,8 @@ public class VcfManager {
         variantCache.clear();
         lastLoadedChromosome = null;
         loading = false;
+        loadingChromosome = null;
+        pendingChromosomeLoads.clear();
         activeChromosomeLoadTask = null;
         // New Project / Clear All: return to pass-all so the next VCF is not hidden by
         // the previous project's type/effect/comparison thresholds.
@@ -1083,27 +1214,28 @@ public class VcfManager {
     public synchronized void reloadCurrentChromosome() {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty()) return;
-        DrawStack firstStack = stackManager.getFirst();
-        if (firstStack == null || firstStack.getChromosome() == null || firstStack.getChromosome().isBlank()) return;
-        
-        // Check if the current viewport is viewing the full chromosome or a specific region
-        // If it's a specific region (like from gene search), don't override it with full chromosome load
-        var currentRegion = firstStack.getRegion();
-        if (currentRegion != null) {
-            long regionStart = currentRegion.start();
-            long regionEnd = currentRegion.end();
-            
-            // If current region is NOT the full chromosome, don't reload
-            // (it's likely a focused region like a gene that shouldn't be overwritten)
-            boolean isFullChromosomeView = (regionStart <= 1 && regionEnd >= (long)firstStack.chromSize);
-            if (!isFullChromosomeView) {
-                // Current region is a specific focused view (e.g., gene) - don't override it
-                return;
+
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack == null || stack.getChromosome() == null || stack.getChromosome().isBlank()) {
+                continue;
             }
+            if (!seen.add(chromosomeAliasKey(stack.getChromosome()))) {
+                continue;
+            }
+
+            var currentRegion = stack.getRegion();
+            if (currentRegion != null) {
+                long regionStart = currentRegion.start();
+                long regionEnd = currentRegion.end();
+                boolean isFullChromosomeView = (regionStart <= 1 && regionEnd >= (long) stack.chromSize);
+                if (!isFullChromosomeView) {
+                    continue;
+                }
+            }
+
+            loadRegionVariants(stack.getChromosome(), 1, (long) (stack.chromSize + 1));
         }
-        
-        // Only reload if viewing full chromosome
-        loadRegionVariants(firstStack.getChromosome(), 1, (long)(firstStack.chromSize + 1));
     }
 
     /**
@@ -1116,6 +1248,8 @@ public class VcfManager {
         }
         chromosomeLoadGeneration.incrementAndGet();
         loading = false;
+        loadingChromosome = null;
+        pendingChromosomeLoads.clear();
         activeChromosomeLoadTask = null;
 
         if (lastLoadedChromosome != null) {
@@ -1193,22 +1327,21 @@ public class VcfManager {
         }
 
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        String preferredChrom = null;
-        if (!stackManager.isEmpty()) {
-            preferredChrom = stackManager.getFirst().getChromosome();
+        lastLoadedChromosome = null;
+        for (DrawStack stack : stackManager.getStacks()) {
+            String chrom = stack.getChromosome();
+            VariantList list = chrom != null ? findCachedVariantList(chrom) : null;
+            if (list != null) {
+                lastLoadedChromosome = chrom;
+                list.ensureVisibleChain(currentFilter);
+            }
         }
-
-        VariantList toDisplay = preferredChrom != null ? findCachedVariantList(preferredChrom) : null;
-
-        // Only skip VCF streaming when the active chromosome is in the cache.
-        if (toDisplay == null) {
-            return false;
-        }
-
-        String chrom = preferredChrom != null ? preferredChrom : toDisplay.getChromosome();
-        lastLoadedChromosome = chrom;
-        toDisplay.ensureVisibleChain(currentFilter);
-        displayCachedVariants(chrom, toDisplay);
+        updateCanvasesWithVariants(null);
+        calculateDensityOnAllCanvases();
+        variantsRevision.incrementAndGet();
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+        fireAndClearChromosomeReadyCallback();
+        loadVariantsForCurrentView();
         return true;
     }
 
@@ -1349,7 +1482,7 @@ public class VcfManager {
     /** True if a chromosome load task is currently running for this chromosome. */
     public synchronized boolean isLoadingChromosome(String chromosome) {
         if (chromosome == null || chromosome.isBlank()) return false;
-        return loading && chromosome.equals(lastLoadedChromosome);
+        return loading && sameChromosomeName(chromosome, loadingChromosome);
     }
 
     /** Register a one-shot callback invoked on the FX thread once chromosome variants are cached. */

@@ -41,7 +41,7 @@ import com.google.gson.GsonBuilder;
  */
 public final class VariantCacheStore {
 
-  public static final int SCHEMA_VERSION = 1;
+  public static final int SCHEMA_VERSION = 2;
   private static final int MAGIC = 0x42505631; // "BPV1"
   private static final String META_FILE = "meta.json";
   private static final String CHROM_SUFFIX = ".bpv.zst";
@@ -437,6 +437,8 @@ public final class VariantCacheStore {
     writeString(out, node.alt != null ? node.alt : "");
     out.writeInt(node.type != null ? node.type.ordinal() : VcfVariantType.COMPLEX.ordinal());
     out.writeLong(node.svEnd);
+    writeNullableString(out, node.svChr2);
+    out.writeLong(node.svEnd2);
     out.writeDouble(node.siteQuality);
 
     List<VariantNode.SampleCall> calls = node.getSamples();
@@ -473,10 +475,14 @@ public final class VariantCacheStore {
     String alt = readString(in);
     VcfVariantType type = ordinalToType(in.readInt());
     long svEnd = in.readLong();
+    String svChr2 = readNullableString(in);
+    long svEnd2 = in.readLong();
     double siteQuality = in.readDouble();
 
     VariantNode node = new VariantNode(position, ref, alt, type);
     node.svEnd = svEnd;
+    node.svChr2 = svChr2;
+    node.svEnd2 = svEnd2;
     node.siteQuality = siteQuality;
 
     int callCount = in.readInt();

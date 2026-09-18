@@ -211,7 +211,6 @@ public class VariantLoader {
                 svProcessed[0]++;
                 
                 List<String> alts = sv.getAlt();
-                Long svEnd = sv.getEnd();
                 double siteQual = sv.getQuality();
                 for (String alt : alts) {
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
@@ -224,7 +223,7 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
                                 sv.getRef(), alt, sv.getType(), call);
-                            if (svEnd != null && cursor[0].svEnd < 0) cursor[0].svEnd = svEnd;
+                            applySvFields(cursor[0], sv, alt);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -380,7 +379,6 @@ public class VariantLoader {
             for (VcfStructuralVariant sv : svs) {
                 svProcessed[0]++;
                 List<String> alts = sv.getAlt();
-                Long svEnd = sv.getEnd();
                 double siteQual = sv.getQuality();
                 for (String alt : alts) {
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
@@ -393,7 +391,7 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
                                 sv.getRef(), alt, sv.getType(), call);
-                            if (svEnd != null && cursor[0].svEnd < 0) cursor[0].svEnd = svEnd;
+                            applySvFields(cursor[0], sv, alt);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -427,6 +425,41 @@ public class VariantLoader {
             onProgress.accept(totalSamples, totalSamples);
         }
         return cursor[0];
+    }
+
+    /** Copy SV span and translocation mate coordinates onto the just-inserted node. */
+    private static void applySvFields(VariantNode node, VcfStructuralVariant sv, String alt) {
+        if (node == null || sv == null) {
+            return;
+        }
+        Long svEnd = sv.getEnd();
+        if (svEnd != null && node.svEnd < 0) {
+            node.svEnd = svEnd;
+        }
+        if (node.svChr2 == null || node.svChr2.isBlank()) {
+            String chr2 = sv.getChr2();
+            if (chr2 == null || chr2.isBlank()) {
+                BreakendAlt.Mate mate = BreakendAlt.parse(alt);
+                if (mate != null) {
+                    chr2 = mate.chrom();
+                }
+            }
+            if (chr2 != null && !chr2.isBlank()) {
+                node.svChr2 = chr2;
+            }
+        }
+        if (node.svEnd2 < 0) {
+            Long end2 = sv.getEnd2();
+            if (end2 == null) {
+                BreakendAlt.Mate mate = BreakendAlt.parse(alt);
+                if (mate != null) {
+                    end2 = mate.pos();
+                }
+            }
+            if (end2 != null && end2 >= 0) {
+                node.svEnd2 = end2;
+            }
+        }
     }
 
     private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,

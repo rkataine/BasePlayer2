@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import org.baseplayer.variant.BreakendAlt;
 import org.baseplayer.variant.VcfSnvIndel;
 import org.baseplayer.variant.VcfStructuralVariant;
 import org.baseplayer.variant.VcfVariantType;
@@ -367,26 +368,14 @@ public class VcfReader implements AutoCloseable {
                     // Breakend: classify as translocation if mate is on different chromosome
                     String chr2 = ctx.getAttributeAsString("CHR2", null);
                     if (chr2 != null) {
-                        String chrom = ctx.getContig();
-                        if (!chr2.equals(chrom)) {
-                            // Different chromosome = translocation
+                        if (!sameChromosome(chr2, ctx.getContig())) {
                             return VcfVariantType.SV_TRANSLOCATION;
                         }
                     } else {
-                        // Try to extract CHR2 from ALT breakend notation
-                        String alt = ctx.getAlternateAlleles().stream()
-                            .map(a -> a.getDisplayString())
-                            .filter(s -> s.contains("[") || s.contains("]"))
-                            .findFirst()
-                            .orElse(null);
-                        if (alt != null) {
-                            String altChr2 = extractChr2FromBreakendAlt(alt);
-                            if (altChr2 != null) {
-                                String chrom = ctx.getContig();
-                                if (!altChr2.equals(chrom)) {
-                                    // Different chromosome = translocation
-                                    return VcfVariantType.SV_TRANSLOCATION;
-                                }
+                        for (var allele : ctx.getAlternateAlleles()) {
+                            BreakendAlt.Mate mate = BreakendAlt.parse(allele.getDisplayString());
+                            if (mate != null && !sameChromosome(mate.chrom(), ctx.getContig())) {
+                                return VcfVariantType.SV_TRANSLOCATION;
                             }
                         }
                     }
@@ -432,82 +421,18 @@ public class VcfReader implements AutoCloseable {
         return VcfVariantType.COMPLEX;
     }
     
-    /**
-     * Extract chromosome from breakend ALT notation (e.g., "C[chr6:123[" -> "chr6").
-     */
-    private String extractChr2FromBreakendAlt(String alt) {
-        // Breakend format: REF[CHR:POS[ or ]CHR:POS]REF
-        // Extract the chromosome:position part
-        int openBracket = alt.indexOf('[');
-        int closeBracket = alt.indexOf(']');
-        int startIdx = -1, endIdx = -1;
-        
-        if (openBracket >= 0) {
-            startIdx = openBracket + 1;
-            endIdx = alt.indexOf('[', startIdx);
-        } else if (closeBracket >= 0) {
-            startIdx = alt.indexOf(']');
-            if (startIdx >= 0) {
-                startIdx++;
-                endIdx = alt.indexOf(']', startIdx);
-            }
+    private static boolean sameChromosome(String a, String b) {
+        if (a == null || b == null) {
+            return false;
         }
-        
-        if (startIdx > 0 && endIdx > startIdx) {
-            String chrPosStr = alt.substring(startIdx, endIdx);
-            int colonIdx = chrPosStr.indexOf(':');
-            if (colonIdx > 0) {
-                return chrPosStr.substring(0, colonIdx);
-            }
-        }
-        
-        return null;
+        return stripChrPrefix(a).equalsIgnoreCase(stripChrPrefix(b));
     }
-    
-    /**
-     * Extract mate position from breakend ALT notation (e.g., "C[chr6:123[" -> 123).
-     * Works for both same-chromosome and different-chromosome mates.
-     */
-    private Long extractMatePosFromBreakendAlt(VariantContext ctx, String currentChromosome) {
-        try {
-            if (ctx.getAlternateAlleles().isEmpty()) {
-                return null;
-            }
-            
-            String alt = ctx.getAlternateAlleles().get(0).getDisplayString();
-            
-            // Breakend format: REF[CHR:POS[ or ]CHR:POS]REF
-            int openBracket = alt.indexOf('[');
-            int closeBracket = alt.indexOf(']');
-            int startIdx = -1, endIdx = -1;
-            
-            if (openBracket >= 0) {
-                startIdx = openBracket + 1;
-                endIdx = alt.indexOf('[', startIdx);
-            } else if (closeBracket >= 0) {
-                startIdx = alt.indexOf(']');
-                if (startIdx >= 0) {
-                    startIdx++;
-                    endIdx = alt.indexOf(']', startIdx);
-                }
-            }
-            
-            if (startIdx > 0 && endIdx > startIdx) {
-                String chrPosStr = alt.substring(startIdx, endIdx);
-                int colonIdx = chrPosStr.indexOf(':');
-                if (colonIdx > 0) {
-                    try {
-                        return Long.parseLong(chrPosStr.substring(colonIdx + 1));
-                    } catch (NumberFormatException e) {
-                        // Ignore parse errors
-                    }
-                }
-            }
-            
-            return null;
-        } catch (Exception e) {
-            return null;
+
+    private static String stripChrPrefix(String chrom) {
+        if (chrom.length() > 3 && chrom.regionMatches(true, 0, "chr", 0, 3)) {
+            return chrom.substring(3);
         }
+        return chrom;
     }
 
     // ── Parsing ───────────────────────────────────────────────────────────────
@@ -542,36 +467,43 @@ public class VcfReader implements AutoCloseable {
         
         Integer svLen = ctx.hasAttribute("SVLEN") ? 
             ctx.getAttributeAsInt("SVLEN", 0) : null;
-        
 
-        
         String svType = ctx.getAttributeAsString("SVTYPE", null);
         String chr2 = ctx.getAttributeAsString("CHR2", null);
-        
-        Long end2 = ctx.hasAttribute("END2") ? 
-            Long.parseLong(ctx.getAttributeAsString("END2", null)) : null;
 
-        
-        // For BND/breakend variants without END field, extract mate position from ALT notation
-        if (end == null && (type == VcfVariantType.SV_DELETION || type == VcfVariantType.SV_INSERTION ||
-                            type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INVERSION || 
-                            type == VcfVariantType.SV_TRANSLOCATION || type == VcfVariantType.SV_BREAKEND)) {
-            Long matePos = extractMatePosFromBreakendAlt(ctx, ctx.getContig());
-            if (matePos != null) {
-                // For intra-chromosomal SVs (DEL, INV, DUP, INS on same chromosome), use mate as END
-                if (type == VcfVariantType.SV_DELETION || type == VcfVariantType.SV_INVERSION || 
-                    type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INSERTION) {
-                    // Ensure END > position for proper span rendering
-                    long pos = ctx.getStart();
-                    if (matePos > pos) {
-                        end = matePos;
-                    } else {
-                        // Swap positions: use smaller as start, larger as end
-                        end = pos;
-                    }
-                }
-                // For TRA (different chromosomes), leave END as null - it's a point variant
+        Long end2 = null;
+        if (ctx.hasAttribute("END2")) {
+            end2 = Long.parseLong(ctx.getAttributeAsString("END2", null));
+        } else if (ctx.hasAttribute("POS2")) {
+            end2 = Long.parseLong(ctx.getAttributeAsString("POS2", null));
+        }
+
+        for (var allele : ctx.getAlternateAlleles()) {
+            BreakendAlt.Mate mate = BreakendAlt.parse(allele.getDisplayString());
+            if (mate == null) {
+                continue;
             }
+            if (chr2 == null) {
+                chr2 = mate.chrom();
+            }
+            if (end2 == null) {
+                end2 = mate.pos();
+            }
+            break;
+        }
+
+        boolean interChrom = chr2 != null && !sameChromosome(chr2, ctx.getContig());
+        if (interChrom) {
+            // Delly-style TRA: INFO/END is the mate coordinate on CHR2, not a same-chrom span.
+            if (end2 == null && end != null) {
+                end2 = end;
+            }
+            end = null;
+        } else if (end == null && (type == VcfVariantType.SV_DELETION || type == VcfVariantType.SV_INSERTION
+                || type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INVERSION)
+                && end2 != null) {
+            long pos = ctx.getStart();
+            end = end2 > pos ? end2 : pos;
         }
         
         return new VcfStructuralVariant(

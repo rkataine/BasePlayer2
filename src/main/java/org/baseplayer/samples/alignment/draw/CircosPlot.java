@@ -30,9 +30,10 @@ import javafx.stage.Stage;
 import javafx.util.Duration;
 
 /**
- * Circos-style plot summarising long-range connections (split reads / SA tags
- * and discordant inter-chromosomal read pairs) originating from the tracks
- * currently loaded in the viewer.
+ * Circos-style plot summarising long-range connections originating from the
+ * tracks currently loaded in the viewer: split reads / SA tags, discordant
+ * inter-chromosomal read pairs, and VCF translocation / inter-chrom breakend
+ * calls.
  *
  * <p>When multiple samples contribute links a toggle switches between a single
  * combined plot and a grid of smaller per-sample plots.
@@ -45,7 +46,8 @@ public final class CircosPlot {
 
     public enum LinkType {
         SPLIT_READ,      // SA tag
-        DISCORDANT_PAIR  // inter-chromosomal mate
+        DISCORDANT_PAIR, // inter-chromosomal mate
+        VCF_TRA          // VCF TRA / inter-chromosomal BND
     }
 
     // ── Colour palette (matches ReadStructureBar) ────────────────────────────
@@ -73,7 +75,7 @@ public final class CircosPlot {
     }
 
     private record HitRegion(Link link, boolean atA, double x, double y, double radius,
-                             int splitCount, int discordantCount, int sampleCount) {}
+                             int splitCount, int discordantCount, int vcfCount, int sampleCount) {}
 
     private final Stage stage = new Stage();
     private final Map<String, ChromArc> arcs = new LinkedHashMap<>();
@@ -102,17 +104,19 @@ public final class CircosPlot {
     // ── UI construction ──────────────────────────────────────────────────────
 
     private void buildUi() {
-        Label title = new Label("Circos \u2014 split reads & discordant pairs");
+        int splits = 0, discos = 0, vcfTra = 0;
+        for (Link l : allLinks) {
+            switch (l.type) {
+                case SPLIT_READ -> splits++;
+                case DISCORDANT_PAIR -> discos++;
+                case VCF_TRA -> vcfTra++;
+            }
+        }
+        Label title = new Label(circosTitle(splits, discos, vcfTra));
         title.setFont(AppFonts.getBoldFont(13));
         title.setStyle("-fx-text-fill: #ddd;");
 
-        int splits = 0, discos = 0;
-        for (Link l : allLinks) {
-            if (l.type == LinkType.SPLIT_READ) splits++; else discos++;
-        }
-        Label stats = new Label(String.format(
-                "%d split-read links  \u2022  %d inter-chromosomal pairs  \u2022  %d sample(s)",
-                splits, discos, linksBySample.size()));
+        Label stats = new Label(circosStats(splits, discos, vcfTra, linksBySample.size()));
         stats.setFont(AppFonts.getUIFont());
         stats.setStyle("-fx-text-fill: #999;");
 
@@ -170,15 +174,19 @@ public final class CircosPlot {
         for (Map.Entry<String, List<Link>> e : linksBySample.entrySet()) {
             String sample = e.getKey();
             List<Link> sampleLinks = e.getValue();
-            int s = 0, d = 0;
+            int s = 0, d = 0, v = 0;
             for (Link l : sampleLinks) {
-                if (l.type == LinkType.SPLIT_READ) s++; else d++;
+                switch (l.type) {
+                    case SPLIT_READ -> s++;
+                    case DISCORDANT_PAIR -> d++;
+                    case VCF_TRA -> v++;
+                }
             }
 
             Label name = new Label(sample);
             name.setFont(AppFonts.getBoldFont(12));
             name.setStyle("-fx-text-fill: #ddd;");
-            Label counts = new Label(String.format("%d split  \u2022  %d discordant", s, d));
+            Label counts = new Label(perSampleCounts(s, d, v));
             counts.setFont(AppFonts.getUIFont());
             counts.setStyle("-fx-text-fill: #888;");
 
@@ -263,9 +271,11 @@ public final class CircosPlot {
                     String sampleLine = sampleName != null ? "\n" + sampleName : "";
                     String sampleCountLine = sampleName == null && h.sampleCount > 0
                         ? String.format("%nSamples: %d", h.sampleCount) : "";
+                    String vcfLine = h.vcfCount > 0
+                        ? String.format("%nVCF translocations: %d", h.vcfCount) : "";
                     tooltip.setText(String.format(
-                        "%s:%,d%nSplit reads: %d  \u2022  Discordant pairs: %d%s%s",
-                        chr, pos, h.splitCount, h.discordantCount, sampleCountLine, sampleLine));
+                        "%s:%,d%nSplit reads: %d  \u2022  Discordant pairs: %d%s%s%s",
+                        chr, pos, h.splitCount, h.discordantCount, vcfLine, sampleCountLine, sampleLine));
                     canvas.setCursor(javafx.scene.Cursor.HAND);
                 } else {
                     tooltip.setText("");
@@ -372,7 +382,8 @@ public final class CircosPlot {
                 List<Link> group = entry.getValue();
                 int count = group.size();
                 int splitCount      = (int) group.stream().filter(l -> l.type == LinkType.SPLIT_READ).count();
-                int discordantCount = count - splitCount;
+                int vcfCount        = (int) group.stream().filter(l -> l.type == LinkType.VCF_TRA).count();
+                int discordantCount = count - splitCount - vcfCount;
                 int sampleCount     = (int) group.stream()
                         .map(Link::sample).filter(s -> s != null).distinct().count();
 
@@ -413,14 +424,43 @@ public final class CircosPlot {
                 g.setFill(colorFor(arcB.name));
                 g.fillOval(bx - dotR, by - dotR, dotR * 2, dotR * 2);
 
-                hitRegions.add(new HitRegion(rep, true,  ax, ay, dotR + 2, splitCount, discordantCount, sampleCount));
-                hitRegions.add(new HitRegion(rep, false, bx, by, dotR + 2, splitCount, discordantCount, sampleCount));
+                hitRegions.add(new HitRegion(rep, true,  ax, ay, dotR + 2, splitCount, discordantCount, vcfCount, sampleCount));
+                hitRegions.add(new HitRegion(rep, false, bx, by, dotR + 2, splitCount, discordantCount, vcfCount, sampleCount));
             }
             g.setLineWidth(1);
         }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private static String circosTitle(int splits, int discos, int vcfTra) {
+        boolean hasReads = splits > 0 || discos > 0;
+        if (hasReads && vcfTra > 0) {
+            return "Circos \u2014 split reads, discordant pairs & VCF translocations";
+        }
+        if (vcfTra > 0) {
+            return "Circos \u2014 VCF translocations";
+        }
+        return "Circos \u2014 split reads & discordant pairs";
+    }
+
+    private static String circosStats(int splits, int discos, int vcfTra, int sampleCount) {
+        if (vcfTra > 0) {
+            return String.format(
+                "%d split-read links  \u2022  %d inter-chromosomal pairs  \u2022  %d VCF translocations  \u2022  %d sample(s)",
+                splits, discos, vcfTra, sampleCount);
+        }
+        return String.format(
+            "%d split-read links  \u2022  %d inter-chromosomal pairs  \u2022  %d sample(s)",
+            splits, discos, sampleCount);
+    }
+
+    private static String perSampleCounts(int splits, int discos, int vcfTra) {
+        if (vcfTra > 0) {
+            return String.format("%d split  \u2022  %d discordant  \u2022  %d VCF TRA", splits, discos, vcfTra);
+        }
+        return String.format("%d split  \u2022  %d discordant", splits, discos);
+    }
 
     private static String normalize(String chrom) {
         if (chrom == null) return "";

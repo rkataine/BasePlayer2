@@ -27,6 +27,10 @@ public class VariantNode {
     public volatile VariantNode prevVisible;
     /** End position for structural variants (from INFO/END); -1 for SNVs/indels. */
     public volatile long svEnd = -1;
+    /** Mate chromosome for translocations / breakends; null if unknown. */
+    public volatile String svChr2;
+    /** Mate position (1-based) for translocations / breakends; -1 if unknown. */
+    public volatile long svEnd2 = -1;
     /** Record-level VCF QUAL value; -1 when missing/unknown. */
     public volatile double siteQuality = -1.0;
     /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
@@ -118,6 +122,29 @@ public class VariantNode {
         this.ref = ref;
         this.alt = alt;
         this.type = type;
+    }
+
+    /**
+     * Mate chromosome for TRA/BND, from {@link #svChr2} or breakend ALT notation.
+     */
+    public String mateChromosome() {
+        if (svChr2 != null && !svChr2.isBlank()) {
+            return svChr2;
+        }
+        BreakendAlt.Mate mate = BreakendAlt.parse(alt);
+        return mate != null ? mate.chrom() : null;
+    }
+
+    /**
+     * Mate position (1-based) for TRA/BND, from {@link #svEnd2} or breakend ALT notation.
+     * @return position, or -1 if unknown
+     */
+    public long matePosition() {
+        if (svEnd2 >= 0) {
+            return svEnd2;
+        }
+        BreakendAlt.Mate mate = BreakendAlt.parse(alt);
+        return mate != null ? mate.pos() : -1;
     }
 
     /** Mark a sample as present using sample-track identity. */

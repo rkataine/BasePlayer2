@@ -24,6 +24,10 @@ import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.VariantFilter;
+import org.baseplayer.variant.VariantList;
+import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VcfVariantType;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -515,7 +519,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     boolean hasVcfData = VcfManager.getInstance().hasVcfLoaded();
     if (!bamFiles.isEmpty() || hasVcfData) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
-      MenuItem circosItem = new MenuItem("Circos plot (split reads + discordant pairs)...");
+      MenuItem circosItem = new MenuItem("Circos plot (reads + VCF translocations)...");
       circosItem.setStyle("-fx-text-fill: #cccccc;");
       circosItem.setOnAction(e -> {
         settingsMenu.hide();
@@ -528,10 +532,12 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   /**
-   * Collect split-read (SA tag) and inter-chromosomal discordant-pair links
-   * across every visible sample and open a {@link CircosPlot} window. Uses
-   * cached reads when available; otherwise sweeps the BAM/CRAM at the current
-   * locus via a streaming query (no caching).
+   * Collect split-read (SA tag), inter-chromosomal discordant-pair, and VCF
+   * translocation / inter-chrom breakend links across every visible sample and
+   * open a {@link CircosPlot} window. Uses cached reads when available;
+   * otherwise sweeps the BAM/CRAM at the current locus via a streaming query
+   * (no caching). VCF links come from TRA/BND calls whose breakpoint is inside
+   * a currently visible stack view, matching the read sweep.
    */
   private void openCircosPlot() {
     final List<DrawStack> stacks = new ArrayList<>(stackManager.getStacks());
@@ -563,6 +569,26 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
     final String currentChrom = masterTrackDrawStack != null ? masterTrackDrawStack.getChromosome() : null;
 
+    final List<ViewWindow> viewWindows = new ArrayList<>();
+    for (DrawStack stack : stacks) {
+      String stackChrom = stack.getChromosome();
+      if (stackChrom == null || stackChrom.isBlank()) {
+        continue;
+      }
+      long viewStart = Math.max(0, (long) stack.getViewStart());
+      long viewEnd = (long) stack.getViewEnd();
+      if (viewEnd < viewStart) {
+        continue;
+      }
+      viewWindows.add(new ViewWindow(stackChrom, viewStart, viewEnd));
+    }
+
+    VcfManager vcfManager = VcfManager.getInstance();
+    final List<VcfManager.CachedChromosomeVariants> vcfLists = vcfManager.hasVcfLoaded()
+        ? new ArrayList<>(vcfManager.getCachedVariantListsInOrder(chromNames))
+        : List.of();
+    final VariantFilter vcfFilter = vcfManager.hasVcfLoaded() ? vcfManager.getCurrentFilter().copy() : null;
+
     Thread t = new Thread(() -> {
       List<CircosPlot.Link> links = new ArrayList<>();
       for (SampleSweep sw : sweeps) {
@@ -589,6 +615,10 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
             }
           }
         }
+      }
+
+      for (VcfManager.CachedChromosomeVariants entry : vcfLists) {
+        extractVcfLinks(entry.chromosome(), entry.variants(), vcfFilter, viewWindows, links);
       }
 
       Platform.runLater(() -> {
@@ -650,6 +680,101 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
   /** Snapshot of a sample's alignment file for off-thread sweeping. */
   private record SampleSweep(AlignmentFile file, String name, String[] refNames) {
+  }
+
+  /** Visible genomic interval of one draw stack at circos-open time. */
+  private record ViewWindow(String chrom, long start, long end) {
+  }
+
+  /**
+   * Emit circos links from VCF TRA and inter-chromosomal BND calls whose
+   * on-chromosome breakpoint falls inside a visible stack view. Respects the
+   * current variant filter without mutating the drawable skip chain (this
+   * runs off the FX thread).
+   */
+  private static void extractVcfLinks(String chromosome, VariantList list,
+      VariantFilter filter, List<ViewWindow> viewWindows, List<CircosPlot.Link> out) {
+    if (chromosome == null || chromosome.isBlank() || list == null || list.isEmpty()
+        || viewWindows == null || viewWindows.isEmpty()) {
+      return;
+    }
+    VariantNode node = list.getFirst();
+    while (node != null) {
+      if (node.type == VcfVariantType.SV_TRANSLOCATION || node.type == VcfVariantType.SV_BREAKEND) {
+        if (inVisibleView(chromosome, node.position, viewWindows)
+            && (filter == null || filter.passesNodeLevel(node))) {
+          String mateChr = node.mateChromosome();
+          long matePos = node.matePosition();
+          if (mateChr != null && !mateChr.isBlank() && matePos >= 0
+              && !sameChromosomeName(chromosome, mateChr)) {
+            int posA = clampGenomicPos(node.position);
+            int posB = clampGenomicPos(matePos);
+            for (VariantNode.SampleCall call : node.getSamples()) {
+              if (filter != null && !filter.passesSampleThresholds(node, call)) {
+                continue;
+              }
+              out.add(new CircosPlot.Link(
+                  chromosome,
+                  posA,
+                  mateChr,
+                  posB,
+                  CircosPlot.LinkType.VCF_TRA,
+                  circosSampleName(call)));
+            }
+          }
+        }
+      }
+      node = node.next;
+    }
+  }
+
+  private static boolean inVisibleView(String chromosome, long position, List<ViewWindow> viewWindows) {
+    for (ViewWindow window : viewWindows) {
+      if (sameChromosomeName(chromosome, window.chrom)
+          && position >= window.start
+          && position <= window.end) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String circosSampleName(VariantNode.SampleCall call) {
+    if (call == null) {
+      return "(vcf)";
+    }
+    if (call.sample != null && call.sample.getName() != null && !call.sample.getName().isBlank()) {
+      return call.sample.getName();
+    }
+    SampleTrack track = call.getTrack();
+    if (track != null && track.getDisplayName() != null && !track.getDisplayName().isBlank()) {
+      return track.getDisplayName();
+    }
+    return "(vcf)";
+  }
+
+  private static boolean sameChromosomeName(String a, String b) {
+    return stripChrPrefix(a).equalsIgnoreCase(stripChrPrefix(b));
+  }
+
+  private static String stripChrPrefix(String chrom) {
+    if (chrom == null) {
+      return "";
+    }
+    if (chrom.length() > 3 && chrom.regionMatches(true, 0, "chr", 0, 3)) {
+      return chrom.substring(3);
+    }
+    return chrom;
+  }
+
+  private static int clampGenomicPos(long pos) {
+    if (pos <= 0) {
+      return 1;
+    }
+    if (pos > Integer.MAX_VALUE) {
+      return Integer.MAX_VALUE;
+    }
+    return (int) pos;
   }
 
   private double getMasterTrackWidth() {

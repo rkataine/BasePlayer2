@@ -53,23 +53,10 @@ public class GeneSearchComponent {
             String geneToNavigate = currentSuggestions.get(selectedSuggestionIndex);
             autoComplete.hide();
             selectedSuggestionIndex = -1;
-            navigateToGene(geneToNavigate);
+            acceptGeneSuggestion(geneToNavigate);
             ke.consume();
           } else {
-            String text = geneSearchField.getText();
-            if (text != null && !text.isEmpty()) {
-              autoComplete.hide();
-              List<String> suggestions = AnnotationData.searchGenes(text);
-              if (!suggestions.isEmpty()) {
-                String exactMatch = suggestions.stream()
-                    .filter(s -> s.equalsIgnoreCase(text))
-                    .findFirst()
-                    .orElse(suggestions.get(0));
-                navigateToGene(exactMatch);
-              } else {
-                navigateToGene(text);
-              }
-            }
+            submitQuery(geneSearchField.getText());
             ke.consume();
           }
         }
@@ -130,7 +117,8 @@ public class GeneSearchComponent {
     });
 
     geneSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
-      if (newVal == null || newVal.length() < 2) {
+      String token = lastToken(newVal);
+      if (token.length() < 2) {
         autoComplete.hide();
         AnnotationData.clearHighlightedGene();
         currentSuggestions.clear();
@@ -139,7 +127,7 @@ public class GeneSearchComponent {
         return;
       }
 
-      List<String> suggestions = AnnotationData.searchGenes(newVal);
+      List<String> suggestions = AnnotationData.searchGenes(token);
       if (suggestions.isEmpty()) {
         autoComplete.hide();
         AnnotationData.clearHighlightedGene();
@@ -155,7 +143,7 @@ public class GeneSearchComponent {
 
       // Highlight exact-match gene on the chromosome canvas while typing
       String exactMatch = suggestions.stream()
-          .filter(s -> s.equalsIgnoreCase(newVal))
+          .filter(s -> s.equalsIgnoreCase(token))
           .findFirst()
           .orElse(null);
       if (exactMatch != null) {
@@ -199,8 +187,9 @@ public class GeneSearchComponent {
         });
         container.setOnMouseExited(e -> {
           String currentText = geneSearchField.getText();
-          if (currentText != null) {
-            GeneLocation exactLoc = AnnotationData.getGeneLocation(currentText);
+          String currentToken = lastToken(currentText);
+          if (!currentToken.isEmpty()) {
+            GeneLocation exactLoc = AnnotationData.getGeneLocation(currentToken);
             if (exactLoc != null && exactLoc.chrom().equals(viewportState.getCurrentChromosome())) {
               AnnotationData.setHighlightedGene(exactLoc);
               return;
@@ -211,7 +200,7 @@ public class GeneSearchComponent {
 
         CustomMenuItem item = new CustomMenuItem(container);
         item.setHideOnClick(true);
-        item.setOnAction(e -> navigateToGene(geneName));
+        item.setOnAction(e -> acceptGeneSuggestion(geneName));
         autoComplete.getItems().add(item);
       }
 
@@ -234,28 +223,92 @@ public class GeneSearchComponent {
     // Direct Enter press when autocomplete is not showing
     geneSearchField.setOnAction(e -> {
       if (!autoComplete.isShowing()) {
-        String text = geneSearchField.getText();
-        if (text != null && text.length() >= 2) {
-          List<String> suggestions = AnnotationData.searchGenes(text);
-          if (!suggestions.isEmpty()) {
-            String exactMatch = suggestions.stream()
-                .filter(s -> s.equalsIgnoreCase(text))
-                .findFirst()
-                .orElse(suggestions.get(0));
-            navigateToGene(exactMatch);
-          }
-        }
+        submitQuery(geneSearchField.getText());
       }
     });
   }
 
-  private void navigateToGene(String geneName) {
+  private void acceptGeneSuggestion(String geneName) {
+    String text = geneSearchField.getText();
+    if (text != null && text.indexOf(';') >= 0) {
+      submitQuery(replaceLastToken(text, geneName));
+    } else {
+      submitQuery(geneName);
+    }
+  }
+
+  private void submitQuery(String text) {
+    List<String> genes = new ArrayList<>();
+    for (String token : splitQuery(text)) {
+      String resolved = resolveGeneName(token);
+      if (resolved != null) {
+        genes.add(resolved);
+      }
+    }
+    if (genes.isEmpty()) {
+      return;
+    }
     autoComplete.hide();
     SearchCommands.clearGeneHighlight();
     NavigationUndoComponent.pushCurrentNavigationToUndo();
-    NavigationCommands.navigateToGene(geneName);
-    geneSearchField.setText(geneName);
+    if (genes.size() == 1) {
+      NavigationCommands.navigateToGene(genes.get(0));
+      geneSearchField.setText(genes.get(0));
+    } else {
+      NavigationCommands.navigateToGenes(genes);
+      geneSearchField.setText(String.join(";", genes));
+    }
     geneSearchField.selectAll();
-    geneSearchField.getParent().requestFocus();
+    if (geneSearchField.getParent() != null) {
+      geneSearchField.getParent().requestFocus();
+    }
+  }
+
+  private static String resolveGeneName(String token) {
+    if (token == null || token.isBlank()) {
+      return null;
+    }
+    String trimmed = token.trim();
+    List<String> suggestions = AnnotationData.searchGenes(trimmed);
+    if (!suggestions.isEmpty()) {
+      return suggestions.stream()
+          .filter(s -> s.equalsIgnoreCase(trimmed))
+          .findFirst()
+          .orElse(suggestions.get(0));
+    }
+    return AnnotationData.getGeneLocation(trimmed) != null ? trimmed : null;
+  }
+
+  private static List<String> splitQuery(String text) {
+    List<String> out = new ArrayList<>();
+    if (text == null || text.isBlank()) {
+      return out;
+    }
+    for (String part : text.split(";")) {
+      String token = part.trim();
+      if (!token.isEmpty()) {
+        out.add(token);
+      }
+    }
+    return out;
+  }
+
+  private static String lastToken(String text) {
+    if (text == null) {
+      return "";
+    }
+    int idx = text.lastIndexOf(';');
+    return (idx < 0 ? text : text.substring(idx + 1)).trim();
+  }
+
+  private static String replaceLastToken(String text, String geneName) {
+    if (text == null) {
+      return geneName;
+    }
+    int idx = text.lastIndexOf(';');
+    if (idx < 0) {
+      return geneName;
+    }
+    return text.substring(0, idx + 1) + geneName;
   }
 }

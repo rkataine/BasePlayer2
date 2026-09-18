@@ -1,6 +1,10 @@
 package org.baseplayer.controllers.commands;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.gene.GeneLocation;
@@ -188,19 +192,75 @@ public class NavigationCommands {
     GeneLocation loc = AnnotationData.getGeneLocation(geneName);
     if (loc == null) return;
     DrawStack stack = stackManager.getHoverStack();
-    if (stack != null) {
-      VcfManager vcfManager = VcfManager.getInstance();
+    if (stack == null && !stackManager.isEmpty()) {
+      stack = stackManager.getFirst();
+    }
+    applyGeneNavigation(stack, loc, loadVariantRegion);
+    AnnotationData.clearHighlightedGene();
+  }
 
-      if (loadVariantRegion) {
-        vcfManager.loadRegionVariants(loc.chrom(), loc.start(), loc.end());
+  public static void navigateToGenes(List<String> geneNames) {
+    if (geneNames == null || geneNames.isEmpty()) {
+      return;
+    }
+    List<GeneLocation> loci = new ArrayList<>();
+    List<String> seen = new ArrayList<>();
+    for (String raw : geneNames) {
+      if (raw == null || raw.isBlank()) {
+        continue;
       }
-      
-      long padding = Math.max(1000, (loc.end() - loc.start()) / 2);
-      long viewStart = loc.start() - padding;
-      long viewEnd   = loc.end()   + padding;
-      stack.navigateTo(loc.chrom(), viewStart, viewEnd);
+      String name = raw.trim();
+      boolean duplicate = false;
+      for (String existing : seen) {
+        if (existing.equalsIgnoreCase(name)) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (duplicate) {
+        continue;
+      }
+      GeneLocation loc = AnnotationData.getGeneLocation(name);
+      if (loc == null) {
+        continue;
+      }
+      seen.add(name);
+      loci.add(loc);
+    }
+    if (loci.isEmpty()) {
+      return;
+    }
+    if (loci.size() == 1) {
+      navigateToGene(seen.get(0), true);
+      return;
+    }
+
+    for (int i = 0; i < loci.size(); i++) {
+      GeneLocation loc = loci.get(i);
+      if (i < stackManager.size()) {
+        applyGeneNavigation(stackManager.getStacks().get(i), loc, true);
+      } else {
+        long[] view = geneViewBounds(loc);
+        MainController.addStackAtRegion(loc.chrom(), view[0], view[1]);
+      }
     }
     AnnotationData.clearHighlightedGene();
+  }
+
+  private static void applyGeneNavigation(DrawStack stack, GeneLocation loc, boolean loadVariantRegion) {
+    if (stack == null || loc == null) {
+      return;
+    }
+    if (loadVariantRegion) {
+      VcfManager.getInstance().loadRegionVariants(loc.chrom(), loc.start(), loc.end());
+    }
+    long[] view = geneViewBounds(loc);
+    stack.navigateTo(loc.chrom(), view[0], view[1]);
+  }
+
+  private static long[] geneViewBounds(GeneLocation loc) {
+    long padding = Math.max(1000L, (loc.end() - loc.start()) / 2);
+    return new long[] { loc.start() - padding, loc.end() + padding };
   }
   
   /**

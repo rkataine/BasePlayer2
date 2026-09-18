@@ -10,6 +10,7 @@ import org.baseplayer.components.sidebars.SidebarController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.project.ProjectDocument;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.services.EventCoordinator;
@@ -495,6 +496,7 @@ public class MainController {
       chromSplitPane.getItems().add(drawStack.chromContainer);
       featureTracksContentPane.getItems().add(drawStack.featureColumn);
       drawPane.getItems().add(drawStack.sampleColumn);
+      VcfManager.getInstance().loadVariantsForStack(drawStack);
       
       // Update visibility of controls on all stacks
       for (DrawStack stack : drawStacks) {
@@ -523,23 +525,32 @@ public class MainController {
   
   }
   public static void addStackAtPosition(String chrom, int position) {
+    double viewSize = 1000;
+    double start = Math.max(1, position - viewSize / 2);
+    double end = start + viewSize;
+    addStackAtRegion(chrom, start, end);
+  }
+
+  public static DrawStack addStackAtRegion(String chrom, double start, double end) {
     clearCrossStackMateArc();
-    // Strip "chr" prefix if present to match internal naming
-    if (chrom.startsWith("chr")) chrom = chrom.substring(3);
+    if (chrom != null && chrom.startsWith("chr")) {
+      chrom = chrom.substring(3);
+    }
     final String finalChrom = chrom;
 
-    // Create the new stack at the target chromosome
     DrawStack drawStack = new DrawStack(finalChrom);
     ReferenceGenomeService refService = ServiceRegistry.getInstance().getReferenceGenomeService();
     if (refService.hasGenome()) {
       drawStack.setChromosomeList(refService.getCurrentGenome().getStandardChromosomeNames());
     }
-    drawStack.chromosomeDropdown.setValue(finalChrom);
+
+    drawStack.navigateTo(finalChrom, start, end);
 
     drawStacks.add(drawStack);
     chromSplitPane.getItems().add(drawStack.chromContainer);
     featureTracksContentPane.getItems().add(drawStack.featureColumn);
     drawPane.getItems().add(drawStack.sampleColumn);
+    VcfManager.getInstance().loadVariantsForStack(drawStack);
 
     for (DrawStack stack : drawStacks) {
       stack.updateControlsVisibility();
@@ -553,13 +564,8 @@ public class MainController {
     featureTracksContentPane.setDividerPositions(drawPositions);
     chromSplitPane.setDividerPositions(drawPositions);
 
-    // Zoom to mate position after layout settles
-    Platform.runLater(() -> {
-      double viewSize = 1000; // ~1kb window around mate
-      double start = Math.max(1, position - viewSize / 2);
-      double end = start + viewSize;
-      drawStack.sampleTrackCanvas.zoomAnimation(start, end);
-    });
+    Platform.runLater(() -> drawStack.sampleTrackCanvas.zoomAnimation(start, end));
+    return drawStack;
   }
   
   public static void removeStack(DrawStack stackToRemove) {
