@@ -1,7 +1,6 @@
 package org.baseplayer.variant;
 
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.Collections;
 import java.util.List;
 
@@ -20,7 +19,6 @@ public class VariantNode {
     public final String alt;
     public final VcfVariantType type;
 
-    private final BitSet samplePresence;  // O(1) presence check for drawing
     private List<SampleCall> samples;     // null until first sample added
 
     public volatile VariantNode next;
@@ -34,27 +32,47 @@ public class VariantNode {
     /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
     public VariantAnnotation annotation;
 
-    /** VCF call data for one sample at this allele. */
+    /**
+     * VCF call data for one sample at this allele.
+     * Identity is the {@link SampleTrack}; {@link #getTrackIndex()} always resolves
+     * against the live sample list so drawing follows list add/remove/reorder.
+     */
     public static class SampleCall {
-			// TODO why track index here?
-        private final int trackIndex;
+        private final SampleTrack track;
         public final Sample sample;
         public final String gt;
         public final double quality;
         public final int depth;
-        public final double alleleFraction;  // Fraction of reads supporting alt allele (from AD field)
+        public final double alleleFraction;
         public final boolean isPhased;
 
         public SampleCall(Sample sample, String gt, double quality, int depth, double alleleFraction) {
-            this(resolveTrackIndex(sample), sample, gt, quality, depth, alleleFraction);
+            this(sample != null ? sample.getTrack() : null, sample, gt, quality, depth, alleleFraction);
         }
 
+        public SampleCall(SampleTrack track, String gt, double quality, int depth, double alleleFraction) {
+            this(track, null, gt, quality, depth, alleleFraction);
+        }
+
+        /** Resolves {@code trackIndex} to a track at construction time and stores that track. */
         public SampleCall(int trackIndex, String gt, double quality, int depth, double alleleFraction) {
-            this(trackIndex, null, gt, quality, depth, alleleFraction);
+            this(resolveTrackByIndex(trackIndex), null, gt, quality, depth, alleleFraction);
         }
 
         public SampleCall(int trackIndex, Sample sample, String gt, double quality, int depth, double alleleFraction) {
-            this.trackIndex = trackIndex;
+            this(
+                sample != null && sample.getTrack() != null
+                    ? sample.getTrack()
+                    : resolveTrackByIndex(trackIndex),
+                sample,
+                gt,
+                quality,
+                depth,
+                alleleFraction);
+        }
+
+        public SampleCall(SampleTrack track, Sample sample, String gt, double quality, int depth, double alleleFraction) {
+            this.track = track;
             this.sample = sample;
             this.gt = gt;
             this.quality = quality;
@@ -63,36 +81,26 @@ public class VariantNode {
             this.isPhased = gt != null && gt.contains("|");
         }
 
+        /** Current index in {@link SampleRegistry#getSampleTracks()}, or -1 if the track is gone. */
         public int getTrackIndex() {
-            return trackIndex;
-        }
-
-        public SampleTrack getTrack() {
-            if (sample != null && sample.getTrack() != null) {
-                return sample.getTrack();
-            }
-            return resolveTrackByIndex(trackIndex);
-        }
-
-        private static int resolveTrackIndex(Sample sample) {
-            if (sample == null || sample.getTrack() == null) {
+            if (track == null) {
                 return -1;
             }
-
             try {
-                SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-                return registry.getTrackIndex(sample.getTrack());
+                return ServiceRegistry.getInstance().getSampleRegistry().getTrackIndex(track);
             } catch (Exception ignored) {
                 return -1;
             }
         }
-				// TODO why track index?
+
+        public SampleTrack getTrack() {
+            return track;
+        }
 
         private static SampleTrack resolveTrackByIndex(int trackIndex) {
             if (trackIndex < 0) {
                 return null;
             }
-
             try {
                 SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
                 if (trackIndex >= registry.getSampleTracks().size()) {
@@ -110,52 +118,41 @@ public class VariantNode {
         this.ref = ref;
         this.alt = alt;
         this.type = type;
-        this.samplePresence = new BitSet();
     }
 
-    /** Mark a sample as present using sample-call identity. */
+    /** Mark a sample as present using sample-track identity. */
     public void addSample(SampleCall call) {
-        if (call == null) {
+        if (call == null || call.getTrack() == null) {
             return;
         }
 
-        int trackIndex = call.getTrackIndex();
-        if (trackIndex < 0) {
-            return;
-        }
-
-        // Prevent duplicate sample-call objects when regions are reloaded or overlap.
-        if (samplePresence.get(trackIndex)) {
-            if (samples == null) {
-                return;
-            }
+        SampleTrack track = call.getTrack();
+        if (samples != null) {
             for (int i = 0; i < samples.size(); i++) {
-                if (samples.get(i).getTrackIndex() == trackIndex) {
+                if (samples.get(i).getTrack() == track) {
                     samples.set(i, call);
                     return;
                 }
             }
+        } else {
+            samples = new ArrayList<>();
         }
-
-        samplePresence.set(trackIndex);
-        if (samples == null) samples = new ArrayList<>();
         samples.add(call);
     }
 
     public boolean hasSample(int trackIndex) {
-        return samplePresence.get(trackIndex);
+        return getSampleCall(trackIndex) != null;
     }
 
-    /** Returns a snapshot BitSet for drawing iteration over all present samples. */
-    public BitSet getSamplePresence() {
-        return (BitSet) samplePresence.clone();
-    }
-
-    /** Returns the SampleCall for trackIndex, or null if not present or no call data stored. */
+    /** Returns the SampleCall for the live track index, or null. */
     public SampleCall getSampleCall(int trackIndex) {
-        if (samples == null) return null;
+        if (samples == null || trackIndex < 0) {
+            return null;
+        }
         for (SampleCall call : samples) {
-            if (call.getTrackIndex() == trackIndex) return call;
+            if (call.getTrackIndex() == trackIndex) {
+                return call;
+            }
         }
         return null;
     }
@@ -166,35 +163,30 @@ public class VariantNode {
     }
 
     public int getSampleCount() {
-        return samplePresence.cardinality();
+        return samples == null ? 0 : samples.size();
     }
-		// TODO check this
+
     /**
      * Remove one sample call from this variant node.
      * @return true if the node has no more samples (should be removed from list)
      */
     public boolean removeSample(SampleCall call) {
         if (call == null) {
-            return samplePresence.isEmpty();
+            return samples == null || samples.isEmpty();
         }
-
-        int trackIndex = call.getTrackIndex();
-        if (trackIndex >= 0) {
-            samplePresence.clear(trackIndex);
-        }
-
         if (samples != null) {
             samples.remove(call);
-            if (samples.isEmpty()) samples = null;
+            if (samples.isEmpty()) {
+                samples = null;
+            }
         }
-
-        return samplePresence.isEmpty();
+        return samples == null || samples.isEmpty();
     }
 
     /** Remove all sample calls that belong to a track object. */
     public boolean removeSample(SampleTrack track) {
         if (track == null || samples == null || samples.isEmpty()) {
-            return samplePresence.isEmpty();
+            return samples == null || samples.isEmpty();
         }
 
         List<SampleCall> removeCalls = new ArrayList<>();
@@ -203,12 +195,10 @@ public class VariantNode {
                 removeCalls.add(call);
             }
         }
-
         for (SampleCall call : removeCalls) {
             removeSample(call);
         }
-
-        return samplePresence.isEmpty();
+        return samples == null || samples.isEmpty();
     }
 
     public boolean isHeterozygous(int trackIndex) {

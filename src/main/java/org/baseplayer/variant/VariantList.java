@@ -670,6 +670,7 @@ public class VariantList {
         }
 
         clearVisibleChain();
+        invalidateSampleIndexes();
         return nodesRemoved;
     }
 

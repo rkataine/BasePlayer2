@@ -353,12 +353,12 @@ VBox {
 }
 
 /* Results tabs */
-.results-tabs .tab-pane {
+.results-tabs {
     -fx-background-color: #1e1e1e;
 }
 
-.results-tabs .tab-pane .tab-header-area {
-    -fx-background-color: #2b2b2b;
+.table-search-field {
+    -fx-prompt-text-fill: #888888;
 }
 
 .results-tabs .tab {

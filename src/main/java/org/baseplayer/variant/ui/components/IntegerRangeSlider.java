@@ -1,4 +1,4 @@
-package org.baseplayer.variant.ui;
+package org.baseplayer.variant.ui.components;
 
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;

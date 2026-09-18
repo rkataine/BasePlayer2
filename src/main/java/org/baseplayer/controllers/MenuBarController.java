@@ -22,6 +22,7 @@ import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
 import javafx.animation.PauseTransition;
+import javafx.application.Platform;
 import javafx.event.ActionEvent;
 import javafx.event.Event;
 import javafx.event.EventHandler;
@@ -41,6 +42,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -54,6 +56,7 @@ public class MenuBarController {
   @FXML private TextField positionField;
   @FXML private TextField geneSearchField;
   @FXML private Label chromosomeLabel;
+  @FXML private HBox positionBox;
   @FXML private Label viewLengthLabel;
   @FXML private MenuBar menuBar;
   @FXML private Menu recentFilesMenu;
@@ -83,6 +86,7 @@ public class MenuBarController {
   private Label snackbarLabel;
   private PauseTransition snackbarHideTimer;
   private final EventHandler<MouseEvent> positionFieldDefocusHandler = this::handleGlobalMousePress;
+  private final EventHandler<MouseEvent> chromosomeMenuOutsidePressHandler = this::handleChromosomeMenuOutsidePress;
 
   private record ParsedPosition(String chromosome, int start, Integer end) {
     boolean isRange() { return end != null; }
@@ -126,6 +130,13 @@ public class MenuBarController {
       menuBar.setMinWidth(newValue.doubleValue());
       menuBar.setMaxWidth(newValue.doubleValue());
     });
+    for (Menu menu : menuBar.getMenus()) {
+      menu.addEventHandler(Menu.ON_SHOWING, e -> {
+        if (chromosomeLabelMenu != null && chromosomeLabelMenu.isShowing()) {
+          chromosomeLabelMenu.hide();
+        }
+      });
+    }
   }
   
   private void setupMemoryBar() {
@@ -151,49 +162,29 @@ public class MenuBarController {
   }
   
   private void setupPositionField() {
-    // Setup chromosome label click to show dropdown
-    chromosomeLabel.setOnMouseClicked(e -> {
-      if (chromosomeLabelMenu == null) {
-        chromosomeLabelMenu = new ContextMenu();
-        chromosomeLabelMenu.setAutoHide(true);
+    if (positionBox != null) {
+      positionBox.setFocusTraversable(true);
+    }
+
+    chromosomeLabel.addEventHandler(MouseEvent.MOUSE_PRESSED, e -> {
+      if (e.getButton() != MouseButton.PRIMARY) return;
+      dismissMenuBarMenus();
+      clearMenuBarFocus();
+
+      ensureChromosomeMenu();
+      if (chromosomeLabelMenu.isShowing()) {
+        chromosomeLabelMenu.hide();
+      } else {
+        Platform.runLater(this::showChromosomeMenu);
       }
-      
-      chromosomeLabelMenu.getItems().clear();
-      // Sort chromosomes properly (1-22, X, Y, MT)
-      var refGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
-      java.util.List<String> chroms = refGenomeService.hasGenome()
-          ? new java.util.ArrayList<>(refGenomeService.getCurrentGenome().getStandardChromosomeNames())
-          : new java.util.ArrayList<>();
-      chroms.sort((c1, c2) -> {
-        Integer n1 = BaseUtils.tryParseInt(c1);
-        Integer n2 = BaseUtils.tryParseInt(c2);
-        if (n1 != null && n2 != null) return n1.compareTo(n2);
-        if (n1 != null) return -1;
-        if (n2 != null) return 1;
-        int order1 = getChromOrder(c1);
-        int order2 = getChromOrder(c2);
-        return Integer.compare(order1, order2);
-      });
-      
-      for (String chrom : chroms) {
-        String label = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
-        MenuItem item = new MenuItem(label);
-        item.setOnAction(event -> {
-          onChromosomeSelected(chrom);
-        });
-        chromosomeLabelMenu.getItems().add(item);
-      }
-      
-      chromosomeLabelMenu.show(chromosomeLabel, Side.BOTTOM, 0, 0);
+      e.consume();
     });
-    
+
     chromosomeLabel.setStyle("-fx-cursor: hand;");
-    
-    // Setup position field for editing
+
     positionField.setOnAction(e -> navigateFromPositionField());
     positionField.focusedProperty().addListener((obs, oldFocused, focused) -> {
       if (!focused) {
-        // After editing ends, restore canonical start-end text from current hover stack.
         syncPositionFieldFromHoverStack();
       }
     });
@@ -202,6 +193,83 @@ public class MenuBarController {
       copyPositionButton.setText("\u2398");
       copyPositionButton.setTooltip(new Tooltip("Copy current locus (chr:start-end)"));
       copyPositionButton.setFocusTraversable(false);
+    }
+  }
+
+  private void ensureChromosomeMenu() {
+    if (chromosomeLabelMenu != null) return;
+    chromosomeLabelMenu = new ContextMenu();
+    chromosomeLabelMenu.setAutoHide(false);
+    chromosomeLabelMenu.setOnShown(e -> installChromosomeMenuOutsideHandler());
+    chromosomeLabelMenu.setOnHidden(e -> removeChromosomeMenuOutsideHandler());
+  }
+
+  private void showChromosomeMenu() {
+    if (chromosomeLabel == null || chromosomeLabel.getScene() == null) return;
+
+    ensureChromosomeMenu();
+    chromosomeLabelMenu.getItems().clear();
+    var refGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
+    java.util.List<String> chroms = refGenomeService.hasGenome()
+        ? new java.util.ArrayList<>(refGenomeService.getCurrentGenome().getStandardChromosomeNames())
+        : new java.util.ArrayList<>();
+    chroms.sort((c1, c2) -> {
+      Integer n1 = BaseUtils.tryParseInt(c1);
+      Integer n2 = BaseUtils.tryParseInt(c2);
+      if (n1 != null && n2 != null) return n1.compareTo(n2);
+      if (n1 != null) return -1;
+      if (n2 != null) return 1;
+      int order1 = getChromOrder(c1);
+      int order2 = getChromOrder(c2);
+      return Integer.compare(order1, order2);
+    });
+
+    for (String chrom : chroms) {
+      String label = chrom.startsWith("chr") || !chrom.matches("^(\\d{1,2}|X|Y|MT?)$") ? chrom : "chr" + chrom;
+      MenuItem item = new MenuItem(label);
+      item.setOnAction(event -> onChromosomeSelected(chrom));
+      chromosomeLabelMenu.getItems().add(item);
+    }
+
+    dismissMenuBarMenus();
+    chromosomeLabelMenu.show(chromosomeLabel, Side.BOTTOM, 0, 0);
+  }
+
+  private void installChromosomeMenuOutsideHandler() {
+    Scene scene = chromosomeLabel != null ? chromosomeLabel.getScene() : null;
+    if (scene != null) {
+      scene.addEventFilter(MouseEvent.MOUSE_PRESSED, chromosomeMenuOutsidePressHandler);
+    }
+  }
+
+  private void removeChromosomeMenuOutsideHandler() {
+    Scene scene = chromosomeLabel != null ? chromosomeLabel.getScene() : null;
+    if (scene != null) {
+      scene.removeEventFilter(MouseEvent.MOUSE_PRESSED, chromosomeMenuOutsidePressHandler);
+    }
+  }
+
+  private void handleChromosomeMenuOutsidePress(MouseEvent event) {
+    if (chromosomeLabelMenu == null || !chromosomeLabelMenu.isShowing()) return;
+    // Owner click is handled by the label toggle; menu items live in another window.
+    if (isEventInsideNode(event.getTarget(), chromosomeLabel)) return;
+    chromosomeLabelMenu.hide();
+  }
+
+  private void dismissMenuBarMenus() {
+    if (menuBar == null) return;
+    for (Menu menu : menuBar.getMenus()) {
+      if (menu != null && menu.isShowing()) {
+        menu.hide();
+      }
+    }
+  }
+
+  private void clearMenuBarFocus() {
+    if (menuBar == null || !menuBar.isFocused()) return;
+    Node sink = positionBox != null ? positionBox : positionField;
+    if (sink != null) {
+      sink.requestFocus();
     }
   }
 
@@ -226,8 +294,16 @@ public class MenuBarController {
   private void handleGlobalMousePress(MouseEvent event) {
     if (positionField == null || !positionField.isFocused()) return;
     if (isEventInsideNode(event.getTarget(), positionField)) return;
+    // Keep focus inside the position controls; never arm MenuBar (that flashes File).
+    if (isEventInsideNode(event.getTarget(), positionBox != null ? positionBox : chromosomeLabel)) {
+      if (positionBox != null) {
+        positionBox.requestFocus();
+      }
+      return;
+    }
 
-    Node fallbackFocusTarget = menuBar != null ? menuBar : positionField.getParent();
+    Node fallbackFocusTarget = positionBox != null ? positionBox
+        : (positionField.getParent() != null ? positionField.getParent() : null);
     if (fallbackFocusTarget != null) {
       fallbackFocusTarget.requestFocus();
     }

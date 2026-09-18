@@ -3,7 +3,7 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
-<?import org.baseplayer.variant.ui.IntegerRangeSlider?>
+<?import org.baseplayer.variant.ui.components.IntegerRangeSlider?>
 
 <StackPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
          fx:controller="org.baseplayer.variant.ui.VariantManagerController"
@@ -89,6 +89,18 @@
                                 <TextField fx:id="alleleFreqField" text="0.0" prefWidth="60" styleClass="filter-field"/>
                             </HBox>
                         </VBox>
+
+                        <!-- Advanced Filtering Section -->
+                        <VBox spacing="8">
+                            <Label text="Advanced Filters (INFO/FILTER)" styleClass="section-header"/>
+                            <VBox fx:id="advancedFiltersContainer" spacing="6">
+                                <!-- Dynamic rules displayed here -->
+                            </VBox>
+                            <HBox spacing="8">
+                                <Button fx:id="addInfoFilterButton" text="Add INFO Filter..." styleClass="secondary-button" onAction="#handleAddInfoFilter"/>
+                                <Button fx:id="addFilterFieldButton" text="Add FILTER..." styleClass="secondary-button" onAction="#handleAddFilterField"/>
+                            </HBox>
+                        </VBox>
                     </VBox>
                 </ScrollPane>
 
@@ -151,26 +163,13 @@
                             <CheckBox fx:id="cancerOnlyCheckBox" text="Cancer genes only (COSMIC Census)" styleClass="filter-checkbox"/>
                         </VBox>
 
-                        <!-- Advanced Filtering Section -->
-                        <VBox spacing="8">
-                            <Label text="Advanced Filters (INFO/FILTER)" styleClass="section-header"/>
-                            <VBox fx:id="advancedFiltersContainer" spacing="6">
-                                <!-- Dynamic rules displayed here -->
-                            </VBox>
-                            <HBox spacing="8">
-                                <Button fx:id="addInfoFilterButton" text="Add INFO Filter..." styleClass="secondary-button" onAction="#handleAddInfoFilter"/>
-                                <Button fx:id="addFilterFieldButton" text="Add FILTER..." styleClass="secondary-button" onAction="#handleAddFilterField"/>
-                            </HBox>
-                        </VBox>
-
-                        <!-- Action Buttons -->
-                        <HBox spacing="12" alignment="CENTER_RIGHT" VBox.vgrow="ALWAYS">
-                            <padding>
-                                <Insets top="12"/>
-                            </padding>
-                            <Button fx:id="annotateAllChromosomesButton" text="Annotate All Chromosomes" styleClass="secondary-button" onAction="#handleAnnotateAllChromosomes"/>
-                            <Button fx:id="resetFiltersButton" text="Reset All" styleClass="secondary-button" onAction="#handleResetFilters"/>
-                            <Button fx:id="applyFiltersButton" text="Apply Filters" styleClass="primary-button" onAction="#handleApplyFilters"/>
+                        <HBox spacing="8" alignment="CENTER_LEFT">
+                            <Button fx:id="annotateAllChromosomesButton" text="Annotate All Chromosomes"
+                                    styleClass="secondary-button"
+                                    onAction="#handleAnnotateAllChromosomes"/>
+                            <TextField fx:id="tableSearchField" promptText="Search genes, effects…"
+                                       styleClass="filter-field table-search-field"
+                                       HBox.hgrow="ALWAYS"/>
                         </HBox>
                     </VBox>
                 </ScrollPane>

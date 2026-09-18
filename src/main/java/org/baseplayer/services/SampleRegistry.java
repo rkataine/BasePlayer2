@@ -49,6 +49,7 @@ public class SampleRegistry extends TrackViewportRegistry {
         sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
             invalidateDisplayedTrackIndicesCache();
             normalizeVisibleRangeAfterDisplayedTrackCountChange();
+            notifyVariantIndexDirty();
             // Keep session dirty in sync even when callers forget markDirty().
             Runnable mark = () -> ProjectSessionState.get().markDirty();
             if (Platform.isFxApplicationThread()) {

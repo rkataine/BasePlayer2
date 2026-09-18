@@ -142,9 +142,9 @@ public class SampleDataManager {
     int oldLast = sampleRegistry.getLastVisibleSample();
     int oldWindow = Math.max(1, oldLast - oldFirst + 1);
     int removedSlot = sampleRegistry.getDisplayedSlotForTrackIndex(index);
-    
+
     try {
-      sampleRegistry.getSampleTracks().get(index).close();
+      removedTrack.close();
     } catch (IOException e) {
       System.err.println("Error closing sample: " + e.getMessage());
     }
@@ -152,16 +152,24 @@ public class SampleDataManager {
     if (index < sampleRegistry.getSampleList().size()) {
       sampleRegistry.getSampleList().remove(index);
     }
-    
-    // Remove variants for this track from all variant lists
+
+    // Drop calls for this track; remaining calls resolve live indices via SampleTrack.
+    java.util.IdentityHashMap<org.baseplayer.variant.VariantList, Boolean> seen =
+        new java.util.IdentityHashMap<>();
+    java.util.function.Consumer<org.baseplayer.variant.VariantList> purge = variantList -> {
+      if (variantList == null || seen.put(variantList, Boolean.TRUE) != null) {
+        return;
+      }
+      variantList.removeTrack(removedTrack);
+    };
     DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
     for (DrawStack stack : stackManager.getStacks()) {
       if (stack.sampleTrackCanvas != null) {
-        org.baseplayer.variant.VariantList variantList = stack.sampleTrackCanvas.getVariantList();
-        if (variantList != null) {
-          variantList.removeTrack(removedTrack);
-        }
+        purge.accept(stack.sampleTrackCanvas.getVariantList());
       }
+    }
+    for (org.baseplayer.variant.VariantList cached : VcfManager.getInstance().snapshotVariantCache().values()) {
+      purge.accept(cached);
     }
     
     // Adjust visible range

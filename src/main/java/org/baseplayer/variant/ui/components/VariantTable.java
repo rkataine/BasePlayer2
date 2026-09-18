@@ -1,5 +1,8 @@
-package org.baseplayer.variant.ui;
+package org.baseplayer.variant.ui.components;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -10,6 +13,7 @@ import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
 
+import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -47,6 +51,11 @@ public class VariantTable {
     private final VariantTableBackend backend;
     private VariantFilter displayFilter = new VariantFilter();
 
+    private ObservableList<TableRow> allCodingItems = FXCollections.observableArrayList();
+    private ObservableList<TableRow> allIntronicItems = FXCollections.observableArrayList();
+    private ObservableList<TableRow> allIntergenicItems = FXCollections.observableArrayList();
+    private String tableSearchQuery = "";
+
     public static record TableRow(String chromosome, VariantNode node) {
         public TableRow {
             if (chromosome == null) {
@@ -78,7 +87,7 @@ public class VariantTable {
             () -> this.displayFilter);
     }
 
-		public void initializeColumns() {
+    public void initializeColumns() {
         backend.initializeColumns();
     }
 
@@ -87,11 +96,83 @@ public class VariantTable {
         ObservableList<TableRow> intronicItems,
         ObservableList<TableRow> intergenicItems) {
 
-        backend.setItems(codingItems, intronicItems, intergenicItems);
+        allCodingItems = codingItems != null ? codingItems : FXCollections.observableArrayList();
+        allIntronicItems = intronicItems != null ? intronicItems : FXCollections.observableArrayList();
+        allIntergenicItems = intergenicItems != null ? intergenicItems : FXCollections.observableArrayList();
+        applyTableSearch();
+    }
+
+    /**
+     * Filters which rows are shown in the tables only. Does not affect genomic screen visibility.
+     */
+    public void setTableSearchQuery(String query) {
+        tableSearchQuery = query != null ? query.trim() : "";
+        applyTableSearch();
+    }
+
+    public String getTableSearchQuery() {
+        return tableSearchQuery;
+    }
+
+    private void applyTableSearch() {
+        ObservableList<TableRow> coding = filterRows(allCodingItems);
+        ObservableList<TableRow> intronic = filterRows(allIntronicItems);
+        ObservableList<TableRow> intergenic = filterRows(allIntergenicItems);
+        backend.setItems(coding, intronic, intergenic);
         setTabCounts(
-            codingItems != null ? codingItems.size() : 0,
-            intronicItems != null ? intronicItems.size() : 0,
-            intergenicItems != null ? intergenicItems.size() : 0);
+            coding.size(),
+            intronic.size(),
+            intergenic.size());
+    }
+
+    private ObservableList<TableRow> filterRows(ObservableList<TableRow> source) {
+        if (source == null || source.isEmpty()) {
+            return FXCollections.observableArrayList();
+        }
+        if (tableSearchQuery.isEmpty()) {
+            return source;
+        }
+        String q = tableSearchQuery.toLowerCase(Locale.ROOT);
+        List<TableRow> matched = new ArrayList<>(source.size());
+        for (TableRow row : source) {
+            if (matchesSearch(row, q, displayFilter)) {
+                matched.add(row);
+            }
+        }
+        return FXCollections.observableArrayList(matched);
+    }
+
+    static boolean matchesSearch(TableRow row, String queryLower, VariantFilter filter) {
+        if (row == null || row.node() == null) {
+            return false;
+        }
+        if (queryLower == null || queryLower.isEmpty()) {
+            return true;
+        }
+
+        String gene = rowGeneName(row);
+        if (gene != null && gene.toLowerCase(Locale.ROOT).contains(queryLower)) {
+            return true;
+        }
+
+        VariantEffect effect = rowEffect(row);
+        if (effect != null) {
+            if (effect.displayName().toLowerCase(Locale.ROOT).contains(queryLower)) {
+                return true;
+            }
+            if (effect.name().toLowerCase(Locale.ROOT).contains(queryLower)) {
+                return true;
+            }
+        }
+
+        for (String property : List.of(
+            "position", "refAlt", "variantType", "effectDisplay", "aaChange", "codonChange")) {
+            String value = resolveTableColumnValue(row, property, filter);
+            if (value != null && value.toLowerCase(Locale.ROOT).contains(queryLower)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void setPlaceholders(Node codingPlaceholder, Node intronicPlaceholder, Node intergenicPlaceholder) {
