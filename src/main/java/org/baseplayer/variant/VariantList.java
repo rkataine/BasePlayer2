@@ -751,6 +751,27 @@ public class VariantList {
         clearVisibleChain();
     }
 
+    public void freezeCachedVariants() {
+				System.out.println("Freezing cached variants");
+        clearGeneSampleIndex();
+        clearClusterSampleIndex();
+
+        head = visibleHead;
+        int newSize = 0;
+        VariantNode last = null;
+        VariantNode node = visibleHead;
+        while (node != null) {
+            VariantNode nextVis = node.nextVisible;
+            node.next = nextVis;
+            last = node;
+            newSize++;
+            node = nextVis;
+        }
+        tail = last;
+        size = newSize;
+        recalculateBounds();
+    }
+
     private void recalculateBounds() {
         if (head == null) {
             tail = null;

@@ -1,5 +1,6 @@
 package org.baseplayer.variant.ui.components;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -9,6 +10,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
+import java.util.function.DoubleSupplier;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.function.ToDoubleFunction;
 
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.variant.VcfVariantType;
@@ -38,6 +43,41 @@ import javafx.util.Pair;
  * cancer filter, advanced INFO/FILTER rules, and reload banner.
  */
 public class VariantFiltersPanel {
+
+    /** Whether a higher or lower current value than the snapshot means a looser filter. */
+    public enum LooserWhen {
+        /** Min thresholds (Q/DP/AF): lowering admits more variants. */
+        CURRENT_LOWER,
+        /** Max thresholds: raising admits more variants. */
+        CURRENT_HIGHER
+    }
+
+    private record ThresholdFilter(
+        String key,
+        DoubleSupplier currentValue,
+        ToDoubleFunction<VariantFilter> snapshotFromLoaded,
+        LooserWhen looserWhen
+    ) {}
+
+    /**
+     * Allowed-set filter (types, effects, …). Looser when the current set contains any
+     * value that was not in the load-time snapshot (current ⊈ snapshot).
+     */
+    private record SetFilter(
+        String key,
+        Supplier<Set<?>> currentValue,
+        Function<VariantFilter, Set<?>> snapshotFromLoaded
+    ) {}
+
+    /**
+     * Boolean constraint that restricts the set when true (e.g. cancer-genes-only).
+     * Looser when snapshot was true and current is false.
+     */
+    private record FlagFilter(
+        String key,
+        BooleanSupplier currentValue,
+        java.util.function.Predicate<VariantFilter> snapshotFromLoaded
+    ) {}
 
     public record Nodes(
         GridPane variantTypesContainer,
@@ -76,6 +116,12 @@ public class VariantFiltersPanel {
 
     private boolean localSuppress;
     private final Map<VcfVariantType, CheckBox> variantTypeCheckBoxes = new HashMap<>();
+    private final List<ThresholdFilter> thresholdFilters = new ArrayList<>();
+    private final List<SetFilter> setFilters = new ArrayList<>();
+    private final List<FlagFilter> flagFilters = new ArrayList<>();
+    private final Map<String, Double> filtersSnapshotHash = new HashMap<>();
+    private final Map<String, Set<?>> setFiltersSnapshotHash = new HashMap<>();
+    private final Map<String, Boolean> flagFiltersSnapshotHash = new HashMap<>();
 
     public void install(
             Nodes nodes,
@@ -87,6 +133,7 @@ public class VariantFiltersPanel {
         this.onImmediateChange = onImmediateChange != null ? onImmediateChange : () -> {};
         this.isSuppressing = isSuppressing != null ? isSuppressing : () -> false;
 
+        registerDefaultFilters();
         setupSliderBindings();
         setupAutoFilterListeners();
 
@@ -96,6 +143,75 @@ public class VariantFiltersPanel {
         if (nodes.addFilterFieldButton() != null) {
             nodes.addFilterFieldButton().setOnAction(e -> showFilterFieldDialog());
         }
+    }
+
+    public void registerThresholdFilter(
+            String key,
+            DoubleSupplier currentValue,
+            ToDoubleFunction<VariantFilter> snapshotFromLoaded,
+            LooserWhen looserWhen) {
+        if (key == null || key.isBlank() || currentValue == null || snapshotFromLoaded == null || looserWhen == null) {
+            return;
+        }
+        thresholdFilters.removeIf(t -> key.equals(t.key()));
+        thresholdFilters.add(new ThresholdFilter(key, currentValue, snapshotFromLoaded, looserWhen));
+    }
+
+    public void registerSetFilter(
+            String key,
+            Supplier<Set<?>> currentValue,
+            Function<VariantFilter, Set<?>> snapshotFromLoaded) {
+        if (key == null || key.isBlank() || currentValue == null || snapshotFromLoaded == null) {
+            return;
+        }
+        setFilters.removeIf(t -> key.equals(t.key()));
+        setFilters.add(new SetFilter(key, currentValue, snapshotFromLoaded));
+    }
+
+    public void registerFlagFilter(
+            String key,
+            BooleanSupplier currentValue,
+            java.util.function.Predicate<VariantFilter> snapshotFromLoaded) {
+        if (key == null || key.isBlank() || currentValue == null || snapshotFromLoaded == null) {
+            return;
+        }
+        flagFilters.removeIf(t -> key.equals(t.key()));
+        flagFilters.add(new FlagFilter(key, currentValue, snapshotFromLoaded));
+    }
+
+    private void registerDefaultFilters() {
+        if (nodes == null) {
+            return;
+        }
+        registerThresholdFilter(
+            "minQ",
+            () -> nodes.qualitySlider().getValue(),
+            VariantFilter::getMinQuality,
+            LooserWhen.CURRENT_LOWER);
+        registerThresholdFilter(
+            "minDP",
+            () -> nodes.coverageSlider().getValue(),
+            f -> f.getMinDepth(),
+            LooserWhen.CURRENT_LOWER);
+        registerThresholdFilter(
+            "minAF",
+            () -> nodes.alleleFreqSlider().getValue(),
+            VariantFilter::getMinAlleleFraction,
+            LooserWhen.CURRENT_LOWER);
+
+        registerSetFilter(
+            "allowedTypes",
+            this::currentAllowedTypes,
+            f -> f.getAllowedTypes() == null ? Set.of() : Set.copyOf(f.getAllowedTypes()));
+        registerSetFilter(
+            "allowedEffects",
+            this::currentAllowedEffects,
+            f -> f.getAllowedEffects() == null ? Set.of() : Set.copyOf(f.getAllowedEffects()));
+
+        registerFlagFilter(
+            "cancerOnly",
+            () -> nodes.cancerOnlyCheckBox().isSelected(),
+            VariantFilter::isCancerGenesOnly);
     }
 
     /**
@@ -150,35 +266,8 @@ public class VariantFiltersPanel {
             return;
         }
 
-        Set<VcfVariantType> types = new HashSet<>();
-        if (variantTypeCheckBoxes.isEmpty()) {
-            types.addAll(EnumSet.allOf(VcfVariantType.class));
-        } else {
-            for (Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
-                if (entry.getValue().isSelected()) {
-                    types.add(entry.getKey());
-                }
-            }
-        }
-        filter.setAllowedTypes(types);
-
-        Set<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
-        if (nodes.missenseCheckBox().isSelected()) effects.add(VariantEffect.CODING_MISSENSE);
-        if (nodes.synonymousCheckBox().isSelected()) effects.add(VariantEffect.CODING_SYNONYMOUS);
-        if (nodes.stopFrameshiftCheckBox().isSelected()) {
-            effects.add(VariantEffect.CODING_STOP_GAIN);
-            effects.add(VariantEffect.CODING_STOP_LOSS);
-            effects.add(VariantEffect.CODING_FRAMESHIFT);
-        }
-        if (nodes.spliceSiteCheckBox().isSelected()) effects.add(VariantEffect.SPLICE_SITE);
-        if (nodes.utrCheckBox().isSelected()) {
-            effects.add(VariantEffect.UTR5);
-            effects.add(VariantEffect.UTR3);
-        }
-        if (nodes.noncodingCheckBox().isSelected()) effects.add(VariantEffect.NONCODING_GENE);
-        if (nodes.intronicCheckBox().isSelected()) effects.add(VariantEffect.INTRONIC);
-        if (nodes.intergenicCheckBox().isSelected()) effects.add(VariantEffect.INTERGENIC);
-        filter.setAllowedEffects(effects);
+        filter.setAllowedTypes(currentAllowedTypes());
+        filter.setAllowedEffects(currentAllowedEffects());
 
         try {
             filter.setMinQuality(Double.parseDouble(nodes.qualityField().getText().trim()));
@@ -213,6 +302,43 @@ public class VariantFiltersPanel {
         }
         filter.setInfoFieldFilters(infoFilters);
         filter.setAllowedFilterValues(filterValues);
+    }
+
+    private Set<VcfVariantType> currentAllowedTypes() {
+        Set<VcfVariantType> types = new HashSet<>();
+        if (variantTypeCheckBoxes.isEmpty()) {
+            types.addAll(EnumSet.allOf(VcfVariantType.class));
+        } else {
+            for (Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+                if (entry.getValue().isSelected()) {
+                    types.add(entry.getKey());
+                }
+            }
+        }
+        return types;
+    }
+
+    private Set<VariantEffect> currentAllowedEffects() {
+        Set<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+        if (nodes == null) {
+            return effects;
+        }
+        if (nodes.missenseCheckBox().isSelected()) effects.add(VariantEffect.CODING_MISSENSE);
+        if (nodes.synonymousCheckBox().isSelected()) effects.add(VariantEffect.CODING_SYNONYMOUS);
+        if (nodes.stopFrameshiftCheckBox().isSelected()) {
+            effects.add(VariantEffect.CODING_STOP_GAIN);
+            effects.add(VariantEffect.CODING_STOP_LOSS);
+            effects.add(VariantEffect.CODING_FRAMESHIFT);
+        }
+        if (nodes.spliceSiteCheckBox().isSelected()) effects.add(VariantEffect.SPLICE_SITE);
+        if (nodes.utrCheckBox().isSelected()) {
+            effects.add(VariantEffect.UTR5);
+            effects.add(VariantEffect.UTR3);
+        }
+        if (nodes.noncodingCheckBox().isSelected()) effects.add(VariantEffect.NONCODING_GENE);
+        if (nodes.intronicCheckBox().isSelected()) effects.add(VariantEffect.INTRONIC);
+        if (nodes.intergenicCheckBox().isSelected()) effects.add(VariantEffect.INTERGENIC);
+        return effects;
     }
 
     public void populateVariantTypes(List<VcfManager.CachedChromosomeVariants> sources) {
@@ -277,6 +403,7 @@ public class VariantFiltersPanel {
                     cb.getStyleClass().add("filter-checkbox");
                     cb.selectedProperty().addListener((obs, oldVal, newVal) -> {
                         updateSelectAllTypesState();
+                        refreshReloadBannerFromFilters();
                         scheduleImmediateChange();
                     });
                     variantTypeCheckBoxes.put(type, cb);
@@ -341,6 +468,101 @@ public class VariantFiltersPanel {
         if (nodes.reloadBannerButton() != null) {
             nodes.reloadBannerButton().setDisable(locked);
         }
+    }
+
+    public void captureFilterSnapshot(VariantFilter loaded) {
+        filtersSnapshotHash.clear();
+        setFiltersSnapshotHash.clear();
+        flagFiltersSnapshotHash.clear();
+        if (loaded == null) {
+            return;
+        }
+        for (ThresholdFilter filter : thresholdFilters) {
+            filtersSnapshotHash.put(filter.key(), filter.snapshotFromLoaded().applyAsDouble(loaded));
+        }
+        for (SetFilter filter : setFilters) {
+            Set<?> snap = filter.snapshotFromLoaded().apply(loaded);
+            setFiltersSnapshotHash.put(filter.key(), snap == null ? Set.of() : Set.copyOf(snap));
+        }
+        for (FlagFilter filter : flagFilters) {
+            flagFiltersSnapshotHash.put(filter.key(), filter.snapshotFromLoaded().test(loaded));
+        }
+    }
+
+    public boolean compareIfLooserValue(String filterKey, double currentValue) {
+        Double snapshot = filtersSnapshotHash.get(filterKey);
+        if (snapshot == null) {
+            return false;
+        }
+        ThresholdFilter spec = findThresholdFilter(filterKey);
+        if (spec == null) {
+            return false;
+        }
+        return switch (spec.looserWhen()) {
+            case CURRENT_LOWER -> currentValue < snapshot;
+            case CURRENT_HIGHER -> currentValue > snapshot;
+        };
+    }
+
+    /**
+     * Allowed-set looser check: current contains any member not in the snapshot.
+     */
+    public boolean compareIfLooserSet(String filterKey, Set<?> currentValue) {
+        Set<?> snapshot = setFiltersSnapshotHash.get(filterKey);
+        if (snapshot == null) {
+            return false;
+        }
+        if (currentValue == null || currentValue.isEmpty()) {
+            return false;
+        }
+        for (Object value : currentValue) {
+            if (!snapshot.contains(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Restrictive flag looser check: was on at load, now off. */
+    public boolean compareIfLooserFlag(String filterKey, boolean currentValue) {
+        Boolean snapshot = flagFiltersSnapshotHash.get(filterKey);
+        if (snapshot == null) {
+            return false;
+        }
+        return snapshot && !currentValue;
+    }
+
+    /** True if any registered filter is currently looser than its load-time snapshot. */
+    public boolean anyFilterLooserThanSnapshot() {
+        for (ThresholdFilter filter : thresholdFilters) {
+            if (compareIfLooserValue(filter.key(), filter.currentValue().getAsDouble())) {
+                return true;
+            }
+        }
+        for (SetFilter filter : setFilters) {
+            if (compareIfLooserSet(filter.key(), filter.currentValue().get())) {
+                return true;
+            }
+        }
+        for (FlagFilter filter : flagFilters) {
+            if (compareIfLooserFlag(filter.key(), filter.currentValue().getAsBoolean())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private ThresholdFilter findThresholdFilter(String key) {
+        for (ThresholdFilter filter : thresholdFilters) {
+            if (filter.key().equals(key)) {
+                return filter;
+            }
+        }
+        return null;
+    }
+
+    private void refreshReloadBannerFromFilters() {
+        refreshReloadBannerState(anyFilterLooserThanSnapshot(), "Reload needed");
     }
 
     public void showReloadBanner(String message) {
@@ -531,40 +753,38 @@ public class VariantFiltersPanel {
     }
 
     private void setupSliderBindings() {
-        nodes.qualitySlider().valueProperty().addListener((obs, oldVal, newVal) -> {
-            int val = newVal.intValue();
-            nodes.qualityValueLabel().setText(String.valueOf(val));
-            nodes.qualityField().setText(String.valueOf(val));
-            scheduleDebouncedChange();
-        });
-        nodes.qualityField().textProperty().addListener((obs, oldVal, newVal) -> {
-            try {
-                nodes.qualitySlider().setValue(Double.parseDouble(newVal));
-            } catch (NumberFormatException ignored) {}
-        });
+        bindThresholdSlider(
+            nodes.qualitySlider(),
+            nodes.qualityField(),
+            nodes.qualityValueLabel(),
+            v -> String.valueOf(v.intValue()));
+        bindThresholdSlider(
+            nodes.coverageSlider(),
+            nodes.coverageField(),
+            nodes.coverageValueLabel(),
+            v -> String.valueOf(v.intValue()));
+        bindThresholdSlider(
+            nodes.alleleFreqSlider(),
+            nodes.alleleFreqField(),
+            nodes.alleleFreqValueLabel(),
+            v -> String.format("%.2f", v));
+    }
 
-        nodes.coverageSlider().valueProperty().addListener((obs, oldVal, newVal) -> {
-            int val = newVal.intValue();
-            nodes.coverageValueLabel().setText(String.valueOf(val));
-            nodes.coverageField().setText(String.valueOf(val));
+    private void bindThresholdSlider(
+            Slider slider,
+            TextField field,
+            Label valueLabel,
+            java.util.function.Function<Double, String> format) {
+        slider.valueProperty().addListener((obs, oldVal, newVal) -> {
+            String text = format.apply(newVal.doubleValue());
+            valueLabel.setText(text);
+            field.setText(text);
+            refreshReloadBannerFromFilters();
             scheduleDebouncedChange();
         });
-        nodes.coverageField().textProperty().addListener((obs, oldVal, newVal) -> {
+        field.textProperty().addListener((obs, oldVal, newVal) -> {
             try {
-                nodes.coverageSlider().setValue(Double.parseDouble(newVal));
-            } catch (NumberFormatException ignored) {}
-        });
-
-        nodes.alleleFreqSlider().valueProperty().addListener((obs, oldVal, newVal) -> {
-            double val = newVal.doubleValue();
-            String formatted = String.format("%.2f", val);
-            nodes.alleleFreqValueLabel().setText(formatted);
-            nodes.alleleFreqField().setText(formatted);
-            scheduleDebouncedChange();
-        });
-        nodes.alleleFreqField().textProperty().addListener((obs, oldVal, newVal) -> {
-            try {
-                nodes.alleleFreqSlider().setValue(Double.parseDouble(newVal));
+                slider.setValue(Double.parseDouble(newVal));
             } catch (NumberFormatException ignored) {}
         });
     }
@@ -577,6 +797,7 @@ public class VariantFiltersPanel {
                 cb.setSelected(selectAll);
             }
             localSuppress = false;
+            refreshReloadBannerFromFilters();
             scheduleImmediateChange();
         });
 
@@ -592,11 +813,13 @@ public class VariantFiltersPanel {
             nodes.intronicCheckBox().setSelected(selectAll);
             nodes.intergenicCheckBox().setSelected(selectAll);
             localSuppress = false;
+            refreshReloadBannerFromFilters();
             scheduleImmediateChange();
         });
 
         ChangeListener<Boolean> effectCheckListener = (obs, oldVal, newVal) -> {
             updateSelectAllEffectsState();
+            refreshReloadBannerFromFilters();
             scheduleImmediateChange();
         };
         nodes.missenseCheckBox().selectedProperty().addListener(effectCheckListener);
@@ -608,7 +831,10 @@ public class VariantFiltersPanel {
         nodes.intronicCheckBox().selectedProperty().addListener(effectCheckListener);
         nodes.intergenicCheckBox().selectedProperty().addListener(effectCheckListener);
 
-        nodes.cancerOnlyCheckBox().setOnAction(e -> scheduleImmediateChange());
+        nodes.cancerOnlyCheckBox().setOnAction(e -> {
+            refreshReloadBannerFromFilters();
+            scheduleImmediateChange();
+        });
         nodes.qualityField().setOnAction(e -> scheduleImmediateChange());
     }
 

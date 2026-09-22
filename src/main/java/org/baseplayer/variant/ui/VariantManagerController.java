@@ -763,15 +763,7 @@ public class VariantManagerController implements Initializable {
             return;
         }
 
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        List<String> chromosomes = new ArrayList<>();
-        if (!stackManager.isEmpty()) {
-            org.baseplayer.draw.DrawStack drawStack = stackManager.getFirst();
-            if (drawStack != null && drawStack.chromosomeDropdown != null) {
-                chromosomes.addAll(drawStack.chromosomeDropdown.getItems());
-            }
-        }
-
+        List<String> chromosomes = getReferenceChromosomeOrder();
         if (chromosomes.isEmpty()) {
             setPlaceholder("No chromosomes available in dropdown");
             return;
@@ -780,11 +772,9 @@ public class VariantManagerController implements Initializable {
         busyOverlay.cancelDelayedLoadingModal();
         busyOverlay.setAllChromosomeAnnotationRunning(true);
         busyOverlay.setAllChromosomeAnnotationTask(null);
-
         busyOverlay.lockFilterControls(true);
         busyOverlay.syncBusyOverlay();
 
-        // Defer the expensive snapshot creation and task submission to let modal display first
         Platform.runLater(() -> {
             VariantFilter filterSnapshot = buildFilterFromUI();
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
@@ -836,16 +826,19 @@ public class VariantManagerController implements Initializable {
             vcfManager.setCurrentFilterForNextLoad(filter);
             vcfManager.applyFilter(filter);
         }
-        pendingReloadFilter = filter;
+
+        boolean reloadNeeded = variantFiltersPanel != null
+            && variantFiltersPanel.anyFilterLooserThanSnapshot();
+        pendingReloadFilter = reloadNeeded ? filter : null;
         if (variantFiltersPanel != null) {
-            variantFiltersPanel.showReloadBanner("Reload needed");
+            variantFiltersPanel.refreshReloadBannerState(reloadNeeded, "Reload needed");
         }
         scheduleRebuild(filter);
     }
 
     @FXML
     private void handleReloadFilteredVariants() {
-        if (chromosome == null || chromosome.isBlank()) {
+        if (vcfManager == null || isAllChromosomeAnnotationRunning()) {
             return;
         }
         VariantFilter target = pendingReloadFilter != null ? pendingReloadFilter : buildFilterFromUI();
@@ -853,12 +846,48 @@ public class VariantManagerController implements Initializable {
         if (variantFiltersPanel != null) {
             variantFiltersPanel.hideReloadBanner();
         }
+
+        List<String> chromosomes = vcfManager.getCachedChromosomesInOrder(getReferenceChromosomeOrder());
+        if (chromosomes.isEmpty() && chromosome != null && !chromosome.isBlank()) {
+            chromosomes = List.of(chromosome);
+        }
+        if (chromosomes.isEmpty()) {
+            return;
+        }
+
         sourceVariants = null;
         clearTableItemsForChromosomeSwitch();
-        setPlaceholder("Reloading variants for " + chromosome + "…");
+        setPlaceholder("Reloading variants…");
         vcfManager.setCurrentFilterForNextLoad(target);
-        vcfManager.clearCurrentChromosomeVariants();
-        vcfManager.reloadCurrentChromosome();
+        vcfManager.markAllCachedVariantListsDirty();
+
+        busyOverlay.cancelDelayedLoadingModal();
+        busyOverlay.setAllChromosomeAnnotationRunning(true);
+        busyOverlay.setAllChromosomeAnnotationTask(null);
+        busyOverlay.lockFilterControls(true);
+        busyOverlay.syncBusyOverlay();
+
+        final VariantFilter filterSnapshot = target.copy();
+        final List<String> cachedChroms = List.copyOf(chromosomes);
+        Platform.runLater(() -> {
+            ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
+                filterSnapshot,
+                cachedChroms,
+                progress -> busyOverlay.updateProgress(progress),
+                this::completeAllChromosomeAnnotation);
+            busyOverlay.setAllChromosomeAnnotationTask(task);
+
+            if (task != null) {
+                task.setProgressSuffix(
+                    "0/" + cachedChroms.size() + " chromosomes, rows: 0");
+                ThreadRunner.get().notifyDescriptionChanged();
+            } else {
+                busyOverlay.setAllChromosomeAnnotationRunning(false);
+                busyOverlay.lockFilterControls(false);
+                busyOverlay.hide();
+                setPlaceholder("No cached chromosomes to reload");
+            }
+        });
     }
 
     @FXML
@@ -1059,6 +1088,8 @@ public class VariantManagerController implements Initializable {
         }
         if (variantFiltersPanel != null) {
             variantFiltersPanel.populateVariantTypes(sourceVariantLists, typeFilter);
+            // Snapshot min Q/DP/AF from the filter used to materialize the cache.
+            variantFiltersPanel.captureFilterSnapshot(typeFilter);
         }
 
         refreshReloadBannerState();
@@ -1115,10 +1146,19 @@ public class VariantManagerController implements Initializable {
             }
             return;
         }
+        final List<VcfManager.CachedChromosomeVariants> snapshots = new ArrayList<>(sourceVariantLists);
+        final VariantFilter filterSnapshot;
+        try {
+            filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
+        } catch (RuntimeException ex) {
+            rebuildNeeded = false;
+            if (busyOverlay != null) {
+                busyOverlay.cancelDelayedLoadingModal();
+            }
+            return;
+        }
         rebuildRunning = true;
         rebuildNeeded = false;
-        final List<VcfManager.CachedChromosomeVariants> snapshots = new ArrayList<>(sourceVariantLists);
-        final VariantFilter filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
 
         Thread buildThread = new Thread(() -> {
             List<VariantTable.TableRow> coding = new ArrayList<>();

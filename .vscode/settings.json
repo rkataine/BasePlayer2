@@ -1,7 +1,7 @@
 {
   "java.configuration.updateBuildConfiguration": "automatic",
   "java.debug.settings.hotCodeReplace": "auto",
-  "java.autobuild.enabled": true,
+  "java.autobuild.enabled": false,
   "java.configuration.runtimes": [
     {
       "name": "JavaSE-23",

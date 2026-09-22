@@ -50,7 +50,8 @@ public class SampleTrackListPanel extends TrackListPanel {
   private static final Color NAME_VISIBLE = Color.web("#aaaaaa");
   private static final Color NAME_DIM = Color.web("#555555");
   private static final Color OVERLAY_DOT = Color.color(0.6, 0.8, 0.6);
-  private static final Color SELECTION_FILL = Color.rgb(77, 184, 255, 0.18);
+  private static final Color SELECTION_BAR = Color.web("#4db8ff");
+  private static final double SIDE_BAR_WIDTH = 4;
 
   private final SampleRegistry sampleRegistry;
   private final Set<Integer> selectedTrackIndices = new LinkedHashSet<>();
@@ -248,17 +249,15 @@ public class SampleTrackListPanel extends TrackListPanel {
       double fillY = Math.max(rowY, 0);
       double fillH = Math.min(rowY + rowHeight, panelHeightPixels) - fillY;
       if (fillH > 0) {
+        Color barColor = null;
         if (selectedTrackIndices.contains(backingTrackIndex)) {
-          gc.setFill(SELECTION_FILL);
-          gc.fillRect(0, fillY, panelWidthPixels, fillH);
+          barColor = SELECTION_BAR;
+        } else if (sampleTrack != null) {
+          barColor = sampleRegistry.getSidebarColorForTrack(sampleTrack);
         }
-        Color groupColor = sampleTrack != null
-            ? sampleRegistry.getSidebarColorForTrack(sampleTrack)
-            : null;
-        if (groupColor != null) {
-          // Accent only — a thin stripe on the left edge of the sample sidebar.
-          gc.setFill(groupColor);
-          gc.fillRect(0, fillY, 4, fillH);
+        if (barColor != null) {
+          gc.setFill(barColor);
+          gc.fillRect(0, fillY, SIDE_BAR_WIDTH, fillH);
         }
       }
 

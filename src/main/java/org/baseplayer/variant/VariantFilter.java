@@ -136,7 +136,13 @@ public class VariantFilter {
     }
 
     public Set<VcfVariantType> getAllowedTypes() { return allowedTypes; }
-    public void setAllowedTypes(Set<VcfVariantType> allowedTypes) { this.allowedTypes = allowedTypes; }
+    public void setAllowedTypes(Set<VcfVariantType> allowedTypes) {
+        if (allowedTypes == null || allowedTypes.isEmpty()) {
+            this.allowedTypes = EnumSet.noneOf(VcfVariantType.class);
+        } else {
+            this.allowedTypes = EnumSet.copyOf(allowedTypes);
+        }
+    }
 
     public Set<VariantEffect> getAllowedEffects() { return allowedEffects; }
     public void setAllowedEffects(Set<VariantEffect> allowedEffects) {
@@ -212,8 +218,13 @@ public class VariantFilter {
         for (Map.Entry<Integer, Set<Integer>> entry : this.groupTrackIndices.entrySet()) {
             copy.groupTrackIndices.put(entry.getKey(), new HashSet<>(entry.getValue()));
         }
-        copy.allowedTypes = EnumSet.copyOf(this.allowedTypes);
-        copy.allowedEffects = EnumSet.copyOf(this.allowedEffects);
+        // EnumSet.copyOf throws on empty collections — keep noneOf for "exclude all".
+        copy.allowedTypes = this.allowedTypes == null || this.allowedTypes.isEmpty()
+            ? EnumSet.noneOf(VcfVariantType.class)
+            : EnumSet.copyOf(this.allowedTypes);
+        copy.allowedEffects = this.allowedEffects == null || this.allowedEffects.isEmpty()
+            ? EnumSet.noneOf(VariantEffect.class)
+            : EnumSet.copyOf(this.allowedEffects);
         copy.showCoding = this.showCoding;
         copy.showIntronic = this.showIntronic;
         copy.showIntergenic = this.showIntergenic;

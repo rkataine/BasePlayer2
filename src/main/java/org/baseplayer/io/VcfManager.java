@@ -913,6 +913,10 @@ public class VcfManager {
 
                 boolean cancelled = Thread.currentThread().isInterrupted();
                 if (!cancelled) {
+                    // clearAll / reload leaves lastLoadedChromosome null; reattach to an on-screen
+                    // stack chrom (or first rebuilt chrom) so UI can find the active list.
+                    restoreLastLoadedChromosomeAfterAnnotateAll(chromosomes);
+
                     // Ensure the chromosome currently on screen matches the annotate-all filter.
                     // Soft filter changes leave loadedFilterKey stale; skip-compatible chroms are fine,
                     // but the active view must never keep pre-filter rows after annotate-all.
@@ -937,6 +941,11 @@ public class VcfManager {
                     } else {
                         variantsRevision.incrementAndGet();
                     }
+                    Platform.runLater(() -> {
+                        updateCanvasesWithVariants(null);
+                        calculateDensityOnAllCanvases();
+                        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+                    });
                 }
                 return new AllChromosomeAnnotationResult(
                     cancelled,
@@ -966,6 +975,40 @@ public class VcfManager {
         if (task == null) return;
         task.setProgressSuffix(suffix);
         ThreadRunner.get().notifyDescriptionChanged();
+    }
+
+    /**
+     * After annotate-all / reload-all, reattach {@link #lastLoadedChromosome} to a visible
+     * stack chrom that now has a cache (cleared reloads leave it null).
+     */
+    private void restoreLastLoadedChromosomeAfterAnnotateAll(List<String> rebuiltChromosomes) {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack == null) {
+                continue;
+            }
+            String chrom = stack.getChromosome();
+            if (chrom == null || chrom.isBlank()) {
+                continue;
+            }
+            VariantList list = findCachedVariantList(chrom);
+            if (list != null && !list.isEmpty()) {
+                lastLoadedChromosome = chrom;
+                return;
+            }
+        }
+        if (lastLoadedChromosome != null && findCachedVariantList(lastLoadedChromosome) != null) {
+            return;
+        }
+        if (rebuiltChromosomes != null) {
+            for (String chrom : rebuiltChromosomes) {
+                VariantList list = findCachedVariantList(chrom);
+                if (list != null && !list.isEmpty()) {
+                    lastLoadedChromosome = chrom;
+                    return;
+                }
+            }
+        }
     }
 
     private int buildChromosomeCacheForAnnotation(
@@ -1261,6 +1304,43 @@ public class VcfManager {
      * Intended for explicit reload flows that must start from an empty state.
      */
     public synchronized void clearCurrentChromosomeVariants() {
+        cancelActiveLoadsForCacheClear();
+
+        if (lastLoadedChromosome != null) {
+            variantCache.remove(lastLoadedChromosome);
+        }
+        lastLoadedChromosome = null;
+        clearVariantListsFromCanvases();
+    }
+
+    /**
+     * Mark every cached chromosome list as filter-stale so the next annotate/rebuild
+     * re-streams and re-annotates it (loadedFilterKey no longer matches).
+     */
+    public synchronized void markAllCachedVariantListsDirty() {
+        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
+        for (VariantList list : variantCache.values()) {
+            if (list == null || seen.put(list, Boolean.TRUE) != null) {
+                continue;
+            }
+            list.setLoadedFilterKey(null);
+            list.setLoadedFilter(null);
+        }
+    }
+
+    /**
+     * Drop every cached chromosome list and clear canvases.
+     * Used when Reload must re-stream (e.g. looser filter than what is in memory).
+     */
+    public synchronized void clearAllVariantCaches() {
+        cancelActiveLoadsForCacheClear();
+        variantCache.clear();
+        lastLoadedChromosome = null;
+        clearVariantListsFromCanvases();
+        variantsRevision.incrementAndGet();
+    }
+
+    private void cancelActiveLoadsForCacheClear() {
         if (activeChromosomeLoadTask != null && !activeChromosomeLoadTask.isCompleted()) {
             activeChromosomeLoadTask.cancel();
         }
@@ -1269,12 +1349,9 @@ public class VcfManager {
         loadingChromosome = null;
         pendingChromosomeLoads.clear();
         activeChromosomeLoadTask = null;
+    }
 
-        if (lastLoadedChromosome != null) {
-            variantCache.remove(lastLoadedChromosome);
-        }
-        lastLoadedChromosome = null;
-
+    private void clearVariantListsFromCanvases() {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.sampleTrackCanvas != null) {
