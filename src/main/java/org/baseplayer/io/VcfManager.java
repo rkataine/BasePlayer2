@@ -344,6 +344,7 @@ public class VcfManager {
         
         if (shouldReuseCachedVariants(chromosome, start, end, cachedVariants, requestFilterSnapshot)) {
             putVariantList(chromosome, cachedVariants);
+            markVcfRegionFetched(chromosome, start, end, cachedVariants);
             displayCachedVariants(chromosome, cachedVariants);
             return;
         }
@@ -367,9 +368,6 @@ public class VcfManager {
             }
         }
 
-        // No valid cache - proceed to load variants from VCF files
-        RegionFetchCache cache = ServiceRegistry.getInstance().getRegionFetchCache();
-
         // Prefer the existing aliased list; never create a parallel empty list under chr/non-chr.
         VariantList variantList = cachedVariants;
         if (variantList == null) {
@@ -386,6 +384,7 @@ public class VcfManager {
             && variantList.isAnnotated()
             && vcfCountMatches
             && !variantList.isEmpty()) {
+            markVcfRegionFetched(chromosome, start, end, variantList);
             displayCachedVariants(chromosome, variantList);
             return;
         }
@@ -413,7 +412,6 @@ public class VcfManager {
         final String targetChromosome = chromosome;
         final long regionStart = start;
         final long regionEnd = end;
-        final RegionFetchCache finalCache = cache;
         final VariantFilter loadFilterSnapshot = currentFilter.copy();
         final String loadFilterKeySnapshot = loadFilterSnapshot.toStableKey();
         loading = true;
@@ -489,6 +487,7 @@ public class VcfManager {
                 loadingChromosome = null;
                 activeChromosomeLoadTask = null;
                 if (result == null) {
+                    ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
                     startNextPendingChromosomeLoad();
                     return;
                 }
@@ -498,7 +497,7 @@ public class VcfManager {
                     return;
                 }
 
-                finalCache.markFetched("VCF", targetChromosome, regionStart, regionEnd);
+                markVcfRegionFetched(targetChromosome, regionStart, regionEnd, result);
                 long fullLoadEnd = resolveChromosomeLoadEnd(targetChromosome);
                 if (regionStart <= 1 && regionEnd >= (fullLoadEnd - 1)) {
                     // Mark as full-chromosome coverage to maximize future cache reuse checks.
@@ -519,6 +518,16 @@ public class VcfManager {
                 fireAndClearChromosomeReadyCallback();
                 startNextPendingChromosomeLoad();
             });
+    }
+
+    private void markVcfRegionFetched(
+        String chromosome, long start, long end, VariantList loadedList) {
+        RegionFetchCache cache = ServiceRegistry.getInstance().getRegionFetchCache();
+        if (isFullChromosomeCached(loadedList) || isFullChromosomeRequest(chromosome, start, end)) {
+            cache.markFetched("VCF", chromosome, 1, Long.MAX_VALUE);
+        } else {
+            cache.markFetched("VCF", chromosome, start, end);
+        }
     }
 
     private void syncCurrentFilterFromOpenVariantManager() {
@@ -781,6 +790,7 @@ public class VcfManager {
                 stack.sampleAggregateCanvas.clearVariantList();
             }
         }
+        org.baseplayer.controllers.MenuBarController.updateVariantManagerButtonVisibility();
     }
     
     /**
@@ -1571,6 +1581,10 @@ public class VcfManager {
     public synchronized boolean isLoadingChromosome(String chromosome) {
         if (chromosome == null || chromosome.isBlank()) return false;
         return loading && sameChromosomeName(chromosome, loadingChromosome);
+    }
+
+    public synchronized boolean isLoading() {
+        return loading;
     }
 
     /** Register a one-shot callback invoked on the FX thread once chromosome variants are cached. */

@@ -3,8 +3,10 @@ package org.baseplayer.services;
 import java.util.ArrayList;
 import java.util.List;
 
+import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 
@@ -23,8 +25,14 @@ public abstract class TrackViewportRegistry {
   public static final double DEFAULT_MASTER_BAND_HEIGHT_PIXELS = 28;
   public static final double DEFAULT_TRACK_ROW_HEIGHT_PIXELS = 20;
   public static final double MINIMUM_TRACK_ROW_HEIGHT_PIXELS = 1;
+  /**
+   * Below this row height a sample/feature name no longer fits in the sidebar row.
+   * Use for compact hover-label mode and to suppress dense track dividers.
+   */
+  public static final double MIN_TRACK_ROW_HEIGHT_FOR_LABELS_PIXELS = 14;
 
   private final IntegerProperty hoveredTrackIndex = new SimpleIntegerProperty(-1);
+  private final BooleanProperty listPointerInside = new SimpleBooleanProperty(false);
   private final DoubleProperty masterBandHeightPixels =
       new SimpleDoubleProperty(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
 
@@ -52,6 +60,19 @@ public abstract class TrackViewportRegistry {
     return hoveredTrackIndex;
   }
 
+  /** True while the pointer is over this registry's sidebar list canvas. */
+  public boolean isListPointerInside() {
+    return listPointerInside.get();
+  }
+
+  public void setListPointerInside(boolean inside) {
+    listPointerInside.set(inside);
+  }
+
+  public BooleanProperty listPointerInsideProperty() {
+    return listPointerInside;
+  }
+
   public int getFirstVisibleTrackSlot() {
     return firstVisibleTrackSlot;
   }
@@ -73,6 +94,12 @@ public abstract class TrackViewportRegistry {
 
   public double getTrackRowHeightPixels() {
     return trackRowHeightPixels;
+  }
+
+  /** True when rows are too short for sidebar names / readable track labels. */
+  public boolean isTrackRowHeightTooSmallForLabels() {
+    return trackRowHeightPixels > 0
+        && trackRowHeightPixels < MIN_TRACK_ROW_HEIGHT_FOR_LABELS_PIXELS;
   }
 
   public double getTrackViewportHeightPixels() {

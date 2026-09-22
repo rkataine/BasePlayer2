@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.baseplayer.components.PopupComboBoxStyler;
+import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.samples.Sample;
@@ -40,15 +41,12 @@ import javafx.stage.Window;
 
 public class SampleTrackListPanel extends TrackListPanel {
 
-  private static final double ICON_SIZE = 14;
-  private static final double ICON_MARGIN = 4;
-  private static final Font ICON_FONT = Font.font("Segoe UI Symbol", 12);
+  private static final double NAME_TEXT_X = 8;
   private static final Font NAME_FONT = Font.font("Segoe UI", 12);
+  private static final Font FILE_FONT = Font.font("Segoe UI", 9);
   private static final Color TAG_BAM = Color.web("#6699cc");
   private static final Color TAG_BED = Color.web("#cc9966");
   private static final Color TAG_VCF = Color.web("#99cc66");
-  private static final Color NAME_VISIBLE = Color.web("#aaaaaa");
-  private static final Color NAME_DIM = Color.web("#555555");
   private static final Color OVERLAY_DOT = Color.color(0.6, 0.8, 0.6);
   private static final Color SELECTION_BAR = Color.web("#4db8ff");
   private static final double SIDE_BAR_WIDTH = 4;
@@ -64,6 +62,7 @@ public class SampleTrackListPanel extends TrackListPanel {
   private SampleTrackListPanel(StackPane parent, SampleRegistry sampleRegistry) {
     super(parent, sampleRegistry);
     this.sampleRegistry = sampleRegistry;
+    sampleRegistry.setTrackIconActionHandler(this::handleTrackRowIconClick);
   }
 
   @Override
@@ -214,6 +213,10 @@ public class SampleTrackListPanel extends TrackListPanel {
     selectionAnchorIndex = -1;
   }
 
+  private boolean isSidebarSqueezed() {
+    return sampleRegistry.isTrackRowHeightTooSmallForLabels();
+  }
+
   @Override
   protected void drawTrackRows(
       double panelWidthPixels, double panelHeightPixels, double rightUiInsetPixels) {
@@ -223,6 +226,8 @@ public class SampleTrackListPanel extends TrackListPanel {
       return;
     }
 
+    double contentRight = panelWidthPixels - rightUiInsetPixels;
+    boolean squeezed = isSidebarSqueezed();
     double rowHeight = sampleRegistry.getTrackRowHeightPixels();
     double scrollOffset = sampleRegistry.getVerticalScrollOffsetPixels();
     int firstSlot = Math.max(0, sampleRegistry.getFirstVisibleTrackSlot());
@@ -240,10 +245,10 @@ public class SampleTrackListPanel extends TrackListPanel {
           ? sampleRegistry.getSampleTracks().get(backingTrackIndex)
           : null;
       boolean trackVisible = sampleTrack == null || sampleTrack.isVisible();
-      if (rowY >= 0) {
+      if (!squeezed && rowY >= 0) {
         double snappedY = Math.round(rowY);
         gc.setStroke(DrawColors.BORDER);
-        gc.strokeLine(0, snappedY, panelWidthPixels, snappedY);
+        gc.strokeLine(0, snappedY, contentRight, snappedY);
       }
 
       double fillY = Math.max(rowY, 0);
@@ -257,24 +262,31 @@ public class SampleTrackListPanel extends TrackListPanel {
         }
         if (barColor != null) {
           gc.setFill(barColor);
-          gc.fillRect(0, fillY, SIDE_BAR_WIDTH, fillH);
+          gc.fillRect(0, fillY, SIDE_BAR_WIDTH, Math.max(fillH, 1));
         }
+      }
+
+      // When rows are too short for a name, only keep the color accent; hover shows the label.
+      if (squeezed) {
+        continue;
       }
 
       double textY = rowY + NAME_FONT.getSize() + 2;
       if (textY > 0) {
         String displayName = sampleTrack != null ? sampleTrack.getDisplayName() : "";
+        gc.save();
+        gc.beginPath();
+        gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
+        gc.clip();
         if (backingTrackIndex == hoverIndex) {
           gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
-          double textWidth = displayName.length() * 7.5;
-          gc.setFill(Color.rgb(0, 0, 0, 0.3));
-          gc.fillRect(8, Math.max(rowY + 2, 0), textWidth + 8, 18);
           gc.setFill(Color.WHITE);
         } else {
           gc.setFont(NAME_FONT);
           gc.setFill(trackVisible ? Color.web("#cccccc") : Color.web("#666666"));
         }
-        gc.fillText(displayName, 10, textY);
+        gc.fillText(displayName, NAME_TEXT_X, textY);
+        gc.restore();
       }
 
       if (hasTrack) {
@@ -289,10 +301,39 @@ public class SampleTrackListPanel extends TrackListPanel {
       int backingTrackIndex, double rowY, double textY, double rowHeight,
       double panelWidth, double rightUiInset, boolean trackVisible) {
     SampleTrack sampleTrack = sampleRegistry.getSampleTracks().get(backingTrackIndex);
-    gc.setFont(Font.font("Segoe UI", 9));
-    double fileY = textY + 4;
+    double contentRight = panelWidth - rightUiInset;
+    boolean hasSuspendedSamples =
+        sampleTrack.getSamples().stream().anyMatch(Sample::isSuspended);
+
+    double contentTop = textY + 2;
+    boolean showSidebarControls = SampleTrackControls.fitsInSidebar(rowHeight)
+        && isMouseOverTrackList()
+        && backingTrackIndex == hoverIndex;
+    if (showSidebarControls) {
+      double controlsY = rowY + NAME_FONT.getSize() + SampleTrackControls.NAME_TO_CONTROLS_GAP;
+      if (controlsY + SampleTrackControls.stripHeight(SampleTrackControls.SIDEBAR_BUTTON_SIZE)
+          <= rowY + rowHeight - 2) {
+        String hovered = hoveredIcon;
+        List<SampleTrackControls.Hit> hits = SampleTrackControls.drawSidebar(
+            gc, contentRight, controlsY, trackVisible, hasSuspendedSamples, hovered);
+        for (SampleTrackControls.Hit hit : hits) {
+          addIconRegion(
+              backingTrackIndex, hit.id(), hit.x(), hit.y(), hit.width(), hit.height());
+        }
+        contentTop = controlsY
+            + SampleTrackControls.stripHeight(SampleTrackControls.SIDEBAR_BUTTON_SIZE) + 4;
+      }
+    }
+
+    // File lines under the track name (and controls when present): "VCF: filename"
+    gc.setFont(FILE_FONT);
+    double fileY = contentTop;
+    gc.save();
+    gc.beginPath();
+    gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
+    gc.clip();
     for (Sample sample : sampleTrack.getSamples()) {
-      fileY += 12;
+      fileY += 11;
       if (fileY > rowY + rowHeight - 4) {
         break;
       }
@@ -307,53 +348,26 @@ public class SampleTrackListPanel extends TrackListPanel {
         case VCF -> TAG_VCF;
       };
       double alpha = sample.visible ? 1.0 : 0.35;
+      String label = tag + ": " + sample.getName();
+
+      if (sample.overlay) {
+        gc.setFill(OVERLAY_DOT);
+        gc.setGlobalAlpha(alpha * 0.8);
+        gc.fillText("\u25CB", NAME_TEXT_X - 2, fileY);
+        gc.setGlobalAlpha(1.0);
+      }
+
       gc.setFill(tagColor);
       if (alpha != 1.0) {
         gc.setGlobalAlpha(alpha);
       }
-      gc.fillText("[" + tag + "]", 14, fileY);
-      if (alpha != 1.0) {
-        gc.setGlobalAlpha(1.0);
-      }
-
-      gc.setFill(sample.visible ? NAME_VISIBLE : NAME_DIM);
-      if (sample.overlay) {
-        gc.setGlobalAlpha(0.7);
-      }
-      gc.fillText(sample.getName(), 44, fileY);
-      if (sample.overlay) {
-        gc.setGlobalAlpha(1.0);
-      }
-
       if (sample.isSuspended()) {
-        gc.setFill(tagColor);
         gc.setGlobalAlpha(0.4);
-        gc.fillText("[" + tag + "]", 14, fileY);
-        gc.setGlobalAlpha(1.0);
-      } else if (sample.overlay) {
-        gc.setFill(OVERLAY_DOT);
-        gc.setGlobalAlpha(alpha * 0.8);
-        gc.fillText("\u25CB", 6, fileY);
-        gc.setGlobalAlpha(1.0);
       }
+      gc.fillText(label, NAME_TEXT_X + (sample.overlay ? 8 : 0), fileY);
+      gc.setGlobalAlpha(1.0);
     }
-
-    boolean hasSuspendedSamples =
-        sampleTrack.getSamples().stream().anyMatch(Sample::isSuspended);
-    if (hasSuspendedSamples) {
-      double reloadX = panelWidth - rightUiInset - ICON_SIZE - ICON_MARGIN;
-      double reloadY = rowY + rowHeight - ICON_SIZE - ICON_MARGIN;
-      gc.setFont(ICON_FONT);
-      gc.setFill(Color.web("#ff9944"));
-      gc.fillText("\u21ba", reloadX, reloadY + ICON_SIZE - 3);
-      addIconRegion(
-          backingTrackIndex, "reload", reloadX - 1, reloadY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
-    }
-
-    if (isMouseOverTrackList() && backingTrackIndex == hoverIndex) {
-      drawSampleButtons(backingTrackIndex, rowY, rowHeight,
-          panelWidth - rightUiInset, trackVisible, hasSuspendedSamples);
-    }
+    gc.restore();
   }
 
   @Override
@@ -373,50 +387,49 @@ public class SampleTrackListPanel extends TrackListPanel {
     if (rowY + rowHeight < 0 || rowY > panelHeightPixels) {
       return;
     }
-    reactiveGc.setFill(Color.rgb(255, 255, 255, 0.05));
-    reactiveGc.fillRect(0, Math.max(rowY, 0), panelWidthPixels, rowHeight);
+
+    double contentRight = Math.max(0, panelWidthPixels - getRightUiInsetPixels());
+    if (isSidebarSqueezed()) {
+      SampleTrack sampleTrack = sampleRegistry.getSampleTracks().get(hoverIndex);
+      String displayName = sampleTrack.getDisplayName();
+      // Line marks the hovered track; name sits above it (may overlap prior rows).
+      double lineY = Math.floor(rowY) + 0.5;
+      reactiveGc.setStroke(Color.WHITE);
+      reactiveGc.setLineWidth(1);
+      reactiveGc.strokeLine(0, lineY, contentRight, lineY);
+
+      reactiveGc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+      javafx.scene.text.Text measure = new javafx.scene.text.Text(displayName);
+      measure.setFont(reactiveGc.getFont());
+      double textWidth = measure.getLayoutBounds().getWidth() + 10;
+      double labelTop = Math.max(0, lineY - 16);
+      reactiveGc.setFill(Color.rgb(0, 0, 0, 0.72));
+      reactiveGc.fillRoundRect(2, labelTop, Math.min(contentRight - 4, Math.max(24, textWidth)), 15, 3, 3);
+      reactiveGc.setFill(Color.WHITE);
+      reactiveGc.fillText(displayName, 6, labelTop + 12);
+
+      // Compact file summary on the hover chip when squeezed.
+      List<Sample> samples = sampleTrack.getSamples();
+      if (!samples.isEmpty()) {
+        String summary = samples.stream()
+            .limit(2)
+            .map(s -> s.getDataType().name() + ": " + s.getName())
+            .reduce((a, b) -> a + "  ·  " + b)
+            .orElse("");
+        if (samples.size() > 2) {
+          summary += "  +" + (samples.size() - 2);
+        }
+        reactiveGc.setFont(Font.font("Segoe UI", 9));
+        reactiveGc.setFill(Color.rgb(200, 210, 220, 0.92));
+        reactiveGc.fillText(summary, 6, Math.min(panelHeightPixels - 4, labelTop + 26));
+      }
+      return;
+    }
+
+    reactiveGc.setFill(Color.rgb(255, 255, 255, 0.85));
+    reactiveGc.fillRect(0, Math.max(rowY, 0), SIDE_BAR_WIDTH, rowHeight);
     if (hoveredIcon != null) {
       drawIconGlow(hoveredIcon, hoverIndex);
-    }
-  }
-
-  private void drawSampleButtons(
-      int backingTrackIndex, double rowY, double rowHeight, double availableWidth,
-      boolean trackVisible, boolean hasSuspendedSamples) {
-    gc.setFont(ICON_FONT);
-    double closeX = availableWidth - ICON_SIZE - ICON_MARGIN;
-    double closeY = rowY + ICON_MARGIN;
-    gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRoundRect(closeX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
-    gc.setFill(Color.web("#cc6666"));
-    gc.fillText("✕", closeX + 1, closeY + ICON_SIZE - 3);
-    addIconRegion(
-        backingTrackIndex, "close", closeX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
-
-    double settingsX = closeX - ICON_SIZE - ICON_MARGIN;
-    gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRoundRect(settingsX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
-    gc.setFill(trackVisible ? Color.web("#cccccc") : Color.web("#666666"));
-    gc.fillText("⚙", settingsX + 1, closeY + ICON_SIZE - 3);
-    addIconRegion(
-        backingTrackIndex, "settings", settingsX - 1, closeY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
-
-    double addX = ICON_MARGIN;
-    double addY = rowY + rowHeight - ICON_SIZE - ICON_MARGIN;
-    gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRoundRect(addX - 1, addY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
-    gc.setFill(Color.web("#88bb88"));
-    gc.fillText("+", addX + 2, addY + ICON_SIZE - 3);
-    addIconRegion(
-        backingTrackIndex, "add", addX - 1, addY - 1, ICON_SIZE + 2, ICON_SIZE + 2);
-
-    if (hasSuspendedSamples) {
-      double reloadX = availableWidth - ICON_SIZE - ICON_MARGIN;
-      gc.setFill(Color.web("#3c3c3c"));
-      gc.fillRoundRect(reloadX - 1, addY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
-      gc.setFont(ICON_FONT);
-      gc.setFill(Color.web("#ff9944"));
-      gc.fillText("\u21ba", reloadX, addY + ICON_SIZE - 3);
     }
   }
 

@@ -1,7 +1,11 @@
 package org.baseplayer.components.sidebars;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
+import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.services.TrackViewportRegistry;
 
@@ -41,19 +45,14 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       boolean canReload,
       int firstVisible,
       int lastVisible,
-      boolean settingsHovered,
-      boolean reloadHovered,
-      boolean addHovered,
+      String hoveredControlId,
       boolean highlightRangeLabel) {
     public static MasterHeaderRenderState empty() {
-      return new MasterHeaderRenderState(
-          0, false, false, 0, 0, false, false, false, false);
+      return new MasterHeaderRenderState(0, false, false, 0, 0, null, false);
     }
   }
 
   protected static final double EXPANDED_MASTER_HEIGHT = 82;
-  protected static final double HEADER_BTN_SIZE = 18;
-  protected static final double HEADER_BTN_LEFT_X = 4;
 
   protected final TrackViewportRegistry trackViewportRegistry;
   protected final Canvas masterHeaderCanvas;
@@ -68,9 +67,8 @@ public abstract class TrackColumnSidebar extends SidebarBase {
   private double dragStartScreenY;
   private double dragStartHeight;
 
-  private boolean settingsHovered;
-  private boolean addHovered;
-  private boolean reloadHovered;
+  private final List<SampleTrackControls.Hit> masterControlHits = new ArrayList<>();
+  private String hoveredMasterControlId;
   private boolean rangeLabelHovered;
 
   private boolean draggingRangeStart;
@@ -237,22 +235,6 @@ public abstract class TrackColumnSidebar extends SidebarBase {
         masterHeaderCanvas.getHeight());
   }
 
-  protected static double headerBtnSize() {
-    return HEADER_BTN_SIZE;
-  }
-
-  protected static double headerBtnLeftX() {
-    return HEADER_BTN_LEFT_X;
-  }
-
-  protected static double reloadBtnX(double canvasWidth) {
-    return canvasWidth - 2 * (HEADER_BTN_SIZE + 4);
-  }
-
-  protected static boolean inHeaderBtn(double mx, double my, double bx, double by) {
-    return mx >= bx && mx <= bx + HEADER_BTN_SIZE && my >= by && my <= by + HEADER_BTN_SIZE;
-  }
-
   private void ensureMenusInitialized() {
     if (addTrackMenu == null) {
       addTrackMenu = buildAddTrackMenu();
@@ -288,9 +270,7 @@ public abstract class TrackColumnSidebar extends SidebarBase {
         canShowReloadButton(),
         firstVisible,
         lastVisible,
-        settingsHovered,
-        reloadHovered,
-        addHovered,
+        hoveredMasterControlId,
         rangeLabelHovered && highlightRangeLabelOnHover());
   }
 
@@ -316,53 +296,46 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     double edgeZone = masterHeaderCanvas.getHeight() - 4;
     boolean inResizeZone = event.getY() >= edgeZone;
     boolean overRangeHandle = isControlsExpanded() && isOverRangeHandle(event.getX(), event.getY());
-    masterHeaderReactiveCanvas.setCursor(
-        inResizeZone ? Cursor.V_RESIZE : (overRangeHandle ? Cursor.H_RESIZE : Cursor.DEFAULT));
+    SampleTrackControls.Hit controlHit =
+        SampleTrackControls.findHit(masterControlHits, event.getX(), event.getY());
+    if (inResizeZone) {
+      masterHeaderReactiveCanvas.setCursor(Cursor.V_RESIZE);
+    } else if (overRangeHandle) {
+      masterHeaderReactiveCanvas.setCursor(Cursor.H_RESIZE);
+    } else if (controlHit != null) {
+      masterHeaderReactiveCanvas.setCursor(Cursor.HAND);
+    } else {
+      masterHeaderReactiveCanvas.setCursor(Cursor.DEFAULT);
+    }
 
-    boolean prevSettings = settingsHovered;
-    boolean prevAdd = addHovered;
-    boolean prevReload = reloadHovered;
+    String prevHovered = hoveredMasterControlId;
     boolean prevRangeLabelHover = rangeLabelHovered;
 
     if (inResizeZone) {
-      settingsHovered = false;
-      addHovered = false;
-      reloadHovered = false;
+      hoveredMasterControlId = null;
       rangeLabelHovered = false;
     } else if (event.getY() <= headerBarHeight()) {
-      double sy = (headerBarHeight() - headerBtnSize()) / 2;
-      settingsHovered = inHeaderBtn(event.getX(), event.getY(), headerBtnLeftX(), sy);
-      reloadHovered = canShowReloadButton()
-          && inHeaderBtn(event.getX(), event.getY(), reloadBtnX(masterHeaderCanvas.getWidth()), sy);
-      addHovered = inHeaderBtn(
-          event.getX(), event.getY(),
-          masterHeaderCanvas.getWidth() - headerBtnSize() - 4, sy);
+      hoveredMasterControlId = controlHit != null ? controlHit.id() : null;
       rangeLabelHovered = false;
     } else {
-      settingsHovered = false;
-      addHovered = false;
-      reloadHovered = false;
+      hoveredMasterControlId = null;
       rangeLabelHovered = isControlsExpanded()
           && rangeLabelHit != null
           && rangeLabelHit.contains(event.getX(), event.getY());
     }
 
-    if (prevSettings != settingsHovered
-        || prevAdd != addHovered
-        || prevReload != reloadHovered
+    if (!java.util.Objects.equals(prevHovered, hoveredMasterControlId)
         || prevRangeLabelHover != rangeLabelHovered) {
-      drawMasterHeaderHover(rangeLabelHit);
+      drawMasterHeader();
     }
   }
 
   private void handleMasterMouseExited(MouseEvent event) {
     masterHeaderReactiveCanvas.setCursor(Cursor.DEFAULT);
-    if (settingsHovered || addHovered || reloadHovered || rangeLabelHovered) {
-      settingsHovered = false;
-      addHovered = false;
-      reloadHovered = false;
+    if (hoveredMasterControlId != null || rangeLabelHovered) {
+      hoveredMasterControlId = null;
       rangeLabelHovered = false;
-      drawMasterHeaderHover(rangeLabelHit);
+      drawMasterHeader();
     }
   }
 
@@ -448,18 +421,14 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       return;
     }
 
-    double sy = (headerBarHeight() - headerBtnSize()) / 2;
-    if (inHeaderBtn(x, y, headerBtnLeftX(), sy)) {
-      onSettingsClicked(screenX, screenY);
-      return;
-    }
-    if (canShowReloadButton()
-        && inHeaderBtn(x, y, reloadBtnX(masterHeaderCanvas.getWidth()), sy)) {
-      onReloadButtonClicked();
-      return;
-    }
-    if (inHeaderBtn(x, y, masterHeaderCanvas.getWidth() - headerBtnSize() - 4, sy)) {
-      onAddClicked(screenX, screenY);
+    SampleTrackControls.Hit controlHit = SampleTrackControls.findHit(masterControlHits, x, y);
+    if (controlHit != null) {
+      switch (controlHit.id()) {
+        case "settings" -> onSettingsClicked(screenX, screenY);
+        case "add" -> onAddClicked(screenX, screenY);
+        case "reload" -> onReloadButtonClicked();
+        default -> { }
+      }
       return;
     }
 
@@ -656,15 +625,11 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     GraphicsContext gc = masterHeaderCanvas.getGraphicsContext2D();
     double headerBarH = Math.min(
         TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS, h);
-    SidebarBase.drawStandardHeader(gc, w, headerBarH, getTitle(), trackCount);
+    SidebarBase.drawStandardHeader(gc, w, headerBarH, getTitle(), trackCount, false);
 
-    if (masterHeaderRenderState.canReload()) {
-      double sy = (headerBarH - HEADER_BTN_SIZE) / 2;
-      double reloadX = reloadBtnX(w);
-      gc.setFont(Font.font("Segoe UI Symbol", 14));
-      gc.setFill(Color.web("#ff9944"));
-      gc.fillText("\u21ba", reloadX + 1, sy + HEADER_BTN_SIZE - 3);
-    }
+    masterControlHits.clear();
+    masterControlHits.addAll(SampleTrackControls.drawMaster(
+        gc, w, headerBarH, masterHeaderRenderState.canReload(), hoveredMasterControlId));
 
     ExpandedControlsRenderResult expandedResult =
         new ExpandedControlsRenderResult(null, null, null);
@@ -745,30 +710,10 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     double h = masterHeaderReactiveCanvas.getHeight();
     reactiveGc.clearRect(0, 0, w, h);
 
-    double headerBarH = Math.min(
-        TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
-        masterHeaderCanvas.getHeight());
-
     if (rangeLabelHovered && highlightRangeLabelOnHover() && rangeLabelHit != null) {
       reactiveGc.setFill(Color.rgb(255, 165, 0, 0.2));
       reactiveGc.fillRect(
           rangeLabelHit.x(), rangeLabelHit.y(), rangeLabelHit.w(), rangeLabelHit.h());
-    }
-
-    double sy = (headerBarH - HEADER_BTN_SIZE) / 2;
-    if (settingsHovered) {
-      reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
-      reactiveGc.fillRoundRect(HEADER_BTN_LEFT_X, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
-    }
-    if (reloadHovered && canShowReloadButton()) {
-      double rx = w - 2 * (HEADER_BTN_SIZE + 4);
-      reactiveGc.setFill(Color.rgb(255, 165, 30, 0.25));
-      reactiveGc.fillRoundRect(rx, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
-    }
-    if (addHovered) {
-      double plusX = w - HEADER_BTN_SIZE - 4;
-      reactiveGc.setFill(Color.rgb(255, 255, 255, 0.15));
-      reactiveGc.fillRoundRect(plusX, sy, HEADER_BTN_SIZE, HEADER_BTN_SIZE, 4, 4);
     }
   }
 }

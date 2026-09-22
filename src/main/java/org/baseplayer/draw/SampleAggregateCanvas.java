@@ -23,8 +23,8 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
     super(reactiveCanvas, parent, drawStack,
         ServiceRegistry.getInstance().getSampleRegistry().masterTrackHeightProperty());
     this.coverageDrawer = coverageDrawer;
-    this.painter = new MasterTrackPainter(coverageDrawer, () ->
-        GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+    // Density completion only repaints this band — not the full canvas stack.
+    this.painter = new MasterTrackPainter(coverageDrawer, this::draw);
   }
 
   public CoverageDrawer getCoverageDrawer() {

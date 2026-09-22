@@ -70,7 +70,9 @@ public abstract class SidebarContentPanel {
     reactiveCanvas.setOnMouseMoved(event -> {
       int previousRow = hoverIndex;
       String previousIcon = hoveredIcon;
-      int currentRow = findRowAt(event.getY());
+      int currentRow = suppressRowHover(event.getX(), event.getY())
+          ? -1
+          : findRowAt(event.getY());
 
       if (currentRow != previousRow) {
         hoverIndex = currentRow;
@@ -96,6 +98,14 @@ public abstract class SidebarContentPanel {
         drawReactive();
       }
     });
+  }
+
+  /**
+   * When true, mouse movement at (x, y) should not highlight a row
+   * (e.g. while over a scrollbar).
+   */
+  protected boolean suppressRowHover(double x, double y) {
+    return false;
   }
 
   /** Hook for side effects when hovered row changes (default: no-op). */

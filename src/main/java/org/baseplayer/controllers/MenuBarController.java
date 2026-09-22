@@ -46,6 +46,7 @@ import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
+import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import javafx.stage.Popup;
@@ -65,6 +66,7 @@ public class MenuBarController {
   @FXML private Button redoButton;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
+  @FXML private Button variantManagerButton;
   @FXML private Button copyPositionButton;
   @FXML private Button themeToggleButton;
   private NavigationUndoComponent navigationUndo;
@@ -73,9 +75,11 @@ public class MenuBarController {
   private FontIcon zoomInIcon;
   private FontIcon zoomOutIcon;
   private FontIcon themeToggleIcon;
+  private FontIcon variantManagerIcon;
   private static final Color ZOOM_IN_ACTIVE = Color.web("#709076");  // Slight green
   private static final Color ZOOM_OUT_ACTIVE = Color.web("#b68454"); // Slight orange
   private static final Color ZOOM_DISABLED = Color.web("#555555");   // Gray
+  private static final Color VARIANT_MANAGER_ICON = Color.web("#8ab4c8");
   
   private static MenuBarController instance;
   private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
@@ -110,6 +114,7 @@ public class MenuBarController {
     installPositionFieldDefocusHandler();
     navigationUndo = new NavigationUndoComponent(undoButton, redoButton);
     setupZoomButtons();
+    setupVariantManagerButton();
     setupThemeToggleButton();
     refreshRecentFilesMenu();
     
@@ -502,6 +507,51 @@ public class MenuBarController {
     zoomOutIcon.setIconColor(ZOOM_OUT_ACTIVE);
     zoomOutButton.setText("");
     zoomOutButton.setGraphic(zoomOutIcon);
+  }
+
+  private void setupVariantManagerButton() {
+    if (variantManagerButton == null) {
+      return;
+    }
+    variantManagerIcon = new FontIcon(FontAwesomeSolid.TABLE);
+    variantManagerIcon.setIconSize(13);
+    variantManagerIcon.setIconColor(VARIANT_MANAGER_ICON);
+    variantManagerButton.setText("Variant Manager");
+    variantManagerButton.setGraphic(variantManagerIcon);
+    variantManagerButton.setContentDisplay(javafx.scene.control.ContentDisplay.LEFT);
+    variantManagerButton.setGraphicTextGap(6);
+    variantManagerButton.setStyle("-fx-font-size: 12px; -fx-font-weight: bold;");
+    variantManagerButton.setMinWidth(Region.USE_PREF_SIZE);
+    if (MainApp.stage != null) {
+      MainApp.stage.focusedProperty().addListener((obs, o, n) -> updateVariantManagerButtonVisibility());
+    }
+    updateVariantManagerButtonVisibility();
+  }
+
+  public static void updateVariantManagerButtonVisibility() {
+    if (instance == null || instance.variantManagerButton == null) {
+      return;
+    }
+    Runnable apply = () -> {
+      boolean show = org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton();
+      instance.variantManagerButton.setVisible(show);
+      instance.variantManagerButton.setManaged(show);
+    };
+    if (Platform.isFxApplicationThread()) {
+      apply.run();
+    } else {
+      Platform.runLater(apply);
+    }
+  }
+
+  @FXML
+  private void openVariantManager() {
+    if (org.baseplayer.variant.ui.MinimizedVariantManagerWindow.isMinimized()) {
+      org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleExpand();
+    } else {
+      org.baseplayer.variant.ui.VariantManagerWindow.bringToFrontOrOpen();
+    }
+    updateVariantManagerButtonVisibility();
   }
 
   private void setupThemeToggleButton() {

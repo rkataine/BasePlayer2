@@ -15,6 +15,8 @@ public abstract class TrackListPanel extends SidebarContentPanel {
 
   private static final double TRACK_SCROLLBAR_WIDTH = 8;
   private static final double TRACK_SCROLLBAR_MARGIN = 3;
+  /** Clear space between row content / names and the scrollbar track. */
+  private static final double TRACK_SCROLLBAR_CONTENT_GAP = 8;
   private static final double TRACK_SCROLLBAR_MINIMUM_THUMB_HEIGHT = 18;
   private static final long SCROLL_ANIMATION_DURATION_NANOSECONDS = 180_000_000L;
   private static final DoubleUnaryOperator EASE_OUT_CUBIC =
@@ -82,7 +84,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
 
   protected final double getRightUiInsetPixels() {
     return trackScrollbarVisible
-        ? TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN + 2
+        ? TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN + TRACK_SCROLLBAR_CONTENT_GAP
         : 0;
   }
 
@@ -147,8 +149,14 @@ public abstract class TrackListPanel extends SidebarContentPanel {
   }
 
   private void setupMouseTracking() {
-    reactiveCanvas.addEventHandler(MouseEvent.MOUSE_ENTERED, event -> mouseOverTrackList = true);
-    reactiveCanvas.addEventHandler(MouseEvent.MOUSE_EXITED, event -> mouseOverTrackList = false);
+    reactiveCanvas.addEventHandler(MouseEvent.MOUSE_ENTERED, event -> {
+      mouseOverTrackList = true;
+      trackViewportRegistry.setListPointerInside(true);
+    });
+    reactiveCanvas.addEventHandler(MouseEvent.MOUSE_EXITED, event -> {
+      mouseOverTrackList = false;
+      trackViewportRegistry.setListPointerInside(false);
+    });
   }
 
   private void setupScrollAndClickHandlers() {
@@ -553,33 +561,45 @@ public abstract class TrackListPanel extends SidebarContentPanel {
     if (!trackScrollbarVisible) {
       return;
     }
-    gc.setFill(Color.rgb(120, 120, 120, 0.26));
+
+    // Opaque strip so long sample/feature names never show through the thin bar.
+    double stripX = trackScrollbarX - TRACK_SCROLLBAR_CONTENT_GAP;
+    double stripW = TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN + TRACK_SCROLLBAR_CONTENT_GAP;
+    gc.setFill(DrawColors.SIDEBAR);
+    gc.fillRect(stripX, trackScrollbarTop, stripW, trackScrollbarHeight);
+
+    gc.setFill(Color.rgb(70, 70, 70, 0.95));
     gc.fillRoundRect(trackScrollbarX, trackScrollbarTop,
         TRACK_SCROLLBAR_WIDTH, trackScrollbarHeight, 4, 4);
-    gc.setFill(Color.rgb(225, 225, 225, 0.82));
+    gc.setFill(Color.rgb(210, 210, 210, 0.9));
     gc.fillRoundRect(trackScrollbarX, trackScrollbarThumbY,
         TRACK_SCROLLBAR_WIDTH, trackScrollbarThumbHeight, 4, 4);
 
     double centerX = trackScrollbarX + TRACK_SCROLLBAR_WIDTH * 0.5;
     double middleY = trackScrollbarThumbY + trackScrollbarThumbHeight * 0.5;
-    gc.setStroke(Color.rgb(60, 60, 60, 0.82));
+    gc.setStroke(Color.rgb(50, 50, 50, 0.9));
     gc.strokeLine(centerX - 2, middleY - 3, centerX + 2, middleY - 3);
     gc.strokeLine(centerX - 2, middleY, centerX + 2, middleY);
     gc.strokeLine(centerX - 2, middleY + 3, centerX + 2, middleY + 3);
   }
 
+  @Override
+  protected boolean suppressRowHover(double x, double y) {
+    return trackScrollbarDragging || isPointInTrackScrollbar(x, y);
+  }
+
   private boolean isPointInTrackScrollbar(double x, double y) {
     return trackScrollbarVisible
-        && x >= trackScrollbarX - 1
-        && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + 1
+        && x >= trackScrollbarX - TRACK_SCROLLBAR_CONTENT_GAP
+        && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN
         && y >= trackScrollbarTop
         && y <= trackScrollbarTop + trackScrollbarHeight;
   }
 
   private boolean isPointInTrackScrollbarThumb(double x, double y) {
     return trackScrollbarVisible
-        && x >= trackScrollbarX - 1
-        && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + 1
+        && x >= trackScrollbarX - TRACK_SCROLLBAR_CONTENT_GAP
+        && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN
         && y >= trackScrollbarThumbY
         && y <= trackScrollbarThumbY + trackScrollbarThumbHeight;
   }

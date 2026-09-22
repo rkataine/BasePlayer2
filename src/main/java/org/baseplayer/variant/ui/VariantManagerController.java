@@ -2,6 +2,7 @@ package org.baseplayer.variant.ui;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.gene.GeneLocation;
@@ -1311,7 +1312,7 @@ public class VariantManagerController implements Initializable {
     }
 
     private void handleHostWindowStateChanged() {
-        // In-window overlay stays with the Variant Manager scene; do not hide it on focus changes.
+        MenuBarController.updateVariantManagerButtonVisibility();
     }
 
     private void completeAllChromosomeAnnotation(VcfManager.AllChromosomeAnnotationResult result) {

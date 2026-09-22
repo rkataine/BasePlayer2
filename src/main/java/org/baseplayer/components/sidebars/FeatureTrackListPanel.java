@@ -151,12 +151,17 @@ public class FeatureTrackListPanel extends TrackListPanel {
         backingTrackIndex, "settings", settingsX, eyeY, ICON_SIZE, ICON_SIZE);
 
     double textX = settingsX + ICON_SIZE + ICON_PADDING + 2;
+    gc.save();
+    gc.beginPath();
+    gc.rect(0, Math.max(rowY, 0), availableWidth, rowHeight);
+    gc.clip();
     gc.setFill(trackVisible ? Color.web("#cccccc") : Color.web("#666666"));
     gc.setFont(AppFonts.getUIFont(9));
     gc.fillText(track.getName(), textX, rowY + 12);
     gc.setFill(trackVisible ? Color.web("#888888") : Color.web("#555555"));
     gc.setFont(AppFonts.getUIFont(8));
     gc.fillText(track.getType(), textX, rowY + 22);
+    gc.restore();
 
     double removeX = Math.max(
         availableWidth - ICON_SIZE - ICON_PADDING, textX + 20);
@@ -189,12 +194,19 @@ public class FeatureTrackListPanel extends TrackListPanel {
     }
 
     reactiveGc.setFill(Color.rgb(255, 255, 255, 0.05));
-    reactiveGc.fillRect(0, Math.max(rowY, 0), panelWidthPixels, rowHeight);
+    reactiveGc.fillRect(0, Math.max(rowY, 0),
+        panelWidthPixels - getRightUiInsetPixels(), rowHeight);
     double textX =
         ICON_PADDING + ICON_SIZE + ICON_PADDING + ICON_SIZE + ICON_PADDING + 2;
+    reactiveGc.save();
+    reactiveGc.beginPath();
+    reactiveGc.rect(0, Math.max(rowY, 0),
+        panelWidthPixels - getRightUiInsetPixels(), rowHeight);
+    reactiveGc.clip();
     reactiveGc.setFill(Color.WHITE);
     reactiveGc.setFont(AppFonts.getUIFont(9));
     reactiveGc.fillText(hoveredTrack.getName(), textX, rowY + 12);
+    reactiveGc.restore();
 
     if (hoveredIcon != null) {
       IconRegion region = findIconRegion(hoveredIcon, hoverIndex);

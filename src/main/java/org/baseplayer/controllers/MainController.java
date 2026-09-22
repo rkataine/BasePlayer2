@@ -3,12 +3,14 @@ package org.baseplayer.controllers;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.components.sidebars.FeatureTrackColumnSidebar;
 import org.baseplayer.components.sidebars.GenomeSidebar;
 import org.baseplayer.components.sidebars.SampleTrackColumnSidebar;
 import org.baseplayer.components.sidebars.SidebarController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.draw.ZoomController;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.project.ProjectDocument;
@@ -89,7 +91,7 @@ public class MainController {
   private static Canvas sharedCrossStackOverlayCanvas;
   private static GraphicsContext sharedCrossStackOverlayGc;
   private static Object crossStackOverlayOwner;
-  
+
   public MainController() {
     // Initialize services from registry
     this.initializationService = new InitializationService();
@@ -116,6 +118,8 @@ public class MainController {
       sidebarController.addPane(drawSplit);
 
       setupCrossStackOverlay();
+      ZoomController.installGlass(mainSplit);
+      SampleTrackControls.installGlassOverlay();
       
       addStack(true);  // Real DrawStack before sidebars that resolve stacks from manager
 

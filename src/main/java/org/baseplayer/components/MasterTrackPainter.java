@@ -1,9 +1,12 @@
 package org.baseplayer.components;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.draw.CoverageDrawer;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -50,7 +53,8 @@ public class MasterTrackPainter {
 
   private volatile List<SvSpan> densitySvSpans = java.util.List.of();
 
-  private volatile boolean wasZoomingLastFrame = false;
+  /** True while zoom or pan was deferring density last paint frame. */
+  private volatile boolean wasDeferringDensityLastFrame = false;
 
   public MasterTrackPainter(CoverageDrawer coverageDrawer, Runnable redrawCallback) {
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
@@ -224,30 +228,22 @@ public class MasterTrackPainter {
     org.baseplayer.io.VcfManager vcfMgr = org.baseplayer.io.VcfManager.getInstance();
     int currentFilterGen = vcfMgr.getFilterGeneration();
     
-    // Detect zoom state: line zoom (right-drag) or animation zoom (mouse wheel)
+    // Defer bin recompute while zooming/panning, or when zoomed in (precise path
+    // paints live alleles and does not need the coarse bin cache).
     boolean isZoomingNow = drawStack.nav.lineZoomerActive || drawStack.nav.animationRunning;
+    boolean zoomedInPrecise = drawStack.getPixelSize() > 1.0;
+    boolean deferDensity = isZoomingNow || drawStack.nav.navigating || zoomedInPrecise;
     
-    // If zoom just ended, force cache invalidation for fresh recalculation
-    boolean zoomJustEnded = wasZoomingLastFrame && !isZoomingNow;
-    if (zoomJustEnded) {
-      densityCached = null;
-      densitySnv = null;
-      densityIndel = null;
-      densityDel = null;
-      densityInv = null;
-      densityDup = null;
-      densityIns = null;
-      densityTra = null;
-      densityBnd = null;
-      densitySvSpans = java.util.List.of();
+    // When interaction ends, invalidate cache coords so the next frame recomputes,
+    // but keep last density arrays so the master band does not flash blank.
+    boolean interactionJustEnded = wasDeferringDensityLastFrame && !deferDensity;
+    if (interactionJustEnded) {
       densityCachedStart = -1;
       densityCachedEnd = -1;
       densityBusy = false;
     }
     
-    // Skip recalculation while zooming - just display existing graphics (they're visually stretched by zoom)
-    // Only do cache checks when NOT actively zooming
-    if (!isZoomingNow) {
+    if (!deferDensity) {
       boolean filterChanged = currentFilterGen != densityFilterGeneration;
       boolean viewChanged = densityCachedStart < 0
           || densityCachedEnd < 0
@@ -260,23 +256,30 @@ public class MasterTrackPainter {
       }
     }
     
-    // Update zoom state for next frame
-    wasZoomingLastFrame = isZoomingNow;
+    wasDeferringDensityLastFrame = deferDensity;
 
     double areaH = masterTrackHeight - 4;
     double svH = densitySvSpans.isEmpty() ? 0 : Math.min(10, areaH * 0.22);
     double densH = areaH - svH;
 
-    boolean hasDensityData = densitySnv != null
-        || densityIndel != null
-        || densityDel != null
-        || densityInv != null
-        || densityDup != null
-        || densityIns != null
-        || densityTra != null
-        || densityBnd != null;
-    if (hasDensityData) {
-      drawDensityBars(gc, drawStack, canvasWidth, 2, densH);
+    double pixelSize = drawStack.getPixelSize();
+    if (pixelSize > 1.0) {
+      // Zoomed in: paint exact allele-aligned bars from the live filter chain.
+      drawPreciseDensityBars(
+          gc, drawStack, canvasWidth, 2, densH, variants,
+          org.baseplayer.io.VcfManager.getInstance().getCurrentFilter());
+    } else {
+      boolean hasDensityData = densitySnv != null
+          || densityIndel != null
+          || densityDel != null
+          || densityInv != null
+          || densityDup != null
+          || densityIns != null
+          || densityTra != null
+          || densityBnd != null;
+      if (hasDensityData) {
+        drawDensityBars(gc, drawStack, canvasWidth, 2, densH);
+      }
     }
     if (svH >= 4) {
       drawSvSpanBars(gc, drawStack, canvasWidth, 2 + densH, svH);
@@ -304,6 +307,20 @@ public class MasterTrackPainter {
     final double viewEnd = drawStack.getViewEnd();
     final List<Integer> aggregateTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     final VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
+
+    // Snapshot displayed track identity → live index once (no indexOf in the per-node loop).
+    final Map<SampleTrack, Integer> displayedTrackToIndex = new IdentityHashMap<>(
+        Math.max(16, aggregateTrackIndices.size() * 2));
+    List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
+    for (int idx : aggregateTrackIndices) {
+      if (idx < 0 || idx >= allTracks.size()) {
+        continue;
+      }
+      SampleTrack track = allTracks.get(idx);
+      if (track != null) {
+        displayedTrackToIndex.put(track, idx);
+      }
+    }
 
     Thread t = new Thread(() -> {
       try {
@@ -338,7 +355,7 @@ public class MasterTrackPainter {
             continue;
           }
           accumulateDensityNode(
-              node, activeFilter, aggregateTrackIndices, viewStart, viewEnd, viewLen,
+              node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
               snvBySample, indelBySample, delBySample, invBySample, dupBySample,
               insBySample, traBySample, bndBySample, spans, true);
         }
@@ -348,7 +365,7 @@ public class MasterTrackPainter {
         VariantNode node = densitySeek.seek(variants, (long) viewStart);
         while (node != null && node.position <= viewEnd) {
           accumulateDensityNode(
-              node, activeFilter, aggregateTrackIndices, viewStart, viewEnd, viewLen,
+              node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
               snvBySample, indelBySample, delBySample, invBySample, dupBySample,
               insBySample, traBySample, bndBySample, spans, false);
           node = node.nextVisible;
@@ -419,16 +436,17 @@ public class MasterTrackPainter {
           boolean viewportShifted = Math.abs(drawStack.getViewStart() - viewStart) > currentViewLen * 0.05
               || Math.abs(drawStack.getViewEnd() - viewEnd) > currentViewLen * 0.05;
           if (viewportShifted) {
-            densitySnv = null;
-            densityIndel = null;
-            densityDel = null;
-            densityInv = null;
-            densityDup = null;
-            densityIns = null;
-            densityTra = null;
-            densityBnd = null;
-            densitySvSpans = java.util.List.of();
-            triggerVariantDensityCompute(variantList, drawStack);
+            // Keep the just-published bars (stretch-rendered) and schedule one recompute
+            // unless the user is still navigating/zooming.
+            boolean stillDeferring = drawStack.nav.navigating
+                || drawStack.nav.lineZoomerActive
+                || drawStack.nav.animationRunning;
+            if (!stillDeferring && variantList != null && !variantList.isEmpty()) {
+              densityCachedStart = -1;
+              densityCachedEnd = -1;
+              triggerVariantDensityCompute(variantList, drawStack);
+            }
+            redrawCallback.run();
             return;
           }
 
@@ -447,7 +465,7 @@ public class MasterTrackPainter {
   private void accumulateDensityNode(
       VariantNode node,
       VariantFilter activeFilter,
-      List<Integer> aggregateTrackIndices,
+      Map<SampleTrack, Integer> displayedTrackToIndex,
       double viewStart,
       double viewEnd,
       double viewLen,
@@ -462,11 +480,22 @@ public class MasterTrackPainter {
       List<SvSpan> spans,
       boolean treatAsSvSpan) {
     List<Integer> passingIndices = new ArrayList<>();
-    for (int idx : aggregateTrackIndices) {
-      VariantNode.SampleCall call = node.getSampleCall(idx);
-      if (call != null && (activeFilter == null || activeFilter.passesSampleThresholds(node, call))) {
-        passingIndices.add(idx);
+    for (VariantNode.SampleCall call : node.getSamples()) {
+      if (call == null) {
+        continue;
       }
+      SampleTrack track = call.getTrack();
+      if (track == null) {
+        continue;
+      }
+      Integer idx = displayedTrackToIndex.get(track);
+      if (idx == null) {
+        continue;
+      }
+      if (activeFilter != null && !activeFilter.passesSampleThresholds(node, call)) {
+        continue;
+      }
+      passingIndices.add(idx);
     }
     if (passingIndices.isEmpty()) {
       return;
@@ -535,6 +564,135 @@ public class MasterTrackPainter {
         }
       }
     }
+  }
+
+  /**
+   * Zoomed-in density: one bar per allele at exact genomic width (matches sample-track
+   * variant rectangles). Avoids stretched 600-bin sampling which looks glitchy/laggy.
+   */
+  private void drawPreciseDensityBars(
+      GraphicsContext gc,
+      DrawStack drawStack,
+      double canvasWidth,
+      double top,
+      double h,
+      VariantList variants,
+      VariantFilter activeFilter) {
+    if (variants == null || variants.isEmpty() || h <= 0 || canvasWidth <= 0) {
+      return;
+    }
+
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    if (displayed.isEmpty()) {
+      return;
+    }
+
+    Map<SampleTrack, Integer> displayedTrackToIndex = new IdentityHashMap<>(displayed.size() * 2);
+    List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
+    for (int idx : displayed) {
+      if (idx < 0 || idx >= allTracks.size()) {
+        continue;
+      }
+      SampleTrack track = allTracks.get(idx);
+      if (track != null) {
+        displayedTrackToIndex.put(track, idx);
+      }
+    }
+
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double pixelSize = drawStack.getPixelSize();
+    double maxBarH = h - 1;
+    int maxC = Math.max(1, displayedTrackToIndex.size());
+
+    variants.ensureVisibleChain(activeFilter);
+
+    record PreciseBar(double x, double w, int count, String color, double alpha) {}
+    List<PreciseBar> bars = new ArrayList<>();
+
+    java.util.function.Consumer<VariantNode> collect = node -> {
+      int count = 0;
+      for (VariantNode.SampleCall call : node.getSamples()) {
+        if (call == null || call.getTrack() == null) {
+          continue;
+        }
+        if (!displayedTrackToIndex.containsKey(call.getTrack())) {
+          continue;
+        }
+        if (activeFilter != null && !activeFilter.passesSampleThresholds(node, call)) {
+          continue;
+        }
+        count++;
+      }
+      if (count <= 0) {
+        return;
+      }
+
+      long g0 = node.position;
+      long g1 = org.baseplayer.variant.draw.VariantDrawer.alleleEndExclusive(node);
+      if (node.svEnd > node.position
+          && (node.type == VcfVariantType.SV_DELETION
+              || node.type == VcfVariantType.SV_INSERTION
+              || node.type == VcfVariantType.SV_DUPLICATION
+              || node.type == VcfVariantType.SV_INVERSION)) {
+        g1 = node.svEnd;
+      }
+      if (g1 <= viewStart || g0 > viewEnd) {
+        return;
+      }
+
+      double x1 = (g0 - viewStart) * pixelSize;
+      double x2 = (g1 - viewStart) * pixelSize;
+      double x = Math.max(0, Math.min(x1, x2));
+      double w = Math.min(canvasWidth, Math.max(x1, x2)) - x;
+      if (w < 1) {
+        w = 1;
+      }
+
+      String color;
+      double alpha;
+      switch (node.type) {
+        case SNV -> { color = "#ff6666"; alpha = 0.55; }
+        case INSERTION, DELETION, MNV -> { color = "#ffaa44"; alpha = 0.55; }
+        case SV_DELETION -> { color = "#00cc44"; alpha = 0.65; }
+        case SV_INVERSION -> { color = "#4488ff"; alpha = 0.65; }
+        case SV_DUPLICATION -> { color = "#c0c0d0"; alpha = 0.65; }
+        case SV_INSERTION -> { color = "#33cc66"; alpha = 0.65; }
+        case SV_TRANSLOCATION -> { color = "#ffdd00"; alpha = 0.65; }
+        case SV_BREAKEND -> { color = "#c0c0c0"; alpha = 0.65; }
+        default -> { color = "#ffaa44"; alpha = 0.5; }
+      }
+      bars.add(new PreciseBar(x, w, count, color, alpha));
+    };
+
+    for (VariantNode node : variants.getVisibleSvByPosition()) {
+      if (node.position >= viewStart) {
+        break;
+      }
+      if (node.svEnd < viewStart || node.position > viewEnd) {
+        continue;
+      }
+      collect.accept(node);
+    }
+
+    VariantDrawSeek seek = new VariantDrawSeek();
+    VariantNode node = seek.seek(variants, (long) viewStart);
+    while (node != null && node.position <= viewEnd) {
+      collect.accept(node);
+      node = node.nextVisible;
+    }
+
+    double bottom = top + h;
+    for (PreciseBar bar : bars) {
+      double bh = maxBarH * (double) bar.count() / maxC;
+      if (bh < 1) {
+        bh = 1;
+      }
+      gc.setFill(Color.web(bar.color(), bar.alpha()));
+      gc.fillRect(bar.x(), bottom - bh, bar.w(), bh);
+    }
+
+    drawDensityScale(gc, canvasWidth - 38, top, h, maxC);
   }
 
   private void drawDensityBars(

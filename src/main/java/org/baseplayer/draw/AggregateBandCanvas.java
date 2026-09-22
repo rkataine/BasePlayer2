@@ -46,6 +46,7 @@ public abstract class AggregateBandCanvas extends GenomicCanvas {
     }
     double genomeDelta = scrollDelta * 0.3 * drawStack.scale;
     setStart(drawStack.start - genomeDelta);
+    resetScrollIdleTimer();
   }
 
   @Override

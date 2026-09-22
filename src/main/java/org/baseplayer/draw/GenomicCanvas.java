@@ -1,15 +1,11 @@
 package org.baseplayer.draw;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.function.Function;
 
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
-import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
@@ -18,7 +14,6 @@ import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.image.Image;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
@@ -37,6 +32,7 @@ public class GenomicCanvas extends Canvas {
  
   private final GraphicsContext gc;
   public GraphicsContext reactiveGc;
+  final ZoomController zoomController;
 
   
   protected Function<Double, Double> chromPosToScreenPos = chromPos -> (chromPos - drawStack.start) * drawStack.pixelSize;
@@ -48,11 +44,8 @@ public class GenomicCanvas extends Canvas {
   protected double mouseDraggedX;
 	protected double mouseDragDeltaX = 0;
   protected double mousePressedY;
-  private boolean lineZoomer = false;
-  private boolean zoomDrag;
   private boolean secondaryDragAnchorInitialized = false;
   private boolean primaryDragAnchorInitialized = false;
-  private static final double MIN_ZOOM_DRAG_PIXELS = 5.0;
   /** True while the mouse is being dragged in this canvas; cleared shortly after release. */
   protected volatile boolean mouseDragged = false;
   public static double zoomFactor = 10;
@@ -71,17 +64,10 @@ public class GenomicCanvas extends Canvas {
   /** Reused after mouse release to clear {@link #mouseDragged}. */
   private PauseTransition dragFlagClearTimer;
 
-  // Snapshot-transform preview used only during animated zoom.
-  private Image interactionSnapshot;
-  private boolean zoomPreviewActive = false;
-  private AnimationTimer zoomPreviewTimer;
-  private double pendingZoomStart = Double.NaN;
-  private double pendingZoomEnd = Double.NaN;
-  private static final double CLOSE_ZOOM_NO_ANIMATION_FACTOR = 3.0;
-
   public GenomicCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
     this.drawStack = drawStack;
+    this.zoomController = new ZoomController(this);
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     gc = getGraphicsContext2D();  
     gc.setFont(Font.font("Segoe UI Regular", 12));
@@ -309,6 +295,9 @@ public class GenomicCanvas extends Canvas {
         
         double genomeDelta = adjustedDelta * drawStack.scale;
         setStart(drawStack.start - genomeDelta);
+        // Always arm idle clear: without this, navigating stays true when momentum
+        // does not start (common at close zoom), and hover handlers stay suppressed.
+        resetScrollIdleTimer();
         
         if (drawStack.viewLength < 5000000) { // Enable momentum up to 5M bp
           long currentTime = System.nanoTime();
@@ -345,7 +334,6 @@ public class GenomicCanvas extends Canvas {
         } else {
           scrollVelocity = 0;
           lastScrollTime = 0;
-          resetScrollIdleTimer();
         }
     }
   }
@@ -378,86 +366,40 @@ public class GenomicCanvas extends Canvas {
       return;
     }
     
-    reactiveGc.setFill(DrawColors.ZOOM_GRADIENT);
-    reactiveGc.setStroke(Color.DODGERBLUE);
-    zoomDrag = true;
-		mouseDragDeltaX = dragX - mouseDraggedX;
+    mouseDragDeltaX = dragX - mouseDraggedX;
+    double previousDraggedX = mouseDraggedX;
     mouseDraggedX = dragX;
-    double totalDragPixels = Math.abs(mouseDraggedX - mousePressedX);
-    if (!lineZoomer && mouseDraggedX >= mousePressedX) {
-      clearReactive();
-      double curtainX = mousePressedX;
-      double curtainW = mouseDraggedX - mousePressedX;
-      reactiveGc.fillRect(curtainX, zoomY, curtainW, getHeight());
-      reactiveGc.strokeRect(curtainX, zoomY, curtainW, getHeight() + 2);
-
-      // Show selected span width while dragging the zoom curtain.
-      long spanBp = Math.max(1L, Math.round(curtainW * drawStack.scale));
-      String spanLabel = BaseUtils.formatNumber(spanBp) + " bp";
-      double labelW = spanLabel.length() * 7.2 + 12;
-      double labelH = 18;
-      double labelX = curtainX + curtainW * 0.5 - labelW * 0.5;
-      if (labelX < 4) labelX = 4;
-      if (labelX + labelW > getWidth() - 4) labelX = getWidth() - labelW - 4;
-      double labelY = 6;
-
-      reactiveGc.setFill(Color.rgb(20, 20, 26, 0.82));
-      reactiveGc.fillRoundRect(labelX, labelY, labelW, labelH, 6, 6);
-      reactiveGc.setStroke(Color.rgb(220, 230, 255, 0.85));
-      reactiveGc.strokeRoundRect(labelX + 0.5, labelY + 0.5, labelW - 1, labelH - 1, 6, 6);
-      reactiveGc.setFill(Color.rgb(242, 246, 255, 0.98));
-      reactiveGc.setFont(Font.font("Segoe UI", 11));
-      reactiveGc.fillText(spanLabel, labelX + 6, labelY + 12.5);
-    } else {
-      if (totalDragPixels < MIN_ZOOM_DRAG_PIXELS) {
-        zoomDrag = false;
-        clearReactive();
-        return;
-      }
-      zoomDrag = false;
-      lineZoomer = true;
-      drawStack.nav.lineZoomerActive = true; // Block all fetches during line zoom
-			clearReactive();
-			reactiveGc.strokeLine(mousePressedX, mousePressedY, mouseDraggedX, dragY);
-      zoom(mouseDragDeltaX, mousePressedX);
-    }
+    zoomController.onPrimaryDrag(dragX, dragY, mousePressedX, mousePressedY, previousDraggedX);
   }
   protected void handleMouseRelease(MouseEvent event) {
     secondaryDragAnchorInitialized = false;
     primaryDragAnchorInitialized = false;
     clearReactive();
-   
-    if (lineZoomer) { 
-      lineZoomer = false;
-      drawStack.nav.lineZoomerActive = false; // Re-enable fetches
-      drawStack.nav.navigating = false; // Allow fetches now that lineZoomer is done
-      // Stop momentum timer to prevent stale velocity from triggering fetches
+
+    boolean wasLineZoomer = zoomController.isLineZoomer();
+    boolean handled = zoomController.onPrimaryRelease(mousePressedX, mouseDraggedX, screenPosToChromPos);
+
+    if (wasLineZoomer) {
+      // Stop momentum so stale velocity does not re-trigger fetches after line zoom.
       scrollVelocity = 0;
       if (momentumTimerRunning) {
         momentumTimer.stop();
       }
-      update.set(!update.get()); 
-      return; 
-    }
-    
-    drawStack.nav.navigating = false; // Normal case - drag/scroll ended
-    
-    if (zoomDrag) {
-      zoomDrag = false;
-      if (Math.abs(mouseDraggedX - mousePressedX) < MIN_ZOOM_DRAG_PIXELS) {
-        update.set(!update.get());
-        return;
-      }
-     
-      if (mousePressedX > mouseDraggedX) { update.set(!update.get()); return; }
-
-      double start = screenPosToChromPos.apply(mousePressedX);
-      double end = screenPosToChromPos.apply(mouseDraggedX);
-      zoomAnimation(start, end);
-    } else {
-      // Right-click pan release or no-op — trigger redraw to start BAM fetch
       update.set(!update.get());
+      return;
     }
+
+    drawStack.nav.navigating = false;
+
+    if (handled) {
+      if (!drawStack.nav.animationRunning) {
+        update.set(!update.get());
+      }
+      return;
+    }
+
+    // Right-click pan release or no-op — trigger redraw to start BAM fetch
+    update.set(!update.get());
   }
   protected void clearReactive() { reactiveGc.clearRect(0, 0, getWidth(), getHeight()); }
 
@@ -470,12 +412,12 @@ public class GenomicCanvas extends Canvas {
   }
 
   /**
-   * True while the reactive canvas is used by GenomicCanvas for zoom visuals
-   * (drag rectangle / line zoom). Subclasses can use this to decide whether
-   * it is safe to draw their own reactive overlays.
+   * True while the reactive canvas is used for zoom visuals (curtain / line /
+   * snapshot animation). Subclasses can use this to decide whether it is safe
+   * to draw their own reactive overlays.
    */
   protected boolean isReactiveOverlayReserved() {
-    return zoomDrag || lineZoomer || drawStack.nav.lineZoomerActive || zoomPreviewActive;
+    return zoomController.isOverlayReserved();
   }
 
   /**
@@ -485,7 +427,7 @@ public class GenomicCanvas extends Canvas {
   protected void onDragActive() {}
 
   /** Start or restart a short timer that clears navigating after scroll events stop. */
-  private void resetScrollIdleTimer() {
+  protected void resetScrollIdleTimer() {
     if (scrollIdleTimer == null) {
       scrollIdleTimer = new PauseTransition(javafx.util.Duration.millis(200));
       scrollIdleTimer.setOnFinished(e -> {
@@ -567,166 +509,10 @@ public class GenomicCanvas extends Canvas {
 
 
   protected void zoom(double zoomDirection, double targetX) {
-		if (zoomDirection == 0.0) return;
-    int direction = zoomDirection > 0 ? 1 : -1;
-    double pivot = targetX / getWidth();
-    double acceleration = drawStack.viewLength/getWidth() * 10;
-    double newSize = drawStack.viewLength - zoomFactor * acceleration * direction;
-    double start = Math.max(1, screenPosToChromPos.apply(targetX) - (pivot * newSize));
-    double end = Math.min(drawStack.chromSize + 1, start + newSize);
-    if (drawStack.start == start && drawStack.end == end) return;
-    setStartEnd(start, end);
+    zoomController.zoom(zoomDirection, targetX);
   }
 
   public void zoomAnimation(double start, double end) {
-    if (shouldSkipZoomAnimation(start, end)) {
-      cancelZoomAnimation(true);
-      setStartEnd(start, end);
-      return;
-    }
-
-    // Preempt an in-flight zoom so repeated zoom-in clicks cannot leave the
-    // viewport in an intermediate state.
-    cancelZoomAnimation(true);
-
-    pendingZoomStart = start;
-    pendingZoomEnd = end;
-
-    // Only cancel fetches if we're jumping to a different region (not zooming in on same area)
-    double overlapStart = Math.max(start, drawStack.start);
-    double overlapEnd = Math.min(end, drawStack.end);
-    double overlapSize = Math.max(0, overlapEnd - overlapStart);
-    double currentSize = drawStack.end - drawStack.start;
-    double overlapRatio = overlapSize / currentSize;
-    
-    // Cancel only if regions have <30% overlap (indicates a jump, not a zoom)
-    if (overlapRatio < 0.3) {
-      FetchManager.get().cancelAll();
-    }
-
-    // Animate by transforming the current canvas snapshot and commit genomic
-    // coordinates only once at the end.
-    final double sourceStart = drawStack.start;
-    final double sourceEnd = drawStack.end;
-
-    final List<GenomicCanvas> previewCanvases = collectStackPreviewCanvases();
-    boolean hasPreviewSnapshot = false;
-    for (GenomicCanvas canvas : previewCanvases) {
-      Image snap = canvas.snapshot(null, null);
-      if (snap == null) continue;
-      canvas.interactionSnapshot = snap;
-      canvas.zoomPreviewActive = true;
-      hasPreviewSnapshot = true;
-    }
-
-    if (!hasPreviewSnapshot) {
-      drawStack.nav.animationRunning = false;
-      drawStack.nav.navigating = false;
-      setStartEnd(start, end);
-      pendingZoomStart = Double.NaN;
-      pendingZoomEnd = Double.NaN;
-      return;
-    }
-
-    drawStack.nav.animationRunning = true;
-    drawStack.nav.navigating = true;
-
-    final long durationNanos = 120_000_000L; // 120 ms
-    final long[] startNanos = { -1L };
-
-    zoomPreviewTimer = new AnimationTimer() {
-      @Override
-      public void handle(long now) {
-        if (startNanos[0] < 0) {
-          startNanos[0] = now;
-        }
-        double t = Math.min(1.0, (now - startNanos[0]) / (double) durationNanos);
-
-        double currentStart = sourceStart + (start - sourceStart) * t;
-        double currentEnd = sourceEnd + (end - sourceEnd) * t;
-        for (GenomicCanvas canvas : previewCanvases) {
-          if (canvas.interactionSnapshot == null) continue;
-          canvas.drawZoomPreview(sourceStart, sourceEnd, currentStart, currentEnd);
-        }
-
-        if (t >= 1.0) {
-          stop();
-          zoomPreviewTimer = null;
-          for (GenomicCanvas canvas : previewCanvases) {
-            canvas.zoomPreviewActive = false;
-            canvas.interactionSnapshot = null;
-            canvas.clearReactive();
-          }
-          drawStack.nav.animationRunning = false;
-          drawStack.nav.navigating = false;
-          setStartEnd(start, end);
-          pendingZoomStart = Double.NaN;
-          pendingZoomEnd = Double.NaN;
-        }
-      }
-    };
-    zoomPreviewTimer.start();
-  }
-
-  private boolean shouldSkipZoomAnimation(double targetStart, double targetEnd) {
-    double currentView = Math.max(minZoom, drawStack.end - drawStack.start);
-    double targetView = Math.max(minZoom, targetEnd - targetStart);
-    boolean zoomingIn = targetView < currentView;
-    double closeZoomThreshold = minZoom * CLOSE_ZOOM_NO_ANIMATION_FACTOR;
-    return zoomingIn && (currentView <= closeZoomThreshold || targetView <= closeZoomThreshold);
-  }
-
-  private void cancelZoomAnimation(boolean snapToPendingTarget) {
-    if (zoomPreviewTimer != null) {
-      zoomPreviewTimer.stop();
-      zoomPreviewTimer = null;
-    }
-
-    boolean hadPreview = false;
-    for (GenomicCanvas canvas : collectStackPreviewCanvases()) {
-      if (canvas.zoomPreviewActive || canvas.interactionSnapshot != null) {
-        hadPreview = true;
-      }
-      canvas.zoomPreviewActive = false;
-      canvas.interactionSnapshot = null;
-      canvas.clearReactive();
-    }
-
-    if (hadPreview) {
-      drawStack.nav.animationRunning = false;
-      drawStack.nav.navigating = false;
-    }
-
-    if (snapToPendingTarget && !Double.isNaN(pendingZoomStart) && !Double.isNaN(pendingZoomEnd)) {
-      setStartEnd(pendingZoomStart, pendingZoomEnd);
-    }
-
-    pendingZoomStart = Double.NaN;
-    pendingZoomEnd = Double.NaN;
-  }
-
-  private List<GenomicCanvas> collectStackPreviewCanvases() {
-    LinkedHashSet<GenomicCanvas> set = new LinkedHashSet<>();
-    set.add(this);
-    if (drawStack.sampleTrackCanvas != null) set.add(drawStack.sampleTrackCanvas);
-    if (drawStack.sampleAggregateCanvas != null) set.add(drawStack.sampleAggregateCanvas);
-    if (drawStack.chromosomeCanvas != null) set.add(drawStack.chromosomeCanvas);
-    if (drawStack.featureAggregateCanvas != null) set.add(drawStack.featureAggregateCanvas);
-    if (drawStack.featureTrackCanvas != null) set.add(drawStack.featureTrackCanvas);
-    return new ArrayList<>(set);
-  }
-
-  private void drawZoomPreview(double sourceStart, double sourceEnd,
-                               double currentStart, double currentEnd) {
-    if (interactionSnapshot == null) return;
-
-    double sourceView = sourceEnd - sourceStart;
-    double currentView = Math.max(minZoom, currentEnd - currentStart);
-    double scaleX = sourceView / currentView;
-    double translateX = (sourceStart - currentStart) * (getWidth() / currentView);
-
-    reactiveGc.setFill(DrawColors.BACKGROUND);
-    reactiveGc.fillRect(0, 0, getWidth(), getHeight());
-    reactiveGc.drawImage(interactionSnapshot, translateX, 0, getWidth() * scaleX, getHeight());
+    zoomController.zoomAnimation(start, end);
   }
 }

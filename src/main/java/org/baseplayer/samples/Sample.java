@@ -21,7 +21,7 @@ public class Sample implements Closeable {
   public enum DataType {
     BAM,      // BAM/CRAM alignment files
     BED,      // BED annotation files
-    VCF       // VCF variant files (for future)
+    VCF       // VCF variant files
   }
 
   private final String name;

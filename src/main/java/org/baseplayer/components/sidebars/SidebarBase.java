@@ -157,35 +157,54 @@ public abstract class SidebarBase {
    */
   public static void drawStandardHeader(GraphicsContext gc, double w, double h,
                                          String title, int count) {
+    drawStandardHeader(gc, w, h, title, count, true);
+  }
+
+  /**
+   * Shared utility for rendering the standard sidebar header bar.
+   *
+   * @param drawActionButtons when false, only chrome + title are painted (callers
+   *                          can place their own controls, e.g. SampleTrackControls)
+   */
+  public static void drawStandardHeader(GraphicsContext gc, double w, double h,
+                                         String title, int count,
+                                         boolean drawActionButtons) {
     // Background
     gc.setFill(Color.web("#2b2d30"));
     gc.fillRect(0, 0, w, h);
 
-    // Settings (⚙) button — left
-    double sy = (h - BTN_SIZE) / 2;
-    gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRoundRect(BTN_LEFT_X, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
-    gc.setStroke(Color.web("#555555"));
-    gc.strokeRoundRect(BTN_LEFT_X, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
-    gc.setFont(Font.font("Segoe UI", 12));
-    gc.setFill(Color.web("#cccccc"));
-    gc.fillText("⚙", BTN_LEFT_X + 3, sy + 13);
+    double titleX = 8;
+    if (drawActionButtons) {
+      // Settings (⚙) button — left
+      double sy = (h - BTN_SIZE) / 2;
+      gc.setFill(Color.web("#3c3c3c"));
+      gc.fillRoundRect(BTN_LEFT_X, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
+      gc.setStroke(Color.web("#555555"));
+      gc.strokeRoundRect(BTN_LEFT_X, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
+      gc.setFont(Font.font("Segoe UI", 12));
+      gc.setFill(Color.web("#cccccc"));
+      gc.fillText("⚙", BTN_LEFT_X + 3, sy + 13);
+      titleX = BTN_LEFT_X + BTN_SIZE + 6;
+    }
 
     // Title (+ count)
     gc.setFont(HEADER_FONT);
     gc.setFill(Color.web("#999999"));
     String label = count > 0 ? title + " (" + count + ")" : title;
-    gc.fillText(label, BTN_LEFT_X + BTN_SIZE + 6, h / 2 + 4);
+    gc.fillText(label, titleX, h / 2 + 4);
 
-    // Add (+) button — right
-    double px = w - BTN_SIZE - 4;
-    gc.setFill(Color.web("#3c3c3c"));
-    gc.fillRoundRect(px, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
-    gc.setStroke(Color.web("#555555"));
-    gc.strokeRoundRect(px, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
-    gc.setFont(Font.font("Segoe UI", 14));
-    gc.setFill(Color.web("#cccccc"));
-    gc.fillText("+", px + 4, sy + 14);
+    if (drawActionButtons) {
+      // Add (+) button — right
+      double sy = (h - BTN_SIZE) / 2;
+      double px = w - BTN_SIZE - 4;
+      gc.setFill(Color.web("#3c3c3c"));
+      gc.fillRoundRect(px, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
+      gc.setStroke(Color.web("#555555"));
+      gc.strokeRoundRect(px, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
+      gc.setFont(Font.font("Segoe UI", 14));
+      gc.setFill(Color.web("#cccccc"));
+      gc.fillText("+", px + 4, sy + 14);
+    }
   }
 
   // ── Header hover overlay ──────────────────────────────────────────────────

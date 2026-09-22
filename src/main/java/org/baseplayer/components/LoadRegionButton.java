@@ -1,9 +1,16 @@
 package org.baseplayer.components;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+
 import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.control.Label;
-import javafx.scene.layout.Region;
-import javafx.scene.layout.VBox;
+import javafx.scene.effect.DropShadow;
+import javafx.scene.layout.StackPane;
+import javafx.scene.paint.Color;
 
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.VcfManager;
@@ -12,125 +19,157 @@ import org.baseplayer.services.RegionFetchCache;
 import org.baseplayer.services.ServiceRegistry;
 
 /**
- * A clickable text label that appears when the current viewport region 
- * is not cached in VCF data. Allows users to manually load variants for 
- * the current zoom level.
+ * Overlay control shown when the current viewport is outside cached VCF data.
+ * Styled as a compact accent button so it stays visible on the genomic canvas.
  */
-public class LoadRegionButton extends Region {
+public class LoadRegionButton extends StackPane {
+
+    private static final String STYLE_IDLE =
+        "-fx-background-color: linear-gradient(to bottom, #3a9fd4 0%, #2a7fb0 100%);"
+            + "-fx-background-radius: 5;"
+            + "-fx-border-color: #7ec8f0;"
+            + "-fx-border-radius: 5;"
+            + "-fx-border-width: 1;"
+            + "-fx-cursor: hand;"
+            + "-fx-padding: 5 12 5 12;";
+
+    private static final String STYLE_HOVER =
+        "-fx-background-color: linear-gradient(to bottom, #4db0e0 0%, #3590c4 100%);"
+            + "-fx-background-radius: 5;"
+            + "-fx-border-color: #b0e0ff;"
+            + "-fx-border-radius: 5;"
+            + "-fx-border-width: 1;"
+            + "-fx-cursor: hand;"
+            + "-fx-padding: 5 12 5 12;"
+            + "-fx-effect: dropshadow(gaussian, rgba(90, 180, 240, 0.55), 10, 0.35, 0, 0);";
+
+    private static final String STYLE_LOADING =
+        "-fx-background-color: linear-gradient(to bottom, #3c3c3c 0%, #2a2a2a 100%);"
+            + "-fx-background-radius: 5;"
+            + "-fx-border-color: #666666;"
+            + "-fx-border-radius: 5;"
+            + "-fx-border-width: 1;"
+            + "-fx-cursor: wait;"
+            + "-fx-padding: 5 12 5 12;";
+
+    private static final String LABEL_IDLE =
+        "-fx-text-fill: #f2f8ff; -fx-font-size: 11; -fx-font-weight: bold;";
+    private static final String LABEL_LOADING =
+        "-fx-text-fill: #bbbbbb; -fx-font-size: 11; -fx-font-weight: bold;";
 
     private final Label textLabel;
-    private final Label debugLabel;
     private final DrawStackManager stackManager;
+    private final RegionFetchCache regionFetchCache;
+    private final Runnable cacheListener = this::refreshVisibilityOnFxThread;
+    private final Set<DrawStack> stacksWithRegionListeners =
+        Collections.newSetFromMap(new IdentityHashMap<>());
+
+    private boolean cacheListenerAttached;
+    private boolean loading;
 
     public LoadRegionButton() {
         this.stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        
-        // Set explicit width/height (not just pref) so StackPane respects sizing
-        this.setMinWidth(120);
-        this.setMaxWidth(120);
-        this.setPrefWidth(120);
-        this.setMinHeight(30);
-        this.setMaxHeight(30);
-        this.setPrefHeight(30);
-        
-        // Keep MANAGED so StackPane can properly layout with alignment
-        this.setManaged(true);
-        
-        this.setStyle("-fx-padding: 0;");
+        this.regionFetchCache = ServiceRegistry.getInstance().getRegionFetchCache();
 
-        // Create main text label
-        textLabel = new Label("[Load Region]");
-        textLabel.setWrapText(true);
-        textLabel.setStyle(
-            "-fx-text-fill: #5a9fd4;" +
-            "-fx-font-size: 10;" +
-            "-fx-font-weight: bold;" +
-            "-fx-cursor: hand;"
-        );
+        setManaged(true);
+        setMaxSize(USE_PREF_SIZE, USE_PREF_SIZE);
+        setAlignment(Pos.CENTER);
+        setPadding(Insets.EMPTY);
 
-        textLabel.setOnMouseEntered(e -> textLabel.setStyle(
-            "-fx-text-fill: #4a8fb4;" +
-            "-fx-font-size: 10;" +
-            "-fx-font-weight: bold;" +
-            "-fx-cursor: hand;"
-        ));
+        DropShadow idleShadow = new DropShadow();
+        idleShadow.setColor(Color.rgb(0, 0, 0, 0.55));
+        idleShadow.setRadius(8);
+        idleShadow.setOffsetY(1);
+        setEffect(idleShadow);
 
-        textLabel.setOnMouseExited(e -> textLabel.setStyle(
-            "-fx-text-fill: #5a9fd4;" +
-            "-fx-font-size: 10;" +
-            "-fx-font-weight: bold;" +
-            "-fx-cursor: hand;"
-        ));
+        textLabel = new Label("Load region");
+        textLabel.setMouseTransparent(true);
+        textLabel.setStyle(LABEL_IDLE);
 
-        textLabel.setOnMouseClicked(e -> loadCurrentRegion());
+        getChildren().add(textLabel);
+        applyIdleStyle();
 
-        // Create debug label showing coordinates and color
-        debugLabel = new Label();
-        debugLabel.setStyle(
-            "-fx-text-fill: #888888;" +
-            "-fx-font-size: 8;"
-        );
+        setOnMouseEntered(e -> {
+            if (!loading) {
+                setStyle(STYLE_HOVER);
+            }
+        });
+        setOnMouseExited(e -> {
+            if (!loading) {
+                applyIdleStyle();
+            }
+        });
+        setOnMouseClicked(e -> {
+            if (!loading) {
+                loadCurrentRegion();
+            }
+        });
 
-        // Container for both labels
-        VBox container = new VBox(1);
-        container.setStyle("-fx-padding: 2;");
-        container.getChildren().addAll(textLabel, debugLabel);
-
-        this.getChildren().add(container);
-
-        // Start HIDDEN - visibility is controlled by listener when samples load
-        this.setVisible(false);
+        setVisible(false);
     }
 
     public void attachRegionListener() {
-        DrawStack mainStack = stackManager.getHoverStack();
-        if (mainStack == null) {
-            return;
+        if (!cacheListenerAttached) {
+            cacheListenerAttached = true;
+            regionFetchCache.addListener(cacheListener);
         }
-        
-        // Define the listener logic
-        java.util.function.Consumer<Void> updateVisibility = unused -> {
-            DrawStack stack = stackManager.getHoverStack();
-            if (stack != null) {
-                var region = stack.getRegion();
-                if (region != null) {
-                    RegionFetchCache cache = ServiceRegistry.getInstance().getRegionFetchCache();
-                    boolean isCached = cache.isFetched("VCF", region.chrom(), (long) region.start(), (long) region.end());
-                    var fetchedRegions = cache.getFetched("VCF", region.chrom());
-                    
-                    // Determine if button should be visible:
-                    // Show button only if viewport extends BEYOND any cached region
-                    boolean shouldShowButton = false;
-                    
-                    if (!isCached && !fetchedRegions.isEmpty()) {
-                        // Viewport is not fully cached - check if it extends beyond a fetched region
-                        var firstFetched = fetchedRegions.get(0);
-                        boolean viewportExtendsBefore = region.start() < firstFetched.start();
-                        boolean viewportExtendsAfter = region.end() > firstFetched.end();
-                        
-                        if (viewportExtendsBefore || viewportExtendsAfter) {
-                            shouldShowButton = true;
-                        }
-                    }
-                    
-                    LoadRegionButton.this.setVisible(shouldShowButton);
-                }
-            }
-        };
-        
-        // Attach listener to regionProperty
-        mainStack.regionProperty().addListener((obs, oldVal, newVal) -> {
-            updateVisibility.accept(null);
-        });
-        
-        // IMPORTANT: Also check visibility immediately after attaching listener
-        // because the region may already be set and the listener won't fire until next change
-        updateVisibility.accept(null);
+        for (DrawStack stack : stackManager.getStacks()) {
+            attachStackRegionListener(stack);
+        }
+        updateVisibility();
     }
 
-    /**
-     * Load variants for the current viewport region.
-     */
+    private void attachStackRegionListener(DrawStack stack) {
+        if (stack == null || !stacksWithRegionListeners.add(stack)) {
+            return;
+        }
+        stack.regionProperty().addListener((obs, oldVal, newVal) -> updateVisibility());
+    }
+
+    private void refreshVisibilityOnFxThread() {
+        if (Platform.isFxApplicationThread()) {
+            updateVisibility();
+        } else {
+            Platform.runLater(this::updateVisibility);
+        }
+    }
+
+    private void updateVisibility() {
+        DrawStack stack = stackManager.getHoverStack();
+        attachStackRegionListener(stack);
+        if (stack == null) {
+            setVisible(false);
+            return;
+        }
+
+        var region = stack.getRegion();
+        if (region == null) {
+            setVisible(false);
+            return;
+        }
+
+        boolean isCached = regionFetchCache.isFetched(
+            "VCF", region.chrom(), (long) region.start(), (long) region.end());
+        var fetchedRegions = regionFetchCache.getFetched("VCF", region.chrom());
+
+        // Show when this chrom has some VCF coverage but the viewport is not fully covered.
+        boolean shouldShowButton = !isCached && !fetchedRegions.isEmpty();
+
+        if (loading && !VcfManager.getInstance().isLoading()) {
+            loading = false;
+            applyIdleStyle();
+        }
+        if (isCached) {
+            loading = false;
+            applyIdleStyle();
+        }
+
+        setVisible(shouldShowButton || loading);
+        if (!shouldShowButton && !loading) {
+            applyIdleStyle();
+        }
+    }
+
     private void loadCurrentRegion() {
         DrawStack mainStack = stackManager.getHoverStack();
         if (mainStack == null) {
@@ -142,38 +181,25 @@ public class LoadRegionButton extends Region {
             return;
         }
 
-        textLabel.setText("[Loading...");
-        textLabel.setStyle(
-            "-fx-text-fill: #cccccc;" +
-            "-fx-font-size: 10;" +
-            "-fx-font-weight: bold;" +
-            "-fx-cursor: wait;"
-        );
+        loading = true;
+        textLabel.setText("Loading…");
+        textLabel.setStyle(LABEL_LOADING);
+        setStyle(STYLE_LOADING);
 
-        // Load variants for the current viewport region (with its exact bounds)
         VcfManager.getInstance().loadRegionVariants(
             region.chrom(),
             (long) region.start(),
             (long) region.end()
         );
 
-        // After a brief delay, reset the button state back to normal
-        // (The button will auto-hide once the region is marked as cached via the regionProperty listener)
-        new Thread(() -> {
-            try {
-                Thread.sleep(300);  // Give the load some time to complete
-                Platform.runLater(() -> {
-                    textLabel.setText("[Load Region]");
-                    textLabel.setStyle(
-                        "-fx-text-fill: #5a9fd4;" +
-                        "-fx-font-size: 10;" +
-                        "-fx-font-weight: bold;" +
-                        "-fx-cursor: hand;"
-                    );
-                });
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }).start();
+        // Cache listener hides the button once the fetch is marked complete.
+        // Re-check immediately for synchronous cache-reuse paths.
+        updateVisibility();
+    }
+
+    private void applyIdleStyle() {
+        textLabel.setText("Load region");
+        textLabel.setStyle(LABEL_IDLE);
+        setStyle(STYLE_IDLE);
     }
 }

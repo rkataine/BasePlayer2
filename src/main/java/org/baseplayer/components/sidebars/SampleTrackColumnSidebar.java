@@ -310,20 +310,13 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     MenuItem vcfItem = new MenuItem("VCF");
     vcfItem.setOnAction(e -> SampleDataManager.addVcfFile());
 
-    MenuItem variantManagerItem = new MenuItem("Variant Manager");
-    variantManagerItem.setOnAction(e ->
-        org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
-            getMasterHeaderCanvas().getScene().getWindow(),
-            VcfManager.getInstance(),
-            null));
-
     MenuItem bedItem = new MenuItem("BED");
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
 
     MenuItem bigwigItem = new MenuItem("BigWig");
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
 
-    menu.getItems().addAll(bamItem, vcfItem, variantManagerItem, new SeparatorMenuItem(), bedItem, bigwigItem);
+    menu.getItems().addAll(bamItem, vcfItem, new SeparatorMenuItem(), bedItem, bigwigItem);
     return menu;
   }
 

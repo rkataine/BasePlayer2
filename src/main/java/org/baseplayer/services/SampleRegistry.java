@@ -116,6 +116,24 @@ public class SampleRegistry extends TrackViewportRegistry {
         return hoveredTrackIndexProperty();
     }
 
+    /** Handles sample-track icon actions (close / settings / add / reload) from sidebar or canvas. */
+    @FunctionalInterface
+    public interface TrackIconActionHandler {
+        boolean handle(String iconId, int trackIndex, double screenX, double screenY);
+    }
+
+    private TrackIconActionHandler trackIconActionHandler;
+
+    public void setTrackIconActionHandler(TrackIconActionHandler handler) {
+        this.trackIconActionHandler = handler;
+    }
+
+    public boolean handleTrackIconAction(
+        String iconId, int trackIndex, double screenX, double screenY) {
+        return trackIconActionHandler != null
+            && trackIconActionHandler.handle(iconId, trackIndex, screenX, screenY);
+    }
+
     public int getFirstVisibleSample() {
         return getFirstVisibleTrackSlot();
     }

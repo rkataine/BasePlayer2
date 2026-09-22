@@ -43,8 +43,10 @@ import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.draw.VariantDrawer;
+import org.baseplayer.variant.draw.VariantInfoPopup;
 
 import javafx.application.Platform;
+import javafx.animation.PauseTransition;
 import javafx.geometry.Point2D;
 import javafx.scene.Cursor;
 import javafx.scene.canvas.Canvas;
@@ -54,6 +56,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.FontWeight;
 import javafx.stage.Window;
+import javafx.util.Duration;
 
 /**
  * Scrollable track body under an aggregate band. Create one instance bound to
@@ -71,6 +74,12 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private final TrackViewportRegistry viewportRegistry;
   private final FeatureTrackViewportRegistry featureRegistry;
 
+  /** Last sample-body frame; stretched while the pane size is changing. */
+  private Image resizeFrame;
+  private double resizeFrameW;
+  private double resizeFrameH;
+  private PauseTransition resizeCommitTimer;
+
   /** Unified coverage data computation and rendering. */
   private final CoverageDrawer coverageDrawer = new CoverageDrawer();
 
@@ -79,6 +88,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
   
   /** Variant drawing and index management. */
   private final VariantDrawer variantDrawer = new VariantDrawer();
+  private final VariantInfoPopup variantInfoPopup = new VariantInfoPopup();
   
   /** Variant list for the current genomic region. */
   private VariantList variantList;
@@ -141,6 +151,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   private BAMRecord hoveredRead  = null;
   private BAMRecord selectedRead = null;  // currently selected read (kept after popup closes)
+  private VariantDrawer.VariantHit hoveredVariant = null;
   // Read-name highlight propagated from another stack when a cross-stack connector is active.
   private String externalLinkedReadName = null;
   private TrackBodyCanvas externalLinkedOwner = null;
@@ -187,7 +198,12 @@ public class TrackBodyCanvas extends GenomicCanvas {
             ? feature
             : null;
 
-    widthProperty().addListener((obs, o, n) -> setStartEnd(drawStack.getViewStart(), drawStack.getViewEnd()));
+    widthProperty().addListener((obs, o, n) -> {
+      if (isSampleBody() && isResizePreview(n.doubleValue(), getHeight())) {
+        return;
+      }
+      setStartEnd(drawStack.getViewStart(), drawStack.getViewEnd());
+    });
     gc = getGraphicsContext2D();
     gc.setLineWidth(1);
     gc.setFont(AppFonts.getUIFont());
@@ -195,6 +211,11 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
     if (isSampleBody()) {
       setupReadMouseHandlers(reactiveCanvas);
+      sampleRegistry.hoverSampleProperty().addListener((obs, oldVal, newVal) -> {
+        if (isSampleBody()) {
+          Platform.runLater(this::drawReadHighlight);
+        }
+      });
     } else {
       setupFeatureContextMenu();
       setupFeatureMouseHandlers();
@@ -222,6 +243,12 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return;
     }
 
+    if (isSampleBody() && isResizePreview(width, height)) {
+      gc.drawImage(resizeFrame, 0, 0, width, height);
+      scheduleResizeCommit();
+      return;
+    }
+
     gc.setFill(DrawColors.BACKGROUND);
     gc.fillRect(0, 0, width + 1, height + 1);
 
@@ -231,6 +258,33 @@ public class TrackBodyCanvas extends GenomicCanvas {
     drawTrackRows();
     finishTrackDraw();
     super.draw();
+
+    if (isSampleBody()) {
+      resizeFrame = snapshot(null, null);
+      resizeFrameW = width;
+      resizeFrameH = height;
+    }
+  }
+
+  private boolean isResizePreview(double width, double height) {
+    return resizeFrame != null
+        && (Math.abs(width - resizeFrameW) > 0.5 || Math.abs(height - resizeFrameH) > 0.5);
+  }
+
+  private void scheduleResizeCommit() {
+    if (resizeCommitTimer == null) {
+      resizeCommitTimer = new PauseTransition(Duration.millis(120));
+      resizeCommitTimer.setOnFinished(e -> {
+        boolean widthChanged = Math.abs(getWidth() - resizeFrameW) > 0.5;
+        resizeFrame = null;
+        if (widthChanged) {
+          setStartEnd(drawStack.getViewStart(), drawStack.getViewEnd());
+        } else {
+          draw();
+        }
+      });
+    }
+    resizeCommitTimer.playFromStart();
   }
 
   private void prepareTrackDraw() {
@@ -250,17 +304,20 @@ public class TrackBodyCanvas extends GenomicCanvas {
         if (hoveredRead != null) {
           hoveredRead = null;
         }
+        hoveredVariant = null;
       } else {
         BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
         if (hit != hoveredRead) {
           hoveredRead = hit;
         }
+        hoveredVariant = findVariantHit(lastMouseX, lastMouseY);
       }
     }
     if (!isReactiveOverlayReserved()) {
       clearReactive();
       if (isScrollbarOverrideActive()
           || hoveredRead != null || selectedRead != null || externalLinkedReadName != null
+          || hoveredVariant != null
           || hasCoverageHoverTarget(lastMouseX, lastMouseY)) {
         drawReadHighlight();
       }
@@ -279,10 +336,15 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private void drawTrackRows() {
     double rowHeight = getTrackRowHeightPixels();
     double scroll = getVerticalScrollOffsetPixels();
+    // When sample rows are shorter than a label, skip dividers — they become visual noise.
+    boolean drawDividers = featureRegistry != null
+        || !viewportRegistry.isTrackRowHeightTooSmallForLabels();
     for (TrackViewportRegistry.VisibleTrackSlot slot : getVisibleTrackSlotsForDrawing()) {
       double rowTopY = slot.slotIndex() * rowHeight - scroll;
       drawTrackRow(slot, rowTopY, rowHeight);
-      drawTrackRowTopDivider(rowTopY);
+      if (drawDividers) {
+        drawTrackRowTopDivider(rowTopY);
+      }
     }
   }
 
@@ -417,6 +479,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
       if (readScrollbarComponent.isOver(lastMouseX, lastMouseY)) {
         reactiveCanvas.setCursor(readScrollbarComponent.cursorFor(lastMouseX, lastMouseY));
         hoveredRead = null;
+        hoveredVariant = null;
         drawReadHighlight();
         if (scrollbarHoverChanged) {
           update.set(!update.get());
@@ -439,10 +502,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
       }
 
       BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
+      VariantDrawer.VariantHit variantHit = findVariantHit(lastMouseX, lastMouseY);
+      boolean hand = variantHit != null || hit != null;
+      reactiveCanvas.setCursor(hand ? Cursor.HAND : Cursor.DEFAULT);
+
+      boolean variantChanged = !java.util.Objects.equals(variantHit, hoveredVariant);
+      hoveredVariant = variantHit;
+
       boolean hoveringSelected = selectedRead != null && hit == selectedRead;
-      if (hit != hoveredRead) {
+      if (hit != hoveredRead || variantChanged) {
         hoveredRead = hit;
-        reactiveCanvas.setCursor(hit != null ? Cursor.HAND : Cursor.DEFAULT);
         drawReadHighlight();
       } else if (hoveringSelected || (hit != null && drawStack.getPixelSize() >= 6)) {
         // refresh tooltip as cursor moves along the read
@@ -458,11 +527,24 @@ public class TrackBodyCanvas extends GenomicCanvas {
         return;
       }
       if (event.getClickCount() == 1 && event.isStillSincePress()) {
+        Window owner = reactiveCanvas.getScene() != null ? reactiveCanvas.getScene().getWindow() : null;
+        VariantDrawer.VariantHit variantHit = findVariantHit(event.getX(), event.getY());
+        if (variantHit != null && owner != null) {
+          selectedRead = null;
+          readInfoPopup.hide();
+          double popupX = event.getScreenX() + 30;
+          double popupY = event.getScreenY() + 10;
+          String chrom = drawStack.getChromosome() != null ? drawStack.getChromosome() : "";
+          variantInfoPopup.show(variantHit.node(), variantHit.call(), chrom, owner, popupX, popupY);
+          draw();
+          return;
+        }
+
         BAMRecord hit = findReadAt(event.getX(), event.getY());
         if (hit != null) {
-          Window owner = reactiveCanvas.getScene() != null ? reactiveCanvas.getScene().getWindow() : null;
           if (owner != null) {
             selectedRead = hit;
+            variantInfoPopup.hide();
             String chrom = drawStack.getChromosome() != null ? drawStack.getChromosome() : "";
             String mateChrName = resolveMateChromName(hit);
 
@@ -478,6 +560,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
         } else {
           selectedRead = null;
           readInfoPopup.hide();
+          variantInfoPopup.hide();
           draw();
         }
       }
@@ -494,8 +577,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
       if (readScrollbarComponent.clearHover()) {
         update.set(!update.get());
       }
-      if (hoveredRead != null) {
+      if (hoveredRead != null || hoveredVariant != null) {
         hoveredRead = null;
+        hoveredVariant = null;
         reactiveCanvas.setCursor(Cursor.DEFAULT);
         drawReadHighlight(); // keeps selectedRead highlighted if popup is still open
       }
@@ -523,6 +607,28 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private void drawVariantData() {
     VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
     variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), activeFilter);
+  }
+
+  private VariantDrawer.VariantHit findVariantHit(double x, double y) {
+    if (drawStack == null || drawStack.getPixelSize() <= 1.0) {
+      return null;
+    }
+    if (!canDrawVariantData()) {
+      return null;
+    }
+    return variantDrawer.findHit(x, y);
+  }
+
+  private void drawVariantHoverHighlight(VariantDrawer.VariantHit hit) {
+    if (hit == null) {
+      return;
+    }
+    double w = Math.max(1.0, hit.x2() - hit.x1());
+    double h = Math.max(1.0, hit.y2() - hit.y1());
+    reactiveGc.setStroke(Color.WHITE);
+    reactiveGc.setLineWidth(1.5);
+    reactiveGc.strokeRect(hit.x1() + 0.5, hit.y1() + 0.5, w - 1, h - 1);
+    reactiveGc.setLineWidth(1.0);
   }
 
   private boolean canDrawVariantData(TrackViewportRegistry.VisibleTrackSlot slot) {
@@ -934,6 +1040,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
     drawingReadHighlight = true;
     try {
     clearReactive();
+    if (hoveredVariant != null) {
+      drawVariantHoverHighlight(hoveredVariant);
+    }
     if (isScrollbarOverrideActive()) {
       clearCrossStackTargetHighlight();
       MainController.releaseCrossStackMateArc(this);
@@ -951,7 +1060,8 @@ public class TrackBodyCanvas extends GenomicCanvas {
       }
       return;
     }
-    if (selectedRead == null && hoveredRead == null && !hasExternalLinkedRead && coverageHover == null) {
+    if (selectedRead == null && hoveredRead == null && !hasExternalLinkedRead
+        && coverageHover == null && hoveredVariant == null) {
       clearCrossStackTargetHighlight();
       MainController.releaseCrossStackMateArc(this);
       return;
@@ -1881,6 +1991,8 @@ public class TrackBodyCanvas extends GenomicCanvas {
    */
   public void clearVariantList() {
     variantList = null;
+    variantDrawer.clearHits();
+    variantInfoPopup.hide();
   }
   
   /**

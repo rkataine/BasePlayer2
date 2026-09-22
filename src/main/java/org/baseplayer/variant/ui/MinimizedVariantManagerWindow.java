@@ -13,6 +13,7 @@ import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import org.baseplayer.MainApp;
+import org.baseplayer.controllers.MenuBarController;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
@@ -45,12 +46,16 @@ public class MinimizedVariantManagerWindow {
         }
 
         instance.minimize();
+        MenuBarController.updateVariantManagerButtonVisibility();
     }
 
     public static void handleExpand() {
         if (instance != null) {
             instance.expand();
+        } else {
+            VariantManagerWindow.bringToFrontOrOpen();
         }
+        MenuBarController.updateVariantManagerButtonVisibility();
     }
 
     public static void handleCleanup() {
@@ -59,6 +64,7 @@ public class MinimizedVariantManagerWindow {
             instance = null;
             managedMainStage = null;
         }
+        MenuBarController.updateVariantManagerButtonVisibility();
     }
 
     /** True when the floating minimized widget is currently showing. */
@@ -66,6 +72,17 @@ public class MinimizedVariantManagerWindow {
         return instance != null
             && instance.minimizedStage != null
             && instance.minimizedStage.isShowing();
+    }
+
+    public static boolean isMinimized() {
+        return isShowing();
+    }
+
+    public static void clearMinimizedFlag() {
+        if (instance != null && isShowing()) {
+            instance.closeMinimizedStage();
+            MenuBarController.updateVariantManagerButtonVisibility();
+        }
     }
 
     private void minimize() {
@@ -84,6 +101,9 @@ public class MinimizedVariantManagerWindow {
             managedMainStage.show();
         }
         if (managedMainStage != null) {
+            if (managedMainStage.isIconified()) {
+                managedMainStage.setIconified(false);
+            }
             managedMainStage.toFront();
             managedMainStage.requestFocus();
         }
