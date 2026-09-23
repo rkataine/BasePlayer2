@@ -119,6 +119,10 @@ public final class ProjectService {
       trackSpec.displayName = track.getDisplayName();
 
       for (Sample sample : track.getSamples()) {
+        if (sample.getDataType() == Sample.DataType.VCF && sample.getPath() != null) {
+          trackSpec.samples.add(capturePathAsSampleFile("VCF", sample.getPath(), projectFile));
+          continue;
+        }
         if (sample.getBamFile() == null && sample.getBedTrack() == null) {
           continue;
         }
@@ -130,7 +134,15 @@ public final class ProjectService {
 
       for (File vcf : vcfManager.getVcfFilesForTrackIndex(trackIndex)) {
         if (vcf == null) continue;
-        trackSpec.samples.add(capturePathAsSampleFile("VCF", vcf.toPath(), projectFile));
+        String pathKey = vcf.toPath().toAbsolutePath().normalize().toString();
+        boolean alreadyListed = trackSpec.samples.stream().anyMatch(spec ->
+            "VCF".equalsIgnoreCase(spec.type)
+                && ((spec.path != null
+                    && pathKey.equals(Path.of(spec.path).toAbsolutePath().normalize().toString()))
+                    || (spec.pathRelative != null && spec.pathRelative.equals(vcf.getName()))));
+        if (!alreadyListed) {
+          trackSpec.samples.add(capturePathAsSampleFile("VCF", vcf.toPath(), projectFile));
+        }
       }
 
       if (trackSpec.samples.isEmpty()) {
@@ -539,11 +551,21 @@ public final class ProjectService {
             if (fileSpec == null) continue;
             String type = fileSpec.type == null ? "" : fileSpec.type.toUpperCase(Locale.ROOT);
 
-            // VCF: ensure a named track exists; file is loaded later (deduped).
+            // VCF: ensure a named track exists and list the file in the sidebar.
             if ("VCF".equals(type)) {
               if (track == null) {
                 track = new SampleTrack(
                     trackSpec.displayName != null ? trackSpec.displayName : "Sample");
+              }
+              Path path = PathResolver.resolve(fileSpec.path, fileSpec.pathRelative, projectFile);
+              if (path != null && path.toFile().exists()) {
+                Sample vcfSample = new Sample(path, Sample.DataType.VCF);
+                vcfSample.visible = fileSpec.visible;
+                vcfSample.overlay = fileSpec.overlay;
+                track.addSample(vcfSample);
+              } else if (fileSpec.path != null || fileSpec.pathRelative != null) {
+                warnings.add("Missing VCF: "
+                    + (fileSpec.path != null ? fileSpec.path : fileSpec.pathRelative));
               }
               continue;
             }

@@ -1012,4 +1012,21 @@ public class VariantList {
         }
         return types;
     }
+
+    /**
+     * Collect annotated {@link org.baseplayer.variant.annotation.VariantEffect} values
+     * present in this list (skips unannotated nodes).
+     */
+    public java.util.Set<org.baseplayer.variant.annotation.VariantEffect> collectVariantEffects() {
+        java.util.Set<org.baseplayer.variant.annotation.VariantEffect> effects =
+            java.util.EnumSet.noneOf(org.baseplayer.variant.annotation.VariantEffect.class);
+        VariantNode current = head;
+        while (current != null) {
+            if (current.annotation != null && current.annotation.effect() != null) {
+                effects.add(current.annotation.effect());
+            }
+            current = current.next;
+        }
+        return effects;
+    }
 }

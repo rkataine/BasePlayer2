@@ -236,10 +236,10 @@ public class VariantInfoPopup extends InfoPopup {
     return switch (type) {
       case SNV -> Color.web("#4A90E2");
       case INSERTION -> Color.web("#7ED321");
-      case DELETION -> Color.web("#F5A623");
+      case DELETION -> Color.rgb(200, 100, 100);
       case MNV -> Color.web("#BD10E0");
       case COMPLEX -> Color.web("#B8E986");
-      case SV_DELETION -> Color.web("#00cc44");
+      case SV_DELETION -> Color.rgb(200, 100, 100);
       case SV_INVERSION -> Color.web("#4488ff");
       case SV_DUPLICATION -> Color.web("#c0c0d0");
       case SV_INSERTION -> Color.web("#33cc66");

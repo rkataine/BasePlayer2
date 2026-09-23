@@ -5,7 +5,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,6 +19,7 @@ import org.baseplayer.io.VcfManager;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.annotation.VariantEffect;
 
 import javafx.application.Platform;
@@ -83,14 +84,7 @@ public class VariantFiltersPanel {
         GridPane variantTypesContainer,
         CheckBox selectAllTypesCheckBox,
         CheckBox selectAllEffectsCheckBox,
-        CheckBox missenseCheckBox,
-        CheckBox synonymousCheckBox,
-        CheckBox stopFrameshiftCheckBox,
-        CheckBox spliceSiteCheckBox,
-        CheckBox utrCheckBox,
-        CheckBox noncodingCheckBox,
-        CheckBox intronicCheckBox,
-        CheckBox intergenicCheckBox,
+        GridPane effectCategoriesContainer,
         Slider qualitySlider,
         Slider coverageSlider,
         Slider alleleFreqSlider,
@@ -109,6 +103,49 @@ public class VariantFiltersPanel {
         Button reloadBannerButton
     ) {}
 
+    /** UI groups that map one checkbox to one or more {@link VariantEffect} values. */
+    private enum EffectCategory {
+        MISSENSE("Missense", VariantEffect.CODING_MISSENSE),
+        SYNONYMOUS("Synonymous", VariantEffect.CODING_SYNONYMOUS),
+        STOP_FRAMESHIFT("Stop/Frameshift",
+            VariantEffect.CODING_STOP_GAIN,
+            VariantEffect.CODING_STOP_LOSS,
+            VariantEffect.CODING_FRAMESHIFT),
+        INFRAME("In-frame", VariantEffect.CODING_INFRAME),
+        CODING("Coding", VariantEffect.CODING_OTHER),
+        SPLICE("Splice Site", VariantEffect.SPLICE_SITE),
+        UTR("UTR", VariantEffect.UTR5, VariantEffect.UTR3),
+        NONCODING("Non-coding", VariantEffect.NONCODING_GENE),
+        INTRONIC("Intronic", VariantEffect.INTRONIC),
+        INTERGENIC("Intergenic", VariantEffect.INTERGENIC);
+
+        final String label;
+        final EnumSet<VariantEffect> effects;
+
+        EffectCategory(String label, VariantEffect first, VariantEffect... rest) {
+            this.label = label;
+            this.effects = EnumSet.of(first, rest);
+        }
+
+        boolean matchesAny(Set<VariantEffect> present) {
+            for (VariantEffect effect : effects) {
+                if (present.contains(effect)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        boolean matchesAllowed(Set<VariantEffect> allowed) {
+            for (VariantEffect effect : effects) {
+                if (allowed.contains(effect)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     private Nodes nodes;
     private Runnable onDebouncedChange;
     private Runnable onImmediateChange;
@@ -116,9 +153,15 @@ public class VariantFiltersPanel {
 
     private boolean localSuppress;
     private final Map<VcfVariantType, CheckBox> variantTypeCheckBoxes = new HashMap<>();
+    private final Map<EffectCategory, CheckBox> effectCategoryCheckBoxes = new LinkedHashMap<>();
     private final List<ThresholdFilter> thresholdFilters = new ArrayList<>();
     private final List<SetFilter> setFilters = new ArrayList<>();
     private final List<FlagFilter> flagFilters = new ArrayList<>();
+    private final ChangeListener<Boolean> effectCheckListener = (obs, oldVal, newVal) -> {
+        updateSelectAllEffectsState();
+        refreshReloadBannerFromFilters();
+        scheduleImmediateChange();
+    };
     private final Map<String, Double> filtersSnapshotHash = new HashMap<>();
     private final Map<String, Set<?>> setFiltersSnapshotHash = new HashMap<>();
     private final Map<String, Boolean> flagFiltersSnapshotHash = new HashMap<>();
@@ -228,16 +271,9 @@ public class VariantFiltersPanel {
         }
 
         Set<VariantEffect> effects = filter.getAllowedEffects();
-        nodes.missenseCheckBox().setSelected(effects.contains(VariantEffect.CODING_MISSENSE));
-        nodes.synonymousCheckBox().setSelected(effects.contains(VariantEffect.CODING_SYNONYMOUS));
-        nodes.stopFrameshiftCheckBox().setSelected(
-            effects.contains(VariantEffect.CODING_STOP_GAIN) || effects.contains(VariantEffect.CODING_FRAMESHIFT));
-        nodes.spliceSiteCheckBox().setSelected(effects.contains(VariantEffect.SPLICE_SITE));
-        nodes.utrCheckBox().setSelected(
-            effects.contains(VariantEffect.UTR5) || effects.contains(VariantEffect.UTR3));
-        nodes.noncodingCheckBox().setSelected(effects.contains(VariantEffect.NONCODING_GENE));
-        nodes.intronicCheckBox().setSelected(effects.contains(VariantEffect.INTRONIC));
-        nodes.intergenicCheckBox().setSelected(effects.contains(VariantEffect.INTERGENIC));
+        for (Map.Entry<EffectCategory, CheckBox> entry : effectCategoryCheckBoxes.entrySet()) {
+            entry.getValue().setSelected(entry.getKey().matchesAllowed(effects));
+        }
 
         nodes.qualitySlider().setValue(filter.getMinQuality());
         nodes.coverageSlider().setValue(filter.getMinDepth());
@@ -319,25 +355,16 @@ public class VariantFiltersPanel {
     }
 
     private Set<VariantEffect> currentAllowedEffects() {
+        if (effectCategoryCheckBoxes.isEmpty()) {
+            // No annotated effects UI yet — do not over-filter.
+            return EnumSet.allOf(VariantEffect.class);
+        }
         Set<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
-        if (nodes == null) {
-            return effects;
+        for (Map.Entry<EffectCategory, CheckBox> entry : effectCategoryCheckBoxes.entrySet()) {
+            if (entry.getValue().isSelected()) {
+                effects.addAll(entry.getKey().effects);
+            }
         }
-        if (nodes.missenseCheckBox().isSelected()) effects.add(VariantEffect.CODING_MISSENSE);
-        if (nodes.synonymousCheckBox().isSelected()) effects.add(VariantEffect.CODING_SYNONYMOUS);
-        if (nodes.stopFrameshiftCheckBox().isSelected()) {
-            effects.add(VariantEffect.CODING_STOP_GAIN);
-            effects.add(VariantEffect.CODING_STOP_LOSS);
-            effects.add(VariantEffect.CODING_FRAMESHIFT);
-        }
-        if (nodes.spliceSiteCheckBox().isSelected()) effects.add(VariantEffect.SPLICE_SITE);
-        if (nodes.utrCheckBox().isSelected()) {
-            effects.add(VariantEffect.UTR5);
-            effects.add(VariantEffect.UTR3);
-        }
-        if (nodes.noncodingCheckBox().isSelected()) effects.add(VariantEffect.NONCODING_GENE);
-        if (nodes.intronicCheckBox().isSelected()) effects.add(VariantEffect.INTRONIC);
-        if (nodes.intergenicCheckBox().isSelected()) effects.add(VariantEffect.INTERGENIC);
         return effects;
     }
 
@@ -349,6 +376,7 @@ public class VariantFiltersPanel {
             List<VcfManager.CachedChromosomeVariants> sources,
             VariantFilter currentFilter) {
         populateVariantTypes(collectPresentVariantTypes(sources), currentFilter);
+        populateEffectCategories(collectPresentVariantEffects(sources), currentFilter);
     }
 
     public void populateVariantTypes(Collection<VcfVariantType> presentTypes) {
@@ -363,69 +391,97 @@ public class VariantFiltersPanel {
         boolean previousLocalSuppress = localSuppress;
         localSuppress = true;
         try {
+            Map<VcfVariantType, Boolean> previousSelection = new HashMap<>();
+            for (Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+                previousSelection.put(entry.getKey(), entry.getValue().isSelected());
+            }
+
+            nodes.variantTypesContainer().getChildren().clear();
+            variantTypeCheckBoxes.clear();
+
             Set<VcfVariantType> present = (presentTypes != null && !presentTypes.isEmpty())
                 ? EnumSet.copyOf(presentTypes)
                 : EnumSet.noneOf(VcfVariantType.class);
 
-            boolean hasSvTypes = present.stream().anyMatch(t ->
-                t == VcfVariantType.SV_DELETION || t == VcfVariantType.SV_INSERTION
-                    || t == VcfVariantType.SV_DUPLICATION || t == VcfVariantType.SV_INVERSION
-                    || t == VcfVariantType.SV_TRANSLOCATION || t == VcfVariantType.SV_BREAKEND);
-
-            Set<VcfVariantType> typesToShow = new LinkedHashSet<>();
-            for (VcfVariantType type : present) {
-                switch (type) {
-                    case SNV, MNV, COMPLEX -> typesToShow.add(type);
-                    case INSERTION -> {
-                        if (!hasSvTypes || !present.contains(VcfVariantType.SV_INSERTION)) {
-                            typesToShow.add(type);
-                        }
-                    }
-                    case DELETION -> {
-                        if (!hasSvTypes || !present.contains(VcfVariantType.SV_DELETION)) {
-                            typesToShow.add(type);
-                        }
-                    }
-                    case SV_INSERTION, SV_DELETION, SV_DUPLICATION, SV_INVERSION, SV_TRANSLOCATION, SV_BREAKEND -> {
-                        if (hasSvTypes) {
-                            typesToShow.add(type);
-                        }
-                    }
-                }
-            }
-
-            Set<VcfVariantType> addedInThisCall = new HashSet<>();
-            for (VcfVariantType type : typesToShow) {
-                if (!variantTypeCheckBoxes.containsKey(type)) {
-                    CheckBox cb = new CheckBox(getVariantTypeLabel(type));
-                    boolean isTypeSelected = currentFilter != null && currentFilter.getAllowedTypes().contains(type);
-                    cb.setSelected(isTypeSelected);
-                    cb.getStyleClass().add("filter-checkbox");
-                    cb.selectedProperty().addListener((obs, oldVal, newVal) -> {
-                        updateSelectAllTypesState();
-                        refreshReloadBannerFromFilters();
-                        scheduleImmediateChange();
-                    });
-                    variantTypeCheckBoxes.put(type, cb);
-                    addedInThisCall.add(type);
-
-                    if (type == VcfVariantType.SV_INSERTION && present.contains(VcfVariantType.INSERTION)) {
-                        variantTypeCheckBoxes.put(VcfVariantType.INSERTION, cb);
-                    } else if (type == VcfVariantType.SV_DELETION && present.contains(VcfVariantType.DELETION)) {
-                        variantTypeCheckBoxes.put(VcfVariantType.DELETION, cb);
-                    }
-                }
-            }
+            Set<VcfVariantType> typesToShow = VariantTypeVisuals.typesForUi(present);
 
             int columnCount = 3;
-            for (VcfVariantType type : addedInThisCall) {
-                CheckBox cb = variantTypeCheckBoxes.get(type);
-                int row = nodes.variantTypesContainer().getChildren().size() / columnCount;
-                int col = nodes.variantTypesContainer().getChildren().size() % columnCount;
-                nodes.variantTypesContainer().add(cb, col, row);
+            int index = 0;
+            Set<VcfVariantType> placed = new HashSet<>();
+            for (VcfVariantType type : typesToShow) {
+                if (placed.contains(type)) {
+                    continue;
+                }
+                CheckBox cb = new CheckBox(getVariantTypeLabel(type));
+                boolean selected = currentFilter != null
+                    ? currentFilter.getAllowedTypes().contains(type)
+                    : previousSelection.getOrDefault(type, true);
+                cb.setSelected(selected);
+                cb.getStyleClass().add("filter-checkbox");
+                cb.selectedProperty().addListener((obs, oldVal, newVal) -> {
+                    updateSelectAllTypesState();
+                    refreshReloadBannerFromFilters();
+                    scheduleImmediateChange();
+                });
+                variantTypeCheckBoxes.put(type, cb);
+                placed.add(type);
+
+                for (VcfVariantType linked : VariantTypeVisuals.linkedTypes(type, present)) {
+                    variantTypeCheckBoxes.put(linked, cb);
+                    placed.add(linked);
+                }
+
+                nodes.variantTypesContainer().add(cb, index % columnCount, index / columnCount);
+                index++;
             }
 
             updateSelectAllTypesState();
+        } finally {
+            localSuppress = previousLocalSuppress;
+        }
+    }
+
+    public void populateEffectCategories(
+            Collection<VariantEffect> presentEffects,
+            VariantFilter currentFilter) {
+        if (nodes == null || nodes.effectCategoriesContainer() == null) {
+            return;
+        }
+
+        boolean previousLocalSuppress = localSuppress;
+        localSuppress = true;
+        try {
+            Map<EffectCategory, Boolean> previousSelection = new HashMap<>();
+            for (Map.Entry<EffectCategory, CheckBox> entry : effectCategoryCheckBoxes.entrySet()) {
+                previousSelection.put(entry.getKey(), entry.getValue().isSelected());
+            }
+
+            nodes.effectCategoriesContainer().getChildren().clear();
+            effectCategoryCheckBoxes.clear();
+
+            Set<VariantEffect> present = (presentEffects != null && !presentEffects.isEmpty())
+                ? EnumSet.copyOf(presentEffects)
+                : EnumSet.noneOf(VariantEffect.class);
+
+            int columnCount = 4;
+            int index = 0;
+            for (EffectCategory category : EffectCategory.values()) {
+                if (!category.matchesAny(present)) {
+                    continue;
+                }
+                CheckBox cb = new CheckBox(category.label);
+                boolean selected = currentFilter != null
+                    ? category.matchesAllowed(currentFilter.getAllowedEffects())
+                    : previousSelection.getOrDefault(category, true);
+                cb.setSelected(selected);
+                cb.getStyleClass().add("filter-checkbox");
+                cb.selectedProperty().addListener(effectCheckListener);
+                effectCategoryCheckBoxes.put(category, cb);
+                nodes.effectCategoriesContainer().add(cb, index % columnCount, index / columnCount);
+                index++;
+            }
+
+            updateSelectAllEffectsState();
         } finally {
             localSuppress = previousLocalSuppress;
         }
@@ -435,20 +491,15 @@ public class VariantFiltersPanel {
         if (nodes == null) {
             return;
         }
-        for (CheckBox cb : variantTypeCheckBoxes.values()) {
+        for (CheckBox cb : new HashSet<>(variantTypeCheckBoxes.values())) {
             cb.setSelected(true);
         }
         if (nodes.selectAllTypesCheckBox() != null) {
             nodes.selectAllTypesCheckBox().setSelected(true);
         }
-        nodes.missenseCheckBox().setSelected(true);
-        nodes.synonymousCheckBox().setSelected(true);
-        nodes.stopFrameshiftCheckBox().setSelected(true);
-        nodes.spliceSiteCheckBox().setSelected(true);
-        nodes.utrCheckBox().setSelected(true);
-        nodes.noncodingCheckBox().setSelected(true);
-        nodes.intronicCheckBox().setSelected(true);
-        nodes.intergenicCheckBox().setSelected(true);
+        for (CheckBox cb : effectCategoryCheckBoxes.values()) {
+            cb.setSelected(true);
+        }
         if (nodes.selectAllEffectsCheckBox() != null) {
             nodes.selectAllEffectsCheckBox().setSelected(true);
         }
@@ -459,6 +510,9 @@ public class VariantFiltersPanel {
         if (nodes.advancedFiltersContainer() != null) {
             nodes.advancedFiltersContainer().getChildren().clear();
         }
+        updateSelectAllTypesState();
+        updateSelectAllEffectsState();
+        refreshReloadBannerFromFilters();
     }
 
     public void setControlsLocked(boolean locked) {
@@ -607,6 +661,10 @@ public class VariantFiltersPanel {
         return variantTypeCheckBoxes;
     }
 
+    public void clearEffectCategoryCheckBoxes() {
+        effectCategoryCheckBoxes.clear();
+    }
+
     public void cancelPendingFilterTimers() {
         // Debounce lives in VariantManagerController.
     }
@@ -737,19 +795,7 @@ public class VariantFiltersPanel {
     }
 
     public static String getVariantTypeLabel(VcfVariantType type) {
-        return switch (type) {
-            case SNV -> "SNV";
-            case INSERTION -> "INS";
-            case DELETION -> "DEL";
-            case MNV -> "MNV";
-            case SV_DELETION -> "DEL";
-            case SV_INSERTION -> "INS";
-            case SV_DUPLICATION -> "DUP";
-            case SV_INVERSION -> "INV";
-            case SV_TRANSLOCATION -> "TRA";
-            case SV_BREAKEND -> "BND";
-            case COMPLEX -> "Complex";
-        };
+        return VariantTypeVisuals.shortLabel(type);
     }
 
     private void setupSliderBindings() {
@@ -804,32 +850,13 @@ public class VariantFiltersPanel {
         nodes.selectAllEffectsCheckBox().setOnAction(e -> {
             boolean selectAll = nodes.selectAllEffectsCheckBox().isSelected();
             localSuppress = true;
-            nodes.missenseCheckBox().setSelected(selectAll);
-            nodes.synonymousCheckBox().setSelected(selectAll);
-            nodes.stopFrameshiftCheckBox().setSelected(selectAll);
-            nodes.spliceSiteCheckBox().setSelected(selectAll);
-            nodes.utrCheckBox().setSelected(selectAll);
-            nodes.noncodingCheckBox().setSelected(selectAll);
-            nodes.intronicCheckBox().setSelected(selectAll);
-            nodes.intergenicCheckBox().setSelected(selectAll);
+            for (CheckBox cb : effectCategoryCheckBoxes.values()) {
+                cb.setSelected(selectAll);
+            }
             localSuppress = false;
             refreshReloadBannerFromFilters();
             scheduleImmediateChange();
         });
-
-        ChangeListener<Boolean> effectCheckListener = (obs, oldVal, newVal) -> {
-            updateSelectAllEffectsState();
-            refreshReloadBannerFromFilters();
-            scheduleImmediateChange();
-        };
-        nodes.missenseCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.synonymousCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.stopFrameshiftCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.spliceSiteCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.utrCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.noncodingCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.intronicCheckBox().selectedProperty().addListener(effectCheckListener);
-        nodes.intergenicCheckBox().selectedProperty().addListener(effectCheckListener);
 
         nodes.cancerOnlyCheckBox().setOnAction(e -> {
             refreshReloadBannerFromFilters();
@@ -839,17 +866,19 @@ public class VariantFiltersPanel {
     }
 
     private void updateSelectAllEffectsState() {
+        if (nodes == null || nodes.selectAllEffectsCheckBox() == null) {
+            return;
+        }
         boolean previousLocalSuppress = localSuppress;
         localSuppress = true;
         try {
-            boolean allSelected = nodes.missenseCheckBox().isSelected()
-                && nodes.synonymousCheckBox().isSelected()
-                && nodes.stopFrameshiftCheckBox().isSelected()
-                && nodes.spliceSiteCheckBox().isSelected()
-                && nodes.utrCheckBox().isSelected()
-                && nodes.noncodingCheckBox().isSelected()
-                && nodes.intronicCheckBox().isSelected()
-                && nodes.intergenicCheckBox().isSelected();
+            boolean allSelected = !effectCategoryCheckBoxes.isEmpty();
+            for (CheckBox cb : effectCategoryCheckBoxes.values()) {
+                if (!cb.isSelected()) {
+                    allSelected = false;
+                    break;
+                }
+            }
             nodes.selectAllEffectsCheckBox().setSelected(allSelected);
         } finally {
             localSuppress = previousLocalSuppress;
@@ -901,6 +930,21 @@ public class VariantFiltersPanel {
             VariantList variants = cached.variants();
             if (variants != null && !variants.isEmpty()) {
                 combined.addAll(variants.collectVariantTypes());
+            }
+        }
+        return combined;
+    }
+
+    private static Set<VariantEffect> collectPresentVariantEffects(
+            List<VcfManager.CachedChromosomeVariants> sources) {
+        Set<VariantEffect> combined = EnumSet.noneOf(VariantEffect.class);
+        if (sources == null) {
+            return combined;
+        }
+        for (VcfManager.CachedChromosomeVariants cached : sources) {
+            VariantList variants = cached.variants();
+            if (variants != null && !variants.isEmpty()) {
+                combined.addAll(variants.collectVariantEffects());
             }
         }
         return combined;

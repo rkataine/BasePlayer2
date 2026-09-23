@@ -64,6 +64,19 @@ public class Sample implements Closeable {
     this.overlay = true; // BED tracks are transparent by default
   }
 
+  public Sample(Path vcfPath, DataType type) {
+    if (type != DataType.VCF) {
+      throw new IllegalArgumentException("Use typed constructors for BAM/BED samples");
+    }
+    this.path = vcfPath;
+    this.dataType = DataType.VCF;
+    this.bamFile = null;
+    this.bedTrack = null;
+    this.name = vcfPath.getFileName() != null
+        ? vcfPath.getFileName().toString()
+        : vcfPath.toString();
+  }
+
   // ── Generic accessors ──
 
   public String getName() { return name; }

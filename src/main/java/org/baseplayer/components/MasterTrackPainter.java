@@ -1,11 +1,14 @@
 package org.baseplayer.components;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.draw.CoverageDrawer;
 import org.baseplayer.services.SampleRegistry;
@@ -16,6 +19,7 @@ import org.baseplayer.variant.VariantDrawSeek;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
 
 import javafx.application.Platform;
@@ -52,6 +56,16 @@ public class MasterTrackPainter {
   }
 
   private volatile List<SvSpan> densitySvSpans = java.util.List.of();
+  private volatile Set<VcfVariantType> presentTypes =
+      EnumSet.noneOf(VcfVariantType.class);
+
+  private record LegendHit(double x, double y, double w, double h, VcfVariantType displayType) {
+    boolean contains(double px, double py) {
+      return px >= x && px <= x + w && py >= y && py <= y + h;
+    }
+  }
+
+  private final List<LegendHit> legendHits = new ArrayList<>();
 
   /** True while zoom or pan was deferring density last paint frame. */
   private volatile boolean wasDeferringDensityLastFrame = false;
@@ -64,11 +78,22 @@ public class MasterTrackPainter {
 
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
+    presentTypes = variantList != null && !variantList.isEmpty()
+        ? EnumSet.copyOf(variantList.collectVariantTypes())
+        : EnumSet.noneOf(VcfVariantType.class);
   }
 
   public void clearVariantList() {
     this.variantList = null;
+    presentTypes = EnumSet.noneOf(VcfVariantType.class);
+    clearDensityArrays();
     densityCached = null;
+    densityCachedStart = -1;
+    densityCachedEnd = -1;
+    densityBusy = false;
+  }
+
+  private void clearDensityArrays() {
     densitySnv = null;
     densityIndel = null;
     densityDel = null;
@@ -78,29 +103,52 @@ public class MasterTrackPainter {
     densityTra = null;
     densityBnd = null;
     densitySvSpans = java.util.List.of();
-    densityCachedStart = -1;
-    densityCachedEnd = -1;
-    densityBusy = false;
   }
 
   public void forceCalculateDensity(DrawStack drawStack) {
     VariantList variants = this.variantList;
     if (variants != null && !variants.isEmpty()) {
       densityCached = null;
-      densitySnv = null;
-      densityIndel = null;
-      densityDel = null;
-      densityInv = null;
-      densityDup = null;
-      densityIns = null;
-      densityTra = null;
-      densityBnd = null;
-      densitySvSpans = java.util.List.of();
+      clearDensityArrays();
       densityCachedStart = -1;
       densityCachedEnd = -1;
       densityBusy = false;
       triggerVariantDensityCompute(variants, drawStack);
     }
+  }
+
+  /**
+   * Toggle canvas-only visibility for a density legend hit. Does not change
+   * Variant Manager filter checkboxes. Returns true if a legend was hit.
+   */
+  public boolean handleLegendClick(double x, double y) {
+    LegendHit hit = null;
+    for (LegendHit candidate : legendHits) {
+      if (candidate.contains(x, y)) {
+        hit = candidate;
+        break;
+      }
+    }
+    if (hit == null) {
+      return false;
+    }
+
+    Set<VcfVariantType> present = presentTypes != null
+        ? presentTypes
+        : EnumSet.noneOf(VcfVariantType.class);
+    Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(hit.displayType(), present);
+    VcfManager.getInstance().toggleCanvasTypeVisibility(linked);
+    return true;
+  }
+
+  /** Cursor hint when hovering a clickable density legend. */
+  public boolean isOverLegend(double x, double y) {
+    for (LegendHit hit : legendHits) {
+      if (hit.contains(x, y)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public void drawMasterAggregates(
@@ -195,32 +243,18 @@ public class MasterTrackPainter {
     if (variants == null || variants.isEmpty()) {
       if (densityCached != null) {
         densityCached = null;
-        densitySnv = null;
-        densityIndel = null;
-        densityDel = null;
-        densityInv = null;
-        densityDup = null;
-        densityIns = null;
-        densityTra = null;
-        densityBnd = null;
+        clearDensityArrays();
         densityCachedStart = -1;
         densityCachedEnd = -1;
         densityBusy = false;
       }
+      legendHits.clear();
       return;
     }
 
     if (variants != densityCached) {
       densityBusy = false;
-      densitySnv = null;
-      densityIndel = null;
-      densityDel = null;
-      densityInv = null;
-      densityDup = null;
-      densityIns = null;
-      densityTra = null;
-      densityBnd = null;
-      densitySvSpans = java.util.List.of();
+      clearDensityArrays();
       densityCachedStart = -1;
       densityCachedEnd = -1;
     }
@@ -258,14 +292,17 @@ public class MasterTrackPainter {
     
     wasDeferringDensityLastFrame = deferDensity;
 
+    legendHits.clear();
+
     double areaH = masterTrackHeight - 4;
     double svH = densitySvSpans.isEmpty() ? 0 : Math.min(10, areaH * 0.22);
     double densH = areaH - svH;
 
+    int scaleMax = Math.max(1, densityMax);
     double pixelSize = drawStack.getPixelSize();
     if (pixelSize > 1.0) {
       // Zoomed in: paint exact allele-aligned bars from the live filter chain.
-      drawPreciseDensityBars(
+      scaleMax = drawPreciseDensityBars(
           gc, drawStack, canvasWidth, 2, densH, variants,
           org.baseplayer.io.VcfManager.getInstance().getCurrentFilter());
     } else {
@@ -284,6 +321,8 @@ public class MasterTrackPainter {
     if (svH >= 4) {
       drawSvSpanBars(gc, drawStack, canvasWidth, 2 + densH, svH);
     }
+
+    drawDensityChrome(gc, canvasWidth, 2, densH > 0 ? densH : areaH, scaleMax);
   }
 
   private void triggerVariantDensityCompute(VariantList variants, DrawStack drawStack) {
@@ -292,13 +331,7 @@ public class MasterTrackPainter {
     final int myGeneration = ++densityGeneration;
 
     if (variants == null) {
-      densityDel = null;
-      densityInv = null;
-      densityDup = null;
-      densityIns = null;
-      densityTra = null;
-      densityBnd = null;
-      densitySvSpans = java.util.List.of();
+      clearDensityArrays();
       densityBusy = false;
       return;
     }
@@ -569,8 +602,9 @@ public class MasterTrackPainter {
   /**
    * Zoomed-in density: one bar per allele at exact genomic width (matches sample-track
    * variant rectangles). Avoids stretched 600-bin sampling which looks glitchy/laggy.
+   * @return scale max (sample count) used for the left axis
    */
-  private void drawPreciseDensityBars(
+  private int drawPreciseDensityBars(
       GraphicsContext gc,
       DrawStack drawStack,
       double canvasWidth,
@@ -579,12 +613,12 @@ public class MasterTrackPainter {
       VariantList variants,
       VariantFilter activeFilter) {
     if (variants == null || variants.isEmpty() || h <= 0 || canvasWidth <= 0) {
-      return;
+      return 1;
     }
 
     List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
     if (displayed.isEmpty()) {
-      return;
+      return 1;
     }
 
     Map<SampleTrack, Integer> displayedTrackToIndex = new IdentityHashMap<>(displayed.size() * 2);
@@ -607,10 +641,13 @@ public class MasterTrackPainter {
 
     variants.ensureVisibleChain(activeFilter);
 
-    record PreciseBar(double x, double w, int count, String color, double alpha) {}
+    record PreciseBar(double x, double w, int count, VcfVariantType type) {}
     List<PreciseBar> bars = new ArrayList<>();
 
     java.util.function.Consumer<VariantNode> collect = node -> {
+      if (!VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
+        return;
+      }
       int count = 0;
       for (VariantNode.SampleCall call : node.getSamples()) {
         if (call == null || call.getTrack() == null) {
@@ -649,20 +686,7 @@ public class MasterTrackPainter {
         w = 1;
       }
 
-      String color;
-      double alpha;
-      switch (node.type) {
-        case SNV -> { color = "#ff6666"; alpha = 0.55; }
-        case INSERTION, DELETION, MNV -> { color = "#ffaa44"; alpha = 0.55; }
-        case SV_DELETION -> { color = "#00cc44"; alpha = 0.65; }
-        case SV_INVERSION -> { color = "#4488ff"; alpha = 0.65; }
-        case SV_DUPLICATION -> { color = "#c0c0d0"; alpha = 0.65; }
-        case SV_INSERTION -> { color = "#33cc66"; alpha = 0.65; }
-        case SV_TRANSLOCATION -> { color = "#ffdd00"; alpha = 0.65; }
-        case SV_BREAKEND -> { color = "#c0c0c0"; alpha = 0.65; }
-        default -> { color = "#ffaa44"; alpha = 0.5; }
-      }
-      bars.add(new PreciseBar(x, w, count, color, alpha));
+      bars.add(new PreciseBar(x, w, count, node.type));
     };
 
     for (VariantNode node : variants.getVisibleSvByPosition()) {
@@ -688,11 +712,11 @@ public class MasterTrackPainter {
       if (bh < 1) {
         bh = 1;
       }
-      gc.setFill(Color.web(bar.color(), bar.alpha()));
+      Color c = VariantTypeVisuals.color(bar.type());
+      gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.6));
       gc.fillRect(bar.x(), bottom - bh, bar.w(), bh);
     }
-
-    drawDensityScale(gc, canvasWidth - 38, top, h, maxC);
+    return maxC;
   }
 
   private void drawDensityBars(
@@ -702,17 +726,34 @@ public class MasterTrackPainter {
       double top,
       double h) {
     if (drawStack.getViewLength() <= 0) return;
-    if (densityDel == null && densitySnv == null && densityIndel == null) return;
+    if (densityDel == null && densitySnv == null && densityIndel == null
+        && densityInv == null && densityDup == null && densityIns == null
+        && densityTra == null && densityBnd == null) {
+      return;
+    }
 
     double maxBarH = h - 1;
     int maxC = Math.max(1, densityMax);
 
     double cachedViewLength = densityCachedEnd - densityCachedStart;
     double currentViewLength = drawStack.getViewLength();
-    
+
     // Apply zoom-aware scaling and translation (same as GenomicCanvas zoom preview)
     double scaleX = cachedViewLength / Math.max(1, currentViewLength);
     double translateX = (densityCachedStart - drawStack.getViewStart()) * (canvasWidth / Math.max(1, currentViewLength));
+
+    VcfManager vcfManager = VcfManager.getInstance();
+    boolean showSnv = vcfManager.isCanvasTypeVisible(VcfVariantType.SNV);
+    boolean showIndel = vcfManager.isCanvasTypeVisible(VcfVariantType.INSERTION)
+        || vcfManager.isCanvasTypeVisible(VcfVariantType.DELETION)
+        || vcfManager.isCanvasTypeVisible(VcfVariantType.MNV)
+        || vcfManager.isCanvasTypeVisible(VcfVariantType.COMPLEX);
+    boolean showDel = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_DELETION);
+    boolean showInv = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_INVERSION);
+    boolean showDup = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_DUPLICATION);
+    boolean showIns = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_INSERTION);
+    boolean showTra = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_TRANSLOCATION);
+    boolean showBnd = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_BREAKEND);
 
     for (int px = 0; px < (int) canvasWidth; px++) {
       // Map screen pixel to cached coordinate space, accounting for both scale and translation
@@ -735,79 +776,123 @@ public class MasterTrackPainter {
       int bndVal = 0;
 
       for (int b = b0; b <= b1; b++) {
-        if (densitySnv != null) snvVal = Math.max(snvVal, densitySnv[b]);
-        if (densityIndel != null) indelVal = Math.max(indelVal, densityIndel[b]);
-        if (densityDel != null) delVal = Math.max(delVal, densityDel[b]);
-        if (densityInv != null) invVal = Math.max(invVal, densityInv[b]);
-        if (densityDup != null) dupVal = Math.max(dupVal, densityDup[b]);
-        if (densityIns != null) insVal = Math.max(insVal, densityIns[b]);
-        if (densityTra != null) traVal = Math.max(traVal, densityTra[b]);
-        if (densityBnd != null) bndVal = Math.max(bndVal, densityBnd[b]);
+        if (showSnv && densitySnv != null) snvVal = Math.max(snvVal, densitySnv[b]);
+        if (showIndel && densityIndel != null) indelVal = Math.max(indelVal, densityIndel[b]);
+        if (showDel && densityDel != null) delVal = Math.max(delVal, densityDel[b]);
+        if (showInv && densityInv != null) invVal = Math.max(invVal, densityInv[b]);
+        if (showDup && densityDup != null) dupVal = Math.max(dupVal, densityDup[b]);
+        if (showIns && densityIns != null) insVal = Math.max(insVal, densityIns[b]);
+        if (showTra && densityTra != null) traVal = Math.max(traVal, densityTra[b]);
+        if (showBnd && densityBnd != null) bndVal = Math.max(bndVal, densityBnd[b]);
       }
 
-      record BarData(int value, String color, double alpha) {
+      record BarData(int value, VcfVariantType type) {
       }
       List<BarData> bars = new ArrayList<>();
-      if (snvVal > 0) bars.add(new BarData(snvVal, "#ff6666", 0.5));
-      if (indelVal > 0) bars.add(new BarData(indelVal, "#ffaa44", 0.5));
-      if (delVal > 0) bars.add(new BarData(delVal, "#00cc44", 0.6));
-      if (invVal > 0) bars.add(new BarData(invVal, "#4488ff", 0.6));
-      if (dupVal > 0) bars.add(new BarData(dupVal, "#c0c0d0", 0.6));
-      if (insVal > 0) bars.add(new BarData(insVal, "#33cc66", 0.6));
-      if (traVal > 0) bars.add(new BarData(traVal, "#ffdd00", 0.6));
-      if (bndVal > 0) bars.add(new BarData(bndVal, "#c0c0c0", 0.6));
+      if (snvVal > 0) bars.add(new BarData(snvVal, VcfVariantType.SNV));
+      if (indelVal > 0) bars.add(new BarData(indelVal, VcfVariantType.DELETION));
+      if (delVal > 0) bars.add(new BarData(delVal, VcfVariantType.SV_DELETION));
+      if (invVal > 0) bars.add(new BarData(invVal, VcfVariantType.SV_INVERSION));
+      if (dupVal > 0) bars.add(new BarData(dupVal, VcfVariantType.SV_DUPLICATION));
+      if (insVal > 0) bars.add(new BarData(insVal, VcfVariantType.SV_INSERTION));
+      if (traVal > 0) bars.add(new BarData(traVal, VcfVariantType.SV_TRANSLOCATION));
+      if (bndVal > 0) bars.add(new BarData(bndVal, VcfVariantType.SV_BREAKEND));
 
       bars.sort((a, b) -> Integer.compare(b.value, a.value));
 
       double bottom = top + h;
       for (BarData bar : bars) {
         double bh = maxBarH * (double) bar.value / maxC;
-        gc.setFill(Color.web(bar.color, bar.alpha));
+        Color c = VariantTypeVisuals.color(bar.type());
+        gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.55));
         gc.fillRect(px, bottom - bh, 1, bh);
       }
     }
-
-    drawDensityScale(gc, canvasWidth - 38, top, h, maxC);
-
-    gc.setFont(AppFonts.getFont("Segoe UI", 7));
-    double legendX = 3;
-    double legendY = top + 3;
-
-    if (densitySnv != null) {
-      gc.setFill(Color.web("#ff6666", 0.7));
-      gc.fillRect(legendX, legendY, 5, 3);
-      gc.setFill(Color.web("#444"));
-      gc.fillText("SNV", legendX + 7, legendY + 5);
-      legendX += 32;
-    }
-    if (densityIndel != null) {
-      gc.setFill(Color.web("#ffaa44", 0.7));
-      gc.fillRect(legendX, legendY, 5, 3);
-      gc.setFill(Color.web("#444"));
-      gc.fillText("indel", legendX + 7, legendY + 5);
-      legendX += 36;
-    }
-    if (densityDel != null) {
-      gc.setFill(Color.web("#00cc44", 0.7));
-      gc.fillRect(legendX, legendY, 5, 3);
-      gc.setFill(Color.web("#444"));
-      gc.fillText("DEL", legendX + 7, legendY + 5);
-    }
   }
 
-  private void drawDensityScale(GraphicsContext gc, double x, double top, double h, int maxCount) {
-    gc.setFont(AppFonts.getFont("Segoe UI", 7));
-    gc.setFill(Color.web("#555"));
-    gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+  private void drawDensityChrome(
+      GraphicsContext gc,
+      double canvasWidth,
+      double top,
+      double h,
+      int maxCount) {
+    if (h < 8 || canvasWidth < 40) {
+      return;
+    }
 
-    gc.fillText(String.valueOf(maxCount), x + 2, top + 4);
-    gc.fillText("0", x + 2, top + h - 2);
+    Set<VcfVariantType> present = presentTypes != null
+        ? presentTypes
+        : EnumSet.noneOf(VcfVariantType.class);
+    Set<VcfVariantType> legendTypes = VariantTypeVisuals.typesForUi(present);
+    if (legendTypes.isEmpty()) {
+      return;
+    }
 
-    gc.setStroke(Color.web("#777"));
-    gc.setLineWidth(0.5);
+    VcfManager vcfManager = VcfManager.getInstance();
+
+    // Left scale
+    double scaleX = 3;
+    double scaleW = 28;
+    gc.setFill(Color.rgb(20, 20, 28, 0.55));
+    gc.fillRoundRect(scaleX - 1, top - 1, scaleW + 2, h + 2, 4, 4);
+
+    gc.setFont(AppFonts.getFont("Segoe UI", 10));
+    gc.setFill(Color.web("#f0f0f4"));
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
+    gc.fillText(String.valueOf(Math.max(1, maxCount)), scaleX + 3, top + 1);
+    gc.setTextBaseline(javafx.geometry.VPos.BOTTOM);
+    gc.fillText("0", scaleX + 3, top + h - 1);
+
+    gc.setStroke(Color.web("#d0d0d8"));
+    gc.setLineWidth(1.0);
+    double axisX = scaleX + scaleW - 4;
+    gc.strokeLine(axisX, top + 1, axisX, top + h - 1);
     for (int i = 0; i <= 4; i++) {
       double y = top + (i * h / 4.0);
-      gc.strokeLine(x, y, x + 3, y);
+      gc.strokeLine(axisX - 4, y, axisX, y);
+    }
+
+    // Color legends to the right of the scale
+    gc.setFont(AppFonts.getFont("Segoe UI", 11));
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
+    double legendX = scaleX + scaleW + 8;
+    double legendY = top + 2;
+    double swatchW = 12;
+    double swatchH = 10;
+    double gap = 10;
+    double rowH = 16;
+
+    for (VcfVariantType type : legendTypes) {
+      Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(type, present);
+      boolean enabled = linked.stream().anyMatch(vcfManager::isCanvasTypeVisible);
+      String label = VariantTypeVisuals.shortLabel(type);
+
+      double textW = Math.max(22, label.length() * 7.2);
+      double itemW = swatchW + 5 + textW;
+
+      if (legendX + itemW > canvasWidth - 4) {
+        legendX = scaleX + scaleW + 8;
+        legendY += rowH;
+        if (legendY + swatchH > top + h) {
+          break;
+        }
+      }
+
+      Color typeColor = VariantTypeVisuals.color(type);
+      double alpha = enabled ? 0.95 : 0.28;
+      gc.setFill(Color.color(typeColor.getRed(), typeColor.getGreen(), typeColor.getBlue(), alpha));
+      gc.fillRoundRect(legendX, legendY, swatchW, swatchH, 2, 2);
+      if (!enabled) {
+        gc.setStroke(Color.web("#888"));
+        gc.setLineWidth(1.2);
+        gc.strokeLine(legendX + 1, legendY + swatchH - 1, legendX + swatchW - 1, legendY + 1);
+      }
+
+      gc.setFill(enabled ? Color.web("#f2f2f6") : Color.web("#888890"));
+      gc.fillText(label, legendX + swatchW + 4, legendY - 1);
+
+      legendHits.add(new LegendHit(legendX - 2, legendY - 2, itemW + 4, swatchH + 4, type));
+      legendX += itemW + gap;
     }
   }
 
@@ -825,63 +910,25 @@ public class MasterTrackPainter {
     double barY = top + 1;
     double barH = Math.max(2, h - 3);
     for (SvSpan span : spans) {
+      if (!VcfManager.getInstance().isCanvasTypeVisible(span.type())) {
+        continue;
+      }
       if (span.end() < viewStart || span.start() > viewStart + viewLen) continue;
       double x1 = Math.max(0, (span.start() - viewStart) / viewLen * canvasWidth);
       double x2 = Math.min(canvasWidth, (span.end() - viewStart) / viewLen * canvasWidth);
       if (x2 - x1 < 1.5) x2 = x1 + 1.5;
       double alpha = Math.min(0.70, 0.20 + span.sampleCount() * 0.12);
 
-      if (span.type() == VcfVariantType.SV_TRANSLOCATION) {
-        gc.setStroke(Color.web("#ffdd00", alpha));
-        gc.setLineWidth(2.0);
-        gc.strokeLine(x1, barY + barH / 2, x2, barY + barH / 2);
-      } else if (span.type() == VcfVariantType.SV_BREAKEND) {
-        gc.setStroke(Color.web("#c0c0c0", alpha));
+      Color base = VariantTypeVisuals.color(span.type());
+      if (span.type() == VcfVariantType.SV_TRANSLOCATION
+          || span.type() == VcfVariantType.SV_BREAKEND) {
+        gc.setStroke(Color.color(base.getRed(), base.getGreen(), base.getBlue(), alpha));
         gc.setLineWidth(2.0);
         gc.strokeLine(x1, barY + barH / 2, x2, barY + barH / 2);
       } else {
-        Color c = switch (span.type()) {
-          case SV_DELETION -> Color.web("#00cc44", alpha);
-          case SV_INVERSION -> Color.web("#4488ff", alpha);
-          case SV_DUPLICATION -> Color.web("#c0c0d0", alpha);
-          case SV_INSERTION -> Color.web("#33cc66", alpha);
-          default -> Color.web("#aaaaaa", alpha);
-        };
-        gc.setFill(c);
+        gc.setFill(Color.color(base.getRed(), base.getGreen(), base.getBlue(), alpha));
         gc.fillRect(x1, barY, x2 - x1, barH);
       }
-    }
-
-    gc.setFont(AppFonts.getFont("Segoe UI", 7));
-    double legendX = canvasWidth - 200;
-    double legendY = top + h - 2;
-
-    if (legendX > 100) {
-      gc.setFill(Color.web("#00cc44", 0.6));
-      gc.fillRect(legendX, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("DEL", legendX + 10, legendY);
-
-      gc.setFill(Color.web("#4488ff", 0.6));
-      gc.fillRect(legendX + 35, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("INV", legendX + 45, legendY);
-
-      gc.setFill(Color.web("#c0c0d0", 0.7));
-      gc.fillRect(legendX + 70, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("DUP", legendX + 80, legendY);
-
-      gc.setFill(Color.web("#33cc66", 0.6));
-      gc.fillRect(legendX + 110, legendY - 5, 8, 4);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("INS", legendX + 120, legendY);
-
-      gc.setStroke(Color.web("#ffdd00", 0.7));
-      gc.setLineWidth(2.0);
-      gc.strokeLine(legendX + 150, legendY - 3, legendX + 158, legendY - 3);
-      gc.setFill(Color.web("#777"));
-      gc.fillText("TRA", legendX + 160, legendY);
     }
   }
 }

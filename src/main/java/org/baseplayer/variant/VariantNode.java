@@ -101,6 +101,45 @@ public class VariantNode {
             return track;
         }
 
+        /**
+         * Whether this call should appear in the canvas, master density, and variant table.
+         * Hidden VCF file entries stay in the cache; only UI presentation is skipped.
+         */
+        public boolean isUiVisible() {
+            if (sample != null) {
+                return sample.visible;
+            }
+            if (track == null) {
+                return true;
+            }
+            boolean hasVcf = false;
+            for (Sample s : track.getSamples()) {
+                if (s.getDataType() == Sample.DataType.VCF) {
+                    hasVcf = true;
+                    if (s.visible) {
+                        return true;
+                    }
+                }
+            }
+            return !hasVcf;
+        }
+
+        /** Transparent VCF overlay — draw/table still include the call at reduced opacity. */
+        public boolean isUiOverlay() {
+            if (sample != null) {
+                return sample.overlay;
+            }
+            if (track == null) {
+                return false;
+            }
+            for (Sample s : track.getSamples()) {
+                if (s.getDataType() == Sample.DataType.VCF && s.overlay) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private static SampleTrack resolveTrackByIndex(int trackIndex) {
             if (trackIndex < 0) {
                 return null;

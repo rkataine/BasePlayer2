@@ -10,6 +10,7 @@ import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VisibleVariantIndex;
 
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 
 import javafx.scene.canvas.GraphicsContext;
@@ -49,12 +50,12 @@ public class VariantDrawer {
     // Color scheme for different variant types
     private static final Color COLOR_SNV = Color.web("#4A90E2");          // Blue
     private static final Color COLOR_INSERTION = Color.web("#7ED321");     // Green
-    private static final Color COLOR_DELETION = Color.web("#F5A623");      // Orange
+    private static final Color COLOR_DELETION = Color.rgb(200, 100, 100);  // Muted red
     private static final Color COLOR_MNV = Color.web("#BD10E0");           // Purple
     private static final Color COLOR_COMPLEX = Color.web("#B8E986");       // Light green
 
-    // SV colors (match master track)
-    private static final Color COLOR_SV_DELETION = Color.web("#00cc44");      // Green
+    // SV colors (match aggregate / VariantTypeVisuals)
+    private static final Color COLOR_SV_DELETION = Color.rgb(200, 100, 100);  // Muted red
     private static final Color COLOR_SV_INVERSION = Color.web("#4488ff");     // Blue
     private static final Color COLOR_SV_DUPLICATION = Color.web("#c0c0d0");   // Grayish white
     private static final Color COLOR_SV_INSERTION = Color.web("#33cc66");     // Light green
@@ -154,6 +155,9 @@ public class VariantDrawer {
             if (!isSvWithSpan(node)) {
                 continue;
             }
+            if (!VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
+                continue;
+            }
             drawNodeForVisibleSamples(
                 gc, node, filter, true, drawClickableRects, chromPosToScreenPos, canvasWidth,
                 chromPosToScreenPos.apply((double) node.position),
@@ -169,9 +173,11 @@ public class VariantDrawer {
                 || (isSvSpan && node.svEnd >= screenStart && node.position <= screenEnd);
 
             if (isVisible) {
-                drawNodeForVisibleSamples(
-                    gc, node, filter, isSvSpan, drawClickableRects, chromPosToScreenPos, canvasWidth, x,
-                    trackToSlot, yPositions, sampleHeight, lastDrawnPixelX);
+                if (VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
+                    drawNodeForVisibleSamples(
+                        gc, node, filter, isSvSpan, drawClickableRects, chromPosToScreenPos, canvasWidth, x,
+                        trackToSlot, yPositions, sampleHeight, lastDrawnPixelX);
+                }
             }
 
             node = node.nextVisible;
@@ -213,6 +219,9 @@ public class VariantDrawer {
             }
             SampleTrack track = call.getTrack();
             if (track == null) {
+                continue;
+            }
+            if (!call.isUiVisible()) {
                 continue;
             }
             Integer slot = trackToSlot.get(track);
@@ -355,8 +364,15 @@ public class VariantDrawer {
             if (call.quality >= 0 && call.quality < MIN_QUALITY_FULL_OPACITY) {
                 opacity *= (call.quality / MIN_QUALITY_FULL_OPACITY);
             }
+            if (isOverlayCall(call)) {
+                opacity *= 0.35;
+            }
         }
         return opacity;
+    }
+
+    private static boolean isOverlayCall(VariantNode.SampleCall call) {
+        return call != null && call.isUiOverlay();
     }
 
     private Color getVariantColor(VcfVariantType type) {

@@ -58,11 +58,9 @@ public class VariantManagerController implements Initializable {
 
     // Filter Tab: Variant Filters
     @FXML private GridPane variantTypesContainer;  // Container for dynamic type checkboxes
+    @FXML private GridPane effectCategoriesContainer;  // Container for dynamic effect checkboxes
     @FXML private CheckBox selectAllTypesCheckBox;
     @FXML private CheckBox selectAllEffectsCheckBox;
-    @FXML private CheckBox missenseCheckBox, synonymousCheckBox, stopFrameshiftCheckBox;
-    @FXML private CheckBox spliceSiteCheckBox, utrCheckBox, noncodingCheckBox;
-    @FXML private CheckBox intronicCheckBox, intergenicCheckBox;
     @FXML private Slider qualitySlider, coverageSlider, alleleFreqSlider;
     @FXML private TextField qualityField, coverageField, alleleFreqField;
     @FXML private Label qualityValueLabel, coverageValueLabel, alleleFreqValueLabel;
@@ -200,14 +198,7 @@ public class VariantManagerController implements Initializable {
                 variantTypesContainer,
                 selectAllTypesCheckBox,
                 selectAllEffectsCheckBox,
-                missenseCheckBox,
-                synonymousCheckBox,
-                stopFrameshiftCheckBox,
-                spliceSiteCheckBox,
-                utrCheckBox,
-                noncodingCheckBox,
-                intronicCheckBox,
-                intergenicCheckBox,
+                effectCategoriesContainer,
                 qualitySlider,
                 coverageSlider,
                 alleleFreqSlider,
@@ -419,12 +410,19 @@ public class VariantManagerController implements Initializable {
         if (variantFiltersPanel != null) {
             variantFiltersPanel.hideReloadBanner();
             variantFiltersPanel.getVariantTypeCheckBoxes().clear();
+            variantFiltersPanel.clearEffectCategoryCheckBoxes();
         }
         if (variantTypesContainer != null) {
             variantTypesContainer.getChildren().clear();
         }
+        if (effectCategoriesContainer != null) {
+            effectCategoriesContainer.getChildren().clear();
+        }
         if (selectAllTypesCheckBox != null) {
             selectAllTypesCheckBox.setSelected(true);
+        }
+        if (selectAllEffectsCheckBox != null) {
+            selectAllEffectsCheckBox.setSelected(true);
         }
 
         VariantFilter defaults = vcfManager != null
@@ -466,6 +464,32 @@ public class VariantManagerController implements Initializable {
         } finally {
             suppressFilterApplyEvents = previousSuppress;
         }
+    }
+
+    /**
+     * Called when a VCF file visibility checkbox changes so the common-variant
+     * slider max and filtered table match currently visible VCF tracks.
+     */
+    public static void notifySampleVisibilityChanged() {
+        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        if (controller == null) {
+            return;
+        }
+        Platform.runLater(() -> {
+            controller.syncSharedSampleRangeBounds();
+            if (!controller.suppressFilterApplyEvents) {
+                controller.scheduleFilterUpdate();
+            }
+        });
+    }
+
+    /** Sync checkboxes when allowed types are toggled outside the Variant Manager UI. */
+    public static void syncFilterUiFromExternal(VariantFilter filter) {
+        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        if (controller == null || filter == null) {
+            return;
+        }
+        Platform.runLater(() -> controller.loadFilterState(filter));
     }
 
     @FXML

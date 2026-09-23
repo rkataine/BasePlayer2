@@ -501,7 +501,8 @@ public class VariantLoader {
             int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
             double af = calculateAlleleFraction(gtMap, altAllele);
             // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp + ", af=" + af);
-            return new VariantNode.SampleCall(trackIndex, gt, gq, dp, af);
+            return new VariantNode.SampleCall(
+                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af);
         }
         
         // GT contains allele bases (e.g. "G/A") or indices (e.g. "0/1"); skip if this alt is not present
@@ -514,7 +515,29 @@ public class VariantLoader {
         int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
         double af = calculateAlleleFraction(gtMap, altAllele);
         // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp + ", af=" + af);
-        return new VariantNode.SampleCall(trackIndex, gt, gq, dp, af);
+        return new VariantNode.SampleCall(
+            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af);
+    }
+
+    /** Prefer a VCF file Sample on the track so visibility/overlay follow the settings UI. */
+    private static Sample resolveVcfSample(int trackIndex) {
+        if (trackIndex < 0) {
+            return null;
+        }
+        try {
+            SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+            if (trackIndex >= registry.getSampleTracks().size()) {
+                return null;
+            }
+            SampleTrack track = registry.getSampleTracks().get(trackIndex);
+            for (Sample sample : track.getSamples()) {
+                if (sample.getDataType() == Sample.DataType.VCF) {
+                    return sample;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
     
     /**

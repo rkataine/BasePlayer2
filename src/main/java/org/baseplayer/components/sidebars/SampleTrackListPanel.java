@@ -43,11 +43,6 @@ public class SampleTrackListPanel extends TrackListPanel {
 
   private static final double NAME_TEXT_X = 8;
   private static final Font NAME_FONT = Font.font("Segoe UI", 12);
-  private static final Font FILE_FONT = Font.font("Segoe UI", 9);
-  private static final Color TAG_BAM = Color.web("#6699cc");
-  private static final Color TAG_BED = Color.web("#cc9966");
-  private static final Color TAG_VCF = Color.web("#99cc66");
-  private static final Color OVERLAY_DOT = Color.color(0.6, 0.8, 0.6);
   private static final Color SELECTION_BAR = Color.web("#4db8ff");
   private static final double SIDE_BAR_WIDTH = 4;
 
@@ -305,69 +300,24 @@ public class SampleTrackListPanel extends TrackListPanel {
     boolean hasSuspendedSamples =
         sampleTrack.getSamples().stream().anyMatch(Sample::isSuspended);
 
-    double contentTop = textY + 2;
     boolean showSidebarControls = SampleTrackControls.fitsInSidebar(rowHeight)
         && isMouseOverTrackList()
         && backingTrackIndex == hoverIndex;
-    if (showSidebarControls) {
-      double controlsY = rowY + NAME_FONT.getSize() + SampleTrackControls.NAME_TO_CONTROLS_GAP;
-      if (controlsY + SampleTrackControls.stripHeight(SampleTrackControls.SIDEBAR_BUTTON_SIZE)
-          <= rowY + rowHeight - 2) {
-        String hovered = hoveredIcon;
-        List<SampleTrackControls.Hit> hits = SampleTrackControls.drawSidebar(
-            gc, contentRight, controlsY, trackVisible, hasSuspendedSamples, hovered);
-        for (SampleTrackControls.Hit hit : hits) {
-          addIconRegion(
-              backingTrackIndex, hit.id(), hit.x(), hit.y(), hit.width(), hit.height());
-        }
-        contentTop = controlsY
-            + SampleTrackControls.stripHeight(SampleTrackControls.SIDEBAR_BUTTON_SIZE) + 4;
-      }
+    if (!showSidebarControls) {
+      return;
     }
-
-    // File lines under the track name (and controls when present): "VCF: filename"
-    gc.setFont(FILE_FONT);
-    double fileY = contentTop;
-    gc.save();
-    gc.beginPath();
-    gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
-    gc.clip();
-    for (Sample sample : sampleTrack.getSamples()) {
-      fileY += 11;
-      if (fileY > rowY + rowHeight - 4) {
-        break;
-      }
-      if (fileY <= 0) {
-        continue;
-      }
-
-      String tag = sample.getDataType().name();
-      Color tagColor = switch (sample.getDataType()) {
-        case BAM -> TAG_BAM;
-        case BED -> TAG_BED;
-        case VCF -> TAG_VCF;
-      };
-      double alpha = sample.visible ? 1.0 : 0.35;
-      String label = tag + ": " + sample.getName();
-
-      if (sample.overlay) {
-        gc.setFill(OVERLAY_DOT);
-        gc.setGlobalAlpha(alpha * 0.8);
-        gc.fillText("\u25CB", NAME_TEXT_X - 2, fileY);
-        gc.setGlobalAlpha(1.0);
-      }
-
-      gc.setFill(tagColor);
-      if (alpha != 1.0) {
-        gc.setGlobalAlpha(alpha);
-      }
-      if (sample.isSuspended()) {
-        gc.setGlobalAlpha(0.4);
-      }
-      gc.fillText(label, NAME_TEXT_X + (sample.overlay ? 8 : 0), fileY);
-      gc.setGlobalAlpha(1.0);
+    double controlsY = rowY + NAME_FONT.getSize() + SampleTrackControls.NAME_TO_CONTROLS_GAP;
+    if (controlsY + SampleTrackControls.stripHeight(SampleTrackControls.SIDEBAR_BUTTON_SIZE)
+        > rowY + rowHeight - 2) {
+      return;
     }
-    gc.restore();
+    String hovered = hoveredIcon;
+    List<SampleTrackControls.Hit> hits = SampleTrackControls.drawSidebar(
+        gc, contentRight, controlsY, trackVisible, hasSuspendedSamples, hovered);
+    for (SampleTrackControls.Hit hit : hits) {
+      addIconRegion(
+          backingTrackIndex, hit.id(), hit.x(), hit.y(), hit.width(), hit.height());
+    }
   }
 
   @Override
@@ -407,22 +357,6 @@ public class SampleTrackListPanel extends TrackListPanel {
       reactiveGc.fillRoundRect(2, labelTop, Math.min(contentRight - 4, Math.max(24, textWidth)), 15, 3, 3);
       reactiveGc.setFill(Color.WHITE);
       reactiveGc.fillText(displayName, 6, labelTop + 12);
-
-      // Compact file summary on the hover chip when squeezed.
-      List<Sample> samples = sampleTrack.getSamples();
-      if (!samples.isEmpty()) {
-        String summary = samples.stream()
-            .limit(2)
-            .map(s -> s.getDataType().name() + ": " + s.getName())
-            .reduce((a, b) -> a + "  ·  " + b)
-            .orElse("");
-        if (samples.size() > 2) {
-          summary += "  +" + (samples.size() - 2);
-        }
-        reactiveGc.setFont(Font.font("Segoe UI", 9));
-        reactiveGc.setFill(Color.rgb(200, 210, 220, 0.92));
-        reactiveGc.fillText(summary, 6, Math.min(panelHeightPixels - 4, labelTop + 26));
-      }
       return;
     }
 
@@ -451,15 +385,35 @@ public class SampleTrackListPanel extends TrackListPanel {
     ContextMenu settingsMenu = new ContextMenu();
     settingsMenu.setStyle(
         "-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
-    for (int fileIndex = 0; fileIndex < track.getSamples().size(); fileIndex++) {
-      settingsMenu.getItems().add(
-          buildTrackRow(track.getSamples().get(fileIndex), track, fileIndex, sampleIndex));
-    }
+    addOpenedFilesMenuItems(settingsMenu, track, sampleIndex);
     addSampleGroupMenuItems(settingsMenu, track, sampleIndex);
     addMethylationSettings(settingsMenu, track);
     addHaplotypeInformation(settingsMenu, track);
     addReadRenderingSettings(settingsMenu, track);
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  private void addOpenedFilesMenuItems(
+      ContextMenu settingsMenu, SampleTrack track, int sampleIndex) {
+    VBox filesBox = new VBox(4);
+    filesBox.setPadding(new Insets(4, 8, 2, 8));
+    Label header = new Label("Opened files");
+    header.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
+    filesBox.getChildren().add(header);
+
+    if (track.getSamples().isEmpty()) {
+      Label empty = new Label("No files on this track");
+      empty.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+      filesBox.getChildren().add(empty);
+      settingsMenu.getItems().add(new CustomMenuItem(filesBox, false));
+      return;
+    }
+
+    settingsMenu.getItems().add(new CustomMenuItem(filesBox, false));
+    for (int fileIndex = 0; fileIndex < track.getSamples().size(); fileIndex++) {
+      settingsMenu.getItems().add(
+          buildTrackRow(track.getSamples().get(fileIndex), track, fileIndex, sampleIndex));
+    }
   }
 
   private void addSampleGroupMenuItems(ContextMenu settingsMenu, SampleTrack track, int sampleIndex) {
@@ -739,7 +693,11 @@ public class SampleTrackListPanel extends TrackListPanel {
     visibilityCheckBox.setSelected(file.visible);
     visibilityCheckBox.getStyleClass().add("dark-checkbox");
     visibilityCheckBox.selectedProperty().addListener((observable, oldValue, newValue) -> {
-      file.visible = newValue;
+      if (file.getDataType() == Sample.DataType.VCF) {
+        SampleDataManager.applyVcfSampleVisibility(track, file, newValue);
+      } else {
+        file.visible = newValue;
+      }
       onAfterVisibleTrackRangeChanged();
     });
 
@@ -749,7 +707,11 @@ public class SampleTrackListPanel extends TrackListPanel {
     transparentCheckBox.setStyle("-fx-font-size: 10;");
     transparentCheckBox.selectedProperty().addListener((observable, oldValue, newValue) -> {
       file.overlay = newValue;
-      onAfterVisibleTrackRangeChanged();
+      if (file.getDataType() == Sample.DataType.VCF) {
+        SampleDataManager.refreshVariantPresentation();
+      } else {
+        onAfterVisibleTrackRangeChanged();
+      }
     });
 
     Label typeLabel = new Label("[" + file.getDataType().name() + "]");

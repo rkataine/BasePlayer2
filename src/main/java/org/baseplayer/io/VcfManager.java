@@ -6,11 +6,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -29,6 +31,7 @@ import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantLoader;
 import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantAnnotator;
 import org.baseplayer.variant.annotation.TranscriptCdsCache;
 import org.baseplayer.variant.ui.VariantManagerController;
@@ -61,6 +64,13 @@ public class VcfManager {
     
     // Current active filter (pass-all by default)
     private VariantFilter currentFilter = new VariantFilter();
+
+    /**
+     * Types hidden by aggregate density legends only — does not change Variant Manager
+     * filter checkboxes or load-time filtering.
+     */
+    private final Set<VcfVariantType> canvasHiddenTypes =
+        EnumSet.noneOf(VcfVariantType.class);
 
     // Whether a background load is in progress
     private boolean loading = false;
@@ -245,6 +255,9 @@ public class VcfManager {
                         GenomicCanvas.update.set(!GenomicCanvas.update.get());
                     }
                 }
+
+                SampleDataManager.attachVcfSamplesToMappedTracks(
+                    vcfData.loader, vcfData.file.toPath());
                 
                 if (vcfData.loader.getMappedSampleCount() == 0) {
                     System.err.println("Warning: Could not create or map any VCF samples.");
@@ -777,6 +790,7 @@ public class VcfManager {
         // the previous project's type/effect/comparison thresholds.
         currentFilter = new VariantFilter();
         filterGeneration.incrementAndGet();
+        clearCanvasTypeVisibility();
         onChromosomeVariantsReady = null;
         TranscriptCdsCache.getInstance().clearMemory();
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
@@ -1220,6 +1234,9 @@ public class VcfManager {
             DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
             for (DrawStack stack : stackManager.getStacks()) {
                 if (stack.sampleTrackCanvas != null) stack.sampleTrackCanvas.draw();
+                if (stack.sampleAggregateCanvas != null) {
+                    stack.sampleAggregateCanvas.forceCalculateDensity();
+                }
             }
         });
     }
@@ -1249,6 +1266,44 @@ public class VcfManager {
 
     public VariantFilter getCurrentFilter() {
         return currentFilter;
+    }
+
+    /** True unless the type was hidden via aggregate density legends. */
+    public synchronized boolean isCanvasTypeVisible(VcfVariantType type) {
+        return type != null && !canvasHiddenTypes.contains(type);
+    }
+
+    /**
+     * Toggle canvas-only visibility for the given types (legend click).
+     * Does not modify {@link #currentFilter} or Variant Manager checkboxes.
+     */
+    public synchronized void toggleCanvasTypeVisibility(Set<VcfVariantType> types) {
+        if (types == null || types.isEmpty()) {
+            return;
+        }
+        boolean anyVisible = types.stream().anyMatch(t -> !canvasHiddenTypes.contains(t));
+        if (anyVisible) {
+            canvasHiddenTypes.addAll(types);
+        } else {
+            canvasHiddenTypes.removeAll(types);
+        }
+        Platform.runLater(this::redrawCanvasesForTypeVisibility);
+    }
+
+    public synchronized void clearCanvasTypeVisibility() {
+        canvasHiddenTypes.clear();
+    }
+
+    private void redrawCanvasesForTypeVisibility() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.draw();
+            }
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.draw();
+            }
+        }
     }
 
     /** Set filter state for future loads only; does not redraw current data. */

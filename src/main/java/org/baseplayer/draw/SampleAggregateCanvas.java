@@ -5,7 +5,9 @@ import org.baseplayer.samples.alignment.draw.CoverageDrawer;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.variant.VariantList;
 
+import javafx.scene.Cursor;
 import javafx.scene.canvas.Canvas;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.StackPane;
 
 /**
@@ -25,6 +27,26 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
     this.coverageDrawer = coverageDrawer;
     // Density completion only repaints this band — not the full canvas stack.
     this.painter = new MasterTrackPainter(coverageDrawer, this::draw);
+
+    getReactiveCanvas().addEventHandler(MouseEvent.MOUSE_CLICKED, this::onLegendClick);
+    getReactiveCanvas().addEventHandler(MouseEvent.MOUSE_MOVED, this::onLegendHover);
+  }
+
+  private void onLegendClick(MouseEvent event) {
+    if (mouseDragged) {
+      return;
+    }
+    if (painter.handleLegendClick(event.getX(), event.getY())) {
+      event.consume();
+    }
+  }
+
+  private void onLegendHover(MouseEvent event) {
+    Cursor cursor = painter.isOverLegend(event.getX(), event.getY())
+        ? Cursor.HAND
+        : Cursor.DEFAULT;
+    getReactiveCanvas().setCursor(cursor);
+    setCursor(cursor);
   }
 
   public CoverageDrawer getCoverageDrawer() {

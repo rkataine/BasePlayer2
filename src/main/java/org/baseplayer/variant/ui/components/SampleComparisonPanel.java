@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
+import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
@@ -141,8 +142,29 @@ public class SampleComparisonPanel {
 
   public void syncSharedSampleRangeBounds() {
     if (nodes == null || nodes.sharedSampleRangeSlider() == null) return;
-    int sampleCount = Math.max(1, ServiceRegistry.getInstance().getSampleRegistry().getSampleTracks().size());
-    nodes.sharedSampleRangeSlider().setAbsoluteMax(sampleCount);
+    nodes.sharedSampleRangeSlider().setAbsoluteMax(countTracksWithVisibleVcf());
+  }
+
+  /**
+   * Upper bound for the common-variant slider: tracks that currently have at least
+   * one UI-visible VCF file (same set that can contribute to shared-sample counts).
+   */
+  private static int countTracksWithVisibleVcf() {
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    int count = 0;
+    for (SampleTrack track : registry.getSampleTracks()) {
+      for (Sample sample : track.getSamples()) {
+        if (sample.getDataType() == Sample.DataType.VCF && sample.visible) {
+          count++;
+          break;
+        }
+      }
+    }
+    // Fallback when no VCF file entries exist yet (legacy / mid-load).
+    if (count == 0) {
+      count = registry.getSampleTracks().size();
+    }
+    return Math.max(1, count);
   }
 
   public void refreshGroups() {

@@ -574,6 +574,8 @@ public class SampleDataManager {
         loader.updateMapping();
       }
 
+      attachVcfSamplesToMappedTracks(loader, vcfPath);
+
       if (loader.getMappedSampleCount() == 0) {
         System.err.println("Warning: Could not create or map any VCF samples from: " + file);
       }
@@ -592,6 +594,81 @@ public class SampleDataManager {
     UserPreferences.addRecentFile("VCF", file);
   }
   
+  /**
+   * Attach a VCF file entry under every sample track this loader maps to,
+   * so the sidebar can list {@code VCF: filename} when there is room.
+   * Track display names stay as VCF header sample IDs (or existing BAM names).
+   */
+  public static void attachVcfSamplesToMappedTracks(VariantLoader loader, Path vcfPath) {
+    if (loader == null || vcfPath == null) {
+      return;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    for (Integer trackIndex : new java.util.LinkedHashSet<>(loader.getTrackIndices())) {
+      if (trackIndex == null || trackIndex < 0
+          || trackIndex >= registry.getSampleTracks().size()) {
+        continue;
+      }
+      addVcfSampleIfMissing(registry.getSampleTracks().get(trackIndex), vcfPath);
+    }
+  }
+
+  private static void addVcfSampleIfMissing(SampleTrack track, Path vcfPath) {
+    if (track == null || vcfPath == null) {
+      return;
+    }
+    String pathKey = vcfPath.toAbsolutePath().normalize().toString();
+    for (Sample sample : track.getSamples()) {
+      if (sample.getDataType() == Sample.DataType.VCF && sample.getPath() != null
+          && pathKey.equals(sample.getPath().toAbsolutePath().normalize().toString())) {
+        return;
+      }
+    }
+    track.addSample(new Sample(vcfPath, Sample.DataType.VCF));
+  }
+
+  /**
+   * Toggle VCF file visibility without touching the variant cache.
+   * Hidden calls stay in {@link org.baseplayer.variant.VariantList} but are skipped
+   * by the filter / drawer / density / table via {@link VariantNode.SampleCall#isUiVisible()}.
+   */
+  public static void applyVcfSampleVisibility(SampleTrack track, Sample vcfSample, boolean visible) {
+    if (track == null || vcfSample == null || vcfSample.getDataType() != Sample.DataType.VCF) {
+      return;
+    }
+    vcfSample.visible = visible;
+    refreshVariantPresentation();
+  }
+
+  /** Rebuild visible chains / density after sample visibility or overlay changes. */
+  public static void refreshVariantPresentation() {
+    java.util.IdentityHashMap<org.baseplayer.variant.VariantList, Boolean> seen =
+        new java.util.IdentityHashMap<>();
+    java.util.function.Consumer<org.baseplayer.variant.VariantList> invalidate = variantList -> {
+      if (variantList == null || seen.put(variantList, Boolean.TRUE) != null) {
+        return;
+      }
+      variantList.clearVisibleChain();
+    };
+    DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+    for (DrawStack stack : stackManager.getStacks()) {
+      if (stack.sampleTrackCanvas != null) {
+        invalidate.accept(stack.sampleTrackCanvas.getVariantList());
+        if (stack.sampleTrackCanvas.getVariantDrawer() != null) {
+          stack.sampleTrackCanvas.getVariantDrawer().markIndexDirty();
+        }
+      }
+      if (stack.sampleAggregateCanvas != null) {
+        stack.sampleAggregateCanvas.forceCalculateDensity();
+      }
+    }
+    for (org.baseplayer.variant.VariantList cached : VcfManager.getInstance().snapshotVariantCache().values()) {
+      invalidate.accept(cached);
+    }
+    org.baseplayer.variant.ui.VariantManagerController.notifySampleVisibilityChanged();
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
   /**
    * Load a single VCF file directly without showing a chooser.
    */

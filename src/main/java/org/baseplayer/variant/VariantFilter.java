@@ -556,6 +556,7 @@ public class VariantFilter {
 
     public boolean passesSampleThresholds(VariantNode node, VariantNode.SampleCall call) {
         if (node == null || call == null) return false;
+        if (!call.isUiVisible()) return false;
 
         if (minQuality > 0 && node.siteQuality < 0 && call.quality >= 0 && call.quality < minQuality) return false;
         if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
