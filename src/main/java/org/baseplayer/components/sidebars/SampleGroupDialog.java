@@ -2,6 +2,8 @@ package org.baseplayer.components.sidebars;
 
 import java.util.Optional;
 
+import org.baseplayer.components.AppDialog;
+
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -52,14 +54,12 @@ public final class SampleGroupDialog {
     dialog.setTitle("Sample group");
     dialog.setResizable(false);
 
-    Label title = new Label(
+    Label title = AppDialog.titleLabel(
         sampleCount <= 1
             ? "Add this sample to a group?"
             : "Add " + sampleCount + " samples to a group?");
-    title.setStyle("-fx-text-fill: #e0e0e0; -fx-font-size: 13px; -fx-font-weight: bold;");
 
-    Label hint = new Label("Pick a sidebar color for the group.");
-    hint.setStyle("-fx-text-fill: #999999; -fx-font-size: 11px;");
+    Label hint = AppDialog.hintLabel("Pick a sidebar color for the group.");
     hint.setWrapText(true);
 
     TextField nameField = new TextField();
@@ -84,16 +84,10 @@ public final class SampleGroupDialog {
     nameLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11px;");
     VBox nameBox = new VBox(4, nameLabel, nameField);
 
-    Button cancel = new Button("Cancel");
-    cancel.setStyle(
-        "-fx-background-color: #3c3c3c; -fx-text-fill: #bbbbbb; -fx-font-size: 12px;"
-            + "-fx-padding: 6 14 6 14; -fx-border-color: #666; -fx-cursor: hand;");
+    Button cancel = AppDialog.secondaryButton("Cancel");
     cancel.setCancelButton(true);
 
-    Button add = new Button("Add to group");
-    add.setStyle(
-        "-fx-background-color: #2a4a6a; -fx-text-fill: #d8e8ff; -fx-font-size: 12px;"
-            + "-fx-padding: 6 14 6 14; -fx-border-color: #4db8ff; -fx-cursor: hand;");
+    Button add = AppDialog.primaryButton("Add to group");
     add.setDefaultButton(true);
 
     final Outcome[] chosen = new Outcome[1];
@@ -129,8 +123,7 @@ public final class SampleGroupDialog {
 
     VBox root = new VBox(12, title, hint, nameBox, colorRow, buttons);
     root.setPadding(new Insets(16));
-    root.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
-
+    root.setStyle(AppDialog.PANEL_STYLE);
     dialog.setScene(new Scene(root, offerRemove ? 420 : 340, 220));
     dialog.setOnShown(e -> {
       nameField.requestFocus();

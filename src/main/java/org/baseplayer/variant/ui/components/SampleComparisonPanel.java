@@ -428,10 +428,18 @@ public class SampleComparisonPanel {
     List<SampleTrack> tracks = registry.getSampleTracks();
     for (int i = 0; i < tracks.size(); i++) {
       SampleTrack track = tracks.get(i);
-      int cohortId = track.hasGroup() ? track.getGroupId() : VariantFilter.UNGROUPED_COHORT_ID;
-      Set<Integer> indices = byGroup.get(cohortId);
-      if (indices != null) {
-        indices.add(i);
+      if (!track.hasGroup()) {
+        Set<Integer> ungrouped = byGroup.get(VariantFilter.UNGROUPED_COHORT_ID);
+        if (ungrouped != null) {
+          ungrouped.add(i);
+        }
+        continue;
+      }
+      for (int cohortId : track.getGroupIds()) {
+        Set<Integer> indices = byGroup.get(cohortId);
+        if (indices != null) {
+          indices.add(i);
+        }
       }
     }
     return byGroup;

@@ -87,7 +87,7 @@ public final class ProjectService {
       main.captureDividerPositions(doc.ui);
     }
 
-    doc.variantFilter = captureFilter(VcfManager.getInstance().getCurrentFilter());
+    doc.variantFilter = captureFilter(VcfManager.getInstance());
     doc.sampleViewport = captureViewport(
         samples.getFirstVisibleTrackSlot(),
         samples.getLastVisibleTrackSlot(),
@@ -332,7 +332,8 @@ public final class ProjectService {
     return spec;
   }
 
-  private static ProjectDocument.VariantFilterSpec captureFilter(VariantFilter filter) {
+  private static ProjectDocument.VariantFilterSpec captureFilter(VcfManager vcfManager) {
+    VariantFilter filter = vcfManager != null ? vcfManager.getCurrentFilter() : null;
     ProjectDocument.VariantFilterSpec spec = new ProjectDocument.VariantFilterSpec();
     if (filter == null) return spec;
     spec.minQuality = filter.getMinQuality();
@@ -354,6 +355,33 @@ public final class ProjectService {
     }
     if (filter.getAllowedFilterValues() != null) {
       spec.allowedFilterValues = new ArrayList<>(filter.getAllowedFilterValues());
+    }
+
+    EnumSet<VcfVariantType> availableTypes = EnumSet.noneOf(VcfVariantType.class);
+    EnumSet<VariantEffect> availableEffects = EnumSet.noneOf(VariantEffect.class);
+    availableTypes.addAll(filter.getAllowedTypes());
+    availableEffects.addAll(filter.getAllowedEffects());
+    if (vcfManager != null) {
+      availableTypes.addAll(vcfManager.getSessionAvailableTypes());
+      availableEffects.addAll(vcfManager.getSessionAvailableEffects());
+      for (VariantList list : vcfManager.snapshotVariantCache().values()) {
+        if (list != null && !list.isEmpty()) {
+          availableTypes.addAll(list.collectVariantTypes());
+          availableEffects.addAll(list.collectVariantEffects());
+        }
+      }
+    }
+    org.baseplayer.variant.ui.VariantManagerController controller =
+        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+    if (controller != null) {
+      availableTypes.addAll(controller.snapshotUiAvailableTypes());
+      availableEffects.addAll(controller.snapshotUiAvailableEffects());
+    }
+    for (VcfVariantType t : availableTypes) {
+      spec.availableTypes.add(t.name());
+    }
+    for (VariantEffect e : availableEffects) {
+      spec.availableEffects.add(e.name());
     }
     return spec;
   }
@@ -394,6 +422,43 @@ public final class ProjectService {
       filter.setAllowedFilterValues(new HashSet<>(spec.allowedFilterValues));
     }
     return filter;
+  }
+
+  private static void restoreSessionAvailableFilters(ProjectDocument.VariantFilterSpec spec) {
+    EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+    EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+    if (spec != null) {
+      if (spec.availableTypes != null) {
+        for (String name : spec.availableTypes) {
+          try {
+            types.add(VcfVariantType.valueOf(name));
+          } catch (Exception ignored) { /* skip */ }
+        }
+      }
+      if (spec.availableEffects != null) {
+        for (String name : spec.availableEffects) {
+          try {
+            effects.add(VariantEffect.valueOf(name));
+          } catch (Exception ignored) { /* skip */ }
+        }
+      }
+      // Older sessions only stored allowed*; keep those checkboxes visible too.
+      if (spec.allowedTypes != null) {
+        for (String name : spec.allowedTypes) {
+          try {
+            types.add(VcfVariantType.valueOf(name));
+          } catch (Exception ignored) { /* skip */ }
+        }
+      }
+      if (spec.allowedEffects != null) {
+        for (String name : spec.allowedEffects) {
+          try {
+            effects.add(VariantEffect.valueOf(name));
+          } catch (Exception ignored) { /* skip */ }
+        }
+      }
+    }
+    VcfManager.getInstance().setSessionAvailableFilters(types, effects);
   }
 
   private static ProjectDocument.SampleFileSpec captureSampleFile(Sample sample, Path projectFile) {
@@ -760,6 +825,7 @@ public final class ProjectService {
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
 
     VariantFilter filter = restoreFilter(document.variantFilter);
+    restoreSessionAvailableFilters(document.variantFilter);
     VcfManager.getInstance().applyFilter(filter);
 
     if (document.sampleFilter != null) {

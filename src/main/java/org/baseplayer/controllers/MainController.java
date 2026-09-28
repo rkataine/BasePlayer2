@@ -3,6 +3,7 @@ package org.baseplayer.controllers;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.components.GeneFocusBanner;
 import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.components.sidebars.FeatureTrackColumnSidebar;
 import org.baseplayer.components.sidebars.GenomeSidebar;
@@ -62,6 +63,7 @@ public class MainController {
   public static SplitPane featureTracksContentPane;
   private FeatureTrackColumnSidebar featureTrackColumnSidebar;
   static SampleTrackColumnSidebar sidebarPanel;
+  private static GeneFocusBanner geneFocusBanner;
 
   public static boolean dividerHovered;
   public static boolean isActive = false;
@@ -127,6 +129,7 @@ public class MainController {
       sidebarPanel = new SampleTrackColumnSidebar(drawSideBarStackPane);
       eventCoordinator.setSidebarPanel(sidebarPanel);
       sidebarPanel.draw();
+      ensureGeneFocusBanner(alignmentOverlayPane);
       
       setupFeatureTrackColumnSidebar();
       
@@ -235,6 +238,7 @@ public class MainController {
     org.baseplayer.components.LoadRegionButton button = sidebarPanel.loadRegionButton;
     // Remove if already added
     if (overlayPane.getChildren().contains(button)) {
+      ensureGeneFocusBanner(overlayPane);
       return;
     }
     
@@ -242,6 +246,22 @@ public class MainController {
     overlayPane.getChildren().add(button);
     StackPane.setAlignment(button, Pos.TOP_LEFT);
     StackPane.setMargin(button, new Insets(90, 0, 0, 4));  // 90px from top to place below legends
+    ensureGeneFocusBanner(overlayPane);
+  }
+
+  private static void ensureGeneFocusBanner(StackPane overlayPane) {
+    if (overlayPane == null) {
+      return;
+    }
+    if (geneFocusBanner == null) {
+      geneFocusBanner = new GeneFocusBanner();
+    }
+    if (!overlayPane.getChildren().contains(geneFocusBanner)) {
+      overlayPane.getChildren().add(geneFocusBanner);
+      StackPane.setAlignment(geneFocusBanner, Pos.TOP_CENTER);
+      StackPane.setMargin(geneFocusBanner, new Insets(8, 0, 0, 0));
+    }
+    geneFocusBanner.attachListeners();
   }
 
   public static boolean drawCrossStackMateArc(Object owner,

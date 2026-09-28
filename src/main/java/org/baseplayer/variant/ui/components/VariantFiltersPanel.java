@@ -375,8 +375,22 @@ public class VariantFiltersPanel {
     public void populateVariantTypes(
             List<VcfManager.CachedChromosomeVariants> sources,
             VariantFilter currentFilter) {
-        populateVariantTypes(collectPresentVariantTypes(sources), currentFilter);
-        populateEffectCategories(collectPresentVariantEffects(sources), currentFilter);
+        Set<VcfVariantType> present = collectPresentVariantTypes(sources);
+        Set<VariantEffect> presentEffects = collectPresentVariantEffects(sources);
+        VcfManager vcfManager = VcfManager.getInstance();
+        present.addAll(vcfManager.getSessionAvailableTypes());
+        presentEffects.addAll(vcfManager.getSessionAvailableEffects());
+        if (currentFilter != null) {
+            if (currentFilter.getAllowedTypes() != null) {
+                present.addAll(currentFilter.getAllowedTypes());
+            }
+            if (currentFilter.getAllowedEffects() != null) {
+                presentEffects.addAll(currentFilter.getAllowedEffects());
+            }
+        }
+        vcfManager.unionSessionAvailableFilters(present, presentEffects);
+        populateVariantTypes(present, currentFilter);
+        populateEffectCategories(presentEffects, currentFilter);
     }
 
     public void populateVariantTypes(Collection<VcfVariantType> presentTypes) {
@@ -659,6 +673,22 @@ public class VariantFiltersPanel {
 
     public Map<VcfVariantType, CheckBox> getVariantTypeCheckBoxes() {
         return variantTypeCheckBoxes;
+    }
+
+    /** Types currently shown as checkboxes (for session persistence). */
+    public Set<VcfVariantType> snapshotShownVariantTypes() {
+        return variantTypeCheckBoxes.isEmpty()
+            ? EnumSet.noneOf(VcfVariantType.class)
+            : EnumSet.copyOf(variantTypeCheckBoxes.keySet());
+    }
+
+    /** Effects covered by currently shown effect-category checkboxes. */
+    public Set<VariantEffect> snapshotShownVariantEffects() {
+        EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+        for (EffectCategory category : effectCategoryCheckBoxes.keySet()) {
+            effects.addAll(category.effects);
+        }
+        return effects;
     }
 
     public void clearEffectCategoryCheckBoxes() {

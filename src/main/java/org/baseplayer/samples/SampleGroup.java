@@ -4,7 +4,7 @@ import javafx.scene.paint.Color;
 
 /**
  * Named sample group with a sidebar accent color.
- * Membership lives on {@link SampleTrack#getGroupId()}.
+ * Membership lives on {@link SampleTrack#getGroupIds()} (multi-group allowed).
  */
 public final class SampleGroup {
 

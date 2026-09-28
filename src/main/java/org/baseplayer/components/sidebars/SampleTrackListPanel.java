@@ -41,10 +41,11 @@ import javafx.stage.Window;
 
 public class SampleTrackListPanel extends TrackListPanel {
 
-  private static final double NAME_TEXT_X = 8;
+  private static final double NAME_PAD_X = 8;
   private static final Font NAME_FONT = Font.font("Segoe UI", 12);
-  private static final Color SELECTION_BAR = Color.web("#4db8ff");
-  private static final double SIDE_BAR_WIDTH = 4;
+  private static final double GROUP_BAR_WIDTH = 4;
+  private static final double GROUP_BAR_GAP = 1;
+  private static final double GROUP_BAR_STRIDE = GROUP_BAR_WIDTH + GROUP_BAR_GAP;
 
   private final SampleRegistry sampleRegistry;
   private final Set<Integer> selectedTrackIndices = new LinkedHashSet<>();
@@ -248,17 +249,14 @@ public class SampleTrackListPanel extends TrackListPanel {
 
       double fillY = Math.max(rowY, 0);
       double fillH = Math.min(rowY + rowHeight, panelHeightPixels) - fillY;
+      boolean isHovered = backingTrackIndex == hoverIndex;
+      List<Color> groupColors = sampleTrack != null
+          ? sampleRegistry.getSidebarColorsForTrack(sampleTrack)
+          : List.of();
+      boolean selected = selectedTrackIndices.contains(backingTrackIndex);
+      boolean showWhiteLead = selected || isHovered;
       if (fillH > 0) {
-        Color barColor = null;
-        if (selectedTrackIndices.contains(backingTrackIndex)) {
-          barColor = SELECTION_BAR;
-        } else if (sampleTrack != null) {
-          barColor = sampleRegistry.getSidebarColorForTrack(sampleTrack);
-        }
-        if (barColor != null) {
-          gc.setFill(barColor);
-          gc.fillRect(0, fillY, SIDE_BAR_WIDTH, Math.max(fillH, 1));
-        }
+        drawMembershipBars(gc, fillY, Math.max(fillH, 1), groupColors, showWhiteLead);
       }
 
       // When rows are too short for a name, only keep the color accent; hover shows the label.
@@ -269,18 +267,19 @@ public class SampleTrackListPanel extends TrackListPanel {
       double textY = rowY + NAME_FONT.getSize() + 2;
       if (textY > 0) {
         String displayName = sampleTrack != null ? sampleTrack.getDisplayName() : "";
+        double nameX = nameTextX(groupColors.size(), showWhiteLead);
         gc.save();
         gc.beginPath();
         gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
         gc.clip();
-        if (backingTrackIndex == hoverIndex) {
+        if (isHovered || selected) {
           gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
           gc.setFill(Color.WHITE);
         } else {
           gc.setFont(NAME_FONT);
           gc.setFill(trackVisible ? Color.web("#cccccc") : Color.web("#666666"));
         }
-        gc.fillText(displayName, NAME_TEXT_X, textY);
+        gc.fillText(displayName, nameX, textY);
         gc.restore();
       }
 
@@ -360,11 +359,49 @@ public class SampleTrackListPanel extends TrackListPanel {
       return;
     }
 
-    reactiveGc.setFill(Color.rgb(255, 255, 255, 0.85));
-    reactiveGc.fillRect(0, Math.max(rowY, 0), SIDE_BAR_WIDTH, rowHeight);
+    // Hover white lead is already painted on the main canvas when the row is
+    // selected; only add it here for hover-without-selection.
+    if (!selectedTrackIndices.contains(hoverIndex)) {
+      reactiveGc.setFill(Color.rgb(255, 255, 255, 0.9));
+      reactiveGc.fillRect(0, Math.max(rowY, 0), GROUP_BAR_WIDTH, rowHeight);
+    }
     if (hoveredIcon != null) {
       drawIconGlow(hoveredIcon, hoverIndex);
     }
+  }
+
+  /**
+   * Left accent bars: optional white lead (hover/selection), then one bar per group.
+   * The white lead shifts group bars to the right.
+   */
+  private void drawMembershipBars(
+      javafx.scene.canvas.GraphicsContext graphics,
+      double fillY,
+      double fillH,
+      List<Color> groupColors,
+      boolean whiteLead) {
+    double x = 0;
+    if (whiteLead) {
+      graphics.setFill(Color.rgb(255, 255, 255, 0.9));
+      graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
+      x += GROUP_BAR_STRIDE;
+    }
+    for (Color color : groupColors) {
+      if (color == null) {
+        continue;
+      }
+      graphics.setFill(color);
+      graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
+      x += GROUP_BAR_STRIDE;
+    }
+  }
+
+  private static double nameTextX(int groupCount, boolean whiteLead) {
+    int barCount = groupCount + (whiteLead ? 1 : 0);
+    if (barCount <= 0) {
+      return NAME_PAD_X;
+    }
+    return barCount * GROUP_BAR_STRIDE + NAME_PAD_X - GROUP_BAR_GAP;
   }
 
   private void drawIconGlow(String iconId, int backingTrackIndex) {
@@ -422,32 +459,54 @@ public class SampleTrackListPanel extends TrackListPanel {
     VBox groupBox = new VBox(6);
     groupBox.setPadding(new Insets(4, 8, 4, 8));
 
-    Label header = new Label("Sample group");
+    Label header = new Label("Sample groups");
     header.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
     groupBox.getChildren().add(header);
 
-    SampleGroup current = sampleRegistry.getGroupForTrack(track);
+    List<SampleGroup> memberships = sampleRegistry.getGroupsForTrack(track);
     ColorPicker colorPicker = new ColorPicker(
-        current != null
-            ? current.getColor()
+        !memberships.isEmpty()
+            ? memberships.get(0).getColor()
             : DrawColors.SAMPLE_GROUP_COLORS[
                 sampleRegistry.getSampleGroups().size() % DrawColors.SAMPLE_GROUP_COLORS.length]);
     colorPicker.setPrefWidth(150);
 
-    if (current != null) {
-      Label currentLabel = new Label("In: " + current.getName());
+    if (!memberships.isEmpty()) {
+      String names = memberships.stream()
+          .map(SampleGroup::getName)
+          .collect(java.util.stream.Collectors.joining(", "));
+      Label currentLabel = new Label("In: " + names);
       currentLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+      currentLabel.setWrapText(true);
+      currentLabel.setMaxWidth(220);
       groupBox.getChildren().add(currentLabel);
 
-      colorPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
-        if (newColor != null) {
-          sampleRegistry.setGroupColor(current.getId(), newColor);
-          draw();
+      if (memberships.size() == 1) {
+        SampleGroup only = memberships.get(0);
+        colorPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
+          if (newColor != null) {
+            sampleRegistry.setGroupColor(only.getId(), newColor);
+            draw();
+          }
+        });
+        Label colorHint = new Label("Group color");
+        colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+        groupBox.getChildren().addAll(colorHint, colorPicker);
+      } else {
+        for (SampleGroup group : memberships) {
+          ColorPicker perGroupPicker = new ColorPicker(group.getColor());
+          perGroupPicker.setPrefWidth(150);
+          Label colorHint = new Label(group.getName() + " color");
+          colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+          perGroupPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
+            if (newColor != null) {
+              sampleRegistry.setGroupColor(group.getId(), newColor);
+              draw();
+            }
+          });
+          groupBox.getChildren().addAll(colorHint, perGroupPicker);
         }
-      });
-      Label colorHint = new Label("Group color");
-      colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
-      groupBox.getChildren().addAll(colorHint, colorPicker);
+      }
     } else {
       Label colorHint = new Label("Color for new group");
       colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
@@ -456,8 +515,7 @@ public class SampleTrackListPanel extends TrackListPanel {
 
     settingsMenu.getItems().add(new CustomMenuItem(groupBox, false));
 
-    MenuItem addThis = new MenuItem(
-        current == null ? "Add this sample to a group…" : "Move to a new group…");
+    MenuItem addThis = new MenuItem("Add this sample to a new group…");
     addThis.setOnAction(event -> {
       Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
       SampleGroupDialog.show(
@@ -482,7 +540,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     int groupedSelectedCount = countGroupedSelectedTracks();
     if (groupedSelectedCount >= 2 && selectedTrackIndices.contains(sampleIndex)) {
       MenuItem removeSelected = new MenuItem(
-          "Remove " + groupedSelectedCount + " selected from group");
+          "Remove " + groupedSelectedCount + " selected from all groups");
       removeSelected.setOnAction(event -> {
         sampleRegistry.clearTracksFromGroups(selectedTracks());
         clearSelection();
@@ -493,7 +551,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     }
 
     for (SampleGroup group : sampleRegistry.getSampleGroups()) {
-      if (current != null && current.getId() == group.getId()) {
+      if (track.isInGroup(group.getId())) {
         continue;
       }
       MenuItem assign = new MenuItem("Add to " + group.getName());
@@ -510,11 +568,19 @@ public class SampleTrackListPanel extends TrackListPanel {
       settingsMenu.getItems().add(assign);
     }
 
-    if (current != null) {
+    for (SampleGroup group : memberships) {
+      MenuItem removeOne = new MenuItem("Remove from " + group.getName());
+      removeOne.setOnAction(event -> {
+        sampleRegistry.removeTrackFromGroup(track, group.getId());
+        draw();
+        onAfterVisibleTrackRangeChanged();
+      });
+      settingsMenu.getItems().add(removeOne);
+    }
+
+    if (!memberships.isEmpty()) {
       MenuItem clear = new MenuItem(
-          selectedTrackIndices.size() > 1 && selectedTrackIndices.contains(sampleIndex)
-              ? "Remove this sample from group"
-              : "Remove from group");
+          memberships.size() == 1 ? "Remove from group" : "Remove from all groups");
       clear.setOnAction(event -> {
         sampleRegistry.clearTrackGroup(track);
         draw();

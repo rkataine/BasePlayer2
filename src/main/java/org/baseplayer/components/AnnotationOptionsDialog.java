@@ -44,10 +44,9 @@ public final class AnnotationOptionsDialog {
 
     VBox content = new VBox(15);
     content.setPadding(new Insets(20));
-    content.setStyle("-fx-background-color: #2b2b2b;");
+    content.setStyle(AppDialog.PANEL_STYLE);
 
-    Label title = new Label("Gene Display Settings");
-    title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: white;");
+    Label title = AppDialog.titleLabel("Gene Display Settings");
 
     CheckBox cancerGenesCheckBox = new CheckBox("Show only cancer genes (COSMIC)");
     cancerGenesCheckBox.setSelected(MainController.showOnlyCancerGenes);
@@ -60,17 +59,15 @@ public final class AnnotationOptionsDialog {
     }
     maneCheckBox.setStyle("-fx-text-fill: white;");
 
-    Label infoLabel = new Label("""
+    Label infoLabel = AppDialog.hintLabel("""
         Cancer genes are from the COSMIC Cancer Gene Census.
         MANE transcripts are the authoritative reference transcripts.""");
-    infoLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #999999; -fx-wrap-text: true;");
     infoLabel.setMaxWidth(300);
 
     HBox buttonBox = new HBox(10);
     buttonBox.setAlignment(Pos.CENTER_RIGHT);
 
-    Button applyButton = new Button("Apply");
-    applyButton.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-cursor: hand;");
+    Button applyButton = AppDialog.primaryButton("Apply");
     applyButton.setOnAction(e -> {
       MainController.showOnlyCancerGenes = cancerGenesCheckBox.isSelected();
       boolean maneOnly = maneCheckBox.isSelected();
@@ -83,8 +80,7 @@ public final class AnnotationOptionsDialog {
       dialog.close();
     });
 
-    Button cancelButton = new Button("Cancel");
-    cancelButton.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: white; -fx-cursor: hand;");
+    Button cancelButton = AppDialog.secondaryButton("Cancel");
     cancelButton.setOnAction(e -> dialog.close());
 
     buttonBox.getChildren().addAll(cancelButton, applyButton);

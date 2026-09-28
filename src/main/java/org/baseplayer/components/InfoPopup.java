@@ -68,12 +68,7 @@ public class InfoPopup {
     /** Minimum label-column width for key–value rows. */
     private static final double LABEL_MIN_WIDTH = 90;
 
-    private static final String POPUP_STYLE =
-            "-fx-background-color: rgba(30, 30, 30, 0.98);" +
-            "-fx-background-radius: 8;"                      +
-            "-fx-border-color: #555555;"                     +
-            "-fx-border-radius: 8;"                          +
-            "-fx-border-width: 1;";
+    private static final String POPUP_STYLE = AppDialog.PANEL_STYLE;
 
     private static final String SCROLL_STYLE =
             "-fx-background-color: transparent;" +

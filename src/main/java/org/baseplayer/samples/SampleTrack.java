@@ -3,6 +3,7 @@ package org.baseplayer.samples;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import org.baseplayer.samples.alignment.AlignmentFile;
@@ -51,25 +52,49 @@ public class SampleTrack implements Closeable {
   /** Set the raw name. */
   public void setName(String name) { this.name = name; }
 
-  // ── Sample group ──
+  // ── Sample groups (a track may belong to several) ──
 
-  /** {@code -1} = ungrouped; otherwise matches {@link SampleGroup#getId()}. */
-  private int groupId = -1;
+  /** Ordered group ids for sidebar accent bars; empty = ungrouped. */
+  private final LinkedHashSet<Integer> groupIds = new LinkedHashSet<>();
 
+  /** First group id, or {@code -1} if ungrouped. */
   public int getGroupId() {
-    return groupId;
+    return groupIds.isEmpty() ? -1 : groupIds.iterator().next();
   }
 
+  /** All group memberships in sidebar bar order. */
+  public List<Integer> getGroupIds() {
+    return List.copyOf(groupIds);
+  }
+
+  public boolean isInGroup(int groupId) {
+    return groupId >= 0 && groupIds.contains(groupId);
+  }
+
+  /** Replace membership with a single group ({@code groupId < 0} clears). */
   public void setGroupId(int groupId) {
-    this.groupId = groupId;
+    groupIds.clear();
+    if (groupId >= 0) {
+      groupIds.add(groupId);
+    }
+  }
+
+  public void addGroupId(int groupId) {
+    if (groupId >= 0) {
+      groupIds.add(groupId);
+    }
+  }
+
+  public void removeGroupId(int groupId) {
+    groupIds.remove(groupId);
   }
 
   public boolean hasGroup() {
-    return groupId >= 0;
+    return !groupIds.isEmpty();
   }
 
   public void clearGroup() {
-    this.groupId = -1;
+    groupIds.clear();
   }
 
   // ── Samples (data files) ──

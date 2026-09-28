@@ -78,9 +78,13 @@ public class MasterTrackPainter {
 
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
-    presentTypes = variantList != null && !variantList.isEmpty()
+    Set<VcfVariantType> fromList = variantList != null && !variantList.isEmpty()
         ? EnumSet.copyOf(variantList.collectVariantTypes())
         : EnumSet.noneOf(VcfVariantType.class);
+    presentTypes = fromList;
+    if (!fromList.isEmpty()) {
+      VcfManager.getInstance().unionSessionAvailableFilters(fromList, null);
+    }
   }
 
   public void clearVariantList() {
@@ -91,6 +95,21 @@ public class MasterTrackPainter {
     densityCachedStart = -1;
     densityCachedEnd = -1;
     densityBusy = false;
+  }
+
+  /** Types for legends: loaded data ∪ session-available ∪ currently allowed. */
+  private Set<VcfVariantType> legendTypeUniverse() {
+    EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+    if (presentTypes != null && !presentTypes.isEmpty()) {
+      types.addAll(presentTypes);
+    }
+    VcfManager vcfManager = VcfManager.getInstance();
+    types.addAll(vcfManager.getSessionAvailableTypes());
+    VariantFilter filter = vcfManager.getCurrentFilter();
+    if (filter != null && filter.getAllowedTypes() != null) {
+      types.addAll(filter.getAllowedTypes());
+    }
+    return types;
   }
 
   private void clearDensityArrays() {
@@ -118,8 +137,9 @@ public class MasterTrackPainter {
   }
 
   /**
-   * Toggle canvas-only visibility for a density legend hit. Does not change
-   * Variant Manager filter checkboxes. Returns true if a legend was hit.
+   * Legend click: toggle canvas visibility for types already in the cache;
+   * for types not materialized under the loaded filter, prompt to reload and
+   * select them in Variant Manager.
    */
   public boolean handleLegendClick(double x, double y) {
     LegendHit hit = null;
@@ -133,12 +153,41 @@ public class MasterTrackPainter {
       return false;
     }
 
-    Set<VcfVariantType> present = presentTypes != null
-        ? presentTypes
-        : EnumSet.noneOf(VcfVariantType.class);
+    Set<VcfVariantType> present = legendTypeUniverse();
     Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(hit.displayType(), present);
-    VcfManager.getInstance().toggleCanvasTypeVisibility(linked);
+    VcfManager vcfManager = VcfManager.getInstance();
+
+    boolean anyNotMaterialized = linked.stream().anyMatch(t -> !vcfManager.isTypeMaterializedInCache(t));
+    boolean enabling = linked.stream().anyMatch(t ->
+        !vcfManager.isCanvasTypeVisible(t) || !vcfManager.isTypeMaterializedInCache(t));
+
+    if (enabling && anyNotMaterialized) {
+      promptReloadForTypes(linked);
+      return true;
+    }
+
+    vcfManager.toggleCanvasTypeVisibility(linked);
     return true;
+  }
+
+  private void promptReloadForTypes(Set<VcfVariantType> types) {
+    String labels = types.stream()
+        .map(VariantTypeVisuals::shortLabel)
+        .distinct()
+        .reduce((a, b) -> a + ", " + b)
+        .orElse("selected");
+
+    boolean ok = AppDialog.confirm(
+        org.baseplayer.MainApp.stage,
+        "Reload required",
+        "Load " + labels + " variants?",
+        "These variant types are not in the current cache because they were filtered out "
+            + "when variants were loaded. Reloading will also select them in Variant Manager.",
+        "Reload",
+        "Cancel");
+    if (ok) {
+      org.baseplayer.variant.ui.VariantManagerController.enableTypesAndReload(types);
+    }
   }
 
   /** Cursor hint when hovering a clickable density legend. */
@@ -820,9 +869,7 @@ public class MasterTrackPainter {
       return;
     }
 
-    Set<VcfVariantType> present = presentTypes != null
-        ? presentTypes
-        : EnumSet.noneOf(VcfVariantType.class);
+    Set<VcfVariantType> present = legendTypeUniverse();
     Set<VcfVariantType> legendTypes = VariantTypeVisuals.typesForUi(present);
     if (legendTypes.isEmpty()) {
       return;
@@ -864,7 +911,10 @@ public class MasterTrackPainter {
 
     for (VcfVariantType type : legendTypes) {
       Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(type, present);
-      boolean enabled = linked.stream().anyMatch(vcfManager::isCanvasTypeVisible);
+      boolean materialized = linked.stream().anyMatch(vcfManager::isTypeMaterializedInCache);
+      boolean canvasOn = linked.stream().anyMatch(vcfManager::isCanvasTypeVisible);
+      // Loaded + canvas-visible = full swatch; not loaded or canvas-hidden = muted.
+      boolean enabled = materialized && canvasOn;
       String label = VariantTypeVisuals.shortLabel(type);
 
       double textW = Math.max(22, label.length() * 7.2);

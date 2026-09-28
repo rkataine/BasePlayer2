@@ -55,6 +55,8 @@ public class ProjectDocument {
     public int comparisonWindowBp;
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
+    public List<String> availableTypes = new ArrayList<>();
+    public List<String> availableEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
     public List<String> allowedFilterValues = new ArrayList<>();
   }

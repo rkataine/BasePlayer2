@@ -33,12 +33,7 @@ public class LoadingPopup {
     private static final double POPUP_W = 310;
     private static final double POPUP_H = 230;
 
-    private static final String POPUP_STYLE =
-            "-fx-background-color: rgba(30, 30, 30, 0.98);"
-            + "-fx-background-radius: 8;"
-            + "-fx-border-color: #555555;"
-            + "-fx-border-radius: 8;"
-            + "-fx-border-width: 1;";
+    private static final String POPUP_STYLE = AppDialog.PANEL_STYLE;
 
     private static final double PROGRESS_EPSILON = 1e-9;
 

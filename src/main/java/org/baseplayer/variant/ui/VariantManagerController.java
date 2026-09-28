@@ -492,6 +492,102 @@ public class VariantManagerController implements Initializable {
         Platform.runLater(() -> controller.loadFilterState(filter));
     }
 
+    /**
+     * Add the given types to the load-time filter (Variant Manager checkboxes),
+     * keep them canvas-visible, and reload cached chromosomes so they materialize.
+     * Used when aggregate legends request a type that was not included in the last load.
+     */
+    public static void enableTypesAndReload(Set<VcfVariantType> types) {
+        if (types == null || types.isEmpty()) {
+            return;
+        }
+        Runnable work = () -> {
+            VcfManager vcfManager = VcfManager.getInstance();
+            if (!vcfManager.hasLoadedVcf()) {
+                return;
+            }
+
+            VariantManagerController controller = VariantManagerWindow.getCurrentController();
+            VariantFilter target;
+            if (controller != null) {
+                target = controller.buildFilterFromUI();
+            } else {
+                VariantFilter current = vcfManager.getCurrentFilter();
+                target = current != null ? current.copy() : new VariantFilter();
+            }
+
+            EnumSet<VcfVariantType> allowed = target.getAllowedTypes() == null || target.getAllowedTypes().isEmpty()
+                ? EnumSet.noneOf(VcfVariantType.class)
+                : EnumSet.copyOf(target.getAllowedTypes());
+            allowed.addAll(types);
+            target.setAllowedTypes(allowed);
+
+            vcfManager.unionSessionAvailableFilters(types, null);
+            vcfManager.ensureCanvasTypesVisible(types);
+            vcfManager.setCurrentFilterForNextLoad(target);
+
+            if (controller != null) {
+                if (controller.variantFiltersPanel != null) {
+                    controller.variantFiltersPanel.populateVariantTypes(
+                        controller.getCachedVariantSources(), target);
+                }
+                controller.loadFilterState(target);
+                controller.handleReloadFilteredVariants();
+            } else {
+                reloadCachedChromosomesHeadless(vcfManager, target);
+            }
+        };
+
+        if (Platform.isFxApplicationThread()) {
+            work.run();
+        } else {
+            Platform.runLater(work);
+        }
+    }
+
+    /** Reload cached chromosomes when Variant Manager is not open. */
+    private static void reloadCachedChromosomesHeadless(VcfManager vcfManager, VariantFilter target) {
+        List<String> chromosomes = vcfManager.getCachedChromosomesInOrder(null);
+        if (chromosomes.isEmpty()) {
+            String chrom = vcfManager.getLastLoadedChromosome();
+            if (chrom != null && !chrom.isBlank()) {
+                chromosomes = List.of(chrom);
+            }
+        }
+        if (chromosomes.isEmpty()) {
+            return;
+        }
+
+        vcfManager.markAllCachedVariantListsDirty();
+        final VariantFilter filterSnapshot = target.copy();
+        final List<String> cachedChroms = List.copyOf(chromosomes);
+        vcfManager.annotateAllReferenceChromosomes(
+            filterSnapshot,
+            cachedChroms,
+            null,
+            result -> {
+                if (result != null && !result.cancelled()) {
+                    vcfManager.setCurrentFilterForNextLoad(filterSnapshot);
+                    vcfManager.applyFilter(filterSnapshot);
+                    org.baseplayer.project.ProjectSessionState.get().markDirty();
+                }
+            });
+    }
+
+    public java.util.Set<VcfVariantType> snapshotUiAvailableTypes() {
+        if (variantFiltersPanel == null) {
+            return java.util.EnumSet.noneOf(VcfVariantType.class);
+        }
+        return variantFiltersPanel.snapshotShownVariantTypes();
+    }
+
+    public java.util.Set<org.baseplayer.variant.annotation.VariantEffect> snapshotUiAvailableEffects() {
+        if (variantFiltersPanel == null) {
+            return java.util.EnumSet.noneOf(org.baseplayer.variant.annotation.VariantEffect.class);
+        }
+        return variantFiltersPanel.snapshotShownVariantEffects();
+    }
+
     @FXML
     private void handleRefreshComparisonGroups() {
         if (sampleComparisonPanel != null) sampleComparisonPanel.refreshGroups();

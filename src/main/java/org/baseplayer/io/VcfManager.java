@@ -32,6 +32,7 @@ import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantLoader;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VcfVariantType;
+import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.annotation.VariantAnnotator;
 import org.baseplayer.variant.annotation.TranscriptCdsCache;
 import org.baseplayer.variant.ui.VariantManagerController;
@@ -71,6 +72,15 @@ public class VcfManager {
      */
     private final Set<VcfVariantType> canvasHiddenTypes =
         EnumSet.noneOf(VcfVariantType.class);
+
+    /**
+     * Types/effects that should appear as Variant Manager checkboxes even when the
+     * current loaded cache was filtered down (persisted in the project session).
+     */
+    private final Set<VcfVariantType> sessionAvailableTypes =
+        EnumSet.noneOf(VcfVariantType.class);
+    private final Set<VariantEffect> sessionAvailableEffects =
+        EnumSet.noneOf(VariantEffect.class);
 
     // Whether a background load is in progress
     private boolean loading = false;
@@ -791,6 +801,7 @@ public class VcfManager {
         currentFilter = new VariantFilter();
         filterGeneration.incrementAndGet();
         clearCanvasTypeVisibility();
+        clearSessionAvailableFilters();
         onChromosomeVariantsReady = null;
         TranscriptCdsCache.getInstance().clearMemory();
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
@@ -1292,6 +1303,68 @@ public class VcfManager {
 
     public synchronized void clearCanvasTypeVisibility() {
         canvasHiddenTypes.clear();
+    }
+
+    /** Ensure the given types are not canvas-hidden (legend “show”). */
+    public synchronized void ensureCanvasTypesVisible(Set<VcfVariantType> types) {
+        if (types == null || types.isEmpty()) {
+            return;
+        }
+        boolean changed = canvasHiddenTypes.removeAll(types);
+        if (changed) {
+            Platform.runLater(this::redrawCanvasesForTypeVisibility);
+        }
+    }
+
+    /**
+     * True when the type was included in the filter used to materialize the current
+     * chromosome cache (so canvas toggle alone can show/hide it).
+     */
+    public synchronized boolean isTypeMaterializedInCache(VcfVariantType type) {
+        if (type == null) {
+            return false;
+        }
+        VariantFilter loaded = getCurrentLoadedFilter();
+        if (loaded == null) {
+            return true;
+        }
+        return loaded.getAllowedTypes() != null && loaded.getAllowedTypes().contains(type);
+    }
+
+    public synchronized Set<VcfVariantType> getSessionAvailableTypes() {
+        return EnumSet.copyOf(sessionAvailableTypes);
+    }
+
+    public synchronized Set<VariantEffect> getSessionAvailableEffects() {
+        return EnumSet.copyOf(sessionAvailableEffects);
+    }
+
+    public synchronized void setSessionAvailableFilters(
+            Set<VcfVariantType> types, Set<VariantEffect> effects) {
+        sessionAvailableTypes.clear();
+        if (types != null && !types.isEmpty()) {
+            sessionAvailableTypes.addAll(types);
+        }
+        sessionAvailableEffects.clear();
+        if (effects != null && !effects.isEmpty()) {
+            sessionAvailableEffects.addAll(effects);
+        }
+    }
+
+    /** Grow the session available sets with newly observed present types/effects. */
+    public synchronized void unionSessionAvailableFilters(
+            Set<VcfVariantType> types, Set<VariantEffect> effects) {
+        if (types != null && !types.isEmpty()) {
+            sessionAvailableTypes.addAll(types);
+        }
+        if (effects != null && !effects.isEmpty()) {
+            sessionAvailableEffects.addAll(effects);
+        }
+    }
+
+    public synchronized void clearSessionAvailableFilters() {
+        sessionAvailableTypes.clear();
+        sessionAvailableEffects.clear();
     }
 
     private void redrawCanvasesForTypeVisibility() {

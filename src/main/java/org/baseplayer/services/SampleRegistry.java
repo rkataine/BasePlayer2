@@ -8,11 +8,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
@@ -38,6 +41,8 @@ public class SampleRegistry extends TrackViewportRegistry {
     private String activeSampleFilterQuery = "";
     private Set<SampleTrack> focusedTracks = null;
     private String focusedGeneName = null;
+    private GeneLocation focusedGeneLocus = null;
+    private final IntegerProperty geneFocusRevision = new SimpleIntegerProperty(0);
     private final List<Integer> cachedDisplayedTrackIndices = new ArrayList<>();
     private boolean displayedTrackIndicesDirty = true;
     private final Map<Integer, SampleGroup> sampleGroups = new LinkedHashMap<>();
@@ -95,6 +100,8 @@ public class SampleRegistry extends TrackViewportRegistry {
         activeSampleFilterQuery = "";
         focusedTracks = null;
         focusedGeneName = null;
+        focusedGeneLocus = null;
+        bumpGeneFocusRevision();
         invalidateDisplayedTrackIndicesCache();
         clearVisibleRange();
         setHoveredTrackIndex(-1);
@@ -239,8 +246,37 @@ public class SampleRegistry extends TrackViewportRegistry {
         return focusedTracks != null;
     }
 
+    /** Tracks currently included by gene focus (empty if none). */
+    public List<SampleTrack> getFocusedTracks() {
+        if (focusedTracks == null || focusedTracks.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(focusedTracks);
+    }
+
     public String getFocusedGeneName() {
         return focusedGeneName;
+    }
+
+    /** Genomic locus for the current gene focus, if resolvable. */
+    public GeneLocation getFocusedGeneLocus() {
+        return focusedGeneLocus;
+    }
+
+    /** True when a named gene (not a position click) currently drives the sample subset. */
+    public boolean hasGeneFocusBanner() {
+        return hasFocusedTracks()
+            && focusedGeneName != null
+            && !focusedGeneName.isBlank()
+            && !focusedGeneName.startsWith("Position:");
+    }
+
+    public IntegerProperty geneFocusRevisionProperty() {
+        return geneFocusRevision;
+    }
+
+    private void bumpGeneFocusRevision() {
+        geneFocusRevision.set(geneFocusRevision.get() + 1);
     }
 
     /** Suggested group name: focused gene if any, otherwise {@code Group N} for the next id. */
@@ -253,12 +289,12 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     public void applyGeneSubset(List<SampleTrack> tracks, String featureName) {
         boolean hadFocusedTracks = focusedTracks != null;
-        boolean hasFocusedTracks = tracks != null && !tracks.isEmpty();
         String oldFeatureName = focusedGeneName;
 
         if (tracks == null || tracks.isEmpty()) {
             focusedTracks = null;
             focusedGeneName = null;
+            focusedGeneLocus = null;
         } else {
             focusedTracks = new LinkedHashSet<>();
             for (SampleTrack track : tracks) {
@@ -268,17 +304,61 @@ public class SampleRegistry extends TrackViewportRegistry {
             }
             if (focusedTracks.isEmpty()) {
                 focusedTracks = null;
+                focusedGeneName = null;
+                focusedGeneLocus = null;
+            } else {
+                focusedGeneName = featureName;
+                focusedGeneLocus = resolveGeneLocus(featureName);
             }
-            focusedGeneName = featureName;
         }
 
         invalidateDisplayedTrackIndicesCache();
         normalizeVisibleRangeAfterDisplayedTrackCountChange();
 
-        boolean changed = (hadFocusedTracks != hasFocusedTracks)
+        boolean changed = (hadFocusedTracks != (focusedTracks != null))
             || (oldFeatureName == null ? focusedGeneName != null : !oldFeatureName.equals(focusedGeneName));
         if (changed) {
+            bumpGeneFocusRevision();
             notifyVariantIndexDirty();
+        }
+    }
+
+    private static GeneLocation resolveGeneLocus(String featureName) {
+        if (featureName == null || featureName.isBlank() || featureName.startsWith("Position:")) {
+            return null;
+        }
+        return AnnotationData.getGeneLocation(featureName);
+    }
+
+    /**
+     * Drop gene focus when the viewport leaves the gene or zooms out far beyond it.
+     * No-op when there is no gene focus / locus.
+     */
+    public void maybeClearGeneFocusForView(String chromosome, double viewStart, double viewEnd) {
+        if (!hasGeneFocusBanner() || focusedGeneLocus == null) {
+            return;
+        }
+        GeneLocation locus = focusedGeneLocus;
+        if (!ChromosomeNames.equals(chromosome, locus.chrom())) {
+            clearSubsetSource(SubsetSource.GENE_FOCUS);
+            return;
+        }
+
+        long geneLen = Math.max(1L, locus.end() - locus.start());
+        double viewLen = Math.max(0, viewEnd - viewStart);
+
+        // Initial gene navigation uses ~gene + 2*pad; clear when zoomed well beyond that.
+        long navPad = Math.max(1000L, geneLen / 2);
+        long navLen = geneLen + 2 * navPad;
+        if (viewLen > navLen * 5.0 && viewLen > geneLen + 50_000) {
+            clearSubsetSource(SubsetSource.GENE_FOCUS);
+            return;
+        }
+
+        // Away from the gene: view no longer overlaps the locus (with padding).
+        long leavePad = Math.max(5_000L, geneLen / 2);
+        if (viewEnd < locus.start() - leavePad || viewStart > locus.end() + leavePad) {
+            clearSubsetSource(SubsetSource.GENE_FOCUS);
         }
     }
 
@@ -310,12 +390,14 @@ public class SampleRegistry extends TrackViewportRegistry {
         if (focusedTracks != null || focusedGeneName != null) {
             focusedTracks = null;
             focusedGeneName = null;
+            focusedGeneLocus = null;
             changed = true;
         }
 
         invalidateDisplayedTrackIndicesCache();
         normalizeVisibleRangeAfterDisplayedTrackCountChange();
         if (changed) {
+            bumpGeneFocusRevision();
             notifyVariantIndexDirty();
         }
     }
@@ -487,15 +569,43 @@ public class SampleRegistry extends TrackViewportRegistry {
         return sampleGroups.get(track.getGroupId());
     }
 
+    /** All groups this track belongs to, in sidebar bar order. */
+    public List<SampleGroup> getGroupsForTrack(SampleTrack track) {
+        if (track == null || !track.hasGroup()) {
+            return List.of();
+        }
+        List<SampleGroup> groups = new ArrayList<>();
+        for (int groupId : track.getGroupIds()) {
+            SampleGroup group = sampleGroups.get(groupId);
+            if (group != null) {
+                groups.add(group);
+            }
+        }
+        return groups;
+    }
+
     public Color getSidebarColorForTrack(SampleTrack track) {
         SampleGroup group = getGroupForTrack(track);
         return group != null ? group.getColor() : null;
     }
 
+    /** Sidebar accent colors for every group on the track (bar order). */
+    public List<Color> getSidebarColorsForTrack(SampleTrack track) {
+        List<SampleGroup> groups = getGroupsForTrack(track);
+        if (groups.isEmpty()) {
+            return List.of();
+        }
+        List<Color> colors = new ArrayList<>(groups.size());
+        for (SampleGroup group : groups) {
+            colors.add(group.getColor());
+        }
+        return colors;
+    }
+
     public int countTracksInGroup(int groupId) {
         int count = 0;
         for (SampleTrack track : sampleTracks) {
-            if (track.getGroupId() == groupId) {
+            if (track.isInGroup(groupId)) {
                 count++;
             }
         }
@@ -519,25 +629,23 @@ public class SampleRegistry extends TrackViewportRegistry {
         return createSampleGroup(name, null);
     }
 
+    /** Add tracks to a group without removing existing memberships. */
     public void assignTracksToGroup(List<SampleTrack> tracks, int groupId) {
         if (tracks == null || !sampleGroups.containsKey(groupId)) {
             return;
         }
-        Set<Integer> vacatedGroups = new LinkedHashSet<>();
+        boolean changed = false;
         for (SampleTrack track : tracks) {
-            if (track == null) {
+            if (track == null || track.isInGroup(groupId)) {
                 continue;
             }
-            if (track.hasGroup() && track.getGroupId() != groupId) {
-                vacatedGroups.add(track.getGroupId());
-            }
-            track.setGroupId(groupId);
+            track.addGroupId(groupId);
+            changed = true;
         }
-        for (int vacatedId : vacatedGroups) {
-            pruneEmptyGroup(vacatedId);
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
         }
-        ProjectSessionState.get().markDirty();
-        bumpSampleGroupsRevision();
     }
 
     public void assignTrackToGroup(SampleTrack track, int groupId) {
@@ -548,14 +656,10 @@ public class SampleRegistry extends TrackViewportRegistry {
             clearTrackGroup(track);
             return;
         }
-        if (!sampleGroups.containsKey(groupId)) {
+        if (!sampleGroups.containsKey(groupId) || track.isInGroup(groupId)) {
             return;
         }
-        int previousGroupId = track.getGroupId();
-        track.setGroupId(groupId);
-        if (previousGroupId >= 0 && previousGroupId != groupId) {
-            pruneEmptyGroup(previousGroupId);
-        }
+        track.addGroupId(groupId);
         ProjectSessionState.get().markDirty();
         bumpSampleGroupsRevision();
     }
@@ -569,18 +673,31 @@ public class SampleRegistry extends TrackViewportRegistry {
         return group;
     }
 
-    public void clearTrackGroup(SampleTrack track) {
-        if (track == null || !track.hasGroup()) {
+    /** Remove a track from one group; prune the group if emptied. */
+    public void removeTrackFromGroup(SampleTrack track, int groupId) {
+        if (track == null || !track.isInGroup(groupId)) {
             return;
         }
-        int groupId = track.getGroupId();
-        track.clearGroup();
+        track.removeGroupId(groupId);
         pruneEmptyGroup(groupId);
         ProjectSessionState.get().markDirty();
         bumpSampleGroupsRevision();
     }
 
-    /** Remove several tracks from whatever groups they belong to; delete emptied groups. */
+    public void clearTrackGroup(SampleTrack track) {
+        if (track == null || !track.hasGroup()) {
+            return;
+        }
+        Set<Integer> previous = new LinkedHashSet<>(track.getGroupIds());
+        track.clearGroup();
+        for (int groupId : previous) {
+            pruneEmptyGroup(groupId);
+        }
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+    }
+
+    /** Remove several tracks from all groups they belong to; delete emptied groups. */
     public void clearTracksFromGroups(List<SampleTrack> tracks) {
         if (tracks == null || tracks.isEmpty()) {
             return;
@@ -588,7 +705,7 @@ public class SampleRegistry extends TrackViewportRegistry {
         Set<Integer> touchedGroups = new LinkedHashSet<>();
         for (SampleTrack track : tracks) {
             if (track != null && track.hasGroup()) {
-                touchedGroups.add(track.getGroupId());
+                touchedGroups.addAll(track.getGroupIds());
                 track.clearGroup();
             }
         }
@@ -615,8 +732,8 @@ public class SampleRegistry extends TrackViewportRegistry {
             return;
         }
         for (SampleTrack track : sampleTracks) {
-            if (track.getGroupId() == groupId) {
-                track.clearGroup();
+            if (track.isInGroup(groupId)) {
+                track.removeGroupId(groupId);
             }
         }
         sampleGroups.remove(groupId);
