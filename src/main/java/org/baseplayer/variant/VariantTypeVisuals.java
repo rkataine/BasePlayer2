@@ -13,6 +13,30 @@ import javafx.scene.paint.Color;
  */
 public final class VariantTypeVisuals {
 
+  /** Top-level Variant Manager mode: point mutations vs structural variants. */
+  public enum VariantClass {
+    POINT,
+    STRUCTURAL;
+
+    public static VariantClass of(VcfVariantType type) {
+      return isStructural(type) ? STRUCTURAL : POINT;
+    }
+
+    public boolean contains(VcfVariantType type) {
+      return type != null && of(type) == this;
+    }
+
+    public EnumSet<VcfVariantType> allTypes() {
+      EnumSet<VcfVariantType> out = EnumSet.noneOf(VcfVariantType.class);
+      for (VcfVariantType type : VcfVariantType.values()) {
+        if (contains(type)) {
+          out.add(type);
+        }
+      }
+      return out;
+    }
+  }
+
   private VariantTypeVisuals() {}
 
   public static String shortLabel(VcfVariantType type) {
@@ -41,10 +65,10 @@ public final class VariantTypeVisuals {
     return switch (type) {
       case SNV -> Color.web("#4A90E2");
       case INSERTION -> Color.web("#7ED321");
-      case DELETION -> Color.rgb(200, 100, 100);       // Muted red (app palette)
+      case DELETION -> Color.rgb(200, 100, 100);
       case MNV -> Color.web("#BD10E0");
       case COMPLEX -> Color.web("#B8E986");
-      case SV_DELETION -> Color.rgb(200, 100, 100);    // Same muted red as indel DEL
+      case SV_DELETION -> Color.rgb(200, 100, 100);
       case SV_INVERSION -> Color.web("#4488ff");
       case SV_DUPLICATION -> Color.web("#c0c0d0");
       case SV_INSERTION -> Color.web("#33cc66");
@@ -55,60 +79,44 @@ public final class VariantTypeVisuals {
 
   /**
    * Types shown as filter checkboxes / density legends for the given present set.
-   * Merges indel INS/DEL into SV counterparts when SVs are present (same as Variant Manager).
+   * Point and SV types are listed independently (no indel↔SV merging).
    */
   public static Set<VcfVariantType> typesForUi(Collection<VcfVariantType> presentTypes) {
+    return typesForUi(presentTypes, null);
+  }
+
+  /**
+   * Types for UI limited to {@code variantClass} when non-null.
+   */
+  public static Set<VcfVariantType> typesForUi(
+      Collection<VcfVariantType> presentTypes, VariantClass variantClass) {
     Set<VcfVariantType> present = (presentTypes != null && !presentTypes.isEmpty())
         ? EnumSet.copyOf(presentTypes)
         : EnumSet.noneOf(VcfVariantType.class);
 
-    boolean hasSvTypes = present.stream().anyMatch(VariantTypeVisuals::isStructural);
-
     Set<VcfVariantType> typesToShow = new LinkedHashSet<>();
     for (VcfVariantType type : present) {
-      switch (type) {
-        case SNV, MNV, COMPLEX -> typesToShow.add(type);
-        case INSERTION -> {
-          if (!hasSvTypes || !present.contains(VcfVariantType.SV_INSERTION)) {
-            typesToShow.add(type);
-          }
-        }
-        case DELETION -> {
-          if (!hasSvTypes || !present.contains(VcfVariantType.SV_DELETION)) {
-            typesToShow.add(type);
-          }
-        }
-        case SV_INSERTION, SV_DELETION, SV_DUPLICATION, SV_INVERSION,
-             SV_TRANSLOCATION, SV_BREAKEND -> {
-          if (hasSvTypes) {
-            typesToShow.add(type);
-          }
-        }
+      if (type == null) {
+        continue;
       }
+      if (variantClass != null && !variantClass.contains(type)) {
+        continue;
+      }
+      typesToShow.add(type);
     }
     return typesToShow;
   }
 
   /**
-   * Types toggled together when interacting with a UI entry for {@code displayType}
-   * (e.g. SV DEL also covers indel DEL when both exist).
+   * Types toggled together for a UI entry. Point and SV types are independent —
+   * each display type only toggles itself.
    */
   public static Set<VcfVariantType> linkedTypes(
       VcfVariantType displayType, Collection<VcfVariantType> presentTypes) {
-    Set<VcfVariantType> present = (presentTypes != null && !presentTypes.isEmpty())
-        ? EnumSet.copyOf(presentTypes)
-        : EnumSet.noneOf(VcfVariantType.class);
-    Set<VcfVariantType> linked = EnumSet.of(displayType);
-    if (displayType == VcfVariantType.SV_INSERTION && present.contains(VcfVariantType.INSERTION)) {
-      linked.add(VcfVariantType.INSERTION);
-    } else if (displayType == VcfVariantType.SV_DELETION && present.contains(VcfVariantType.DELETION)) {
-      linked.add(VcfVariantType.DELETION);
-    } else if (displayType == VcfVariantType.INSERTION && present.contains(VcfVariantType.SV_INSERTION)) {
-      linked.add(VcfVariantType.SV_INSERTION);
-    } else if (displayType == VcfVariantType.DELETION && present.contains(VcfVariantType.SV_DELETION)) {
-      linked.add(VcfVariantType.SV_DELETION);
+    if (displayType == null) {
+      return EnumSet.noneOf(VcfVariantType.class);
     }
-    return linked;
+    return EnumSet.of(displayType);
   }
 
   public static boolean isStructural(VcfVariantType type) {
@@ -118,5 +126,32 @@ public final class VariantTypeVisuals {
         || type == VcfVariantType.SV_INVERSION
         || type == VcfVariantType.SV_TRANSLOCATION
         || type == VcfVariantType.SV_BREAKEND;
+  }
+
+  public static boolean isPoint(VcfVariantType type) {
+    return type != null && !isStructural(type);
+  }
+
+  public static boolean hasClass(Collection<VcfVariantType> types, VariantClass variantClass) {
+    if (types == null || variantClass == null) {
+      return false;
+    }
+    for (VcfVariantType type : types) {
+      if (variantClass.contains(type)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Span length in bp for structural nodes; {@code -1} when unknown / not an SV span. */
+  public static long svSpanLengthBp(VariantNode node) {
+    if (node == null || !isStructural(node.type)) {
+      return -1;
+    }
+    if (node.svEnd > node.position) {
+      return node.svEnd - node.position;
+    }
+    return -1;
   }
 }

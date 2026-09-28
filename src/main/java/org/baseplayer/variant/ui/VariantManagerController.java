@@ -18,11 +18,14 @@ import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.ui.components.AgentPanel;
 import org.baseplayer.variant.ui.components.ControlFilesPanel;
 import org.baseplayer.variant.ui.components.IntegerRangeSlider;
 import org.baseplayer.variant.ui.components.SampleComparisonPanel;
+import org.baseplayer.variant.ui.components.SvVariantTable;
 import org.baseplayer.variant.ui.components.VariantBusyOverlay;
+import org.baseplayer.variant.ui.components.VariantClassWorkspace;
 import org.baseplayer.variant.ui.components.VariantFiltersPanel;
 import org.baseplayer.variant.ui.components.VariantTable;
 
@@ -41,6 +44,7 @@ import javafx.util.Duration;
 import java.util.*;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
@@ -71,6 +75,15 @@ public class VariantManagerController implements Initializable {
     @FXML private Label reloadBannerLabel;
     @FXML private Button reloadBannerButton;
 
+    @FXML private Tab pointMutationsTab;
+    @FXML private Tab structuralVariantsTab;
+    @FXML private SplitPane pointMainSplitPane;
+    @FXML private SplitPane svMainSplitPane;
+    @FXML private VBox svFiltersHost;
+    @FXML private TabPane svResultsTabPane;
+    @FXML private Tab svAllTab, svGeneTab, svOtherTab;
+    @FXML private TableView<?> svAllTable, svGeneTable, svOtherTable;
+
     // Loading Modal
     @FXML private VBox loadingModal;
     @FXML private ProgressIndicator loadingSpinner;
@@ -92,11 +105,21 @@ public class VariantManagerController implements Initializable {
     @FXML private Label groupComparisonSummaryLabel;
     @FXML private Button refreshComparisonGroupsButton;
     @FXML private RadioButton presentMatchAllRadio, presentMatchAnyRadio;
-    private SampleComparisonPanel sampleComparisonPanel;
-    private VariantFiltersPanel variantFiltersPanel;
-    private ControlFilesPanel controlFilesPanel;
     private AgentPanel agentPanel;
     private VariantBusyOverlay busyOverlay;
+
+    /** Point and SV mode bundles (filters + comparison + control + tools + results). */
+    private VariantClassWorkspace pointWorkspace;
+    private VariantClassWorkspace svWorkspace;
+
+    private TabPane pointToolTabPane;
+    private TabPane svToolTabPane;
+    private Tab pointFiltersTab;
+    private Tab svFiltersTab;
+    private Tab pointComparisonTab;
+    private Tab pointControlTab;
+    private Tab svComparisonTab;
+    private Tab svControlTab;
 
     // Filter Tab: Control Files
     @FXML private CheckBox filterByPopFreqCheckBox, useGnomadCheckBox, use1000GenomesCheckBox, useExacCheckBox;
@@ -129,11 +152,11 @@ public class VariantManagerController implements Initializable {
     @FXML private TableColumn<VariantNode, String> intergenicSamplesColumn, intergenicQualityColumn;
 
     // Filter & Results tab panes
-    @FXML private SplitPane mainSplitPane;
     @FXML private SplitPane variantFiltersSplitPane;
     @FXML private SplitPane sampleComparisonSplitPane;
     @FXML private SplitPane controlFilesSplitPane;
     @FXML private TabPane filterTabPane, resultsTabPane;
+    // filterTabPane is the outer mode pane (Point | SV). Kept name for FXML compatibility.
     @FXML private Button annotateAllChromosomesButton;
     @FXML private TextField tableSearchField;
 
@@ -166,6 +189,7 @@ public class VariantManagerController implements Initializable {
     private boolean suppressFilterApplyEvents = false;
     private VariantFilter pendingReloadFilter;
     private VariantTable variantTable;
+    private SvVariantTable svVariantTable;
 
     // ── Initialization ────────────────────────────────────────────────────────
 
@@ -176,7 +200,12 @@ public class VariantManagerController implements Initializable {
         immediateFilterApplyTimer = new Timeline(new KeyFrame(Duration.millis(40), e -> applyFiltersNow()));
         immediateFilterApplyTimer.setCycleCount(1);
 
-        sampleComparisonPanel = new SampleComparisonPanel();
+        pointWorkspace = new VariantClassWorkspace(
+            VariantTypeVisuals.VariantClass.POINT, pointMutationsTab);
+        svWorkspace = new VariantClassWorkspace(
+            VariantTypeVisuals.VariantClass.STRUCTURAL, structuralVariantsTab);
+
+        SampleComparisonPanel sampleComparisonPanel = new SampleComparisonPanel();
         sampleComparisonPanel.install(
             new SampleComparisonPanel.Nodes(
                 sharedSampleRangeSlider,
@@ -191,8 +220,9 @@ public class VariantManagerController implements Initializable {
             this::scheduleFilterUpdate,
             this::scheduleImmediateFilterApply,
             () -> suppressFilterApplyEvents);
+        pointWorkspace.setComparison(sampleComparisonPanel);
 
-        variantFiltersPanel = new VariantFiltersPanel();
+        VariantFiltersPanel variantFiltersPanel = new VariantFiltersPanel();
         variantFiltersPanel.install(
             new VariantFiltersPanel.Nodes(
                 variantTypesContainer,
@@ -217,9 +247,13 @@ public class VariantManagerController implements Initializable {
                 reloadBannerButton),
             this::scheduleFilterUpdate,
             this::scheduleImmediateFilterApply,
-            () -> suppressFilterApplyEvents);
+            () -> suppressFilterApplyEvents,
+            VariantTypeVisuals.VariantClass.POINT);
+        pointWorkspace.setFilters(variantFiltersPanel);
 
-        controlFilesPanel = new ControlFilesPanel();
+        installStructuralFiltersPanel();
+
+        ControlFilesPanel controlFilesPanel = new ControlFilesPanel();
         controlFilesPanel.install(
             new ControlFilesPanel.Nodes(
                 filterByPopFreqCheckBox,
@@ -234,12 +268,13 @@ public class VariantManagerController implements Initializable {
                 controlFileNameColumn,
                 controlFileTypeColumn,
                 controlFileActionsColumn));
+        pointWorkspace.setControl(controlFilesPanel);
 
         agentPanel = new AgentPanel();
         agentPanel.install(
             new AgentPanel.Nodes(
                 filterTabPane,
-                resultsTabPane,
+                null,
                 agentTab,
                 apiKeyField,
                 agentModelField,
@@ -266,13 +301,244 @@ public class VariantManagerController implements Initializable {
         busyOverlay.setOnCancel(this::handleCancelLoadingModal);
 
         initializeVariantTable();
+        initializeSvVariantTable();
         if (tableSearchField != null) {
             tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (variantTable != null) {
                     variantTable.setTableSearchQuery(newVal);
                 }
+                if (svVariantTable != null) {
+                    svVariantTable.setSearchQuery(newVal);
+                }
             });
         }
+
+        restructureModeWorkspaces();
+
+        // Agent tab now lives under the Point tool pane.
+        if (agentPanel != null && pointToolTabPane != null) {
+            agentPanel.install(
+                new AgentPanel.Nodes(
+                    pointToolTabPane,
+                    null,
+                    agentTab,
+                    apiKeyField,
+                    agentModelField,
+                    agentPromptArea,
+                    agentResponseArea,
+                    agentStatusLabel,
+                    agentSubmitButton),
+                this::buildVariantContext);
+        }
+    }
+
+    /** Ordered Point then SV workspaces that have been assembled. */
+    private List<VariantClassWorkspace> workspaces() {
+        List<VariantClassWorkspace> list = new ArrayList<>(2);
+        if (pointWorkspace != null) {
+            list.add(pointWorkspace);
+        }
+        if (svWorkspace != null) {
+            list.add(svWorkspace);
+        }
+        return list;
+    }
+
+    /**
+     * Nest Filters / Sample Comparison / Control / Agent under each mode workspace.
+     * Outer {@link #filterTabPane} becomes Point | SV only (Agent moves into Point tools;
+     * SV gets its own Comparison/Control; Agent shared via Point for now and duplicated
+     * under SV as a second agent tab binding to the same prefs-backed panel is deferred —
+     * Agent stays under Point tools and is also linked into SV tools by reusing the tab).
+     */
+    private void restructureModeWorkspaces() {
+        if (filterTabPane == null || pointMainSplitPane == null || svMainSplitPane == null) {
+            return;
+        }
+
+        // Capture shared sibling tabs before removing them from the mode pane.
+        Tab comparisonTab = findTabByText(filterTabPane, "Sample Comparison");
+        Tab controlTab = findTabByText(filterTabPane, "Control Files");
+        Tab agent = agentTab;
+
+        filterTabPane.getTabs().removeAll(
+            comparisonTab != null ? List.of(comparisonTab) : List.of());
+        if (controlTab != null) {
+            filterTabPane.getTabs().remove(controlTab);
+        }
+        if (agent != null) {
+            filterTabPane.getTabs().remove(agent);
+        }
+
+        // ── Point workspace: tool tabs above results ─────────────────────────
+        Node pointFilters = null;
+        Node pointResults = null;
+        if (pointMainSplitPane.getItems().size() >= 2) {
+            pointFilters = pointMainSplitPane.getItems().get(0);
+            pointResults = pointMainSplitPane.getItems().get(1);
+        }
+
+        pointToolTabPane = new TabPane();
+        pointToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        pointToolTabPane.getStyleClass().add("filter-tabs");
+
+        pointFiltersTab = new Tab("Variant Filters", pointFilters);
+        pointFiltersTab.setClosable(false);
+        pointComparisonTab = comparisonTab != null ? comparisonTab : new Tab("Sample Comparison");
+        pointComparisonTab.setClosable(false);
+        pointComparisonTab.setText("Sample Comparison");
+        pointControlTab = controlTab != null ? controlTab : new Tab("Control Files");
+        pointControlTab.setClosable(false);
+        pointControlTab.setText("Control Files");
+        if (agent != null) {
+            agent.setClosable(false);
+        }
+
+        pointToolTabPane.getTabs().add(pointFiltersTab);
+        pointToolTabPane.getTabs().add(pointComparisonTab);
+        pointToolTabPane.getTabs().add(pointControlTab);
+        if (agent != null) {
+            pointToolTabPane.getTabs().add(agent);
+        }
+
+        if (pointFilters != null && pointResults != null) {
+            pointMainSplitPane.getItems().setAll(pointToolTabPane, pointResults);
+            pointMainSplitPane.setDividerPositions(0.45);
+        }
+
+        // ── SV workspace: tool tabs above results ────────────────────────────
+        Node svResults = null;
+        if (svMainSplitPane.getItems().size() >= 2) {
+            svResults = svMainSplitPane.getItems().get(1);
+        }
+
+        svToolTabPane = new TabPane();
+        svToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        svToolTabPane.getStyleClass().add("filter-tabs");
+
+        // Filters host may already contain the built SV filter UI.
+        svFiltersTab = new Tab("Variant Filters", svFiltersHost);
+        svFiltersTab.setClosable(false);
+
+        javafx.util.Pair<Node, SampleComparisonPanel.Nodes> svComp =
+            SampleComparisonPanel.buildUi();
+        SampleComparisonPanel svSampleComparisonPanel = new SampleComparisonPanel();
+        svSampleComparisonPanel.install(
+            svComp.getValue(),
+            this::scheduleFilterUpdate,
+            this::scheduleImmediateFilterApply,
+            () -> suppressFilterApplyEvents);
+        SampleComparisonPanel.wireApplyButton(svComp.getKey(), this::handleApplyComparison);
+        if (svWorkspace != null) {
+            svWorkspace.setComparison(svSampleComparisonPanel);
+        }
+        svComparisonTab = new Tab("Sample Comparison", svComp.getKey());
+        svComparisonTab.setClosable(false);
+
+        javafx.util.Pair<Node, ControlFilesPanel.Nodes> svCtrl = ControlFilesPanel.buildUi();
+        ControlFilesPanel svControlFilesPanel = new ControlFilesPanel();
+        svControlFilesPanel.install(svCtrl.getValue());
+        if (svWorkspace != null) {
+            svWorkspace.setControl(svControlFilesPanel);
+        }
+        svControlTab = new Tab("Control Files", svCtrl.getKey());
+        svControlTab.setClosable(false);
+
+        // Reuse the same Agent tab instance — selecting it under SV shows the same agent UI.
+        // When both modes are shown, Agent lives under Point tools; SV gets a lightweight note tab
+        // that selects Point's agent (avoid dual ownership of one Node).
+        Tab svAgentTab = new Tab("Agent");
+        svAgentTab.setClosable(false);
+        Label agentHint = new Label(
+            "Open the Point mutations → Agent tab to run AI analysis on loaded variants.");
+        agentHint.setWrapText(true);
+        agentHint.setStyle("-fx-text-fill: #bbbbbb; -fx-padding: 16;");
+        svAgentTab.setContent(agentHint);
+        if (agent != null) {
+            // Prefer putting Agent under SV tools as well by cloning the selection action:
+            svAgentTab.setOnSelectionChanged(e -> {
+                if (svAgentTab.isSelected() && pointToolTabPane != null && agent != null) {
+                    // Keep hint; full dual Agent UI can be added later.
+                }
+            });
+        }
+
+        svToolTabPane.getTabs().addAll(svFiltersTab, svComparisonTab, svControlTab, svAgentTab);
+
+        if (svResults != null) {
+            svMainSplitPane.getItems().setAll(svToolTabPane, svResults);
+            svMainSplitPane.setDividerPositions(0.45);
+        }
+
+        if (pointWorkspace != null) {
+            pointWorkspace.setToolTabPane(pointToolTabPane);
+        }
+        if (svWorkspace != null) {
+            svWorkspace.setToolTabPane(svToolTabPane);
+        }
+
+        // Outer pane should only carry mode tabs now.
+        filterTabPane.getTabs().removeIf(t ->
+            t != pointMutationsTab && t != structuralVariantsTab);
+        if (pointMutationsTab != null && !filterTabPane.getTabs().contains(pointMutationsTab)) {
+            filterTabPane.getTabs().add(0, pointMutationsTab);
+        }
+        if (structuralVariantsTab != null && !filterTabPane.getTabs().contains(structuralVariantsTab)) {
+            filterTabPane.getTabs().add(structuralVariantsTab);
+        }
+    }
+
+    private static Tab findTabByText(TabPane pane, String text) {
+        if (pane == null || text == null) {
+            return null;
+        }
+        for (Tab tab : pane.getTabs()) {
+            if (text.equals(tab.getText())) {
+                return tab;
+            }
+        }
+        return null;
+    }
+
+    private void installStructuralFiltersPanel() {
+        if (svFiltersHost == null) {
+            return;
+        }
+        javafx.util.Pair<Node, VariantFiltersPanel.Nodes> built =
+            VariantFiltersPanel.buildStructuralFiltersUi();
+        svFiltersHost.getChildren().setAll(built.getKey());
+        VBox.setVgrow(built.getKey(), javafx.scene.layout.Priority.ALWAYS);
+
+        VariantFiltersPanel.Nodes svNodes = built.getValue();
+        if (svNodes.reloadBannerButton() != null) {
+            svNodes.reloadBannerButton().setOnAction(e -> handleReloadFilteredVariants());
+        }
+
+        VariantFiltersPanel svFiltersPanel = new VariantFiltersPanel();
+        svFiltersPanel.install(
+            svNodes,
+            this::scheduleFilterUpdate,
+            this::scheduleImmediateFilterApply,
+            () -> suppressFilterApplyEvents,
+            VariantTypeVisuals.VariantClass.STRUCTURAL);
+        if (svWorkspace != null) {
+            svWorkspace.setFilters(svFiltersPanel);
+        }
+    }
+
+    private void initializeSvVariantTable() {
+        if (svAllTable == null) {
+            return;
+        }
+        svVariantTable = new SvVariantTable(
+            svAllTable,
+            svGeneTable,
+            svOtherTable,
+            svAllTab,
+            svGeneTab,
+            svOtherTab,
+            this::handlePositionClick);
+        svVariantTable.initializeColumns();
     }
 
     /**
@@ -286,14 +552,29 @@ public class VariantManagerController implements Initializable {
         VariantFilter currentFilter = vcfManager.getCurrentFilter();
         loadFilterState(currentFilter);
 
+        sourceVariantLists = getCachedVariantSources();
+        if (vcfManager != null) {
+            vcfManager.rebuildSessionAvailableFromCaches();
+        }
+
         // Populate variant type filters dynamically
         VariantFilter typeFilter = vcfManager.getCurrentLoadedFilter();
         if (typeFilter == null) {
             typeFilter = vcfManager.getCurrentFilter();
         }
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.populateVariantTypes(sourceVariantLists, typeFilter);
+        VariantFilter pointSlice = typeFilter != null && typeFilter.getPointSlice() != null
+            ? typeFilter.getPointSlice()
+            : typeFilter;
+        VariantFilter svSlice = typeFilter != null && typeFilter.getSvSlice() != null
+            ? typeFilter.getSvSlice()
+            : typeFilter;
+        if (pointWorkspace != null) {
+            pointWorkspace.populateTypes(sourceVariantLists, pointSlice);
         }
+        if (svWorkspace != null) {
+            svWorkspace.populateTypes(sourceVariantLists, svSlice);
+        }
+        updateModeTabVisibility();
 
         // Set up listeners
         vcfManager.setOnVcfAdded(this::loadData);
@@ -308,18 +589,35 @@ public class VariantManagerController implements Initializable {
         registry.getSampleTracks().addListener((javafx.collections.ListChangeListener<SampleTrack>) c ->
             Platform.runLater(() -> {
                 syncSharedSampleRangeBounds();
-                if (sampleComparisonPanel != null) sampleComparisonPanel.refreshGroups();
+                for (VariantClassWorkspace ws : workspaces()) {
+                    ws.refreshComparisonGroups();
+                }
             }));
         registry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) ->
             Platform.runLater(() -> {
-                if (sampleComparisonPanel != null) sampleComparisonPanel.refreshGroups();
+                for (VariantClassWorkspace ws : workspaces()) {
+                    ws.refreshComparisonGroups();
+                }
             }));
 
         if (filterTabPane != null) {
             filterTabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+                // no-op: mode switch; tool tabs refresh comparison on demand
+            });
+        }
+        if (pointToolTabPane != null) {
+            pointToolTabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
                 if (newTab != null && "Sample Comparison".equals(newTab.getText())
-                    && sampleComparisonPanel != null) {
-                    sampleComparisonPanel.refreshGroups();
+                    && pointWorkspace != null) {
+                    pointWorkspace.refreshComparisonGroups();
+                }
+            });
+        }
+        if (svToolTabPane != null) {
+            svToolTabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+                if (newTab != null && "Sample Comparison".equals(newTab.getText())
+                    && svWorkspace != null) {
+                    svWorkspace.refreshComparisonGroups();
                 }
             });
         }
@@ -329,8 +627,11 @@ public class VariantManagerController implements Initializable {
 
         // Keep a balanced workspace: filters on top, tables below.
         Platform.runLater(() -> {
-            if (mainSplitPane != null) {
-                mainSplitPane.setDividerPositions(0.5);
+            if (pointMainSplitPane != null) {
+                pointMainSplitPane.setDividerPositions(0.45);
+            }
+            if (svMainSplitPane != null) {
+                svMainSplitPane.setDividerPositions(0.45);
             }
             if (variantFiltersSplitPane != null) {
                 variantFiltersSplitPane.setDividerPositions(0.5);
@@ -383,7 +684,12 @@ public class VariantManagerController implements Initializable {
         lastSeenVariantsRevision = -1;
         sourceVariants = null;
         sourceVariantLists = List.of();
-        variantTable().setZeroTabCounts();
+        if (variantTable != null) {
+            variantTable.setZeroTabCounts();
+        }
+        if (svVariantTable != null) {
+            svVariantTable.setBaseTabTitles();
+        }
         
         setTableItems(
             FXCollections.<VariantTable.TableRow>observableArrayList(),
@@ -407,10 +713,8 @@ public class VariantManagerController implements Initializable {
         clearBatchAnnotationResults();
         cancelPendingFilterTimers();
         pendingReloadFilter = null;
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.hideReloadBanner();
-            variantFiltersPanel.getVariantTypeCheckBoxes().clear();
-            variantFiltersPanel.clearEffectCategoryCheckBoxes();
+        for (VariantClassWorkspace ws : workspaces()) {
+            ws.clearTypeAndEffectCheckboxes();
         }
         if (variantTypesContainer != null) {
             variantTypesContainer.getChildren().clear();
@@ -438,6 +742,9 @@ public class VariantManagerController implements Initializable {
         if (variantTable != null) {
             variantTable.setTableSearchQuery("");
         }
+        if (svVariantTable != null) {
+            svVariantTable.setSearchQuery("");
+        }
         clearTableItemsForChromosomeSwitch();
         setPlaceholder("Open a VCF to see variants");
     }
@@ -456,11 +763,12 @@ public class VariantManagerController implements Initializable {
     }
 
     private void syncSharedSampleRangeBounds() {
-        if (sampleComparisonPanel == null) return;
         boolean previousSuppress = suppressFilterApplyEvents;
         suppressFilterApplyEvents = true;
         try {
-            sampleComparisonPanel.syncSharedSampleRangeBounds();
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.syncSharedSampleRangeBounds();
+            }
         } finally {
             suppressFilterApplyEvents = previousSuppress;
         }
@@ -477,6 +785,27 @@ public class VariantManagerController implements Initializable {
         }
         Platform.runLater(() -> {
             controller.syncSharedSampleRangeBounds();
+            if (!controller.suppressFilterApplyEvents) {
+                controller.scheduleFilterUpdate();
+            }
+        });
+    }
+
+    /**
+     * Called when sample/VCF data is removed so type checkboxes, mode tabs, and
+     * tables drop types that are no longer present in any cached list.
+     */
+    public static void notifySampleDataChanged() {
+        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        if (controller == null) {
+            return;
+        }
+        Platform.runLater(() -> {
+            controller.syncSharedSampleRangeBounds();
+            // Force loadData to rebuild filters/tables even if the VariantList instance is unchanged.
+            controller.sourceVariants = null;
+            controller.lastSeenVariantsRevision = -1;
+            controller.loadData();
             if (!controller.suppressFilterApplyEvents) {
                 controller.scheduleFilterUpdate();
             }
@@ -516,22 +845,66 @@ public class VariantManagerController implements Initializable {
                 target = current != null ? current.copy() : new VariantFilter();
             }
 
-            EnumSet<VcfVariantType> allowed = target.getAllowedTypes() == null || target.getAllowedTypes().isEmpty()
+            // Ensure class slices exist, then add types to the matching slice.
+            VariantFilter point = target.getPointSlice() != null
+                ? target.getPointSlice().copy()
+                : new VariantFilter();
+            VariantFilter sv = target.getSvSlice() != null
+                ? target.getSvSlice().copy()
+                : new VariantFilter();
+            if (target.getPointSlice() == null && target.getSvSlice() == null) {
+                // Legacy single filter: seed slices from current allowed types only
+                // (never invent a full Point/SV inventory).
+                EnumSet<VcfVariantType> currentTypes = target.getAllowedTypes() == null
+                    ? EnumSet.noneOf(VcfVariantType.class)
+                    : EnumSet.copyOf(target.getAllowedTypes());
+                EnumSet<VcfVariantType> pointTypes = EnumSet.copyOf(VariantTypeVisuals.VariantClass.POINT.allTypes());
+                pointTypes.retainAll(currentTypes);
+                EnumSet<VcfVariantType> svTypes = EnumSet.copyOf(VariantTypeVisuals.VariantClass.STRUCTURAL.allTypes());
+                svTypes.retainAll(currentTypes);
+                point.setAllowedTypes(pointTypes);
+                point.setMinQuality(target.getMinQuality());
+                point.setMinDepth(target.getMinDepth());
+                point.setMinAlleleFraction(target.getMinAlleleFraction());
+                point.setAllowedEffects(target.getAllowedEffects());
+                point.setCancerGenesOnly(target.isCancerGenesOnly());
+                sv.setAllowedTypes(svTypes);
+                sv.setMinQuality(target.getMinQuality());
+                sv.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
+            }
+
+            EnumSet<VcfVariantType> pointAllowed = point.getAllowedTypes() == null || point.getAllowedTypes().isEmpty()
                 ? EnumSet.noneOf(VcfVariantType.class)
-                : EnumSet.copyOf(target.getAllowedTypes());
-            allowed.addAll(types);
-            target.setAllowedTypes(allowed);
+                : EnumSet.copyOf(point.getAllowedTypes());
+            EnumSet<VcfVariantType> svAllowed = sv.getAllowedTypes() == null || sv.getAllowedTypes().isEmpty()
+                ? EnumSet.noneOf(VcfVariantType.class)
+                : EnumSet.copyOf(sv.getAllowedTypes());
+            for (VcfVariantType type : types) {
+                if (VariantTypeVisuals.isStructural(type)) {
+                    svAllowed.add(type);
+                } else {
+                    pointAllowed.add(type);
+                }
+            }
+            point.setAllowedTypes(pointAllowed);
+            sv.setAllowedTypes(svAllowed);
+            target.setClassSlices(point, sv);
 
             vcfManager.unionSessionAvailableFilters(types, null);
             vcfManager.ensureCanvasTypesVisible(types);
             vcfManager.setCurrentFilterForNextLoad(target);
 
             if (controller != null) {
-                if (controller.variantFiltersPanel != null) {
-                    controller.variantFiltersPanel.populateVariantTypes(
-                        controller.getCachedVariantSources(), target);
+                if (controller.pointWorkspace != null) {
+                    controller.pointWorkspace.populateTypes(
+                        controller.getCachedVariantSources(), point);
+                }
+                if (controller.svWorkspace != null) {
+                    controller.svWorkspace.populateTypes(
+                        controller.getCachedVariantSources(), sv);
                 }
                 controller.loadFilterState(target);
+                controller.updateModeTabVisibility();
                 controller.handleReloadFilteredVariants();
             } else {
                 reloadCachedChromosomesHeadless(vcfManager, target);
@@ -575,22 +948,27 @@ public class VariantManagerController implements Initializable {
     }
 
     public java.util.Set<VcfVariantType> snapshotUiAvailableTypes() {
-        if (variantFiltersPanel == null) {
-            return java.util.EnumSet.noneOf(VcfVariantType.class);
+        java.util.EnumSet<VcfVariantType> types = java.util.EnumSet.noneOf(VcfVariantType.class);
+        for (VariantClassWorkspace ws : workspaces()) {
+            types.addAll(ws.snapshotShownVariantTypes());
         }
-        return variantFiltersPanel.snapshotShownVariantTypes();
+        return types;
     }
 
     public java.util.Set<org.baseplayer.variant.annotation.VariantEffect> snapshotUiAvailableEffects() {
-        if (variantFiltersPanel == null) {
-            return java.util.EnumSet.noneOf(org.baseplayer.variant.annotation.VariantEffect.class);
+        java.util.EnumSet<org.baseplayer.variant.annotation.VariantEffect> effects =
+            java.util.EnumSet.noneOf(org.baseplayer.variant.annotation.VariantEffect.class);
+        for (VariantClassWorkspace ws : workspaces()) {
+            effects.addAll(ws.snapshotShownVariantEffects());
         }
-        return variantFiltersPanel.snapshotShownVariantEffects();
+        return effects;
     }
 
     @FXML
     private void handleRefreshComparisonGroups() {
-        if (sampleComparisonPanel != null) sampleComparisonPanel.refreshGroups();
+        for (VariantClassWorkspace ws : workspaces()) {
+            ws.refreshComparisonGroups();
+        }
     }
 
     /**
@@ -840,18 +1218,24 @@ public class VariantManagerController implements Initializable {
     private void loadFilterState(VariantFilter filter) {
         suppressFilterApplyEvents = true;
         try {
-            if (variantFiltersPanel != null) {
-                variantFiltersPanel.loadFrom(filter);
+            VariantFilter point = filter != null && filter.getPointSlice() != null
+                ? filter.getPointSlice()
+                : filter;
+            VariantFilter sv = filter != null && filter.getSvSlice() != null
+                ? filter.getSvSlice()
+                : filter;
+            if (pointWorkspace != null) {
+                pointWorkspace.loadSlice(point);
             }
-            if (sampleComparisonPanel != null) {
-                sampleComparisonPanel.loadFrom(filter);
+            if (svWorkspace != null) {
+                svWorkspace.loadSlice(sv);
             }
         } finally {
             suppressFilterApplyEvents = false;
             cancelPendingFilterTimers();
             pendingReloadFilter = null;
-            if (variantFiltersPanel != null) {
-                variantFiltersPanel.hideReloadBanner();
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.hideReloadBanner();
             }
         }
     }
@@ -866,14 +1250,27 @@ public class VariantManagerController implements Initializable {
     }
 
     private VariantFilter buildFilterFromUI() {
-        VariantFilter filter = new VariantFilter();
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.writeTo(filter);
+        // Unobserved class panels (empty checkboxes) allow that whole class so a later
+        // VCF of the other mode can still load. Legends / mode tabs use loaded data only.
+        VariantFilter point = pointWorkspace != null
+            ? pointWorkspace.writeSlice()
+            : passAllSlice(VariantTypeVisuals.VariantClass.POINT);
+        VariantFilter sv = svWorkspace != null
+            ? svWorkspace.writeSlice()
+            : passAllSlice(VariantTypeVisuals.VariantClass.STRUCTURAL);
+
+        VariantFilter merged = new VariantFilter();
+        merged.setClassSlices(point, sv);
+        return merged;
+    }
+
+    private static VariantFilter passAllSlice(VariantTypeVisuals.VariantClass mode) {
+        VariantFilter slice = new VariantFilter();
+        slice.setAllowedTypes(mode.allTypes());
+        if (mode == VariantTypeVisuals.VariantClass.STRUCTURAL) {
+            slice.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
         }
-        if (sampleComparisonPanel != null) {
-            sampleComparisonPanel.writeTo(filter);
-        }
-        return filter;
+        return slice;
     }
 
     // ── Action Handlers ───────────────────────────────────────────────────────
@@ -948,11 +1345,16 @@ public class VariantManagerController implements Initializable {
             vcfManager.applyFilter(filter);
         }
 
-        boolean reloadNeeded = variantFiltersPanel != null
-            && variantFiltersPanel.anyFilterLooserThanSnapshot();
+        boolean reloadNeeded = false;
+        for (VariantClassWorkspace ws : workspaces()) {
+            if (ws.anyFilterLooserThanSnapshot()) {
+                reloadNeeded = true;
+                break;
+            }
+        }
         pendingReloadFilter = reloadNeeded ? filter : null;
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.refreshReloadBannerState(reloadNeeded, "Reload needed");
+        for (VariantClassWorkspace ws : workspaces()) {
+            ws.refreshReloadBannerState(reloadNeeded, "Reload needed");
         }
         scheduleRebuild(filter);
     }
@@ -964,8 +1366,8 @@ public class VariantManagerController implements Initializable {
         }
         VariantFilter target = pendingReloadFilter != null ? pendingReloadFilter : buildFilterFromUI();
         pendingReloadFilter = null;
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.hideReloadBanner();
+        for (VariantClassWorkspace ws : workspaces()) {
+            ws.hideReloadBanner();
         }
 
         List<String> chromosomes = vcfManager.getCachedChromosomesInOrder(getReferenceChromosomeOrder());
@@ -1018,43 +1420,43 @@ public class VariantManagerController implements Initializable {
 
     @FXML
     private void handleApplyControlSettings() {
-        if (controlFilesPanel != null) {
-            controlFilesPanel.handleApplyControlSettings();
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            pointWorkspace.control().handleApplyControlSettings();
         }
     }
 
     @FXML
     private void handleAddControlVcf() {
-        if (controlFilesPanel != null) {
-            controlFilesPanel.handleAddControlVcf();
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            pointWorkspace.control().handleAddControlVcf();
         }
     }
 
     @FXML
     private void handleAddControlBed() {
-        if (controlFilesPanel != null) {
-            controlFilesPanel.handleAddControlBed();
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            pointWorkspace.control().handleAddControlBed();
         }
     }
 
     @FXML
     private void handleRemoveControlFile() {
-        if (controlFilesPanel != null) {
-            controlFilesPanel.handleRemoveControlFile();
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            pointWorkspace.control().handleRemoveControlFile();
         }
     }
 
     @FXML
     private void handleAddInfoFilter() {
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.showInfoFilterDialog();
+        if (pointWorkspace != null && pointWorkspace.filters() != null) {
+            pointWorkspace.filters().showInfoFilterDialog();
         }
     }
 
     @FXML
     private void handleAddFilterField() {
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.showFilterFieldDialog();
+        if (pointWorkspace != null && pointWorkspace.filters() != null) {
+            pointWorkspace.filters().showFilterFieldDialog();
         }
     }
 
@@ -1178,12 +1580,19 @@ public class VariantManagerController implements Initializable {
         }
         
         sourceVariants = fresh;
-        lastSeenVariantsRevision = revision;
         sourceVariantLists = getCachedVariantSources();
 
         if (sourceVariantLists.isEmpty()) {
+            lastSeenVariantsRevision = revision;
             clearTableItemsForChromosomeSwitch();
             setPlaceholder("No variants available");
+            if (vcfManager != null) {
+                vcfManager.rebuildSessionAvailableFromCaches();
+            }
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.populateTypes(sourceVariantLists, null);
+            }
+            updateModeTabVisibility();
             refreshReloadBannerState();
             if (!isCurrentChromosomeStillLoading()) {
                 pendingScrollToChromosome = null;
@@ -1194,11 +1603,19 @@ public class VariantManagerController implements Initializable {
         if (isCurrentChromosomeStillLoading()) {
             // Progressive loads can trigger many update events; defer expensive full table rebuild
             // and full variant-type scans until the chromosome load has completed.
+            // Do not stamp lastSeenVariantsRevision so completion re-enters loadData and
+            // refreshes mode tabs (Point|SV) once both classes are present.
             rebuildNeeded = true;
             if (busyOverlay != null) {
                 busyOverlay.cancelDelayedLoadingModal();
             }
             return;
+        }
+
+        lastSeenVariantsRevision = revision;
+
+        if (vcfManager != null) {
+            vcfManager.rebuildSessionAvailableFromCaches();
         }
 
         // Update variant type filters after load completes to avoid repeated full-list scans
@@ -1207,11 +1624,21 @@ public class VariantManagerController implements Initializable {
         if (typeFilter == null) {
             typeFilter = vcfManager.getCurrentFilter();
         }
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.populateVariantTypes(sourceVariantLists, typeFilter);
-            // Snapshot min Q/DP/AF from the filter used to materialize the cache.
-            variantFiltersPanel.captureFilterSnapshot(typeFilter);
+        VariantFilter pointSnap = typeFilter != null && typeFilter.getPointSlice() != null
+            ? typeFilter.getPointSlice()
+            : typeFilter;
+        VariantFilter svSnap = typeFilter != null && typeFilter.getSvSlice() != null
+            ? typeFilter.getSvSlice()
+            : typeFilter;
+        if (pointWorkspace != null) {
+            pointWorkspace.populateTypes(sourceVariantLists, pointSnap);
+            pointWorkspace.captureFilterSnapshot(pointSnap);
         }
+        if (svWorkspace != null) {
+            svWorkspace.populateTypes(sourceVariantLists, svSnap);
+            svWorkspace.captureFilterSnapshot(svSnap);
+        }
+        updateModeTabVisibility();
 
         refreshReloadBannerState();
         scheduleRebuild(vcfManager.getCurrentFilter());
@@ -1285,6 +1712,9 @@ public class VariantManagerController implements Initializable {
             List<VariantTable.TableRow> coding = new ArrayList<>();
             List<VariantTable.TableRow> intronic = new ArrayList<>();
             List<VariantTable.TableRow> intergenic = new ArrayList<>();
+            List<VariantTable.TableRow> svAll = new ArrayList<>();
+            List<VariantTable.TableRow> svGene = new ArrayList<>();
+            List<VariantTable.TableRow> svOther = new ArrayList<>();
 
             try {
                 for (VcfManager.CachedChromosomeVariants cached : snapshots) {
@@ -1326,17 +1756,24 @@ public class VariantManagerController implements Initializable {
                             }
                         }
                         if (passSamples > 0) {
-                            VariantAnnotation ann = node.annotation;
-                            VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
                             VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
-                            if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
-                                // Gene tab: coding, splice sites, UTR, and non-coding genes
-                                coding.add(row);
-                            } else if (effect.isIntronic()) {
-                                // Intronic tab: only true intronic
-                                intronic.add(row);
+                            if (VariantTypeVisuals.isStructural(node.type)) {
+                                svAll.add(row);
+                                if (SvVariantTable.isGeneOverlapping(node)) {
+                                    svGene.add(row);
+                                } else {
+                                    svOther.add(row);
+                                }
                             } else {
-                                intergenic.add(row);
+                                VariantAnnotation ann = node.annotation;
+                                VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
+                                if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
+                                    coding.add(row);
+                                } else if (effect.isIntronic()) {
+                                    intronic.add(row);
+                                } else {
+                                    intergenic.add(row);
+                                }
                             }
                         }
                         node = node.next;
@@ -1361,11 +1798,28 @@ public class VariantManagerController implements Initializable {
                     FXCollections.observableArrayList(coding),
                     FXCollections.observableArrayList(intronic),
                     FXCollections.observableArrayList(intergenic));
+                if (svVariantTable != null) {
+                    svVariantTable.setDisplayContext(filterSnapshot);
+                    svVariantTable.setItems(
+                        FXCollections.observableArrayList(svAll),
+                        FXCollections.observableArrayList(svGene),
+                        FXCollections.observableArrayList(svOther));
+                }
 
-                if (coding.isEmpty() && intronic.isEmpty() && intergenic.isEmpty()) {
-                    setPlaceholder("No variants match current filter settings");
+                boolean pointEmpty = coding.isEmpty() && intronic.isEmpty() && intergenic.isEmpty();
+                boolean svEmpty = svAll.isEmpty();
+                if (pointEmpty) {
+                    setPlaceholder("No point mutations match current filter settings");
                 } else {
                     setTablePlaceholders(null, null, null);
+                }
+                if (svVariantTable != null) {
+                    if (svEmpty) {
+                        svVariantTable.setPlaceholders(
+                            "No structural variants match current filter settings", "", "");
+                    } else {
+                        svVariantTable.setPlaceholders("", "", "");
+                    }
                 }
 
                 if (pendingScrollToChromosome != null && !pendingScrollToChromosome.isBlank()) {
@@ -1415,7 +1869,13 @@ public class VariantManagerController implements Initializable {
         Label lbl = new Label(text);
         lbl.setStyle("-fx-text-fill: " + TEXT + ";");
         setTablePlaceholders(lbl, new Label(""), new Label(""));
-        variantTable().setBaseTabTitles();
+        if (variantTable != null) {
+            variantTable.setBaseTabTitles();
+        }
+        if (svVariantTable != null) {
+            svVariantTable.setBaseTabTitles();
+            svVariantTable.setPlaceholders(text, "", "");
+        }
     }
 
     private void setupWindowVisibilityListeners() {
@@ -1455,8 +1915,8 @@ public class VariantManagerController implements Initializable {
         // so a leftover "Reload needed" banner from soft filter apply is stale.
         if (result != null && !result.cancelled()) {
             pendingReloadFilter = null;
-            if (variantFiltersPanel != null) {
-                variantFiltersPanel.hideReloadBanner();
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.hideReloadBanner();
             }
             if (vcfManager != null) {
                 VariantFilter filter = buildFilterFromUI();
@@ -1480,9 +1940,108 @@ public class VariantManagerController implements Initializable {
     }
 
     private void refreshReloadBannerState() {
-        if (variantFiltersPanel != null) {
-            variantFiltersPanel.refreshReloadBannerState(
-                pendingReloadFilter != null, "Reload needed");
+        boolean needed = pendingReloadFilter != null;
+        for (VariantClassWorkspace ws : workspaces()) {
+            ws.refreshReloadBannerState(needed, "Reload needed");
+        }
+    }
+
+    /** Show/hide Point mutations vs Structural variants tabs based on loaded data. */
+    void updateModeTabVisibility() {
+        if (filterTabPane == null) {
+            return;
+        }
+        // Presence from loaded caches (+ session after rebuild). Never invent from filter defaults.
+        Set<VcfVariantType> universe = collectLoadedVariantTypes();
+        if (vcfManager != null) {
+            universe.addAll(vcfManager.getSessionAvailableTypes());
+        }
+
+        boolean hasPoint = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.POINT);
+        boolean hasSv = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.STRUCTURAL);
+        // If neither known yet, keep both tabs so the user can configure before load.
+        if (!hasPoint && !hasSv) {
+            hasPoint = true;
+            hasSv = true;
+        }
+
+        boolean both = hasPoint && hasSv;
+        setTabVisible(pointMutationsTab, hasPoint);
+        setTabVisible(structuralVariantsTab, hasSv);
+        applyModeChrome(both);
+
+        // Prefer the only available mode; when both exist, leave current selection alone
+        // unless it points at a hidden tab.
+        Tab selected = filterTabPane.getSelectionModel().getSelectedItem();
+        boolean selectedInvalid = selected == null || !filterTabPane.getTabs().contains(selected);
+        if (!both) {
+            if (hasSv && structuralVariantsTab != null) {
+                filterTabPane.getSelectionModel().select(structuralVariantsTab);
+            } else if (hasPoint && pointMutationsTab != null) {
+                filterTabPane.getSelectionModel().select(pointMutationsTab);
+            }
+        } else if (selectedInvalid) {
+            if (pointMutationsTab != null && filterTabPane.getTabs().contains(pointMutationsTab)) {
+                filterTabPane.getSelectionModel().select(pointMutationsTab);
+            } else if (structuralVariantsTab != null) {
+                filterTabPane.getSelectionModel().select(structuralVariantsTab);
+            }
+        }
+    }
+
+    /** Types actually present in cached chromosome variant lists. */
+    private Set<VcfVariantType> collectLoadedVariantTypes() {
+        Set<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+        List<VcfManager.CachedChromosomeVariants> sources = sourceVariantLists;
+        if (sources == null || sources.isEmpty()) {
+            sources = getCachedVariantSources();
+        }
+        if (sources != null) {
+            for (VcfManager.CachedChromosomeVariants cached : sources) {
+                if (cached != null && cached.variants() != null) {
+                    types.addAll(cached.variants().collectVariantTypes());
+                }
+            }
+        }
+        return types;
+    }
+
+    /** When only one class is present, hide the outer Point|SV tab header. */
+    private void applyModeChrome(boolean showModeTabs) {
+        if (filterTabPane == null) {
+            return;
+        }
+        filterTabPane.getStyleClass().remove("single-mode");
+        if (!showModeTabs) {
+            filterTabPane.getStyleClass().add("single-mode");
+            // Collapse header (Variant Manager may not apply CSS-only hide reliably).
+            filterTabPane.setTabMinHeight(0);
+            filterTabPane.setTabMaxHeight(0);
+        } else {
+            // USE_COMPUTED_SIZE alone often fails to undo a prior 0 max-height in JavaFX.
+            filterTabPane.setTabMinHeight(Region.USE_COMPUTED_SIZE);
+            filterTabPane.setTabMaxHeight(Double.MAX_VALUE);
+            filterTabPane.applyCss();
+            filterTabPane.requestLayout();
+        }
+    }
+
+    private void setTabVisible(Tab tab, boolean visible) {
+        if (tab == null || filterTabPane == null) {
+            return;
+        }
+        if (visible) {
+            if (!filterTabPane.getTabs().contains(tab)) {
+                // Insert Point before SV before shared tabs.
+                int index = 0;
+                if (tab == structuralVariantsTab && pointMutationsTab != null
+                    && filterTabPane.getTabs().contains(pointMutationsTab)) {
+                    index = filterTabPane.getTabs().indexOf(pointMutationsTab) + 1;
+                }
+                filterTabPane.getTabs().add(Math.min(index, filterTabPane.getTabs().size()), tab);
+            }
+        } else {
+            filterTabPane.getTabs().remove(tab);
         }
     }
 

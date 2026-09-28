@@ -68,6 +68,25 @@ public class VariantFilter {
     private Set<String> allowedFilterValues = new HashSet<>();        // E.g., "PASS", "LowQual", etc.
     private boolean filterFieldsActive = false;                       // Whether to apply FILTER field filtering
 
+    /**
+     * Inclusive minimum SV span length in bp ({@code svEnd - position}).
+     * {@code 0} = no minimum. Applied only to structural types.
+     */
+    private long minSvLengthBp = 0;
+    /**
+     * Inclusive maximum SV span length in bp. {@code Long.MAX_VALUE} = no maximum.
+     * Applied only to structural types with a known span; types without END are not
+     * rejected by max alone.
+     */
+    private long maxSvLengthBp = Long.MAX_VALUE;
+
+    /**
+     * Optional class-scoped filter slices. When both are set, type / Q / DP / AF /
+     * effects / cancer / INFO / SV-length checks use the matching slice; shared-sample
+     * and group comparison stay on this parent filter.
+     */
+    private VariantFilter pointSlice;
+    private VariantFilter svSlice;
     // ── Getters/setters ───────────────────────────────────────────────────────
 
     public double getMinQuality() { return minQuality; }
@@ -97,7 +116,13 @@ public class VariantFilter {
         this.presentMatchMode = presentMatchMode != null ? presentMatchMode : PresentMatchMode.ALL;
     }
 
-    public boolean isGeneLevel() { return geneLevel; }
+    public boolean isGeneLevel() {
+        if (hasClassSlices()) {
+            return (pointSlice != null && pointSlice.geneLevel)
+                || (svSlice != null && svSlice.geneLevel);
+        }
+        return geneLevel;
+    }
     public void setGeneLevel(boolean geneLevel) { this.geneLevel = geneLevel; }
 
     public int getComparisonWindowBp() { return comparisonWindowBp; }
@@ -106,6 +131,10 @@ public class VariantFilter {
     }
 
     public boolean hasComparisonWindow() {
+        if (hasClassSlices()) {
+            return (pointSlice != null && !pointSlice.geneLevel && pointSlice.comparisonWindowBp > 0)
+                || (svSlice != null && !svSlice.geneLevel && svSlice.comparisonWindowBp > 0);
+        }
         return !geneLevel && comparisonWindowBp > 0;
     }
 
@@ -171,6 +200,90 @@ public class VariantFilter {
     
     public boolean isFilterFieldsActive() { return filterFieldsActive; }
 
+    public long getMinSvLengthBp() { return minSvLengthBp; }
+    public void setMinSvLengthBp(long minSvLengthBp) {
+        this.minSvLengthBp = Math.max(0, minSvLengthBp);
+    }
+
+    public long getMaxSvLengthBp() { return maxSvLengthBp; }
+    public void setMaxSvLengthBp(long maxSvLengthBp) {
+        this.maxSvLengthBp = maxSvLengthBp < 1 ? Long.MAX_VALUE : maxSvLengthBp;
+    }
+
+    public VariantFilter getPointSlice() { return pointSlice; }
+    public VariantFilter getSvSlice() { return svSlice; }
+
+    public boolean hasClassSlices() {
+        return pointSlice != null && svSlice != null;
+    }
+
+    /**
+     * Install class-scoped slices and sync parent {@link #allowedTypes} to their union.
+     * Nested slices must not themselves carry class slices.
+     */
+    public void setClassSlices(VariantFilter point, VariantFilter sv) {
+        this.pointSlice = point == null ? null : copySlice(point);
+        this.svSlice = sv == null ? null : copySlice(sv);
+        if (this.pointSlice != null || this.svSlice != null) {
+            EnumSet<VcfVariantType> union = EnumSet.noneOf(VcfVariantType.class);
+            if (this.pointSlice != null && this.pointSlice.allowedTypes != null) {
+                union.addAll(this.pointSlice.allowedTypes);
+            }
+            if (this.svSlice != null && this.svSlice.allowedTypes != null) {
+                union.addAll(this.svSlice.allowedTypes);
+            }
+            this.allowedTypes = union;
+        }
+    }
+
+    /** Clear class slices; parent fields remain as-is. */
+    public void clearClassSlices() {
+        this.pointSlice = null;
+        this.svSlice = null;
+    }
+
+    /**
+     * Empty allowedTypes on a class slice means that class was never observed in the UI.
+     * Expand those slices to the full class inventory so a newly added VCF of that class
+     * is not filtered out at load time. Does not invent UI checkboxes / legends.
+     */
+    public void ensureUnobservedClassSlicesPassAll() {
+        if (pointSlice == null && svSlice == null) {
+            return;
+        }
+        boolean changed = false;
+        if (pointSlice != null
+            && (pointSlice.allowedTypes == null || pointSlice.allowedTypes.isEmpty())) {
+            pointSlice.setAllowedTypes(VariantTypeVisuals.VariantClass.POINT.allTypes());
+            changed = true;
+        }
+        if (svSlice != null
+            && (svSlice.allowedTypes == null || svSlice.allowedTypes.isEmpty())) {
+            svSlice.setAllowedTypes(VariantTypeVisuals.VariantClass.STRUCTURAL.allTypes());
+            changed = true;
+        }
+        if (changed) {
+            setClassSlices(pointSlice, svSlice);
+        }
+    }
+
+    private static VariantFilter copySlice(VariantFilter source) {
+        VariantFilter copy = source.copy();
+        copy.pointSlice = null;
+        copy.svSlice = null;
+        return copy;
+    }
+
+    private VariantFilter classSlice(VcfVariantType type) {
+        if (pointSlice == null && svSlice == null) {
+            return this;
+        }
+        if (VariantTypeVisuals.isStructural(type)) {
+            return svSlice != null ? svSlice : this;
+        }
+        return pointSlice != null ? pointSlice : this;
+    }
+
     private void syncVisibilityFlagsFromAllowedEffects() {
         boolean hasCodingLike = false;
         boolean hasIntronic = false;
@@ -231,6 +344,10 @@ public class VariantFilter {
         copy.infoFieldFilters = new HashMap<>(this.infoFieldFilters);
         copy.allowedFilterValues = new HashSet<>(this.allowedFilterValues);
         copy.filterFieldsActive = this.filterFieldsActive;
+        copy.minSvLengthBp = this.minSvLengthBp;
+        copy.maxSvLengthBp = this.maxSvLengthBp;
+        copy.pointSlice = this.pointSlice == null ? null : copySlice(this.pointSlice);
+        copy.svSlice = this.svSlice == null ? null : copySlice(this.svSlice);
         return copy;
     }
 
@@ -240,32 +357,71 @@ public class VariantFilter {
      * are intentionally deferred until after annotation/pruning.
      */
     public boolean passesLoadTime(VcfVariantType type, double siteQuality, VariantNode.SampleCall call) {
-        if (!allowedTypes.contains(type)) return false;
+        return passesLoadTime(type, siteQuality, call, -1);
+    }
 
-        if (minQuality > 0) {
+    /**
+     * @param svLengthBp known SV span length at load time, or {@code -1} if unknown
+     */
+    public boolean passesLoadTime(
+            VcfVariantType type, double siteQuality, VariantNode.SampleCall call, long svLengthBp) {
+        VariantFilter f = classSlice(type);
+        if (!f.allowedTypes.contains(type)) return false;
+
+        if (f.minQuality > 0) {
             if (siteQuality >= 0) {
-                if (siteQuality < minQuality) return false;
-            } else if (call != null && call.quality >= 0 && call.quality < minQuality) {
+                if (siteQuality < f.minQuality) return false;
+            } else if (call != null && call.quality >= 0 && call.quality < f.minQuality) {
                 return false;
             }
         }
 
         if (call != null) {
-            if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
-            if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
+            if (f.minDepth > 0 && call.depth >= 0 && call.depth < f.minDepth) return false;
+            if (f.minAlleleFraction > 0 && call.alleleFraction >= 0
+                && call.alleleFraction < f.minAlleleFraction) {
+                return false;
+            }
+        }
+
+        if (VariantTypeVisuals.isStructural(type) && !f.passesSvLength(svLengthBp)) {
+            return false;
         }
 
         return true;
     }
 
+    private boolean passesSvLength(long svLengthBp) {
+        if (minSvLengthBp <= 0 && maxSvLengthBp == Long.MAX_VALUE) {
+            return true;
+        }
+        if (svLengthBp < 0) {
+            // Unknown span: only reject when a positive minimum is required.
+            return minSvLengthBp <= 0;
+        }
+        if (minSvLengthBp > 0 && svLengthBp < minSvLengthBp) {
+            return false;
+        }
+        if (maxSvLengthBp < Long.MAX_VALUE && svLengthBp > maxSvLengthBp) {
+            return false;
+        }
+        return true;
+    }
+
     /** Whether this filter needs annotation-aware post-load pruning. */
     public boolean requiresPostAnnotationFiltering() {
+        if (hasClassSlices()) {
+            return (pointSlice != null && pointSlice.requiresPostAnnotationFiltering())
+                || (svSlice != null && svSlice.requiresPostAnnotationFiltering());
+        }
         return cancerGenesOnly
             || !showCoding
             || !showIntronic
             || !showIntergenic
             || !infoFieldFilters.isEmpty()
-            || filterFieldsActive;
+            || filterFieldsActive
+            || minSvLengthBp > 0
+            || maxSvLengthBp < Long.MAX_VALUE;
     }
 
     /** Stable key for comparing whether cached chromosome data matches filter settings. */
@@ -293,6 +449,8 @@ public class VariantFilter {
         return "minQ=" + minQuality
             + "|minDP=" + minDepth
             + "|minAF=" + minAlleleFraction
+            + "|minSvLen=" + minSvLengthBp
+            + "|maxSvLen=" + (maxSvLengthBp == Long.MAX_VALUE ? "inf" : maxSvLengthBp)
             + "|cancerOnly=" + cancerGenesOnly
             + "|minShare=" + minSharedSamples
             + "|maxShare=" + maxSharedSamples
@@ -308,7 +466,9 @@ public class VariantFilter {
             + "|types=" + String.join(",", typeNames)
             + "|info=" + String.join(",", infoPairs)
             + "|filterActive=" + filterFieldsActive
-            + "|filterValues=" + String.join(",", filterVals);
+            + "|filterValues=" + String.join(",", filterVals)
+            + "|pointSlice=" + (pointSlice == null ? "-" : pointSlice.toStableKey())
+            + "|svSlice=" + (svSlice == null ? "-" : svSlice.toStableKey());
     }
 
     private String sortedGroupRolesKey() {
@@ -367,6 +527,9 @@ public class VariantFilter {
      *        (null falls back to per-variant semantics)
      */
     public boolean passesNodeLevel(VariantNode node, Set<Integer> aggregatedSampleTracks) {
+        if (node != null && hasClassSlices()) {
+            return classSlice(node.type).passesNodeLevel(node, aggregatedSampleTracks);
+        }
         if (!passesBaseNodeLevel(node)) {
             return false;
         }
@@ -386,19 +549,26 @@ public class VariantFilter {
      */
     public boolean passesBaseNodeLevel(VariantNode node) {
         if (node == null) return false;
-        if (!allowedTypes.contains(node.type)) return false;
+        VariantFilter f = classSlice(node.type);
+        if (!f.allowedTypes.contains(node.type)) return false;
 
-        if (minQuality > 0) {
-            if (node.siteQuality >= 0 && node.siteQuality < minQuality) return false;
+        if (f.minQuality > 0) {
+            if (node.siteQuality >= 0 && node.siteQuality < f.minQuality) return false;
+        }
+
+        if (VariantTypeVisuals.isStructural(node.type)) {
+            if (!f.passesSvLength(VariantTypeVisuals.svSpanLengthBp(node))) {
+                return false;
+            }
         }
 
         VariantAnnotation ann = node.annotation;
         if (ann != null) {
-            if (cancerGenesOnly && !ann.isCancerGene()) return false;
-            if (!allowedEffects.contains(ann.effect())) return false;
+            if (f.cancerGenesOnly && !ann.isCancerGene()) return false;
+            if (!f.allowedEffects.contains(ann.effect())) return false;
         } else {
-            if (cancerGenesOnly) return false;
-            if (!allowedEffects.contains(VariantEffect.INTERGENIC)) return false;
+            if (f.cancerGenesOnly) return false;
+            if (!f.allowedEffects.contains(VariantEffect.INTERGENIC)) return false;
         }
 
         return true;
@@ -558,9 +728,14 @@ public class VariantFilter {
         if (node == null || call == null) return false;
         if (!call.isUiVisible()) return false;
 
-        if (minQuality > 0 && node.siteQuality < 0 && call.quality >= 0 && call.quality < minQuality) return false;
-        if (minDepth > 0 && call.depth >= 0 && call.depth < minDepth) return false;
-        if (minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < minAlleleFraction) return false;
+        VariantFilter f = classSlice(node.type);
+        if (f.minQuality > 0 && node.siteQuality < 0 && call.quality >= 0 && call.quality < f.minQuality) {
+            return false;
+        }
+        if (f.minDepth > 0 && call.depth >= 0 && call.depth < f.minDepth) return false;
+        if (f.minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < f.minAlleleFraction) {
+            return false;
+        }
 
         return true;
     }
@@ -571,9 +746,20 @@ public class VariantFilter {
 
     /** Returns true if all filters are at default (pass-all) state. */
     public boolean isPassAll() {
+        if (hasClassSlices()) {
+            return (pointSlice == null || pointSlice.isPassAll())
+                && (svSlice == null || svSlice.isPassAll())
+                && minSharedSamples <= 1
+                && maxSharedSamples == Integer.MAX_VALUE
+                && !geneLevel
+                && comparisonWindowBp <= 0
+                && !hasActiveGroupComparison();
+        }
         return minQuality == 0.0
             && minDepth == 0
             && minAlleleFraction == 0.0
+            && minSvLengthBp <= 0
+            && maxSvLengthBp == Long.MAX_VALUE
             && !cancerGenesOnly
             && minSharedSamples <= 1
             && maxSharedSamples == Integer.MAX_VALUE

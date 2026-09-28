@@ -12,6 +12,14 @@
   -fx-border-width: 0 0 1 0;
 }
 
+/* Hide outer Point|SV tab header when only one variant class is present. */
+.filter-tabs.single-mode > .tab-header-area {
+  visibility: hidden;
+  -fx-pref-height: 0;
+  -fx-max-height: 0;
+  -fx-min-height: 0;
+}
+
 .menuBar {
   -fx-padding: 5 5 5 5;
   padding: 4 4 4 4;

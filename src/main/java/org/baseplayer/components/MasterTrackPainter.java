@@ -78,13 +78,7 @@ public class MasterTrackPainter {
 
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
-    Set<VcfVariantType> fromList = variantList != null && !variantList.isEmpty()
-        ? EnumSet.copyOf(variantList.collectVariantTypes())
-        : EnumSet.noneOf(VcfVariantType.class);
-    presentTypes = fromList;
-    if (!fromList.isEmpty()) {
-      VcfManager.getInstance().unionSessionAvailableFilters(fromList, null);
-    }
+    refreshPresentTypesFromList();
   }
 
   public void clearVariantList() {
@@ -97,18 +91,29 @@ public class MasterTrackPainter {
     densityBusy = false;
   }
 
-  /** Types for legends: loaded data ∪ session-available ∪ currently allowed. */
+  public VariantList getVariantList() {
+    return variantList;
+  }
+
+  /** Re-read types from the current list (e.g. after a sample was removed from shared caches). */
+  public void refreshPresentTypesFromList() {
+    Set<VcfVariantType> fromList = variantList != null && !variantList.isEmpty()
+        ? EnumSet.copyOf(variantList.collectVariantTypes())
+        : EnumSet.noneOf(VcfVariantType.class);
+    presentTypes = fromList;
+  }
+
+  /**
+   * Types for legends: only types present in current / cached sample data.
+   * Does not invent types from filter defaults.
+   */
   private Set<VcfVariantType> legendTypeUniverse() {
+    refreshPresentTypesFromList();
     EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
     if (presentTypes != null && !presentTypes.isEmpty()) {
       types.addAll(presentTypes);
     }
-    VcfManager vcfManager = VcfManager.getInstance();
-    types.addAll(vcfManager.getSessionAvailableTypes());
-    VariantFilter filter = vcfManager.getCurrentFilter();
-    if (filter != null && filter.getAllowedTypes() != null) {
-      types.addAll(filter.getAllowedTypes());
-    }
+    types.addAll(VcfManager.getInstance().getSessionAvailableTypes());
     return types;
   }
 

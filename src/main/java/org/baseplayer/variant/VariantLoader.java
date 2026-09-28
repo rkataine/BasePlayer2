@@ -217,7 +217,8 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             sv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
-                            if (loadFilter != null && !loadFilter.passesLoadTime(sv.getType(), siteQual, call)) {
+                            if (loadFilter != null && !loadFilter.passesLoadTime(
+                                    sv.getType(), siteQual, call, svLengthBp(sv))) {
                                 continue;
                             }
                             int trackIdx = entry.getValue();
@@ -385,7 +386,8 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             sv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
-                            if (loadFilter != null && !loadFilter.passesLoadTime(sv.getType(), siteQual, call)) {
+                            if (loadFilter != null && !loadFilter.passesLoadTime(
+                                    sv.getType(), siteQual, call, svLengthBp(sv))) {
                                 continue;
                             }
                             int trackIdx = entry.getValue();
@@ -460,6 +462,20 @@ public class VariantLoader {
                 node.svEnd2 = end2;
             }
         }
+    }
+
+    private static long svLengthBp(VcfStructuralVariant sv) {
+        if (sv == null) {
+            return -1;
+        }
+        if (sv.getSvLen() != null) {
+            return Math.abs(sv.getSvLen());
+        }
+        Long end = sv.getEnd();
+        if (end != null && end > sv.getPosition()) {
+            return end - sv.getPosition();
+        }
+        return -1;
     }
 
     private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,

@@ -11,7 +11,7 @@ import java.util.Map;
  */
 public class ProjectDocument {
 
-  public int schemaVersion = 1;
+  public int schemaVersion = 2;
   public String name;
 
   public GenomeSpec genome = new GenomeSpec();
@@ -44,7 +44,15 @@ public class ProjectDocument {
     public List<Double> columnDividers;
   }
 
+  /** Shared session-available types + nested point/SV filter slices (incl. comparison). */
   public static class VariantFilterSpec {
+    public List<String> availableTypes = new ArrayList<>();
+    public List<String> availableEffects = new ArrayList<>();
+
+    public ClassFilterSpec point = new ClassFilterSpec();
+    public ClassFilterSpec sv = new ClassFilterSpec();
+
+    // Legacy flat fields (schema v1). Read on restore when point/sv are empty.
     public double minQuality;
     public int minDepth;
     public double minAlleleFraction;
@@ -55,8 +63,24 @@ public class ProjectDocument {
     public int comparisonWindowBp;
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
-    public List<String> availableTypes = new ArrayList<>();
-    public List<String> availableEffects = new ArrayList<>();
+    public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
+    public List<String> allowedFilterValues = new ArrayList<>();
+  }
+
+  /** Per-class (point vs structural) filter + sample-comparison settings. */
+  public static class ClassFilterSpec {
+    public double minQuality;
+    public int minDepth;
+    public double minAlleleFraction;
+    public boolean cancerGenesOnly;
+    public long minSvLengthBp;
+    public long maxSvLengthBp = Long.MAX_VALUE;
+    public int minSharedSamples = 1;
+    public int maxSharedSamples = Integer.MAX_VALUE;
+    public boolean geneLevel;
+    public int comparisonWindowBp;
+    public List<String> allowedTypes = new ArrayList<>();
+    public List<String> allowedEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
     public List<String> allowedFilterValues = new ArrayList<>();
   }

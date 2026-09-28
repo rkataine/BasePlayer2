@@ -1000,14 +1000,16 @@ public class VariantList {
     }
     
     /**
-     * Collect all unique variant types present in this list.
-     * Useful for dynamically generating filter UI based on actual data.
+     * Collect unique variant types that still have at least one UI-visible sample call.
+     * Hidden / removed samples do not keep types in legends or Variant Manager.
      */
     public java.util.Set<VcfVariantType> collectVariantTypes() {
         java.util.Set<VcfVariantType> types = new java.util.HashSet<>();
         VariantNode current = head;
         while (current != null) {
-            types.add(current.type);
+            if (current.hasUiVisibleSample()) {
+                types.add(current.type);
+            }
             current = current.next;
         }
         return types;
@@ -1015,14 +1017,16 @@ public class VariantList {
 
     /**
      * Collect annotated {@link org.baseplayer.variant.annotation.VariantEffect} values
-     * present in this list (skips unannotated nodes).
+     * present on UI-visible nodes (skips unannotated nodes).
      */
     public java.util.Set<org.baseplayer.variant.annotation.VariantEffect> collectVariantEffects() {
         java.util.Set<org.baseplayer.variant.annotation.VariantEffect> effects =
             java.util.EnumSet.noneOf(org.baseplayer.variant.annotation.VariantEffect.class);
         VariantNode current = head;
         while (current != null) {
-            if (current.annotation != null && current.annotation.effect() != null) {
+            if (current.hasUiVisibleSample()
+                && current.annotation != null
+                && current.annotation.effect() != null) {
                 effects.add(current.annotation.effect());
             }
             current = current.next;

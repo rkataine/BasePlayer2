@@ -456,4 +456,139 @@ public class SampleComparisonPanel {
   private void fireImmediate() {
     if (onImmediateChange != null) onImmediateChange.run();
   }
+
+  /**
+   * Build a Sample Comparison UI tree programmatically (for the SV mode workspace).
+   */
+  public static javafx.util.Pair<javafx.scene.Node, Nodes> buildUi() {
+    Label help = new Label(
+        "Keep variants shared by at least this many samples (left) and at most this many (right). "
+            + "Use this to drop private variants or those shared by everyone.");
+    help.getStyleClass().add("subsection-label");
+    help.setWrapText(true);
+
+    CheckBox geneLevel = new CheckBox("Gene level (count samples mutated anywhere in the gene)");
+    geneLevel.getStyleClass().add("filter-checkbox");
+
+    TextField windowField = new TextField("0");
+    windowField.setPrefWidth(80);
+    windowField.getStyleClass().add("filter-field");
+    Label windowHint = new Label("0 = exact allele; >0 soft-matches nearby / overlapping SVs");
+    windowHint.getStyleClass().add("subsection-label");
+    windowHint.setWrapText(true);
+
+    IntegerRangeSlider rangeSlider = new IntegerRangeSlider();
+
+    VBox left = new VBox(12);
+    left.getStyleClass().add("filter-panel");
+    left.setPadding(new javafx.geometry.Insets(16));
+    Label commonTitle = new Label("Common Variants");
+    commonTitle.getStyleClass().add("section-header");
+    HBox windowRow = new HBox(8,
+        new Label("Window size (bp)") {{ getStyleClass().add("subsection-label"); }},
+        windowField,
+        windowHint);
+    windowRow.setAlignment(Pos.CENTER_LEFT);
+    HBox.setHgrow(windowHint, Priority.ALWAYS);
+    left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
+
+    VBox groupsContainer = new VBox(6);
+    VBox.setVgrow(groupsContainer, Priority.ALWAYS);
+    Label summary = new Label("No group constraints");
+    summary.getStyleClass().add("value-label");
+    summary.setWrapText(true);
+    Button refresh = new Button("Refresh");
+    refresh.getStyleClass().add("secondary-button");
+
+    RadioButton matchAll = new RadioButton("All of them (AND)");
+    matchAll.getStyleClass().add("filter-radio");
+    matchAll.setSelected(true);
+    RadioButton matchAny = new RadioButton("Any of them (OR)");
+    matchAny.getStyleClass().add("filter-radio");
+
+    Button apply = new Button("Apply Comparison");
+    apply.getStyleClass().add("primary-button");
+
+    VBox right = new VBox(12);
+    right.getStyleClass().add("filter-panel");
+    right.setPadding(new javafx.geometry.Insets(16));
+    Label groupsTitle = new Label("Sample Groups");
+    groupsTitle.getStyleClass().add("section-header");
+    HBox groupsHeader = new HBox(8, groupsTitle, new javafx.scene.layout.Region(), refresh);
+    HBox.setHgrow(groupsHeader.getChildren().get(1), Priority.ALWAYS);
+    groupsHeader.setAlignment(Pos.CENTER_LEFT);
+    Label groupsHelp = new Label(
+        "For each named group, choose whether the variant (or gene / window cluster) must be present, "
+            + "must be absent, or is ignored.");
+    groupsHelp.getStyleClass().add("subsection-label");
+    groupsHelp.setWrapText(true);
+    Label presentTitle = new Label("When multiple groups require present");
+    presentTitle.getStyleClass().add("section-header");
+    HBox presentRow = new HBox(16, matchAll, matchAny);
+    presentRow.setAlignment(Pos.CENTER_LEFT);
+    HBox applyRow = new HBox(apply);
+    applyRow.setAlignment(Pos.CENTER_RIGHT);
+    right.getChildren().addAll(
+        groupsHeader,
+        groupsHelp,
+        groupsContainer,
+        summary,
+        presentTitle,
+        presentRow,
+        applyRow);
+
+    javafx.scene.control.SplitPane split = new javafx.scene.control.SplitPane(
+        new javafx.scene.control.ScrollPane(left) {{
+          setFitToWidth(true);
+          getStyleClass().add("filter-scroll");
+          setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
+          setVbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        }},
+        new javafx.scene.control.ScrollPane(right) {{
+          setFitToWidth(true);
+          getStyleClass().add("filter-scroll");
+          setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
+          setVbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        }});
+    split.setDividerPositions(0.5);
+    split.getStyleClass().add("tab-content-split");
+
+    Nodes nodes = new Nodes(
+        rangeSlider,
+        geneLevel,
+        windowField,
+        help,
+        groupsContainer,
+        summary,
+        refresh,
+        matchAll,
+        matchAny);
+    apply.setOnAction(e -> {
+      // Wired by controller after install if needed; default no-op here.
+    });
+    return new javafx.util.Pair<>(split, nodes);
+  }
+
+  /** Optional: attach Apply button action after {@link #buildUi()}. */
+  public static void wireApplyButton(javafx.scene.Node root, Runnable onApply) {
+    if (root == null || onApply == null) {
+      return;
+    }
+    findApplyButton(root).ifPresent(btn -> btn.setOnAction(e -> onApply.run()));
+  }
+
+  private static java.util.Optional<Button> findApplyButton(javafx.scene.Node node) {
+    if (node instanceof Button button && "Apply Comparison".equals(button.getText())) {
+      return java.util.Optional.of(button);
+    }
+    if (node instanceof javafx.scene.Parent parent) {
+      for (javafx.scene.Node child : parent.getChildrenUnmodifiable()) {
+        java.util.Optional<Button> found = findApplyButton(child);
+        if (found.isPresent()) {
+          return found;
+        }
+      }
+    }
+    return java.util.Optional.empty();
+  }
 }

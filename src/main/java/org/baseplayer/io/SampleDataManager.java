@@ -167,10 +167,27 @@ public class SampleDataManager {
       if (stack.sampleTrackCanvas != null) {
         purge.accept(stack.sampleTrackCanvas.getVariantList());
       }
+      if (stack.sampleAggregateCanvas != null) {
+        purge.accept(stack.sampleAggregateCanvas.getVariantList());
+      }
     }
     for (org.baseplayer.variant.VariantList cached : VcfManager.getInstance().snapshotVariantCache().values()) {
       purge.accept(cached);
     }
+
+    // Types/legends must follow remaining sample data — not a sticky union of past types.
+    VcfManager.getInstance().rebuildSessionAvailableFromCaches();
+    for (DrawStack stack : stackManager.getStacks()) {
+      if (stack.sampleTrackCanvas != null) {
+        stack.sampleTrackCanvas.invalidateVariantIndex();
+      }
+      if (stack.sampleAggregateCanvas != null) {
+        stack.sampleAggregateCanvas.refreshPresentTypesFromList();
+        stack.sampleAggregateCanvas.forceCalculateDensity();
+      }
+    }
+    VcfManager.getInstance().bumpVariantsRevision();
+    org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
     
     // Adjust visible range
     int newCount = sampleRegistry.getDisplayedTrackCount();
@@ -659,13 +676,16 @@ public class SampleDataManager {
         }
       }
       if (stack.sampleAggregateCanvas != null) {
+        stack.sampleAggregateCanvas.refreshPresentTypesFromList();
         stack.sampleAggregateCanvas.forceCalculateDensity();
       }
     }
     for (org.baseplayer.variant.VariantList cached : VcfManager.getInstance().snapshotVariantCache().values()) {
       invalidate.accept(cached);
     }
-    org.baseplayer.variant.ui.VariantManagerController.notifySampleVisibilityChanged();
+    VcfManager.getInstance().rebuildSessionAvailableFromCaches();
+    VcfManager.getInstance().bumpVariantsRevision();
+    org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 

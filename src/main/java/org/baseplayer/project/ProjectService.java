@@ -336,30 +336,54 @@ public final class ProjectService {
     VariantFilter filter = vcfManager != null ? vcfManager.getCurrentFilter() : null;
     ProjectDocument.VariantFilterSpec spec = new ProjectDocument.VariantFilterSpec();
     if (filter == null) return spec;
-    spec.minQuality = filter.getMinQuality();
-    spec.minDepth = filter.getMinDepth();
-    spec.minAlleleFraction = filter.getMinAlleleFraction();
-    spec.cancerGenesOnly = filter.isCancerGenesOnly();
-    spec.minSharedSamples = filter.getMinSharedSamples();
-    spec.maxSharedSamples = filter.getMaxSharedSamples();
-    spec.geneLevel = filter.isGeneLevel();
-    spec.comparisonWindowBp = filter.getComparisonWindowBp();
-    for (VcfVariantType t : filter.getAllowedTypes()) {
-      if (t != null) spec.allowedTypes.add(t.name());
-    }
-    for (VariantEffect e : filter.getAllowedEffects()) {
-      if (e != null) spec.allowedEffects.add(e.name());
-    }
-    if (filter.getInfoFieldFilters() != null) {
-      spec.infoFieldFilters = new HashMap<>(filter.getInfoFieldFilters());
-    }
-    if (filter.getAllowedFilterValues() != null) {
-      spec.allowedFilterValues = new ArrayList<>(filter.getAllowedFilterValues());
+
+    VariantFilter point = filter.getPointSlice() != null ? filter.getPointSlice() : filter;
+    VariantFilter sv = filter.getSvSlice() != null ? filter.getSvSlice() : null;
+    spec.point = captureClassFilter(point);
+    if (sv != null) {
+      spec.sv = captureClassFilter(sv);
+    } else {
+      ProjectDocument.ClassFilterSpec svSpec = captureClassFilter(point);
+      svSpec.allowedTypes.removeIf(name -> {
+        try {
+          return !org.baseplayer.variant.VariantTypeVisuals.isStructural(
+              org.baseplayer.variant.VcfVariantType.valueOf(name));
+        } catch (Exception e) {
+          return true;
+        }
+      });
+      spec.point.allowedTypes.removeIf(name -> {
+        try {
+          return org.baseplayer.variant.VariantTypeVisuals.isStructural(
+              org.baseplayer.variant.VcfVariantType.valueOf(name));
+        } catch (Exception e) {
+          return true;
+        }
+      });
+      if (svSpec.allowedTypes.isEmpty()) {
+        for (org.baseplayer.variant.VcfVariantType t :
+            org.baseplayer.variant.VariantTypeVisuals.VariantClass.STRUCTURAL.allTypes()) {
+          svSpec.allowedTypes.add(t.name());
+        }
+      }
+      svSpec.allowedEffects.clear();
+      for (VariantEffect e : VariantEffect.values()) {
+        svSpec.allowedEffects.add(e.name());
+      }
+      spec.sv = svSpec;
     }
 
     EnumSet<VcfVariantType> availableTypes = EnumSet.noneOf(VcfVariantType.class);
     EnumSet<VariantEffect> availableEffects = EnumSet.noneOf(VariantEffect.class);
     availableTypes.addAll(filter.getAllowedTypes());
+    if (filter.getPointSlice() != null) {
+      availableTypes.addAll(filter.getPointSlice().getAllowedTypes());
+      availableEffects.addAll(filter.getPointSlice().getAllowedEffects());
+    }
+    if (filter.getSvSlice() != null) {
+      availableTypes.addAll(filter.getSvSlice().getAllowedTypes());
+      availableEffects.addAll(filter.getSvSlice().getAllowedEffects());
+    }
     availableEffects.addAll(filter.getAllowedEffects());
     if (vcfManager != null) {
       availableTypes.addAll(vcfManager.getSessionAvailableTypes());
@@ -386,13 +410,141 @@ public final class ProjectService {
     return spec;
   }
 
+  private static ProjectDocument.ClassFilterSpec captureClassFilter(VariantFilter filter) {
+    ProjectDocument.ClassFilterSpec spec = new ProjectDocument.ClassFilterSpec();
+    if (filter == null) {
+      return spec;
+    }
+    spec.minQuality = filter.getMinQuality();
+    spec.minDepth = filter.getMinDepth();
+    spec.minAlleleFraction = filter.getMinAlleleFraction();
+    spec.cancerGenesOnly = filter.isCancerGenesOnly();
+    spec.minSvLengthBp = filter.getMinSvLengthBp();
+    spec.maxSvLengthBp = filter.getMaxSvLengthBp();
+    spec.minSharedSamples = filter.getMinSharedSamples();
+    spec.maxSharedSamples = filter.getMaxSharedSamples();
+    spec.geneLevel = filter.isGeneLevel();
+    spec.comparisonWindowBp = filter.getComparisonWindowBp();
+    for (VcfVariantType t : filter.getAllowedTypes()) {
+      if (t != null) spec.allowedTypes.add(t.name());
+    }
+    for (VariantEffect e : filter.getAllowedEffects()) {
+      if (e != null) spec.allowedEffects.add(e.name());
+    }
+    if (filter.getInfoFieldFilters() != null) {
+      spec.infoFieldFilters = new HashMap<>(filter.getInfoFieldFilters());
+    }
+    if (filter.getAllowedFilterValues() != null) {
+      spec.allowedFilterValues = new ArrayList<>(filter.getAllowedFilterValues());
+    }
+    return spec;
+  }
+
   private static VariantFilter restoreFilter(ProjectDocument.VariantFilterSpec spec) {
     VariantFilter filter = new VariantFilter();
     if (spec == null) return filter;
+
+    boolean hasNested =
+        (spec.point != null && spec.point.allowedTypes != null && !spec.point.allowedTypes.isEmpty())
+            || (spec.sv != null && spec.sv.allowedTypes != null && !spec.sv.allowedTypes.isEmpty());
+
+    VariantFilter point;
+    VariantFilter sv;
+    if (hasNested) {
+      point = restoreClassFilter(spec.point);
+      sv = restoreClassFilter(spec.sv);
+    } else {
+      point = new VariantFilter();
+      point.setMinQuality(spec.minQuality);
+      point.setMinDepth(spec.minDepth);
+      point.setMinAlleleFraction(spec.minAlleleFraction);
+      point.setCancerGenesOnly(spec.cancerGenesOnly);
+      point.setMinSharedSamples(spec.minSharedSamples > 0 ? spec.minSharedSamples : 1);
+      point.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
+      point.setGeneLevel(spec.geneLevel);
+      point.setComparisonWindowBp(Math.max(0, spec.comparisonWindowBp));
+      EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+      if (spec.allowedTypes != null) {
+        for (String name : spec.allowedTypes) {
+          try {
+            types.add(VcfVariantType.valueOf(name));
+          } catch (Exception ignored) { /* skip */ }
+        }
+      }
+      EnumSet<VcfVariantType> pointTypes = EnumSet.copyOf(
+          org.baseplayer.variant.VariantTypeVisuals.VariantClass.POINT.allTypes());
+      pointTypes.retainAll(types);
+      if (pointTypes.isEmpty()) {
+        for (VcfVariantType t : types) {
+          if (org.baseplayer.variant.VariantTypeVisuals.isPoint(t)) {
+            pointTypes.add(t);
+          }
+        }
+      }
+      if (pointTypes.isEmpty()) {
+        pointTypes = org.baseplayer.variant.VariantTypeVisuals.VariantClass.POINT.allTypes();
+      }
+      point.setAllowedTypes(pointTypes);
+      if (spec.allowedEffects != null && !spec.allowedEffects.isEmpty()) {
+        EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+        for (String name : spec.allowedEffects) {
+          try {
+            effects.add(VariantEffect.valueOf(name));
+          } catch (Exception ignored) { /* skip */ }
+        }
+        point.setAllowedEffects(effects);
+      }
+      if (spec.infoFieldFilters != null) {
+        point.setInfoFieldFilters(new HashMap<>(spec.infoFieldFilters));
+      }
+      if (spec.allowedFilterValues != null) {
+        point.setAllowedFilterValues(new HashSet<>(spec.allowedFilterValues));
+      }
+
+      sv = new VariantFilter();
+      EnumSet<VcfVariantType> svTypes = EnumSet.noneOf(VcfVariantType.class);
+      for (VcfVariantType t : types) {
+        if (org.baseplayer.variant.VariantTypeVisuals.isStructural(t)) {
+          svTypes.add(t);
+        }
+      }
+      if (spec.availableTypes != null) {
+        for (String name : spec.availableTypes) {
+          try {
+            VcfVariantType t = VcfVariantType.valueOf(name);
+            if (org.baseplayer.variant.VariantTypeVisuals.isStructural(t)) {
+              svTypes.add(t);
+            }
+          } catch (Exception ignored) { /* skip */ }
+        }
+      }
+      if (svTypes.isEmpty()) {
+        svTypes = org.baseplayer.variant.VariantTypeVisuals.VariantClass.STRUCTURAL.allTypes();
+      }
+      sv.setAllowedTypes(svTypes);
+      sv.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
+      sv.setMinQuality(spec.minQuality);
+      sv.setMinSharedSamples(spec.minSharedSamples > 0 ? spec.minSharedSamples : 1);
+      sv.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
+      sv.setGeneLevel(spec.geneLevel);
+      sv.setComparisonWindowBp(Math.max(0, spec.comparisonWindowBp));
+    }
+
+    filter.setClassSlices(point, sv);
+    return filter;
+  }
+
+  private static VariantFilter restoreClassFilter(ProjectDocument.ClassFilterSpec spec) {
+    VariantFilter filter = new VariantFilter();
+    if (spec == null) {
+      return filter;
+    }
     filter.setMinQuality(spec.minQuality);
     filter.setMinDepth(spec.minDepth);
     filter.setMinAlleleFraction(spec.minAlleleFraction);
     filter.setCancerGenesOnly(spec.cancerGenesOnly);
+    filter.setMinSvLengthBp(spec.minSvLengthBp);
+    filter.setMaxSvLengthBp(spec.maxSvLengthBp > 0 ? spec.maxSvLengthBp : Long.MAX_VALUE);
     filter.setMinSharedSamples(spec.minSharedSamples > 0 ? spec.minSharedSamples : 1);
     filter.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
     filter.setGeneLevel(spec.geneLevel);
@@ -404,7 +556,9 @@ public final class ProjectService {
           types.add(VcfVariantType.valueOf(name));
         } catch (Exception ignored) { /* skip */ }
       }
-      if (!types.isEmpty()) filter.setAllowedTypes(types);
+      if (!types.isEmpty()) {
+        filter.setAllowedTypes(types);
+      }
     }
     if (spec.allowedEffects != null && !spec.allowedEffects.isEmpty()) {
       EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
@@ -457,8 +611,33 @@ public final class ProjectService {
           } catch (Exception ignored) { /* skip */ }
         }
       }
+      addClassSpecTypes(spec.point, types, effects);
+      addClassSpecTypes(spec.sv, types, effects);
     }
     VcfManager.getInstance().setSessionAvailableFilters(types, effects);
+  }
+
+  private static void addClassSpecTypes(
+      ProjectDocument.ClassFilterSpec classSpec,
+      EnumSet<VcfVariantType> types,
+      EnumSet<VariantEffect> effects) {
+    if (classSpec == null) {
+      return;
+    }
+    if (classSpec.allowedTypes != null) {
+      for (String name : classSpec.allowedTypes) {
+        try {
+          types.add(VcfVariantType.valueOf(name));
+        } catch (Exception ignored) { /* skip */ }
+      }
+    }
+    if (classSpec.allowedEffects != null) {
+      for (String name : classSpec.allowedEffects) {
+        try {
+          effects.add(VariantEffect.valueOf(name));
+        } catch (Exception ignored) { /* skip */ }
+      }
+    }
   }
 
   private static ProjectDocument.SampleFileSpec captureSampleFile(Sample sample, Path projectFile) {

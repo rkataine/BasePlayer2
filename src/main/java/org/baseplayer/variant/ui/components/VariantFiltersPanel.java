@@ -53,6 +53,8 @@ public class VariantFiltersPanel {
         CURRENT_HIGHER
     }
 
+    private VariantTypeVisuals.VariantClass variantClass;
+
     private record ThresholdFilter(
         String key,
         DoubleSupplier currentValue,
@@ -100,9 +102,222 @@ public class VariantFiltersPanel {
         Button addFilterFieldButton,
         HBox reloadBanner,
         Label reloadBannerLabel,
-        Button reloadBannerButton
-    ) {}
+        Button reloadBannerButton,
+        TextField minSvLengthField,
+        TextField maxSvLengthField
+    ) {
+        /** Point-mutation nodes without SV length fields. */
+        public Nodes(
+            GridPane variantTypesContainer,
+            CheckBox selectAllTypesCheckBox,
+            CheckBox selectAllEffectsCheckBox,
+            GridPane effectCategoriesContainer,
+            Slider qualitySlider,
+            Slider coverageSlider,
+            Slider alleleFreqSlider,
+            TextField qualityField,
+            TextField coverageField,
+            TextField alleleFreqField,
+            Label qualityValueLabel,
+            Label coverageValueLabel,
+            Label alleleFreqValueLabel,
+            CheckBox cancerOnlyCheckBox,
+            VBox advancedFiltersContainer,
+            Button addInfoFilterButton,
+            Button addFilterFieldButton,
+            HBox reloadBanner,
+            Label reloadBannerLabel,
+            Button reloadBannerButton) {
+            this(
+                variantTypesContainer,
+                selectAllTypesCheckBox,
+                selectAllEffectsCheckBox,
+                effectCategoriesContainer,
+                qualitySlider,
+                coverageSlider,
+                alleleFreqSlider,
+                qualityField,
+                coverageField,
+                alleleFreqField,
+                qualityValueLabel,
+                coverageValueLabel,
+                alleleFreqValueLabel,
+                cancerOnlyCheckBox,
+                advancedFiltersContainer,
+                addInfoFilterButton,
+                addFilterFieldButton,
+                reloadBanner,
+                reloadBannerLabel,
+                reloadBannerButton,
+                null,
+                null);
+        }
+    }
 
+    /**
+     * Programmatically build an SV filter panel (types, QUAL, SV length, cancer, reload).
+     * Returns the root node and wired {@link Nodes}.
+     */
+    public static Pair<javafx.scene.Node, Nodes> buildStructuralFiltersUi() {
+        GridPane typesContainer = new GridPane();
+        typesContainer.setHgap(12);
+        typesContainer.setVgap(6);
+
+        CheckBox selectAllTypes = new CheckBox();
+        selectAllTypes.getStyleClass().add("filter-checkbox");
+
+        Slider qualitySlider = new Slider(0, 99, 0);
+        qualitySlider.setShowTickLabels(true);
+        qualitySlider.setShowTickMarks(true);
+        qualitySlider.setMajorTickUnit(20);
+        qualitySlider.setMinorTickCount(4);
+        qualitySlider.setBlockIncrement(5);
+        qualitySlider.setPrefWidth(350);
+        TextField qualityField = new TextField("0");
+        qualityField.setPrefWidth(60);
+        qualityField.getStyleClass().add("filter-field");
+        Label qualityValue = new Label("0");
+        qualityValue.getStyleClass().add("value-label");
+
+        // Hidden depth/AF for Nodes compatibility (SV panel does not show them).
+        Slider coverageSlider = new Slider(0, 200, 0);
+        coverageSlider.setVisible(false);
+        coverageSlider.setManaged(false);
+        TextField coverageField = new TextField("0");
+        coverageField.setVisible(false);
+        coverageField.setManaged(false);
+        Label coverageValue = new Label("0");
+        coverageValue.setVisible(false);
+        coverageValue.setManaged(false);
+
+        Slider alleleFreqSlider = new Slider(0, 1.0, 0);
+        alleleFreqSlider.setVisible(false);
+        alleleFreqSlider.setManaged(false);
+        TextField alleleFreqField = new TextField("0.0");
+        alleleFreqField.setVisible(false);
+        alleleFreqField.setManaged(false);
+        Label alleleFreqValue = new Label("0.0");
+        alleleFreqValue.setVisible(false);
+        alleleFreqValue.setManaged(false);
+
+        CheckBox selectAllEffects = new CheckBox();
+        selectAllEffects.setVisible(false);
+        selectAllEffects.setManaged(false);
+        GridPane effectsContainer = new GridPane();
+        effectsContainer.setVisible(false);
+        effectsContainer.setManaged(false);
+
+        CheckBox cancerOnly = new CheckBox("Cancer genes only (COSMIC Census)");
+        cancerOnly.getStyleClass().add("filter-checkbox");
+
+        TextField minSvLen = new TextField("0");
+        minSvLen.setPrefWidth(80);
+        minSvLen.getStyleClass().add("filter-field");
+        TextField maxSvLen = new TextField("");
+        maxSvLen.setPrefWidth(80);
+        maxSvLen.setPromptText("no max");
+        maxSvLen.getStyleClass().add("filter-field");
+
+        HBox reloadBanner = new HBox(6);
+        reloadBanner.setAlignment(Pos.CENTER_LEFT);
+        reloadBanner.setVisible(false);
+        reloadBanner.setStyle(
+            "-fx-background-color: rgba(209,102,36,0.18); -fx-background-radius: 6; -fx-padding: 2 6 2 6;");
+        Label reloadLabel = new Label("Reload needed");
+        reloadLabel.setStyle("-fx-text-fill: #f0c6a9; -fx-font-size: 11px;");
+        Button reloadButton = new Button("Reload");
+        reloadButton.getStyleClass().add("secondary-button");
+        reloadButton.setStyle("-fx-font-size: 10px; -fx-padding: 1 6 1 6;");
+        reloadBanner.getChildren().addAll(reloadLabel, reloadButton);
+
+        VBox advanced = new VBox(6);
+        Button addInfo = new Button("Add INFO Filter...");
+        addInfo.getStyleClass().add("secondary-button");
+        Button addFilter = new Button("Add FILTER...");
+        addFilter.getStyleClass().add("secondary-button");
+
+        Label title = new Label("Structural variant filters");
+        title.getStyleClass().add("panel-title");
+
+        HBox titleRow = new HBox(8, title, reloadBanner);
+        titleRow.setAlignment(Pos.CENTER_LEFT);
+
+        VBox left = new VBox(12);
+        left.getStyleClass().add("filter-panel");
+        left.setPadding(new Insets(16));
+        left.getChildren().addAll(
+            titleRow,
+            new javafx.scene.control.Separator(),
+            labeledSlider("Minimum Variant Quality (QUAL)", qualityValue, qualitySlider, qualityField),
+            labeledFields("SV length (bp)",
+                new Label("Min"), minSvLen, new Label("Max"), maxSvLen),
+            section("Advanced Filters (INFO/FILTER)", advanced, new HBox(8, addInfo, addFilter)));
+
+        VBox right = new VBox(12);
+        right.getStyleClass().add("filter-panel");
+        right.setPadding(new Insets(16));
+        HBox typesHeader = new HBox(8, selectAllTypes, new Label("SV Types"));
+        typesHeader.setAlignment(Pos.CENTER_LEFT);
+        ((Label) typesHeader.getChildren().get(1)).getStyleClass().add("section-header");
+        right.getChildren().addAll(
+            new VBox(8, typesHeader, typesContainer),
+            new VBox(8, new Label("Special Filters") {{ getStyleClass().add("section-header"); }}, cancerOnly));
+
+        javafx.scene.control.SplitPane split = new javafx.scene.control.SplitPane(left, right);
+        split.setDividerPositions(0.5);
+        split.getStyleClass().add("tab-content-split");
+
+        Nodes nodes = new Nodes(
+            typesContainer,
+            selectAllTypes,
+            selectAllEffects,
+            effectsContainer,
+            qualitySlider,
+            coverageSlider,
+            alleleFreqSlider,
+            qualityField,
+            coverageField,
+            alleleFreqField,
+            qualityValue,
+            coverageValue,
+            alleleFreqValue,
+            cancerOnly,
+            advanced,
+            addInfo,
+            addFilter,
+            reloadBanner,
+            reloadLabel,
+            reloadButton,
+            minSvLen,
+            maxSvLen);
+        return new Pair<>(split, nodes);
+    }
+
+    private static VBox labeledSlider(String title, Label valueLabel, Slider slider, TextField field) {
+        Label header = new Label(title);
+        header.getStyleClass().add("section-header");
+        HBox top = new HBox(8, header, valueLabel);
+        top.setAlignment(Pos.CENTER_LEFT);
+        HBox controls = new HBox(8, slider, field);
+        HBox.setHgrow(slider, javafx.scene.layout.Priority.ALWAYS);
+        controls.setAlignment(Pos.CENTER_LEFT);
+        return new VBox(6, top, controls);
+    }
+
+    private static VBox labeledFields(String title, javafx.scene.Node... nodes) {
+        Label header = new Label(title);
+        header.getStyleClass().add("section-header");
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().addAll(nodes);
+        return new VBox(6, header, row);
+    }
+
+    private static VBox section(String title, javafx.scene.Node body, javafx.scene.Node footer) {
+        Label header = new Label(title);
+        header.getStyleClass().add("section-header");
+        return new VBox(8, header, body, footer);
+    }
     /** UI groups that map one checkbox to one or more {@link VariantEffect} values. */
     private enum EffectCategory {
         MISSENSE("Missense", VariantEffect.CODING_MISSENSE),
@@ -171,7 +386,17 @@ public class VariantFiltersPanel {
             Runnable onDebouncedChange,
             Runnable onImmediateChange,
             BooleanSupplier isSuppressing) {
+        install(nodes, onDebouncedChange, onImmediateChange, isSuppressing, null);
+    }
+
+    public void install(
+            Nodes nodes,
+            Runnable onDebouncedChange,
+            Runnable onImmediateChange,
+            BooleanSupplier isSuppressing,
+            VariantTypeVisuals.VariantClass variantClass) {
         this.nodes = nodes;
+        this.variantClass = variantClass;
         this.onDebouncedChange = onDebouncedChange != null ? onDebouncedChange : () -> {};
         this.onImmediateChange = onImmediateChange != null ? onImmediateChange : () -> {};
         this.isSuppressing = isSuppressing != null ? isSuppressing : () -> false;
@@ -186,6 +411,10 @@ public class VariantFiltersPanel {
         if (nodes.addFilterFieldButton() != null) {
             nodes.addFilterFieldButton().setOnAction(e -> showFilterFieldDialog());
         }
+    }
+
+    public VariantTypeVisuals.VariantClass getVariantClass() {
+        return variantClass;
     }
 
     public void registerThresholdFilter(
@@ -255,6 +484,37 @@ public class VariantFiltersPanel {
             "cancerOnly",
             () -> nodes.cancerOnlyCheckBox().isSelected(),
             VariantFilter::isCancerGenesOnly);
+
+        if (nodes.minSvLengthField() != null) {
+            registerThresholdFilter(
+                "minSvLen",
+                () -> {
+                    try {
+                        String t = nodes.minSvLengthField().getText().trim();
+                        return t.isEmpty() ? 0.0 : Double.parseDouble(t);
+                    } catch (NumberFormatException e) {
+                        return 0.0;
+                    }
+                },
+                f -> (double) f.getMinSvLengthBp(),
+                LooserWhen.CURRENT_LOWER);
+        }
+        if (nodes.maxSvLengthField() != null) {
+            registerThresholdFilter(
+                "maxSvLen",
+                () -> {
+                    try {
+                        String t = nodes.maxSvLengthField().getText().trim();
+                        return t.isEmpty() ? Double.MAX_VALUE : Double.parseDouble(t);
+                    } catch (NumberFormatException e) {
+                        return Double.MAX_VALUE;
+                    }
+                },
+                f -> f.getMaxSvLengthBp() == Long.MAX_VALUE
+                    ? Double.MAX_VALUE
+                    : (double) f.getMaxSvLengthBp(),
+                LooserWhen.CURRENT_HIGHER);
+        }
     }
 
     /**
@@ -279,6 +539,14 @@ public class VariantFiltersPanel {
         nodes.coverageSlider().setValue(filter.getMinDepth());
         nodes.alleleFreqSlider().setValue(filter.getMinAlleleFraction());
         nodes.cancerOnlyCheckBox().setSelected(filter.isCancerGenesOnly());
+
+        if (nodes.minSvLengthField() != null) {
+            nodes.minSvLengthField().setText(Long.toString(Math.max(0, filter.getMinSvLengthBp())));
+        }
+        if (nodes.maxSvLengthField() != null) {
+            long max = filter.getMaxSvLengthBp();
+            nodes.maxSvLengthField().setText(max == Long.MAX_VALUE ? "" : Long.toString(max));
+        }
 
         if (nodes.advancedFiltersContainer() != null) {
             nodes.advancedFiltersContainer().getChildren().clear();
@@ -317,6 +585,23 @@ public class VariantFiltersPanel {
 
         filter.setCancerGenesOnly(nodes.cancerOnlyCheckBox().isSelected());
 
+        if (nodes.minSvLengthField() != null) {
+            try {
+                String text = nodes.minSvLengthField().getText().trim();
+                filter.setMinSvLengthBp(text.isEmpty() ? 0 : Long.parseLong(text));
+            } catch (NumberFormatException ignored) {
+                filter.setMinSvLengthBp(0);
+            }
+        }
+        if (nodes.maxSvLengthField() != null) {
+            try {
+                String text = nodes.maxSvLengthField().getText().trim();
+                filter.setMaxSvLengthBp(text.isEmpty() ? Long.MAX_VALUE : Long.parseLong(text));
+            } catch (NumberFormatException ignored) {
+                filter.setMaxSvLengthBp(Long.MAX_VALUE);
+            }
+        }
+
         Map<String, String> infoFilters = new HashMap<>();
         Set<String> filterValues = new HashSet<>();
         if (nodes.advancedFiltersContainer() != null) {
@@ -343,12 +628,19 @@ public class VariantFiltersPanel {
     private Set<VcfVariantType> currentAllowedTypes() {
         Set<VcfVariantType> types = new HashSet<>();
         if (variantTypeCheckBoxes.isEmpty()) {
-            types.addAll(EnumSet.allOf(VcfVariantType.class));
-        } else {
-            for (Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
-                if (entry.getValue().isSelected()) {
-                    types.add(entry.getKey());
-                }
+            // No types observed for this class yet — allow the whole class so a newly
+            // added VCF of this class can load. Once types appear, checkboxes drive the set.
+            // (Unchecking every checkbox leaves entries in the map with selected=false → none.)
+            if (variantClass != null) {
+                types.addAll(variantClass.allTypes());
+            } else {
+                types.addAll(EnumSet.allOf(VcfVariantType.class));
+            }
+            return types;
+        }
+        for (Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
+            if (entry.getValue().isSelected()) {
+                types.add(entry.getKey());
             }
         }
         return types;
@@ -377,18 +669,11 @@ public class VariantFiltersPanel {
             VariantFilter currentFilter) {
         Set<VcfVariantType> present = collectPresentVariantTypes(sources);
         Set<VariantEffect> presentEffects = collectPresentVariantEffects(sources);
-        VcfManager vcfManager = VcfManager.getInstance();
-        present.addAll(vcfManager.getSessionAvailableTypes());
-        presentEffects.addAll(vcfManager.getSessionAvailableEffects());
-        if (currentFilter != null) {
-            if (currentFilter.getAllowedTypes() != null) {
-                present.addAll(currentFilter.getAllowedTypes());
-            }
-            if (currentFilter.getAllowedEffects() != null) {
-                presentEffects.addAll(currentFilter.getAllowedEffects());
-            }
+        // Only types present in loaded sample data — do not seed from filter defaults
+        // or sticky session unions that invent absent classes.
+        if (variantClass != null) {
+            present.removeIf(t -> t != null && !variantClass.contains(t));
         }
-        vcfManager.unionSessionAvailableFilters(present, presentEffects);
         populateVariantTypes(present, currentFilter);
         populateEffectCategories(presentEffects, currentFilter);
     }
@@ -417,7 +702,7 @@ public class VariantFiltersPanel {
                 ? EnumSet.copyOf(presentTypes)
                 : EnumSet.noneOf(VcfVariantType.class);
 
-            Set<VcfVariantType> typesToShow = VariantTypeVisuals.typesForUi(present);
+            Set<VcfVariantType> typesToShow = VariantTypeVisuals.typesForUi(present, variantClass);
 
             int columnCount = 3;
             int index = 0;
@@ -893,6 +1178,22 @@ public class VariantFiltersPanel {
             scheduleImmediateChange();
         });
         nodes.qualityField().setOnAction(e -> scheduleImmediateChange());
+        if (nodes.minSvLengthField() != null) {
+            nodes.minSvLengthField().setOnAction(e -> scheduleImmediateChange());
+            nodes.minSvLengthField().focusedProperty().addListener((obs, was, is) -> {
+                if (was && !is) {
+                    scheduleImmediateChange();
+                }
+            });
+        }
+        if (nodes.maxSvLengthField() != null) {
+            nodes.maxSvLengthField().setOnAction(e -> scheduleImmediateChange());
+            nodes.maxSvLengthField().focusedProperty().addListener((obs, was, is) -> {
+                if (was && !is) {
+                    scheduleImmediateChange();
+                }
+            });
+        }
     }
 
     private void updateSelectAllEffectsState() {

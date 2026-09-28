@@ -232,6 +232,19 @@ public class VariantNode {
         return samples == null ? 0 : samples.size();
     }
 
+    /** True if any sample call on this node is currently UI-visible. */
+    public boolean hasUiVisibleSample() {
+        if (samples == null || samples.isEmpty()) {
+            return false;
+        }
+        for (SampleCall call : samples) {
+            if (call != null && call.isUiVisible()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Remove one sample call from this variant node.
      * @return true if the node has no more samples (should be removed from list)

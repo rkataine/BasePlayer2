@@ -290,6 +290,9 @@ public class VcfManager {
     /** Trigger variant load for every visible stack: cached chromosome, else the on-screen window. */
     public void loadVariantsForCurrentView() {
         syncCurrentFilterFromOpenVariantManager();
+        if (currentFilter != null) {
+            currentFilter.ensureUnobservedClassSlicesPassAll();
+        }
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty() || loadedVcfs.isEmpty()) return;
         for (DrawStack stack : stackManager.getStacks()) {
@@ -684,6 +687,7 @@ public class VcfManager {
                 stack.sampleAggregateCanvas.draw();
             }
         }
+        rebuildSessionAvailableFromCaches();
     }
 
     private void clearVariantListsForChromosome(String chromosome) {
@@ -1367,6 +1371,28 @@ public class VcfManager {
         sessionAvailableEffects.clear();
     }
 
+    /**
+     * Replace session-available types/effects with exactly what is present in cached
+     * variant lists (no hardcoded inventories). Call after loads and after samples
+     * are removed so aggregate legends / Variant Manager drop types that no longer exist.
+     */
+    public synchronized void rebuildSessionAvailableFromCaches() {
+        EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+        EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
+        for (VariantList list : variantCache.values()) {
+            if (list == null || list.isEmpty() || seen.put(list, Boolean.TRUE) != null) {
+                continue;
+            }
+            types.addAll(list.collectVariantTypes());
+            effects.addAll(list.collectVariantEffects());
+        }
+        sessionAvailableTypes.clear();
+        sessionAvailableTypes.addAll(types);
+        sessionAvailableEffects.clear();
+        sessionAvailableEffects.addAll(effects);
+    }
+
     private void redrawCanvasesForTypeVisibility() {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
@@ -1507,6 +1533,11 @@ public class VcfManager {
 
     public long getVariantsRevision() {
         return variantsRevision.get();
+    }
+
+    /** Notify listeners (Variant Manager tables) that cached variant contents changed in place. */
+    public void bumpVariantsRevision() {
+        variantsRevision.incrementAndGet();
     }
 
     public String getLastLoadedChromosome() {

@@ -61,6 +61,15 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
     painter.clearVariantList();
   }
 
+  public VariantList getVariantList() {
+    return painter.getVariantList();
+  }
+
+  /** Refresh legend types after shared VariantList contents change (e.g. sample removed). */
+  public void refreshPresentTypesFromList() {
+    painter.refreshPresentTypesFromList();
+  }
+
   public void forceCalculateDensity() {
     painter.forceCalculateDensity(drawStack);
   }
