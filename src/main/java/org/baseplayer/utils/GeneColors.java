@@ -19,6 +19,9 @@ public final class GeneColors {
   
   /** Color for stop codons (TAA, TAG, TGA) */
   public static final Color STOP_CODON_COLOR = Color.web("#ff0000");
+
+  /** COSMIC Cancer Gene Census highlight */
+  public static final Color COSMIC_COLOR = Color.web("#d16624");
   
   /** Get color for a single amino acid character. Delegates to {@link AminoAcids#getColor}. */
   public static Color getAminoAcidColor(char aminoAcid) {
@@ -47,7 +50,7 @@ public final class GeneColors {
   public static Color getGeneColor(String geneName, String biotype) {
     // COSMIC census genes are colored orange-red
     if (CosmicGenes.isCosmicGene(geneName)) {
-      return Color.web("#d16624");
+      return COSMIC_COLOR;
     }
     if (biotype == null) return Color.CORNFLOWERBLUE;
     return switch (biotype) {

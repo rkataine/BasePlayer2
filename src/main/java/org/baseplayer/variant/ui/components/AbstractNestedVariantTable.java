@@ -59,7 +59,7 @@ public abstract class AbstractNestedVariantTable {
     private static final String TEXT = "#1e1e1e";
     private static final String COLOR_SYNONYMOUS = "#107c10";
     private static final String COLOR_MISSENSE = "#c9a000";
-    private static final String COLOR_TRUNCATING = "#d13438";
+    private static final String COLOR_TRUNCATING = org.baseplayer.ui.theme.AppTheme.CHROME_DARK.dangerHex();
     private static final String COLOR_NONCODING = "#8a8886";
 
 

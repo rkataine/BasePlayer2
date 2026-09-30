@@ -1,5 +1,7 @@
 package org.baseplayer.components.sidebars;
 
+import org.baseplayer.ui.theme.AppTheme;
+
 import org.baseplayer.features.Track;
 import org.baseplayer.features.TrackSettingsPopup;
 import org.baseplayer.services.DrawStackManager;
@@ -7,7 +9,6 @@ import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.AppFonts;
-import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
@@ -109,7 +110,7 @@ public class FeatureTrackListPanel extends TrackListPanel {
   @Override
   protected void drawTrackRows(
       double panelWidthPixels, double panelHeightPixels, double rightUiInsetPixels) {
-    gc.setStroke(DrawColors.BORDER);
+    gc.setStroke(org.baseplayer.ui.theme.AppTheme.chrome().border());
     double rowHeight = featureTrackViewportRegistry.getTrackRowHeightPixels();
     double scrollOffset =
         featureTrackViewportRegistry.getVerticalScrollOffsetPixels();
@@ -140,7 +141,7 @@ public class FeatureTrackListPanel extends TrackListPanel {
     boolean trackVisible = track.isVisible();
     if (rowY >= 0) {
       double snappedY = Math.round(rowY);
-      gc.setStroke(DrawColors.BORDER);
+      gc.setStroke(org.baseplayer.ui.theme.AppTheme.chrome().border());
       gc.strokeLine(0, snappedY, availableWidth, snappedY);
     }
 
@@ -160,10 +161,10 @@ public class FeatureTrackListPanel extends TrackListPanel {
     gc.beginPath();
     gc.rect(0, Math.max(rowY, 0), availableWidth, rowHeight);
     gc.clip();
-    gc.setFill(trackVisible ? Color.web("#cccccc") : Color.web("#666666"));
+    gc.setFill(trackVisible ? AppTheme.chrome().text() : AppTheme.chrome().muted());
     gc.setFont(AppFonts.getUIFont(9));
     gc.fillText(track.getName(), textX, rowY + 12);
-    gc.setFill(trackVisible ? Color.web("#888888") : Color.web("#555555"));
+    gc.setFill(trackVisible ? AppTheme.chrome().secondary() : AppTheme.chrome().stroke());
     gc.setFont(AppFonts.getUIFont(8));
     gc.fillText(track.getType(), textX, rowY + 22);
     gc.restore();
@@ -171,7 +172,7 @@ public class FeatureTrackListPanel extends TrackListPanel {
     double removeX = Math.max(
         availableWidth - ICON_SIZE - ICON_PADDING, textX + 20);
     double removeY = rowY + (rowHeight - ICON_SIZE) / 2;
-    gc.setFill(Color.web("#3c3c3c"));
+    gc.setFill(AppTheme.chrome().control());
     gc.fillRoundRect(
         removeX - 1, removeY - 1, ICON_SIZE + 2, ICON_SIZE + 2, 3, 3);
     gc.setFill(Color.web("#cc6666"));
@@ -208,7 +209,7 @@ public class FeatureTrackListPanel extends TrackListPanel {
     reactiveGc.rect(0, Math.max(rowY, 0),
         panelWidthPixels - getRightUiInsetPixels(), rowHeight);
     reactiveGc.clip();
-    reactiveGc.setFill(Color.WHITE);
+    reactiveGc.setFill(AppTheme.canvas().overlayInk());
     reactiveGc.setFont(AppFonts.getUIFont(9));
     reactiveGc.fillText(hoveredTrack.getName(), textX, rowY + 12);
     reactiveGc.restore();

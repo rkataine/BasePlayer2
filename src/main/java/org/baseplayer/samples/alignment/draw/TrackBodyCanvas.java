@@ -79,6 +79,8 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private double resizeFrameW;
   private double resizeFrameH;
   private PauseTransition resizeCommitTimer;
+  /** Debounced capture so pan/zoom redraws do not snapshot every frame. */
+  private PauseTransition resizeFrameCaptureTimer;
 
   /** Unified coverage data computation and rendering. */
   private final CoverageDrawer coverageDrawer = new CoverageDrawer();
@@ -249,7 +251,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return;
     }
 
-    gc.setFill(DrawColors.BACKGROUND);
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, width + 1, height + 1);
 
     ensureTrackRowHeightFitsViewport(height);
@@ -260,9 +262,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     super.draw();
 
     if (isSampleBody()) {
-      resizeFrame = snapshot(null, null);
-      resizeFrameW = width;
-      resizeFrameH = height;
+      scheduleResizeFrameCapture();
     }
   }
 
@@ -271,12 +271,31 @@ public class TrackBodyCanvas extends GenomicCanvas {
         && (Math.abs(width - resizeFrameW) > 0.5 || Math.abs(height - resizeFrameH) > 0.5);
   }
 
+  /** Capture a stable frame shortly after drawing stops — used only for resize preview. */
+  private void scheduleResizeFrameCapture() {
+    if (resizeFrameCaptureTimer == null) {
+      resizeFrameCaptureTimer = new PauseTransition(Duration.millis(80));
+      resizeFrameCaptureTimer.setOnFinished(e -> {
+        double width = getWidth();
+        double height = getHeight();
+        if (width <= 0 || height <= 0) return;
+        resizeFrame = snapshot(null, null);
+        resizeFrameW = width;
+        resizeFrameH = height;
+      });
+    }
+    resizeFrameCaptureTimer.playFromStart();
+  }
+
   private void scheduleResizeCommit() {
     if (resizeCommitTimer == null) {
       resizeCommitTimer = new PauseTransition(Duration.millis(120));
       resizeCommitTimer.setOnFinished(e -> {
         boolean widthChanged = Math.abs(getWidth() - resizeFrameW) > 0.5;
         resizeFrame = null;
+        if (resizeFrameCaptureTimer != null) {
+          resizeFrameCaptureTimer.stop();
+        }
         if (widthChanged) {
           setStartEnd(drawStack.getViewStart(), drawStack.getViewEnd());
         } else {
@@ -321,6 +340,17 @@ public class TrackBodyCanvas extends GenomicCanvas {
           || hasCoverageHoverTarget(lastMouseX, lastMouseY)) {
         drawReadHighlight();
       }
+    }
+  }
+
+  @Override
+  protected void restoreReactiveOverlays() {
+    if (!isSampleBody() || isReactiveOverlayReserved()) return;
+    if (isScrollbarOverrideActive()
+        || hoveredRead != null || selectedRead != null || externalLinkedReadName != null
+        || hoveredVariant != null
+        || hasCoverageHoverTarget(lastMouseX, lastMouseY)) {
+      drawReadHighlight();
     }
   }
 
@@ -837,7 +867,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
     ReadLayout layout = ReadLayout.compute(sampleY, sampleH, coverageH, bamFile, sample, drawStack);
 
-    gc.setStroke(DrawColors.COVERAGE_SEPARATOR);
+    gc.setStroke(org.baseplayer.ui.theme.AppTheme.canvas().separator());
     gc.strokeLine(0, layout.readsY(), getWidth(), layout.readsY());
 
     if (layout.butterfly()) {

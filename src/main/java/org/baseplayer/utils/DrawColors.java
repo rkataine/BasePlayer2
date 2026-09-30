@@ -1,26 +1,43 @@
 package org.baseplayer.utils;
 
+import org.baseplayer.ui.theme.AppTheme;
+
 import javafx.scene.paint.Color;
 import javafx.scene.paint.CycleMethod;
 import javafx.scene.paint.LinearGradient;
 import javafx.scene.paint.Stop;
 
 /**
- * Centralized color constants for genomic data drawing.
+ * Centralized color constants for genomic <em>data</em> drawing
+ * (reads, coverage, mismatches, sample groups, gnomAD).
  *
- * <p>UI chrome / canvas <em>surface</em> colors are moving to
- * {@link org.baseplayer.ui.theme.AppTheme}. Keep base/read/variant glyph colors
- * here so they stay visible on both dark and light canvas backgrounds.
+ * <p>Canvas <em>surface</em> colors live in {@link AppTheme#canvas()}; UI chrome in
+ * {@link AppTheme#chrome()}. {@link #BACKGROUND}, {@link #SIDEBAR}, and {@link #BORDER}
+ * remain as dark-canvas aliases for older call sites — prefer AppTheme for new code.
+ *
+ * <p>{@link #MISMATCH_A}/{@code C}/{@code G}/{@code T} are intentionally distinct from
+ * {@link BaseColors} (same hue family, different luminance for mismatch glyphs on reads).
  */
 public final class DrawColors {
 
   private DrawColors() {} // Utility class
 
-  // ── UI / canvas surface (prefer AppTheme.chrome() / canvas() for new code) ──
-  public static Color lineColor = new Color(0.5, 0.8, 0.8, 0.5);  // Mutable: changed by dark mode toggle
-  public static final Color BACKGROUND = Color.web("#1e1e1e");       // Editor background
-  public static final Color SIDEBAR = Color.web("#252526");          // Sidebar background
-  public static final Color BORDER = Color.web("#3c3c3c");           // Border color
+  // ── Canvas surface aliases (prefer AppTheme.canvas() / chrome()) ──────────
+  /** Mutable zoom guide tint; synced from AppTheme.canvas().zoomLine() on theme toggle. */
+  public static Color lineColor = AppTheme.CANVAS_DARK.zoomLine();
+
+  /** @deprecated Prefer {@code AppTheme.canvas().trackBackground()} */
+  @Deprecated
+  public static final Color BACKGROUND = AppTheme.CANVAS_DARK.trackBackground();
+
+  /** @deprecated Prefer {@code AppTheme.canvas().sidebarBackground()} */
+  @Deprecated
+  public static final Color SIDEBAR = AppTheme.CANVAS_DARK.sidebarBackground();
+
+  /** @deprecated Prefer {@code AppTheme.chrome().border()} */
+  @Deprecated
+  public static final Color BORDER = AppTheme.CHROME_DARK.border();
+
   public static final LinearGradient ZOOM_GRADIENT = new LinearGradient(
     0, 0, 1, 1, true, CycleMethod.NO_CYCLE,
     new Stop(0, Color.rgb(30, 144, 255, 0.3)),
@@ -88,7 +105,9 @@ public final class DrawColors {
 
   // ── Coverage ──
   public static final Color COVERAGE_FILL = Color.rgb(100, 140, 180, 0.50);
-  public static final Color COVERAGE_SEPARATOR = Color.rgb(80, 80, 80, 0.60);
+  /** @deprecated Prefer {@code AppTheme.canvas().separator()} */
+  @Deprecated
+  public static final Color COVERAGE_SEPARATOR = AppTheme.CANVAS_DARK.separator();
 
   // ── Sashimi plot (splice junction arches) ──
   public static final Color SASHIMI_ARC = Color.rgb(200, 100, 50, 0.75);

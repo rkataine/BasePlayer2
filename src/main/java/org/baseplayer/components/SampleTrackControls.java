@@ -379,9 +379,15 @@ public final class SampleTrackControls {
     double totalW = width(showReload, showClose, buttonSize);
 
     if (withPlate) {
-      gc.setFill(Color.rgb(18, 20, 24, 0.72));
+      var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
+      boolean dark = org.baseplayer.ui.theme.AppTheme.isDark();
+      gc.setFill(dark
+          ? Color.rgb(18, 20, 24, 0.72)
+          : Color.color(chrome.panel().getRed(), chrome.panel().getGreen(), chrome.panel().getBlue(), 0.92));
       gc.fillRoundRect(leftX - 6, topY - 3, totalW + 12, stripH + 6, 8, 8);
-      gc.setStroke(Color.rgb(120, 170, 220, 0.45));
+      gc.setStroke(dark
+          ? Color.rgb(120, 170, 220, 0.45)
+          : Color.color(chrome.accent().getRed(), chrome.accent().getGreen(), chrome.accent().getBlue(), 0.55));
       gc.setLineWidth(1);
       gc.strokeRoundRect(leftX - 6, topY - 3, totalW + 12, stripH + 6, 8, 8);
     }
@@ -390,17 +396,29 @@ public final class SampleTrackControls {
     Font iconFont = Font.font("Segoe UI Symbol", FontWeight.BOLD,
         buttonSize >= 20 ? 14 : 12);
 
+    boolean dark = org.baseplayer.ui.theme.AppTheme.isDark();
+    String addBg = dark ? "#2d4a2d" : "#c8e6c9";
+    String addFg = dark ? "#9dcc9d" : "#1b5e20";
+    String settingsBg = dark ? "#2f343a" : "#d5d5d5";
+    String settingsFg = trackVisible
+        ? (dark ? "#dde3ea" : "#0a0a0a")
+        : (dark ? "#777777" : "#777777");
+    String closeBg = dark ? "#4a2a2a" : "#ffcdd2";
+    String closeFg = dark ? "#e08888" : "#a31515";
+    String reloadBg = dark ? "#4a3520" : "#ffe0b2";
+    String reloadFg = dark ? "#ff9944" : "#c43e00";
+
     x = paintButton(gc, hits, x, y, buttonSize, iconFont, "+",
-        "#2d4a2d", "#9dcc9d", "add", hoveredId);
+        addBg, addFg, "add", hoveredId);
     x = paintButton(gc, hits, x, y, buttonSize, iconFont, "⚙",
-        "#2f343a", trackVisible ? "#dde3ea" : "#777777", "settings", hoveredId);
+        settingsBg, settingsFg, "settings", hoveredId);
     if (showClose) {
       x = paintButton(gc, hits, x, y, buttonSize, iconFont, "✕",
-          "#4a2a2a", "#e08888", "close", hoveredId);
+          closeBg, closeFg, "close", hoveredId);
     }
     if (showReload) {
       paintButton(gc, hits, x, y, buttonSize, iconFont, "\u21ba",
-          "#4a3520", "#ff9944", "reload", hoveredId);
+          reloadBg, reloadFg, "reload", hoveredId);
     }
     return hits;
   }
@@ -433,12 +451,13 @@ public final class SampleTrackControls {
     boolean hovered = id.equals(hoveredId);
     gc.setFill(Color.web(bgHex));
     gc.fillRoundRect(x, y, buttonSize, buttonSize, 4, 4);
+    boolean dark = org.baseplayer.ui.theme.AppTheme.isDark();
     if (hovered) {
-      gc.setStroke(Color.rgb(180, 220, 255, 0.9));
+      gc.setStroke(dark ? Color.rgb(180, 220, 255, 0.9) : Color.rgb(0, 90, 158, 0.85));
       gc.setLineWidth(1.4);
       gc.strokeRoundRect(x - 0.5, y - 0.5, buttonSize + 1, buttonSize + 1, 4, 4);
     } else {
-      gc.setStroke(Color.rgb(255, 255, 255, 0.16));
+      gc.setStroke(dark ? Color.rgb(255, 255, 255, 0.16) : Color.rgb(0, 0, 0, 0.18));
       gc.setLineWidth(1);
       gc.strokeRoundRect(x + 0.5, y + 0.5, buttonSize - 1, buttonSize - 1, 4, 4);
     }

@@ -67,6 +67,20 @@ public class GenomeSidebar extends SidebarBase {
     return true;
   }
 
+  /** Redraw header chrome after theme toggle. */
+  public static void redrawThemeChrome() {
+    GenomeSidebar sidebar = instance;
+    if (sidebar == null) {
+      return;
+    }
+    Runnable redraw = sidebar::drawHeader;
+    if (Platform.isFxApplicationThread()) {
+      redraw.run();
+    } else {
+      Platform.runLater(redraw);
+    }
+  }
+
   // ── SidebarBase contract ──────────────────────────────────────────────────
 
   @Override protected String getTitle() { return "Genome"; }

@@ -165,6 +165,8 @@ public class MainApp extends Application {
         applyTheme();
         // Canvas zoom-line tint follows canvas palette (painters still mostly dark).
         DrawColors.lineColor = AppTheme.canvas().zoomLine();
+        org.baseplayer.components.sidebars.GenomeSidebar.redrawThemeChrome();
+        org.baseplayer.variant.ui.VariantManagerWindow.refreshTheme();
         org.baseplayer.project.ProjectSessionState.get().markDirty();
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }

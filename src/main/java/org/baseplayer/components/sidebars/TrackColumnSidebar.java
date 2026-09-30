@@ -143,9 +143,9 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       int firstVisibleSlot,
       int lastVisibleSlot) {
     gc.setFont(Font.font("Segoe UI", 10));
-    gc.setFill(Color.web("#9ea7b3"));
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.chrome().secondary());
     gc.fillText(getVisibleTracksRangeLabelTitle(), 8, headerBarHeight + 14);
-    gc.setFill(Color.web("#7f8791"));
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.chrome().muted());
 
     String rangeText = firstVisibleSlot == lastVisibleSlot
         ? String.valueOf(firstVisibleSlot + 1)
@@ -550,22 +550,33 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     row.setPadding(new Insets(6));
 
     Label fromLabel = new Label("From");
-    fromLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    fromLabel.setStyle("-fx-text-fill: " + org.baseplayer.ui.theme.AppTheme.chrome().secondaryHex()
+        + "; -fx-font-size: 11;");
     TextField fromField = new TextField(String.valueOf(first + 1));
     fromField.setPrefWidth(52);
     fromField.setStyle(
-        "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+        "-fx-background-color: " + org.baseplayer.ui.theme.AppTheme.chrome().elevatedHex()
+            + "; -fx-text-fill: " + org.baseplayer.ui.theme.AppTheme.chrome().textHex()
+            + "; -fx-border-color: " + org.baseplayer.ui.theme.AppTheme.chrome().strokeHex()
+            + "; -fx-font-size: 11;");
 
     Label toLabel = new Label("To");
-    toLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    toLabel.setStyle("-fx-text-fill: " + org.baseplayer.ui.theme.AppTheme.chrome().secondaryHex()
+        + "; -fx-font-size: 11;");
     TextField toField = new TextField(String.valueOf(last + 1));
     toField.setPrefWidth(52);
     toField.setStyle(
-        "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+        "-fx-background-color: " + org.baseplayer.ui.theme.AppTheme.chrome().elevatedHex()
+            + "; -fx-text-fill: " + org.baseplayer.ui.theme.AppTheme.chrome().textHex()
+            + "; -fx-border-color: " + org.baseplayer.ui.theme.AppTheme.chrome().strokeHex()
+            + "; -fx-font-size: 11;");
 
     Button applyBtn = new Button("Apply");
-    applyBtn.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11;"
-        + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+    applyBtn.setStyle("-fx-background-color: " + org.baseplayer.ui.theme.AppTheme.chrome().elevatedHex()
+        + "; -fx-text-fill: " + org.baseplayer.ui.theme.AppTheme.chrome().textHex()
+        + "; -fx-font-size: 11;"
+        + "-fx-padding: 2 8 2 8; -fx-border-color: "
+        + org.baseplayer.ui.theme.AppTheme.chrome().strokeHex() + "; -fx-cursor: hand;");
 
     Runnable applyRange = () -> {
       int displayedCount = trackViewportRegistry.getDisplayedTrackCount();
@@ -664,9 +675,10 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       return new ExpandedControlsRenderResult(null, null, null);
     }
 
-    gc.setFill(Color.web("#202327"));
+    var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
+    gc.setFill(chrome.panel());
     gc.fillRect(0, headerBarH, w, Math.max(0, h - headerBarH));
-    gc.setStroke(Color.web("#3e444d"));
+    gc.setStroke(chrome.border());
     gc.strokeLine(0, headerBarH, w, headerBarH);
 
     if (trackCount <= 0) {
@@ -681,7 +693,7 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     double railY = headerBarH + 29;
     double railH = 8;
 
-    gc.setFill(Color.web("#2f353e"));
+    gc.setFill(chrome.elevated());
     gc.fillRoundRect(railX, railY, railW, railH, 4, 4);
 
     double startX = railX
@@ -693,13 +705,13 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       endX = railX + railW;
     }
 
-    gc.setFill(Color.web("#4b5f7f"));
+    gc.setFill(chrome.accent());
     gc.fillRoundRect(startX, railY, Math.max(2, endX - startX), railH, 4, 4);
 
     double handleW = 8;
     double handleH = 16;
     double handleY = railY - 4;
-    gc.setFill(Color.web("#d8e3f5"));
+    gc.setFill(chrome.text());
     gc.fillRoundRect(startX - handleW / 2, handleY, handleW, handleH, 3, 3);
     gc.fillRoundRect(endX - handleW / 2, handleY, handleW, handleH, 3, 3);
 

@@ -438,7 +438,7 @@ public final class ZoomController {
     double scaleX = sourceView / currentView;
     double translateX = (sourceStart - currentStart) * (target.getWidth() / currentView);
     GraphicsContext gc = target.reactiveGc;
-    gc.setFill(DrawColors.BACKGROUND);
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, target.getWidth(), target.getHeight());
     gc.drawImage(snapshot, translateX, 0, target.getWidth() * scaleX, target.getHeight());
   }

@@ -756,7 +756,7 @@ public class CoverageDrawer {
         gc.setLineWidth(1.0);
       }
 
-      gc.setFill(Color.web("#aaaaaa"));
+      gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().axisInk());
       gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
       gc.fillText(String.valueOf((int) row.maxCoverage), 3, sampleY + 10);
 
@@ -898,13 +898,13 @@ public class CoverageDrawer {
         bamFile.requestSampledCoverage(chrom, start, end, numPoints, drawStack);
 
     if (sampled == null) {
-      gc.setFill(Color.web("#888888"));
+      gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().axisInk());
       gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 11));
       gc.fillText("Sampling coverage...", 10, sampleY + sampleH / 2 + 4);
       return;
     }
     if (sampled.samplesCompleted == 0) {
-      gc.setFill(Color.web("#888888"));
+      gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().axisInk());
       gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 11));
       String msg = sampled.chunksProcessed > 0
           ? "Sampling coverage... (" + sampled.chunksProcessed + " chunks processed)"
@@ -970,11 +970,11 @@ public class CoverageDrawer {
 
     if (!sampled.complete) {
       int pct = (int)(100.0 * count / sampled.numSamples);
-      gc.setFill(Color.web("#888888"));
+      gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().axisInk());
       gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
       gc.fillText("Sampling " + pct + "%", 3, sampleY + sampleH - 4);
     }
-    gc.setFill(Color.web("#aaaaaa"));
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().axisInk());
     gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
     gc.fillText(String.valueOf((int) maxDepth), 3, sampleY + 10);
   }

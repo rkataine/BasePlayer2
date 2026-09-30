@@ -3,6 +3,7 @@ package org.baseplayer.components;
 import java.util.Optional;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -40,9 +41,9 @@ public class AppDialog {
 
   /** Shared panel style (matches InfoPopup / LoadingPopup). */
   public static final String PANEL_STYLE =
-      "-fx-background-color: rgba(30, 30, 30, 0.98);"
+      "-fx-background-color: " + AppTheme.CHROME_DARK.surfaceHex() + ";"
           + "-fx-background-radius: 8;"
-          + "-fx-border-color: #555555;"
+          + "-fx-border-color: " + AppTheme.CHROME_DARK.strokeHex() + ";"
           + "-fx-border-radius: 8;"
           + "-fx-border-width: 1;";
 
@@ -53,7 +54,7 @@ public class AppDialog {
       "-fx-text-fill: #b0b0b0; -fx-font-size: 12px; -fx-wrap-text: true;";
 
   public static final String HINT_STYLE =
-      "-fx-text-fill: #888888; -fx-font-size: 11px; -fx-wrap-text: true;";
+      "-fx-text-fill: " + AppTheme.CHROME_DARK.mutedHex() + "; -fx-font-size: 11px; -fx-wrap-text: true;";
 
   private static final String PRIMARY_STYLE =
       "-fx-background-color: #2a4a6a;"
@@ -66,8 +67,8 @@ public class AppDialog {
           + "-fx-cursor: hand;";
 
   private static final String SECONDARY_STYLE =
-      "-fx-background-color: #3c3c3c;"
-          + "-fx-text-fill: #bbbbbb;"
+      "-fx-background-color: " + AppTheme.CHROME_DARK.controlHex() + ";"
+          + "-fx-text-fill: " + AppTheme.CHROME_DARK.textMutedHex() + ";"
           + "-fx-font-size: 12px;"
           + "-fx-padding: 6 16 6 16;"
           + "-fx-background-radius: 4;"

@@ -3,7 +3,6 @@ package org.baseplayer.components.sidebars;
 import java.util.function.DoubleUnaryOperator;
 
 import org.baseplayer.services.TrackViewportRegistry;
-import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
 import javafx.scene.Cursor;
@@ -122,7 +121,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
     double panelWidth = canvas.getWidth();
     double panelHeight = canvas.getHeight();
 
-    gc.setFill(DrawColors.SIDEBAR);
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().sidebarBackground());
     gc.fillRect(0, 0, panelWidth, panelHeight);
     clearIconRegions();
 
@@ -565,7 +564,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
     // Opaque strip so long sample/feature names never show through the thin bar.
     double stripX = trackScrollbarX - TRACK_SCROLLBAR_CONTENT_GAP;
     double stripW = TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN + TRACK_SCROLLBAR_CONTENT_GAP;
-    gc.setFill(DrawColors.SIDEBAR);
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().sidebarBackground());
     gc.fillRect(stripX, trackScrollbarTop, stripW, trackScrollbarHeight);
 
     gc.setFill(Color.rgb(70, 70, 70, 0.95));

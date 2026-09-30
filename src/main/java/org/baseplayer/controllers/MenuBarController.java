@@ -18,9 +18,11 @@ import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ViewportState;
 import org.baseplayer.utils.BaseUtils;
+import org.baseplayer.ui.theme.AppTheme;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
+import javafx.animation.AnimationTimer;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.event.ActionEvent;
@@ -86,6 +88,10 @@ public class MenuBarController {
   private ContextMenu chromosomeLabelMenu;
   private Rectangle memoryFill;
   private Tooltip memoryTooltip;
+  private AnimationTimer memoryMonitor;
+  /** When true, next sample paints even if fill width changed by &lt; 1px (e.g. after GC). */
+  private boolean forceMemoryRefresh;
+  private PauseTransition memoryForceSettleTimer;
   private Popup snackbarPopup;
   private Label snackbarLabel;
   private PauseTransition snackbarHideTimer;
@@ -157,12 +163,51 @@ public class MenuBarController {
     Tooltip.install(memoryBar, memoryTooltip);
     memoryTooltip.setText("Memory: calculating...");
     
-    // Double-click to run garbage collector
+    // Double-click to run garbage collector, then refresh while GC settles
     memoryBar.setOnMouseClicked(e -> {
       if (e.getClickCount() == 2) {
-        System.gc();
+        runGarbageCollectionAndRefresh();
       }
     });
+
+    memoryMonitor = new AnimationTimer() {
+      private long lastSampleNs;
+
+      @Override
+      public void handle(long now) {
+        // Poll often enough to catch GC; paint only when fill moves ≥1px.
+        if (!forceMemoryRefresh && now - lastSampleNs < 100_000_000L) {
+          return;
+        }
+        lastSampleNs = now;
+        sampleMemoryUsage();
+      }
+    };
+    memoryMonitor.start();
+    Platform.runLater(this::sampleMemoryUsage);
+  }
+
+  /** Run GC and keep the memory bar sampling until usage has settled. */
+  public static void runGarbageCollectionAndRefresh() {
+    System.gc();
+    if (instance == null) return;
+    instance.forceMemoryRefresh = true;
+    instance.sampleMemoryUsage();
+    if (instance.memoryForceSettleTimer == null) {
+      instance.memoryForceSettleTimer = new PauseTransition(Duration.millis(600));
+      instance.memoryForceSettleTimer.setOnFinished(e -> {
+        instance.forceMemoryRefresh = false;
+        instance.sampleMemoryUsage();
+      });
+    }
+    instance.memoryForceSettleTimer.playFromStart();
+  }
+
+  private void sampleMemoryUsage() {
+    Runtime rt = Runtime.getRuntime();
+    int usedMem = BaseUtils.toMegabytes.apply(rt.totalMemory() - rt.freeMemory());
+    int maxMem = BaseUtils.toMegabytes.apply(rt.maxMemory());
+    updateMemoryBar(usedMem, maxMem);
   }
   
   private void setupPositionField() {
@@ -582,13 +627,22 @@ public class MenuBarController {
   
   public static void updateMemoryBar(int usedMem, int maxMem) {
     if (instance == null || instance.memoryBar == null || instance.memoryFill == null) return;
-    
+    if (maxMem <= 0) return;
+
     double proportion = (double) usedMem / maxMem;
     double barWidth = instance.memoryBar.getWidth();
     double barHeight = instance.memoryBar.getHeight();
-    
+    if (barWidth <= 0) return;
+
     // Green fill from left showing used memory
     double usedWidth = Math.max(1, barWidth * proportion); // At least 1 pixel
+    // Skip paint when usage moved less than one pixel of bar width (unless forced, e.g. GC).
+    if (!instance.forceMemoryRefresh
+        && instance.memoryFill.getWidth() > 0
+        && Math.abs(usedWidth - instance.memoryFill.getWidth()) < 1.0) {
+      return;
+    }
+
     instance.memoryFill.setX(0);
     instance.memoryFill.setY(1);
     instance.memoryFill.setWidth(usedWidth);
@@ -596,12 +650,13 @@ public class MenuBarController {
     
     // Color based on proportion: green -> yellow -> red
     Color fillColor;
+    var chrome = AppTheme.chrome();
     if (proportion < 0.5) {
-      fillColor = Color.web("#4CAF50"); // Green
+      fillColor = chrome.success();
     } else if (proportion < 0.8) {
-      fillColor = Color.web("#FFC107"); // Yellow
+      fillColor = chrome.warning();
     } else {
-      fillColor = Color.web("#F44336"); // Red
+      fillColor = chrome.danger();
     }
     instance.memoryFill.setFill(fillColor);
     
@@ -718,7 +773,7 @@ public class MenuBarController {
   public void addStack(ActionEvent event) { ViewCommands.addStack(); }
   public void removeStack(ActionEvent event) { ViewCommands.removeStack(); }
   public void setDarkMode(ActionEvent event) { ViewCommands.toggleDarkMode(); }
-  public void cleanMemory(ActionEvent event) { ViewCommands.cleanMemory(); }
+  public void cleanMemory(ActionEvent event) { runGarbageCollectionAndRefresh(); }
   public void clearAllData(ActionEvent event) { FileCommands.newProject(); }
   public void newProject(ActionEvent event) { FileCommands.newProject(); }
 

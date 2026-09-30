@@ -224,22 +224,7 @@ public class VariantInfoPopup extends InfoPopup {
   }
 
   private static Color colorForType(VcfVariantType type) {
-    if (type == null) {
-      return Color.web("#B8E986");
-    }
-    return switch (type) {
-      case SNV -> Color.web("#4A90E2");
-      case INSERTION -> Color.web("#7ED321");
-      case DELETION -> Color.rgb(200, 100, 100);
-      case MNV -> Color.web("#BD10E0");
-      case COMPLEX -> Color.web("#B8E986");
-      case SV_DELETION -> Color.rgb(200, 100, 100);
-      case SV_INVERSION -> Color.web("#4488ff");
-      case SV_DUPLICATION -> Color.web("#c0c0d0");
-      case SV_INSERTION -> Color.web("#33cc66");
-      case SV_TRANSLOCATION -> Color.web("#ffdd00");
-      case SV_BREAKEND -> Color.web("#c0c0c0");
-    };
+    return org.baseplayer.variant.VariantTypeVisuals.color(type);
   }
 
   private static String toHex(Color color) {

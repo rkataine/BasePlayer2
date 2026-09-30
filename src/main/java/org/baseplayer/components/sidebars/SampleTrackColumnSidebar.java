@@ -1,5 +1,7 @@
 package org.baseplayer.components.sidebars;
 
+import org.baseplayer.ui.theme.AppTheme;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -196,13 +198,13 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     filterRow.setPadding(new Insets(0, 6, 6, 6));
 
     Label filterLabel = new Label("Filter");
-    filterLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+    filterLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
 
     TextField filterField = new TextField(sampleRegistry.getActiveSampleFilterQuery());
     filterField.setPromptText("sample name contains...");
     filterField.setPrefWidth(170);
     filterField.setStyle(
-        "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+        "-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-font-size: 11;");
 
     Button clearButton = new Button("Clear");
     clearButton.setStyle(
@@ -332,7 +334,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
   private ContextMenu buildGlobalSettingsMenu() {
     ContextMenu settingsMenu = new ContextMenu();
-    settingsMenu.setStyle("-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+    settingsMenu.setStyle("-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
 
     Label titleLabel = new Label("Global Settings");
     titleLabel.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 13; -fx-font-weight: bold; -fx-padding: 4 8 2 8;");
@@ -364,14 +366,13 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
       HBox samplePointsBox = new HBox(6);
       Label samplePointsLabel = new Label("Sample points:");
-      samplePointsLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+      samplePointsLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       TextField samplePointsField = new TextField(String.valueOf(Settings.get().getSampledCoveragePoints()));
       samplePointsField.setStyle(
-          "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+          "-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-font-size: 11;");
       samplePointsField.setPrefWidth(80);
       Button refreshButton = new Button("Refresh");
-      refreshButton.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11; "
-          + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+      refreshButton.setStyle("-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11; -fx-padding: 2 8 2 8; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-cursor: hand;");
       refreshButton.setOnAction(e -> {
         try {
           int value = Integer.parseInt(samplePointsField.getText());
@@ -403,7 +404,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       mismatchBox.setPadding(new Insets(4, 8, 4, 8));
 
       Label mismatchLabel = new Label("Mismatch filtering (all tracks)");
-      mismatchLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 12; -fx-font-weight: bold;");
+      mismatchLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 12; -fx-font-weight: bold;");
 
       CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C->T / G->A)");
       boolean anyMethylSuppressed = bamFiles.stream().anyMatch(AlignmentFile::isMethylationData);
@@ -419,25 +420,24 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
       HBox mmFractionRow = new HBox(6);
       Label mmFractionLabel = new Label("Min fraction (0-1):");
-      mmFractionLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+      mmFractionLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       TextField mmFractionField = new TextField(String.valueOf(Settings.get().getMismatchMinFraction()));
       mmFractionField.setStyle(
-          "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+          "-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-font-size: 11;");
       mmFractionField.setPrefWidth(80);
       mmFractionRow.getChildren().addAll(mmFractionLabel, mmFractionField);
 
       HBox mmCountRow = new HBox(6);
       Label mmCountLabel = new Label("Min read count:");
-      mmCountLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+      mmCountLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       TextField mmCountField = new TextField(String.valueOf(Settings.get().getMismatchMinCount()));
       mmCountField.setStyle(
-          "-fx-background-color: #333; -fx-text-fill: #cccccc; -fx-border-color: #555; -fx-font-size: 11;");
+          "-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-font-size: 11;");
       mmCountField.setPrefWidth(80);
       mmCountRow.getChildren().addAll(mmCountLabel, mmCountField);
 
       Button applyMismatchButton = new Button("Apply mismatch thresholds");
-      applyMismatchButton.setStyle("-fx-background-color: #4a4a4a; -fx-text-fill: #cccccc; -fx-font-size: 11; "
-          + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
+      applyMismatchButton.setStyle("-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11; -fx-padding: 2 8 2 8; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-cursor: hand;");
       Runnable applyMismatchThresholds = () -> {
         try {
           double frac = Double.parseDouble(mmFractionField.getText());
@@ -459,7 +459,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       mmCountField.setOnAction(e -> applyMismatchThresholds.run());
 
       Label mismatchInfo = new Label("Use for emSeq/WGBS to suppress bisulfite-conversion mismatches.");
-      mismatchInfo.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+      mismatchInfo.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
 
       mismatchBox.getChildren().addAll(mismatchLabel, suppressMethylCb, mmFractionRow, mmCountRow,
           applyMismatchButton, mismatchInfo);
@@ -473,11 +473,11 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       readRenderBox.setPadding(new Insets(4, 8, 4, 8));
 
       Label readRenderLabel = new Label("Read rendering (all tracks)");
-      readRenderLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 12; -fx-font-weight: bold;");
+      readRenderLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 12; -fx-font-weight: bold;");
 
       HBox colorRow = new HBox(6);
       Label colorLabel = new Label("Read color:");
-      colorLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+      colorLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       ComboBox<ReadColorMode> colorCombo = new ComboBox<>();
       colorCombo.getItems().setAll(bamFiles.get(0).getAvailableColorModes());
       colorCombo.setValue(bamFiles.get(0).getReadColorMode());
@@ -496,7 +496,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
       HBox stackRow = new HBox(6);
       Label stackLabel = new Label("Stacking:");
-      stackLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 11;");
+      stackLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       ComboBox<AlignmentFile.ReadStackingMode> stackCombo = new ComboBox<>();
       stackCombo.getItems().setAll(AlignmentFile.ReadStackingMode.values());
       stackCombo.setValue(bamFiles.get(0).getReadStackingMode());
@@ -514,7 +514,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       stackRow.getChildren().addAll(stackLabel, stackCombo);
 
       Label stackInfo = new Label("Stacking modes are mutually exclusive.");
-      stackInfo.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+      stackInfo.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
       readRenderBox.getChildren().addAll(readRenderLabel, colorRow, stackRow, stackInfo);
       settingsMenu.getItems().add(new CustomMenuItem(readRenderBox, false));
     }
@@ -523,7 +523,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     if (!bamFiles.isEmpty() || hasVcfData) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
       MenuItem circosItem = new MenuItem("Circos plot (reads + VCF translocations)...");
-      circosItem.setStyle("-fx-text-fill: #cccccc;");
+      circosItem.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + ";");
       circosItem.setOnAction(e -> {
         settingsMenu.hide();
         openCircosPlot();

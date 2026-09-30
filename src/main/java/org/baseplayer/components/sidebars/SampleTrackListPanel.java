@@ -16,6 +16,7 @@ import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.DrawColors;
@@ -222,7 +223,7 @@ public class SampleTrackListPanel extends TrackListPanel {
   @Override
   protected void drawTrackRows(
       double panelWidthPixels, double panelHeightPixels, double rightUiInsetPixels) {
-    gc.setStroke(DrawColors.BORDER);
+    gc.setStroke(org.baseplayer.ui.theme.AppTheme.chrome().border());
     List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     if (displayedTrackIndices.isEmpty()) {
       return;
@@ -249,7 +250,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       boolean trackVisible = sampleTrack == null || sampleTrack.isVisible();
       if (!squeezed && rowY >= 0) {
         double snappedY = Math.round(rowY);
-        gc.setStroke(DrawColors.BORDER);
+        gc.setStroke(org.baseplayer.ui.theme.AppTheme.chrome().border());
         gc.strokeLine(0, snappedY, contentRight, snappedY);
       }
 
@@ -280,10 +281,10 @@ public class SampleTrackListPanel extends TrackListPanel {
         gc.clip();
         if (isHovered || selected) {
           gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
-          gc.setFill(Color.WHITE);
+          gc.setFill(AppTheme.canvas().overlayInk());
         } else {
           gc.setFont(NAME_FONT);
-          gc.setFill(trackVisible ? Color.web("#cccccc") : Color.web("#666666"));
+          gc.setFill(trackVisible ? AppTheme.chrome().text() : AppTheme.chrome().muted());
         }
         gc.fillText(displayName, nameX, textY);
         gc.restore();
@@ -349,7 +350,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       String displayName = sampleTrack.getDisplayName();
       // Line marks the hovered track; name sits above it (may overlap prior rows).
       double lineY = Math.floor(rowY) + 0.5;
-      reactiveGc.setStroke(Color.WHITE);
+      reactiveGc.setStroke(AppTheme.canvas().overlayInk());
       reactiveGc.setLineWidth(1);
       reactiveGc.strokeLine(0, lineY, contentRight, lineY);
 
@@ -360,7 +361,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       double labelTop = Math.max(0, lineY - 16);
       reactiveGc.setFill(Color.rgb(0, 0, 0, 0.72));
       reactiveGc.fillRoundRect(2, labelTop, Math.min(contentRight - 4, Math.max(24, textWidth)), 15, 3, 3);
-      reactiveGc.setFill(Color.WHITE);
+      reactiveGc.setFill(AppTheme.canvas().overlayInk());
       reactiveGc.fillText(displayName, 6, labelTop + 12);
       return;
     }
@@ -427,7 +428,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
     ContextMenu settingsMenu = new ContextMenu();
     settingsMenu.setStyle(
-        "-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+        "-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
     addOpenedFilesMenuItems(settingsMenu, track, sampleIndex);
     addSampleGroupMenuItems(settingsMenu, track, sampleIndex);
     addMethylationSettings(settingsMenu, track);
@@ -441,12 +442,12 @@ public class SampleTrackListPanel extends TrackListPanel {
     VBox filesBox = new VBox(4);
     filesBox.setPadding(new Insets(4, 8, 2, 8));
     Label header = new Label("Opened files");
-    header.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
+    header.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11; -fx-font-weight: bold;");
     filesBox.getChildren().add(header);
 
     if (track.getSamples().isEmpty()) {
       Label empty = new Label("No files on this track");
-      empty.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+      empty.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
       filesBox.getChildren().add(empty);
       settingsMenu.getItems().add(new CustomMenuItem(filesBox, false));
       return;
@@ -466,7 +467,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     groupBox.setPadding(new Insets(4, 8, 4, 8));
 
     Label header = new Label("Sample groups");
-    header.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
+    header.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11; -fx-font-weight: bold;");
     groupBox.getChildren().add(header);
 
     List<SampleGroup> memberships = sampleRegistry.getGroupsForTrack(track);
@@ -482,7 +483,7 @@ public class SampleTrackListPanel extends TrackListPanel {
           .map(SampleGroup::getName)
           .collect(java.util.stream.Collectors.joining(", "));
       Label currentLabel = new Label("In: " + names);
-      currentLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+      currentLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
       currentLabel.setWrapText(true);
       currentLabel.setMaxWidth(220);
       groupBox.getChildren().add(currentLabel);
@@ -496,14 +497,14 @@ public class SampleTrackListPanel extends TrackListPanel {
           }
         });
         Label colorHint = new Label("Group color");
-        colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+        colorHint.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
         groupBox.getChildren().addAll(colorHint, colorPicker);
       } else {
         for (SampleGroup group : memberships) {
           ColorPicker perGroupPicker = new ColorPicker(group.getColor());
           perGroupPicker.setPrefWidth(150);
           Label colorHint = new Label(group.getName() + " color");
-          colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+          colorHint.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
           perGroupPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
             if (newColor != null) {
               sampleRegistry.setGroupColor(group.getId(), newColor);
@@ -515,7 +516,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       }
     } else {
       Label colorHint = new Label("Color for new group");
-      colorHint.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+      colorHint.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
       groupBox.getChildren().addAll(colorHint, colorPicker);
     }
 
@@ -618,7 +619,7 @@ public class SampleTrackListPanel extends TrackListPanel {
         : "🧬 Methylation / Bisulfite sequencing");
     label.setStyle(track.hasMethylationData()
         ? "-fx-text-fill: #88ccff; -fx-font-size: 11; -fx-font-weight: bold;"
-        : "-fx-text-fill: #aaaaaa; -fx-font-size: 11; -fx-font-weight: bold;");
+        : "-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11; -fx-font-weight: bold;");
     CheckBox hideMismatches =
         new CheckBox("Hide bisulfite mismatches (C→T / G→A)");
     hideMismatches.setSelected(track.hasMethylationData());
@@ -635,7 +636,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     });
     Label information =
         new Label("Enable for emSeq/WGBS data to hide C→T conversions");
-    information.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+    information.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
     methylationBox.getChildren().addAll(label, hideMismatches, information);
     settingsMenu.getItems().add(new CustomMenuItem(methylationBox, false));
   }
@@ -650,9 +651,9 @@ public class SampleTrackListPanel extends TrackListPanel {
     Label label = new Label("\uD83E\uDDE9 Phased haplotype data (HP tags)");
     label.setStyle("-fx-text-fill: #88eebb; -fx-font-size: 11; -fx-font-weight: bold;");
     Label information = new Label("Reads shown in allele-split butterfly view:");
-    information.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+    information.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
     Label direction = new Label("HP1 = top (up), HP2 = bottom (down)");
-    direction.setStyle("-fx-text-fill: #999999; -fx-font-size: 10;");
+    direction.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
     haplotypeBox.getChildren().addAll(label, information, direction);
     settingsMenu.getItems().add(new CustomMenuItem(haplotypeBox, false));
   }
@@ -667,11 +668,11 @@ public class SampleTrackListPanel extends TrackListPanel {
     renderingBox.setPadding(new Insets(4, 8, 4, 8));
     Label renderingLabel = new Label("🎨 Read rendering");
     renderingLabel.setStyle(
-        "-fx-text-fill: #cccccc; -fx-font-size: 11; -fx-font-weight: bold;");
+        "-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11; -fx-font-weight: bold;");
 
     HBox colorRow = new HBox(6);
     Label colorLabel = new Label("Read color:");
-    colorLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+    colorLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
     ComboBox<ReadColorMode> colorComboBox = new ComboBox<>();
     colorComboBox.getItems().setAll(primaryAlignmentFile.getAvailableColorModes());
     colorComboBox.setValue(primaryAlignmentFile.getReadColorMode());
@@ -692,7 +693,7 @@ public class SampleTrackListPanel extends TrackListPanel {
 
     HBox stackingRow = new HBox(6);
     Label stackingLabel = new Label("Stacking:");
-    stackingLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+    stackingLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
     ComboBox<AlignmentFile.ReadStackingMode> stackingComboBox = new ComboBox<>();
     stackingComboBox.getItems().setAll(AlignmentFile.ReadStackingMode.values());
     stackingComboBox.setValue(primaryAlignmentFile.getReadStackingMode());
@@ -713,13 +714,13 @@ public class SampleTrackListPanel extends TrackListPanel {
 
     Label stackingInformation =
         new Label("Only one stacking mode can be active at a time.");
-    stackingInformation.setStyle("-fx-text-fill: #888888; -fx-font-size: 9;");
+    stackingInformation.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
     renderingBox.getChildren().addAll(
         renderingLabel, colorRow, stackingRow, stackingInformation);
     if (primaryAlignmentFile.getDetectedReadGroups().size() > 1) {
       Label readGroupInformation = new Label(
           "Read groups: " + String.join(", ", primaryAlignmentFile.getDetectedReadGroups()));
-      readGroupInformation.setStyle("-fx-text-fill: #999999; -fx-font-size: 9;");
+      readGroupInformation.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
       readGroupInformation.setWrapText(true);
       renderingBox.getChildren().add(readGroupInformation);
     }
@@ -729,7 +730,7 @@ public class SampleTrackListPanel extends TrackListPanel {
   private void showAddFileMenu(int sampleIndex, double screenX, double screenY) {
     ContextMenu addMenu = new ContextMenu();
     addMenu.setStyle(
-        "-fx-background-color: #2b2b2b; -fx-border-color: #555; -fx-border-width: 1;");
+        "-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
     MenuItem bamItem = new MenuItem("Add BAM/CRAM");
     bamItem.setOnAction(event -> SampleDataManager.addBamToTrack(sampleIndex));
     MenuItem bedItem = new MenuItem("Add BED");
@@ -744,10 +745,10 @@ public class SampleTrackListPanel extends TrackListPanel {
     dialog.setTitle("Rename Track");
     dialog.setHeaderText("Enter new name for this individual:");
     dialog.setContentText("Name:");
-    dialog.getDialogPane().setStyle("-fx-background-color: #2b2b2b;");
-    dialog.getDialogPane().lookup(".content.label").setStyle("-fx-text-fill: #cccccc;");
+    dialog.getDialogPane().setStyle("-fx-background-color: " + AppTheme.chrome().panelHex() + ";");
+    dialog.getDialogPane().lookup(".content.label").setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + ";");
     dialog.getDialogPane().lookup(".header-panel")
-        .setStyle("-fx-background-color: #333333;");
+        .setStyle("-fx-background-color: " + AppTheme.chrome().elevatedHex() + ";");
     dialog.showAndWait().ifPresent(newName -> {
       if (!newName.trim().isEmpty()) {
         track.setCustomName(newName.trim());
@@ -787,9 +788,9 @@ public class SampleTrackListPanel extends TrackListPanel {
     });
 
     Label typeLabel = new Label("[" + file.getDataType().name() + "]");
-    typeLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+    typeLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
     Label nameLabel = new Label(file.getName());
-    nameLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-size: 12; -fx-cursor: hand;");
+    nameLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 12; -fx-cursor: hand;");
     nameLabel.setMaxWidth(Double.MAX_VALUE);
     HBox.setHgrow(nameLabel, Priority.ALWAYS);
     nameLabel.setOnMouseClicked(event -> {

@@ -4,11 +4,11 @@
 }
 
 .toolBar {
-  -fx-background-color: #333333;
-  background-color: #333333;
+  -fx-background-color: -bp-elevated;
+  background-color: -bp-elevated;
   -fx-padding: 4 4 4 4;
   padding: 4 4 4 4;
-  -fx-border-color: transparent transparent #3c3c3c transparent;
+  -fx-border-color: transparent transparent -bp-control transparent;
   -fx-border-width: 0 0 1 0;
 }
 
@@ -23,7 +23,7 @@
 .menuBar {
   -fx-padding: 5 5 5 5;
   padding: 4 4 4 4;
-  -fx-background-color: #333333;
+  -fx-background-color: -bp-elevated;
 }
 
 .flat-combo-box .list-cell {
@@ -97,32 +97,32 @@
 
 /* Anchor pane backgrounds for different panels */
 .anchor-pane, AnchorPane {
-  -fx-background-color: #1e1e1e;
+  -fx-background-color: -bp-surface;
 }
 
 /* Sidebar style - slightly different shade */
 #chromSideBar, #drawSideBar {
-  -fx-background-color: #252526;
+  -fx-background-color: -bp-panel;
 }
 
 /* Stack pane backgrounds */
 .stack-pane, StackPane {
-  -fx-background-color: #1e1e1e;
+  -fx-background-color: -bp-surface;
 }
 
 /* Pane backgrounds */
 Pane {
-  -fx-background-color: #1e1e1e;
+  -fx-background-color: -bp-surface;
 }
 
 /* VBox background */
 VBox {
-  -fx-background-color: #1e1e1e;
+  -fx-background-color: -bp-surface;
 }
 
 /* Sidebar panels - slightly lighter shade like VS Code */
 .sidebar-panel {
-  -fx-background-color: #252526;
+  -fx-background-color: -bp-panel;
 }
 
 /* Minimal combo box - just text and arrow, no box */
@@ -134,21 +134,21 @@ VBox {
 }
 
 .minimal-combo-box:hover {
-  -fx-background-color: rgba(255, 255, 255, 0.1);
+  -fx-background-color: rgba(0, 0, 0, 0.06);
 }
 
 .minimal-combo-box .list-cell {
   -fx-padding: 2px 4px;
-  -fx-text-fill: #7e99b4;
+  -fx-text-fill: -bp-accent;
   -fx-background-color: transparent;
 }
 
 .minimal-combo-box .list-cell:hover {
-  -fx-background-color: rgba(255, 255, 255, 0.15);
+  -fx-background-color: rgba(0, 90, 158, 0.12);
 }
 
 .minimal-combo-box .list-cell:filled:selected {
-  -fx-background-color: rgba(100, 160, 220, 0.3);
+  -fx-background-color: rgba(0, 90, 158, 0.22);
 }
 
 .minimal-combo-box .arrow-button {
@@ -157,16 +157,16 @@ VBox {
 }
 
 .minimal-combo-box .arrow {
-  -fx-background-color: #888888;
+  -fx-background-color: -bp-muted;
   -fx-shape: "M 0 0 L 4 4 L 8 0 Z";
 }
 
 /* Memory bar styles */
 .memory-bar {
-  -fx-background-color: #3c3c3c;
+  -fx-background-color: -bp-control;
   -fx-background-radius: 3;
   -fx-border-radius: 3;
-  -fx-border-color: #555555;
+  -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
 }
 
@@ -176,33 +176,33 @@ VBox {
 
 /* Text field styles */
 .text-field {
-  -fx-prompt-text-fill: #888888;
-  -fx-text-fill: #cccccc;
-  -fx-background-color: #3c3c3c;
-  -fx-border-color: #555555;
+  -fx-prompt-text-fill: -bp-muted;
+  -fx-text-fill: -bp-text;
+  -fx-background-color: -bp-control;
+  -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
   -fx-padding: 2 4 2 4;
 }
 
 .text-field:focused {
-  -fx-border-color: #007acc;
-  -fx-background-color: #2d2d2d;
+  -fx-border-color: -bp-focus;
+  -fx-background-color: -bp-panel;
 }
 
 #geneSearchField {
-  -fx-prompt-text-fill: #888888;
+  -fx-prompt-text-fill: -bp-muted;
 }
 
 /* Sidebar label styles */
 .sidebar-label {
-  -fx-text-fill: #709076;
+  -fx-text-fill: -bp-muted;
   -fx-font-size: 11px;
 }
 
 /* Position box styles */
 .position-box {
-  -fx-background-color: #3c3c3c;
-  -fx-border-color: #555555;
+  -fx-background-color: -bp-control;
+  -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
   -fx-border-radius: 2;
   -fx-background-radius: 2;
@@ -224,7 +224,7 @@ VBox {
 .position-text-field {
   -fx-background-color: transparent;
   -fx-border-color: transparent;
-  -fx-text-fill: #cccccc;
+  -fx-text-fill: -bp-text;
   -fx-padding: 2 6 2 2;
   -fx-font-size: 12px;
 }
@@ -241,16 +241,16 @@ VBox {
 }
 
 .project-name-label {
-  -fx-text-fill: #c0c0c0;
+  -fx-text-fill: -bp-text;
   -fx-font-size: 12px;
   -fx-font-weight: bold;
   -fx-padding: 2 0 2 0;
 }
 
 .zoom-button {
-  -fx-background-color: #3c3c3c;
-  -fx-text-fill: #cccccc;
-  -fx-border-color: #555555;
+  -fx-background-color: -bp-control;
+  -fx-text-fill: -bp-text;
+  -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
   -fx-border-radius: 2;
   -fx-background-radius: 2;
@@ -268,7 +268,7 @@ VBox {
 
 .icon-button {
   -fx-background-color: transparent;
-  -fx-text-fill: #cccccc;
+  -fx-text-fill: -bp-text;
   -fx-border-color: transparent;
   -fx-border-width: 0;
   -fx-padding: 0;
@@ -285,22 +285,22 @@ VBox {
   -fx-background-radius: 2;
 }
 
-/* Dark mode checkbox for popups */
+/* Themed checkbox for popups / settings */
 .dark-checkbox {
-  -fx-text-fill: white;
+  -fx-text-fill: -bp-text;
 }
 
 .dark-checkbox .box {
-  -fx-background-color: #3c3c3c;
-  -fx-border-color: #666666;
+  -fx-background-color: -bp-control;
+  -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
   -fx-border-radius: 2;
   -fx-background-radius: 2;
 }
 
 .dark-checkbox:selected .box {
-  -fx-background-color: #3c3c3c;
-  -fx-border-color: #888888;
+  -fx-background-color: -bp-control;
+  -fx-border-color: -bp-muted;
 }
 
 .dark-checkbox .mark {
@@ -308,11 +308,11 @@ VBox {
 }
 
 .dark-checkbox:selected .mark {
-  -fx-background-color: white;
+  -fx-background-color: -bp-text;
 }
 
 .dark-checkbox:hover .box {
-  -fx-border-color: #888888;
+  -fx-border-color: -bp-muted;
 }
 /* =============================================================================
    VARIANT MANAGER SPECIFIC STYLES
@@ -320,11 +320,11 @@ VBox {
 
 /* Root pane background */
 .root-pane {
-    -fx-background-color: #2b2b2b;
+    -fx-background-color: -bp-panel;
 }
 
 .variant-manager-split {
-  -fx-background-color: #2b2b2b;
+  -fx-background-color: -bp-panel;
   -fx-padding: 0;
 }
 
@@ -354,25 +354,25 @@ VBox {
 }
 
 .tab-content-split > .split-pane-divider {
-  -fx-background-color: #3a3a3a;
+  -fx-background-color: -bp-control;
   -fx-padding: 0 0 1 0;
 }
 
 .root-pane .label {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 /* Filter panel */
 .filter-panel {
-    -fx-background-color: #2b2b2b;
-  -fx-border-color: #3c3c3c;
+    -fx-background-color: -bp-panel;
+  -fx-border-color: -bp-control;
   -fx-border-width: 1px;
   -fx-border-radius: 6px;
   -fx-background-radius: 6px;
 }
 
 .filter-panel .label {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 /* Panel titles and section headers */
@@ -383,13 +383,13 @@ VBox {
 }
 
 .section-header {
-    -fx-text-fill: #dddddd;
+    -fx-text-fill: -bp-text;
     -fx-font-weight: bold;
     -fx-font-size: 12px;
 }
 
 .subsection-label {
-    -fx-text-fill: #cccccc;
+    -fx-text-fill: -bp-text;
     -fx-font-size: 11px;
 }
 
@@ -400,64 +400,64 @@ VBox {
 
 /* Filter tabs */
 .filter-tabs .tab-pane {
-    -fx-background-color: #2b2b2b;
+    -fx-background-color: -bp-panel;
 }
 
 .filter-tabs .tab-pane .tab-header-area {
-    -fx-background-color: #3c3c3c;
+    -fx-background-color: -bp-control;
 }
 
 .filter-tabs .tab {
-    -fx-background-color: #3c3c3c;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-control;
+    -fx-text-fill: -bp-text;
 }
 
 .filter-tabs .tab:selected {
-    -fx-background-color: #2b2b2b;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-panel;
+    -fx-text-fill: -bp-text;
 }
 
 .filter-tabs .tab .tab-label {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 /* Results tabs */
 .results-tabs {
-    -fx-background-color: #1e1e1e;
+    -fx-background-color: -bp-surface;
 }
 
 .table-search-field {
-    -fx-prompt-text-fill: #888888;
+    -fx-prompt-text-fill: -bp-muted;
 }
 
 .results-tabs .tab {
-    -fx-background-color: #3c3c3c;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-control;
+    -fx-text-fill: -bp-text;
 }
 
 .results-tabs .tab:selected {
-    -fx-background-color: #1e1e1e;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-surface;
+    -fx-text-fill: -bp-text;
 }
 
 .results-tabs .tab .tab-label {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 /* Filter checkboxes */
 .filter-checkbox {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 .filter-checkbox .box {
-    -fx-background-color: #3c3c3c;
-    -fx-border-color: #999999;
+    -fx-background-color: -bp-control;
+    -fx-border-color: -bp-secondary;
     -fx-border-width: 1.5px;
 }
 
 .filter-checkbox:selected .box {
-    -fx-background-color: #007acc;
-    -fx-border-color: #007acc;
+    -fx-background-color: -bp-focus;
+    -fx-border-color: -bp-focus;
 }
 
 .filter-checkbox .mark {
@@ -470,17 +470,17 @@ VBox {
 
 /* Filter radio buttons */
 .filter-radio {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 .filter-radio .radio {
-    -fx-background-color: #3c3c3c;
-    -fx-border-color: #999999;
+    -fx-background-color: -bp-control;
+    -fx-border-color: -bp-secondary;
 }
 
 .filter-radio:selected .radio {
-    -fx-background-color: #007acc;
-    -fx-border-color: #007acc;
+    -fx-background-color: -bp-focus;
+    -fx-border-color: -bp-focus;
 }
 
 .filter-radio .dot {
@@ -489,45 +489,45 @@ VBox {
 
 /* Filter text fields */
 .filter-field {
-    -fx-background-color: #3c3c3c;
-    -fx-text-fill: white;
-    -fx-border-color: #555555;
+    -fx-background-color: -bp-control;
+    -fx-text-fill: -bp-text;
+    -fx-border-color: -bp-stroke;
     -fx-border-width: 1px;
   -fx-padding: 5 8 5 8;
-    -fx-prompt-text-fill: #888888;
+    -fx-prompt-text-fill: -bp-muted;
 }
 
 /* Sliders */
 .slider {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 .slider .track {
-    -fx-background-color: #4a4a4a;
+    -fx-background-color: -bp-stroke;
 }
 
 .slider .thumb {
-    -fx-background-color: #4db8ff;
+    -fx-background-color: -bp-focus;
 }
 
 .slider .thumb:hover {
-    -fx-background-color: #1a8eee;
+    -fx-background-color: -bp-accent;
 }
 
 .slider .axis {
-    -fx-tick-label-fill: #cccccc;
+    -fx-tick-label-fill: -bp-text;
 }
 
 .slider .axis .axis-tick-mark {
-    -fx-stroke: #888888;
+    -fx-stroke: -bp-muted;
 }
 
 .slider .axis .axis-minor-tick-mark {
-    -fx-stroke: #555555;
+    -fx-stroke: -bp-stroke;
 }
 
 .slider .axis Text {
-    -fx-fill: #cccccc;
+    -fx-fill: -bp-text;
 }
 
 /* Dual-thumb sample-share range (low slider sits on top with transparent track) */
@@ -565,7 +565,7 @@ VBox {
 
 /* Buttons */
 .primary-button {
-    -fx-background-color: #007acc;
+    -fx-background-color: -bp-focus;
     -fx-text-fill: white;
     -fx-cursor: hand;
     -fx-padding: 8 16 8 16;
@@ -577,77 +577,81 @@ VBox {
 }
 
 .secondary-button {
-    -fx-background-color: #4a4a4a;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-elevated;
+    -fx-text-fill: -bp-text;
     -fx-cursor: hand;
     -fx-padding: 8 16 8 16;
+    -fx-border-color: -bp-border;
+    -fx-border-width: 1;
 }
 
 .secondary-button:hover {
-    -fx-background-color: #5a5a5a;
+    -fx-background-color: -bp-control;
 }
 
 /* Variant tables */
 .table-container {
     -fx-background-color: #b9cddc;
-  -fx-padding: 8;
-  -fx-border-color: #3c3c3c;
-  -fx-border-width: 1px 0 0 0;
+    -fx-padding: 0;
+    -fx-border-width: 0;
 }
 
 .variant-table {
-    -fx-background-color: #1e1e1e;
-    -fx-control-inner-background: #1e1e1e;
-    -fx-table-cell-border-color: #3c3c3c;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-surface;
+    -fx-control-inner-background: -bp-surface;
+    -fx-table-cell-border-color: -bp-control;
+    -fx-text-fill: -bp-text;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-border-width: 0;
 }
 
 .variant-table .filler {
-    -fx-background-color: #1e1e1e;
+    -fx-background-color: -bp-surface;
 }
 
 .variant-table .column-header-background {
-    -fx-background-color: #2b2b2b;
+    -fx-background-color: -bp-panel;
 }
 
 .variant-table .column-header,
 .variant-table .column-header .label {
-    -fx-background-color: #2b2b2b;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-panel;
+    -fx-text-fill: -bp-text;
   -fx-font-weight: bold;
-    -fx-border-color: #3c3c3c;
+    -fx-border-color: -bp-control;
 }
 
 .variant-table .table-row-cell {
-    -fx-background-color: #1e1e1e;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-surface;
+    -fx-text-fill: -bp-text;
     -fx-border-color: transparent;
 }
 
 .variant-table .table-row-cell:odd {
-    -fx-background-color: #252526;
+    -fx-background-color: -bp-panel;
 }
 
 .variant-table .table-row-cell:selected {
-    -fx-background-color: #007acc;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-focus;
+    -fx-text-fill: #ffffff;
 }
 
 .variant-table .table-row-cell:hover {
-    -fx-background-color: #383838;
+    -fx-background-color: -bp-control;
 }
 
 .variant-table .table-cell {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
     -fx-border-color: transparent;
 }
 
 .variant-table .table-row-cell:selected .table-cell {
-    -fx-text-fill: white;
+    -fx-text-fill: #ffffff;
 }
 
 .variant-table .placeholder .label {
-    -fx-text-fill: #888888;
+    -fx-text-fill: -bp-muted;
 }
 
 /* Nested Gene → Variant → Sample: light-blue rows, distinct dark headers, dark body text.
@@ -668,13 +672,12 @@ VBox {
 
 .vn-sticky-headers {
     -fx-background-color: #b9cddc;
-    /* Outer inset matches .vn-thread-list; top gap uses shared 4px rhythm. */
-    -fx-padding: 4 8 0 8;
+    -fx-padding: 0;
 }
 
 .vn-pin-bar {
     -fx-background-color: #b9cddc;
-    -fx-padding: 4 8 0 8;
+    -fx-padding: 0;
 }
 
 .vn-node-pinned {
@@ -766,7 +769,7 @@ VBox {
     -fx-background-color: #b9cddc;
     -fx-control-inner-background: #b9cddc;
     -fx-background-insets: 0;
-    -fx-padding: 0 8 8 8;
+    -fx-padding: 0;
 }
 
 .vn-thread-list .list-cell {
@@ -924,7 +927,7 @@ VBox {
 
 .vn-node-gene-cancer {
     -fx-background-color: #f0d8c8;
-    -fx-border-color: #c85424;
+    -fx-border-color: #d16624;
 }
 
 .vn-node-variant {
@@ -1029,7 +1032,7 @@ VBox {
 
 .root-pane .vn-tier-badge,
 .vn-tier-badge {
-    -fx-background-color: #c85424;
+    -fx-background-color: #d16624;
     -fx-text-fill: #ffffff;
     -fx-padding: 1 5 1 5;
     -fx-background-radius: 3;
@@ -1082,55 +1085,55 @@ VBox {
 
 /* Sample list */
 .sample-list {
-    -fx-background-color: #1e1e1e;
-    -fx-control-inner-background: #1e1e1e;
+    -fx-background-color: -bp-surface;
+    -fx-control-inner-background: -bp-surface;
 }
 
 .sample-list .list-cell {
-    -fx-background-color: #1e1e1e;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-surface;
+    -fx-text-fill: -bp-text;
 }
 
 .sample-list .list-cell:odd {
-    -fx-background-color: #252526;
+    -fx-background-color: -bp-panel;
 }
 
 .sample-list .list-cell:selected {
-    -fx-background-color: #007acc;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-focus;
+    -fx-text-fill: #ffffff;
 }
 
 /* Control files table */
 .control-files-table {
-    -fx-background-color: #1e1e1e;
-    -fx-control-inner-background: #1e1e1e;
+    -fx-background-color: -bp-surface;
+    -fx-control-inner-background: -bp-surface;
 }
 
 .control-files-table .filler {
-    -fx-background-color: #1e1e1e;
+    -fx-background-color: -bp-surface;
 }
 
 .control-files-table .column-header-background {
-    -fx-background-color: #2b2b2b;
+    -fx-background-color: -bp-panel;
 }
 
 .control-files-table .column-header,
 .control-files-table .column-header .label {
-    -fx-background-color: #2b2b2b;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-panel;
+    -fx-text-fill: -bp-text;
 }
 
 .control-files-table .table-row-cell {
-    -fx-background-color: #1e1e1e;
-    -fx-text-fill: white;
+    -fx-background-color: -bp-surface;
+    -fx-text-fill: -bp-text;
 }
 
 .control-files-table .table-row-cell:odd {
-    -fx-background-color: #252526;
+    -fx-background-color: -bp-panel;
 }
 
 .control-files-table .table-cell {
-    -fx-text-fill: white;
+    -fx-text-fill: -bp-text;
 }
 
 /* =============================================================================
@@ -1138,20 +1141,20 @@ VBox {
    ============================================================================= */
 
 .agent-text-area {
-    -fx-control-inner-background: #252526;
-    -fx-text-fill: white;
-    -fx-prompt-text-fill: #6a6a6a;
-    -fx-border-color: #3c3c3c;
+    -fx-control-inner-background: -bp-panel;
+    -fx-text-fill: -bp-text;
+    -fx-prompt-text-fill: -bp-muted;
+    -fx-border-color: -bp-control;
     -fx-border-radius: 3;
     -fx-background-radius: 3;
 }
 
 .agent-text-area .content {
-    -fx-background-color: #252526;
+    -fx-background-color: -bp-panel;
 }
 
 .agent-text-area:focused {
-    -fx-border-color: #007acc;
+    -fx-border-color: -bp-focus;
 }
 
 /* =============================================================================
@@ -1177,7 +1180,7 @@ VBox {
 }
 
 .filter-scroll .scroll-bar .thumb {
-    -fx-background-color: #555555;
+    -fx-background-color: -bp-stroke;
     -fx-background-radius: 5;
 }
 
@@ -1288,7 +1291,7 @@ VBox {
 }
 
 .start-hub-scroll .scroll-bar .thumb {
-  -fx-background-color: #555555;
+  -fx-background-color: -bp-stroke;
   -fx-background-radius: 5;
 }
 

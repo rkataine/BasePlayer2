@@ -119,7 +119,7 @@ public class InfoPopup {
         closeBtn.setFocusTraversable(false);
         String closeBtnNormal =
                 "-fx-background-color: rgba(80,80,80,0.0);" +
-                "-fx-text-fill: #888888;"                   +
+                "-fx-text-fill: " + org.baseplayer.ui.theme.AppTheme.CHROME_DARK.mutedHex() + ";" +
                 "-fx-font-size: 14;"                        +
                 "-fx-padding: 0 5 1 5;"                     +
                 "-fx-background-radius: 4;"                 +

@@ -3,6 +3,7 @@ package org.baseplayer.controllers.commands;
 import org.baseplayer.MainApp;
 import org.baseplayer.components.SettingsDialog;
 import org.baseplayer.controllers.MainController;
+import org.baseplayer.controllers.MenuBarController;
 
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
@@ -35,10 +36,10 @@ public class ViewCommands {
   }
   
   /**
-   * Run garbage collection to free memory.
+   * Run garbage collection to free memory and refresh the memory bar.
    */
   public static void cleanMemory() {
-    System.gc();
+    MenuBarController.runGarbageCollectionAndRefresh();
   }
   
   /**

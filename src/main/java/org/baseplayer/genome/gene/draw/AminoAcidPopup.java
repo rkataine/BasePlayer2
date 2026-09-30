@@ -195,9 +195,9 @@ public class AminoAcidPopup {
                 .filter(p -> !p.isPathogenic() && !p.isBenign())
                 .sorted((a, b) -> Double.compare(b.pathogenicity(), a.pathogenicity())).toList();
 
-            if (!pathogenic.isEmpty()) addMissenseGroup(predList, pathogenic, Color.web("#f44336"));
-            if (!ambiguous.isEmpty())  addMissenseGroup(predList, ambiguous,  Color.web("#ff9800"));
-            if (!benign.isEmpty())     addMissenseGroup(predList, benign,     Color.web("#4caf50"));
+            if (!pathogenic.isEmpty()) addMissenseGroup(predList, pathogenic, org.baseplayer.utils.BaseColors.COLOR_T);
+            if (!ambiguous.isEmpty())  addMissenseGroup(predList, ambiguous,  org.baseplayer.utils.BaseColors.COLOR_G);
+            if (!benign.isEmpty())     addMissenseGroup(predList, benign,     org.baseplayer.utils.BaseColors.COLOR_A);
 
             if (predList.getChildren().size() > 4) {
               ScrollPane sp = new ScrollPane(predList);

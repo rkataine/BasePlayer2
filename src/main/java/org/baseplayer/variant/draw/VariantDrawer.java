@@ -8,6 +8,7 @@ import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VcfVariantType;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VisibleVariantIndex;
 
 import org.baseplayer.io.VcfManager;
@@ -46,21 +47,6 @@ public class VariantDrawer {
     private final VisibleVariantIndex visibleIndex;
     private final VariantDrawSeek drawSeek = new VariantDrawSeek();
     private final List<VariantHit> hitRegions = new ArrayList<>();
-
-    // Color scheme for different variant types
-    private static final Color COLOR_SNV = Color.web("#4A90E2");          // Blue
-    private static final Color COLOR_INSERTION = Color.web("#7ED321");     // Green
-    private static final Color COLOR_DELETION = Color.rgb(200, 100, 100);  // Muted red
-    private static final Color COLOR_MNV = Color.web("#BD10E0");           // Purple
-    private static final Color COLOR_COMPLEX = Color.web("#B8E986");       // Light green
-
-    // SV colors (match aggregate / VariantTypeVisuals)
-    private static final Color COLOR_SV_DELETION = Color.rgb(200, 100, 100);  // Muted red
-    private static final Color COLOR_SV_INVERSION = Color.web("#4488ff");     // Blue
-    private static final Color COLOR_SV_DUPLICATION = Color.web("#c0c0d0");   // Grayish white
-    private static final Color COLOR_SV_INSERTION = Color.web("#33cc66");     // Light green
-    private static final Color COLOR_SV_TRANSLOCATION = Color.web("#ffdd00"); // Yellow
-    private static final Color COLOR_SV_BREAKEND = Color.web("#c0c0c0");      // Light gray
 
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;
@@ -376,35 +362,7 @@ public class VariantDrawer {
     }
 
     private Color getVariantColor(VcfVariantType type) {
-        switch (type) {
-            case SNV:
-                return COLOR_SNV;
-            case INSERTION:
-                return COLOR_INSERTION;
-            case DELETION:
-                return COLOR_DELETION;
-            case MNV:
-                return COLOR_MNV;
-            case COMPLEX:
-                return COLOR_COMPLEX;
-
-            // SV colors
-            case SV_DELETION:
-                return COLOR_SV_DELETION;
-            case SV_INVERSION:
-                return COLOR_SV_INVERSION;
-            case SV_DUPLICATION:
-                return COLOR_SV_DUPLICATION;
-            case SV_INSERTION:
-                return COLOR_SV_INSERTION;
-            case SV_TRANSLOCATION:
-                return COLOR_SV_TRANSLOCATION;
-            case SV_BREAKEND:
-                return COLOR_SV_BREAKEND;
-
-            default:
-                return COLOR_COMPLEX;
-        }
+        return VariantTypeVisuals.color(type);
     }
 
     public void markIndexDirty() {

@@ -165,7 +165,7 @@ public class LoadingPopup {
             Node bar = progressBar.lookup(".bar");
             if (bar != null) {
                 bar.setStyle(
-                        "-fx-background-color: #2196F3;"
+                        "-fx-background-color: " + org.baseplayer.ui.theme.AppTheme.CHROME_DARK.focusHex() + ";"
                         + "-fx-background-radius: 2px;"
                         + "-fx-background-insets: 2px;");
             }

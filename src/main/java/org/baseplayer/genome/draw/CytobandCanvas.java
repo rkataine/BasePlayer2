@@ -11,7 +11,6 @@ import org.baseplayer.genome.Cytoband;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
-import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
@@ -203,7 +202,7 @@ public class CytobandCanvas extends Canvas {
   }
   
   public void draw() {
-    gc.setFill(DrawColors.BACKGROUND);
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, getWidth(), getHeight());
     
     String currentChrom = drawStack.getChromosome();

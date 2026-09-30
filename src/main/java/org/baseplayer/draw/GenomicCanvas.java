@@ -6,7 +6,6 @@ import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
-import org.baseplayer.utils.DrawColors;
 
 import javafx.animation.AnimationTimer;
 import javafx.animation.PauseTransition;
@@ -76,7 +75,14 @@ public class GenomicCanvas extends Canvas {
     reactiveCanvas.heightProperty().bind(parent.heightProperty());
     reactiveCanvas.widthProperty().bind(parent.widthProperty());
     parent.widthProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
-    reactiveCanvas.setOnMouseEntered(event -> { stackManager.setHoverStack(drawStack); update.set(!update.get()); });
+    reactiveCanvas.setOnMouseEntered(event -> {
+      DrawStack previous = stackManager.getHoverStack();
+      stackManager.setHoverStack(drawStack);
+      // Hover chrome lives on the reactive layer only — never trigger a full redraw.
+      if (previous != drawStack) {
+        refreshHoverChromeAll();
+      }
+    });
 
     setupParentHeightListener(parent);
    
@@ -93,11 +99,6 @@ public class GenomicCanvas extends Canvas {
   }
 
   protected void draw() {
-    
-    if (stackManager.getStacks().size() > 1 && drawStack.equals(stackManager.getHoverStack())) {
-      gc.setStroke(Color.WHITESMOKE);
-      gc.strokeRect(1, -1, getWidth()-2, getHeight()+2);
-    }
     
     drawMiddleLines();
   }
@@ -118,7 +119,7 @@ public class GenomicCanvas extends Canvas {
     if (rowTopY < 1.0) {
       return;
     }
-    gc.setStroke(DrawColors.BORDER);
+    gc.setStroke(org.baseplayer.ui.theme.AppTheme.chrome().border());
     gc.setLineWidth(1);
     double snappedY = Math.floor(rowTopY) + 0.5;
     gc.strokeLine(0, snappedY, getWidth(), snappedY);
@@ -401,7 +402,52 @@ public class GenomicCanvas extends Canvas {
     // Right-click pan release or no-op — trigger redraw to start BAM fetch
     update.set(!update.get());
   }
-  protected void clearReactive() { reactiveGc.clearRect(0, 0, getWidth(), getHeight()); }
+  protected void clearReactive() {
+    if (reactiveGc == null) return;
+    reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+    paintHoverBorderIfNeeded();
+  }
+
+  /**
+   * Multi-stack hover outline on the reactive layer only. Cleared/redrawn with
+   * {@link #clearReactive()} so main-canvas paints stay untouched.
+   */
+  protected void paintHoverBorderIfNeeded() {
+    if (reactiveGc == null) return;
+    if (stackManager.getStacks().size() <= 1) return;
+    if (!drawStack.equals(stackManager.getHoverStack())) return;
+    reactiveGc.setStroke(org.baseplayer.ui.theme.AppTheme.canvas().axisInk());
+    reactiveGc.setLineWidth(1);
+    reactiveGc.strokeRect(1, -1, getWidth() - 2, getHeight() + 2);
+  }
+
+  /**
+   * Refresh hover outline + any subclass reactive overlays without a full redraw.
+   */
+  protected void refreshHoverChrome() {
+    if (isReactiveOverlayReserved()) return;
+    clearReactive();
+    restoreReactiveOverlays();
+  }
+
+  /** Re-paint reactive overlays after {@link #clearReactive()} (hover, selection, etc.). */
+  protected void restoreReactiveOverlays() {}
+
+  private static void refreshHoverChromeAll() {
+    for (DrawStack stack : stackManager.getStacks()) {
+      refreshHoverChrome(stack.chromosomeCanvas);
+      refreshHoverChrome(stack.sampleAggregateCanvas);
+      refreshHoverChrome(stack.sampleTrackCanvas);
+      refreshHoverChrome(stack.featureAggregateCanvas);
+      refreshHoverChrome(stack.featureTrackCanvas);
+    }
+  }
+
+  private static void refreshHoverChrome(GenomicCanvas canvas) {
+    if (canvas != null) {
+      canvas.refreshHoverChrome();
+    }
+  }
 
   /**
    * Returns true while the user is dragging (or just released a drag).

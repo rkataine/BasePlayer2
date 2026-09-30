@@ -10,6 +10,7 @@ import org.baseplayer.io.APIs.GnomadApiClient;
 import org.baseplayer.io.APIs.GnomadApiClient.Variant;
 import org.baseplayer.io.APIs.GnomadApiClient.VariantData;
 import org.baseplayer.io.APIs.UcscApiClient.ConservationData;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.scene.paint.Color;
 
@@ -188,10 +189,10 @@ public final class GnomadDataParser {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private static Color getImpactColor(Variant v) {
-    if (v.isLoF()) return Color.rgb(220, 60, 60);
-    if (v.isMissense()) return Color.rgb(230, 160, 50);
-    if (v.isSynonymous()) return Color.rgb(80, 140, 220);
-    return Color.rgb(140, 140, 140);
+    if (v.isLoF()) return DrawColors.GNOMAD_LOF;
+    if (v.isMissense()) return DrawColors.GNOMAD_MISSENSE;
+    if (v.isSynonymous()) return DrawColors.GNOMAD_SYNONYMOUS;
+    return DrawColors.GNOMAD_OTHER;
   }
 
   private static String formatAlleleFrequency(double af) {
@@ -203,8 +204,8 @@ public final class GnomadDataParser {
 
   private static Color getFrequencyColor(double af) {
     if (af == 0) return Color.GRAY;
-    if (af < 0.0001) return Color.rgb(200, 50, 50);
-    if (af < 0.001) return Color.rgb(220, 140, 40);
+    if (af < 0.0001) return DrawColors.GNOMAD_LOF;
+    if (af < 0.001) return DrawColors.GNOMAD_MISSENSE;
     if (af < 0.01) return Color.rgb(180, 180, 80);
     if (af < 0.05) return Color.rgb(80, 180, 80);
     return Color.LIGHTGRAY;

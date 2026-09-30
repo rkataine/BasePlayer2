@@ -1,6 +1,7 @@
 package org.baseplayer.components.sidebars;
 
 import org.baseplayer.components.InfoPopup;
+import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.geometry.Pos;
 import javafx.scene.canvas.Canvas;
@@ -170,26 +171,26 @@ public abstract class SidebarBase {
                                          String title, int count,
                                          boolean drawActionButtons) {
     // Background
-    gc.setFill(Color.web("#2b2d30"));
+    gc.setFill(AppTheme.chrome().panel());
     gc.fillRect(0, 0, w, h);
 
     double titleX = 8;
     if (drawActionButtons) {
       // Settings (⚙) button — left
       double sy = (h - BTN_SIZE) / 2;
-      gc.setFill(Color.web("#3c3c3c"));
+      gc.setFill(AppTheme.chrome().control());
       gc.fillRoundRect(BTN_LEFT_X, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
-      gc.setStroke(Color.web("#555555"));
+      gc.setStroke(AppTheme.chrome().stroke());
       gc.strokeRoundRect(BTN_LEFT_X, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
       gc.setFont(Font.font("Segoe UI", 12));
-      gc.setFill(Color.web("#cccccc"));
+      gc.setFill(AppTheme.chrome().text());
       gc.fillText("⚙", BTN_LEFT_X + 3, sy + 13);
       titleX = BTN_LEFT_X + BTN_SIZE + 6;
     }
 
     // Title (+ count)
     gc.setFont(HEADER_FONT);
-    gc.setFill(Color.web("#999999"));
+    gc.setFill(AppTheme.chrome().secondary());
     String label = count > 0 ? title + " (" + count + ")" : title;
     gc.fillText(label, titleX, h / 2 + 4);
 
@@ -197,12 +198,12 @@ public abstract class SidebarBase {
       // Add (+) button — right
       double sy = (h - BTN_SIZE) / 2;
       double px = w - BTN_SIZE - 4;
-      gc.setFill(Color.web("#3c3c3c"));
+      gc.setFill(AppTheme.chrome().control());
       gc.fillRoundRect(px, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
-      gc.setStroke(Color.web("#555555"));
+      gc.setStroke(AppTheme.chrome().stroke());
       gc.strokeRoundRect(px, sy, BTN_SIZE, BTN_SIZE, BTN_RADIUS, BTN_RADIUS);
       gc.setFont(Font.font("Segoe UI", 14));
-      gc.setFill(Color.web("#cccccc"));
+      gc.setFill(AppTheme.chrome().text());
       gc.fillText("+", px + 4, sy + 14);
     }
   }

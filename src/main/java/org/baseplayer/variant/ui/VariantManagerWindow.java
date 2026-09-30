@@ -124,6 +124,22 @@ public class VariantManagerWindow {
         return currentStage != null && currentStage.isShowing();
     }
 
+    /** Re-apply theme stylesheets when the main app toggles light/dark mode. */
+    public static void refreshTheme() {
+        if (currentStage == null || currentStage.getScene() == null) {
+            return;
+        }
+        org.baseplayer.ui.theme.AppTheme.setDark(MainApp.darkMode);
+        javafx.scene.Scene scene = currentStage.getScene();
+        scene.getStylesheets().clear();
+        if (MainApp.darkMode) {
+            scene.getStylesheets().add(MainApp.getResource("theme-dark.css").toExternalForm());
+        } else {
+            scene.getStylesheets().add(MainApp.getResource("theme-light.css").toExternalForm());
+        }
+        scene.getStylesheets().add(MainApp.getResource("application.css").toExternalForm());
+    }
+
     public static boolean shouldShowToolbarButton() {
         if (!VcfManager.getInstance().hasLoadedVcf()) {
             return false;

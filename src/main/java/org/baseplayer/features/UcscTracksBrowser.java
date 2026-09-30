@@ -11,6 +11,7 @@ import org.baseplayer.MainApp;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.APIs.UcscApiClient;
 import org.baseplayer.io.UcscTrackInfo;
+import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -59,9 +60,10 @@ public class UcscTracksBrowser {
     dialog.setWidth(700);
     dialog.setHeight(600);
     
+    var chrome = AppTheme.chrome();
     VBox root = new VBox(12);
     root.setPadding(new Insets(16));
-    root.setStyle("-fx-background-color: #2b2b2b;");
+    root.setStyle("-fx-background-color: " + chrome.panelHex() + ";");
     
     // Header with title and refresh button
     HBox headerBox = new HBox(12);
@@ -73,7 +75,8 @@ public class UcscTracksBrowser {
     HBox.setHgrow(title, Priority.ALWAYS);
     
     refreshBtn = new Button("⟳ Refresh");
-    refreshBtn.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-font-size: 11px;");
+    refreshBtn.setStyle("-fx-background-color: " + chrome.focusHex()
+        + "; -fx-text-fill: white; -fx-font-size: 11px;");
     refreshBtn.setOnAction(e -> refreshTracks());
     
     headerBox.getChildren().addAll(title, refreshBtn);
@@ -81,7 +84,9 @@ public class UcscTracksBrowser {
     // Search box
     searchField = new TextField();
     searchField.setPromptText("Search tracks...");
-    searchField.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: #cccccc; -fx-prompt-text-fill: #888888;");
+    searchField.setStyle("-fx-background-color: " + chrome.controlHex()
+        + "; -fx-text-fill: " + chrome.textHex()
+        + "; -fx-prompt-text-fill: " + chrome.mutedHex() + ";");
     searchField.textProperty().addListener((obs, oldVal, newVal) -> filterTracks(newVal));
     
     // Loading indicator
@@ -91,7 +96,7 @@ public class UcscTracksBrowser {
     
     // Status label
     statusLabel = new Label("Loading tracks from UCSC...");
-    statusLabel.setStyle("-fx-text-fill: #888888;");
+    statusLabel.setStyle("-fx-text-fill: " + chrome.mutedHex() + ";");
     
     // Content area (scrollable)
     contentBox = new VBox(8);
@@ -99,7 +104,8 @@ public class UcscTracksBrowser {
     
     ScrollPane scrollPane = new ScrollPane(contentBox);
     scrollPane.setFitToWidth(true);
-    scrollPane.setStyle("-fx-background: #2b2b2b; -fx-background-color: #2b2b2b;");
+    scrollPane.setStyle("-fx-background: " + chrome.panelHex()
+        + "; -fx-background-color: " + chrome.panelHex() + ";");
     scrollPane.setFocusTraversable(false); // Prevent scroll jumping on button clicks
     VBox.setVgrow(scrollPane, Priority.ALWAYS);
     
@@ -108,7 +114,8 @@ public class UcscTracksBrowser {
     buttonBox.setAlignment(Pos.CENTER_RIGHT);
     
     Button closeBtn = new Button("Close");
-    closeBtn.setStyle("-fx-background-color: #555555; -fx-text-fill: #cccccc;");
+    closeBtn.setStyle("-fx-background-color: " + chrome.strokeHex()
+        + "; -fx-text-fill: " + chrome.textHex() + ";");
     closeBtn.setOnAction(e -> dialog.close());
     buttonBox.getChildren().add(closeBtn);
     
@@ -138,7 +145,7 @@ public class UcscTracksBrowser {
     loadingIndicator.setVisible(true);
     refreshBtn.setDisable(true);
     statusLabel.setText("Loading tracks from UCSC...");
-    statusLabel.setStyle("-fx-text-fill: #888888;");
+    statusLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + ";");
     
     CompletableFuture<List<UcscTrackInfo>> future;
     
@@ -156,7 +163,7 @@ public class UcscTracksBrowser {
       
       if (tracks.isEmpty()) {
         statusLabel.setText("Failed to load tracks. Check network connection.");
-        statusLabel.setStyle("-fx-text-fill: #ff6b6b;");
+        statusLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().dangerHex() + ";");
         return;
       }
       
@@ -166,7 +173,7 @@ public class UcscTracksBrowser {
       
       String cacheStatus = forceRefresh ? " (refreshed)" : "";
       statusLabel.setText(String.format("Loaded %d tracks%s", allTracks.size(), cacheStatus));
-      statusLabel.setStyle("-fx-text-fill: #4CAF50;");
+      statusLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().successHex() + ";");
       
       // Group tracks
       tracksByGroup = allTracks.stream()
@@ -196,7 +203,7 @@ public class UcscTracksBrowser {
     
     if (filtered.isEmpty()) {
       Label noResults = new Label("No tracks found matching \"" + query + "\"");
-      noResults.setStyle("-fx-text-fill: #888888;");
+      noResults.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + ";");
       contentBox.getChildren().add(noResults);
       return;
     }
@@ -234,34 +241,36 @@ public class UcscTracksBrowser {
   }
   
   private HBox createTrackRow(UcscTrackInfo track) {
+    var chrome = AppTheme.chrome();
     HBox row = new HBox(8);
     row.setAlignment(Pos.CENTER_LEFT);
     row.setPadding(new Insets(4));
-    row.setStyle("-fx-background-color: #2b2b2b; -fx-background-radius: 4;");
+    row.setStyle("-fx-background-color: " + chrome.panelHex() + "; -fx-background-radius: 4;");
     
     // Track info
     VBox info = new VBox(2);
     
     Label nameLabel = new Label(track.shortLabel());
     nameLabel.setFont(Font.font("Segoe UI", 11));
-    nameLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-weight: bold;");
+    nameLabel.setStyle("-fx-text-fill: " + chrome.textHex() + "; -fx-font-weight: bold;");
     
     Label descLabel = new Label(track.longLabel());
     descLabel.setFont(Font.font("Segoe UI", 9));
-    descLabel.setStyle("-fx-text-fill: #888888;");
+    descLabel.setStyle("-fx-text-fill: " + chrome.mutedHex() + ";");
     descLabel.setWrapText(true);
     descLabel.setMaxWidth(450);
     
     Label typeLabel = new Label(track.getTypeLabel());
     typeLabel.setFont(Font.font("Segoe UI", 8));
-    typeLabel.setStyle("-fx-text-fill: #666666;");
+    typeLabel.setStyle("-fx-text-fill: " + chrome.textMutedHex() + ";");
     
     info.getChildren().addAll(nameLabel, descLabel, typeLabel);
     HBox.setHgrow(info, Priority.ALWAYS);
     
     // Add button
     Button addBtn = new Button("Add");
-    addBtn.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-font-size: 10px;");
+    addBtn.setStyle("-fx-background-color: " + chrome.focusHex()
+        + "; -fx-text-fill: white; -fx-font-size: 10px;");
     addBtn.setFocusTraversable(false); // Prevent focus change from scrolling
     addBtn.setOnAction(e -> {
       e.consume(); // Consume event to prevent propagation
@@ -271,8 +280,8 @@ public class UcscTracksBrowser {
     row.getChildren().addAll(info, addBtn);
     
     // Hover effect - use a simple opacity change to avoid layout shifts
-    final String defaultStyle = "-fx-background-color: #2b2b2b; -fx-background-radius: 4;";
-    final String hoverStyle = "-fx-background-color: #3c3c3c; -fx-background-radius: 4;";
+    final String defaultStyle = "-fx-background-color: " + chrome.panelHex() + "; -fx-background-radius: 4;";
+    final String hoverStyle = "-fx-background-color: " + chrome.controlHex() + "; -fx-background-radius: 4;";
     row.setOnMouseEntered(e -> {
       if (row.getStyle().equals(defaultStyle)) {
         row.setStyle(hoverStyle);
@@ -298,7 +307,8 @@ public class UcscTracksBrowser {
       
       // Update button to show added
       addBtn.setText("✓ Added");
-      addBtn.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-size: 10px;");
+      addBtn.setStyle("-fx-background-color: " + AppTheme.chrome().successHex()
+          + "; -fx-text-fill: white; -fx-font-size: 10px;");
       addBtn.setDisable(true);
     }
   }

@@ -18,7 +18,6 @@ import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.Transcript;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
-import org.baseplayer.utils.DrawColors;
 import org.baseplayer.utils.StackingAlgorithm;
 
 import javafx.scene.Cursor;
@@ -235,7 +234,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
     selectedGeneId = null;
     selectedTranscriptId = null;
     if (reactiveGc != null) {
-      reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+      clearReactive();
     }
   }
 
@@ -330,7 +329,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
   }
 
   private void drawReactive() {
-    reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+    clearReactive();
 
     DrawGene.GeneHitBox selectedHit = findSelectedGeneHitBox();
     if (selectedHit != null) {
@@ -349,6 +348,14 @@ public class ChromosomeCanvas extends GenomicCanvas {
         drawGeneHitHighlight(hitBox, Color.WHITE);
         break;
       }
+    }
+  }
+
+  @Override
+  protected void restoreReactiveOverlays() {
+    if (hoveredGene != null || hoveredAminoAcid != null
+        || (selectedGeneId != null && genePopup.isShowing())) {
+      drawReactive();
     }
   }
 
@@ -434,13 +441,13 @@ public class ChromosomeCanvas extends GenomicCanvas {
 
   @Override
   public void draw() {
-    gc.setFill(DrawColors.BACKGROUND);
+    gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, getWidth(), getHeight());
     
     hoveredGene = null;
     hoveredAminoAcid = null;
     if (!isDragging()) {
-      reactiveGc.clearRect(0, 0, getWidth(), getHeight());
+      clearReactive();
     }
    
     drawGenes();

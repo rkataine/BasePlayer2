@@ -4,6 +4,7 @@ import org.baseplayer.draw.DrawStack;
 
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 
@@ -26,11 +27,13 @@ public class PositionIndicator {
    * @param height Canvas height
    */
   public static void draw(GraphicsContext gc, DrawStack drawStack, double width, double height) {
-    gc.setFill(Color.rgb(30, 30, 30));
+    var canvas = AppTheme.canvas();
+    gc.setFill(canvas.trackBackground());
     gc.fillRect(0, height - 25, width, 25);
     
-    gc.setFill(Color.GREY);
-    gc.setStroke(Color.GREY);
+    Color ink = canvas.axisInk();
+    gc.setFill(ink);
+    gc.setStroke(ink);
     gc.setLineWidth(1);
     gc.setFont(AppFonts.getMonoFont(10));
     

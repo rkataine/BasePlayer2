@@ -12,6 +12,7 @@ import org.baseplayer.project.ProjectDocument;
 import org.baseplayer.project.ProjectSerializer;
 import org.baseplayer.project.ProjectService;
 import org.baseplayer.project.ProjectSessionState;
+import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -178,9 +179,10 @@ public class FileCommands {
     dialog.setTitle("Unsaved project");
     dialog.setResizable(false);
 
+    var chrome = AppTheme.chrome();
     VBox root = new VBox(12);
     root.setPadding(new Insets(20));
-    root.setStyle("-fx-background-color: #2b2b2b;");
+    root.setStyle("-fx-background-color: " + chrome.panelHex() + ";");
 
     Label title = new Label("Save changes to \"" + session.getName() + "\"?");
     title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #ffffff;");
@@ -188,20 +190,22 @@ public class FileCommands {
     title.setMaxWidth(360);
 
     Label detail = new Label("Your project has unsaved changes.");
-    detail.setStyle("-fx-font-size: 12px; -fx-text-fill: #cccccc;");
+    detail.setStyle("-fx-font-size: 12px; -fx-text-fill: " + chrome.textHex() + ";");
     detail.setWrapText(true);
     detail.setMaxWidth(360);
 
     Button saveBtn = new Button("Save");
     saveBtn.setDefaultButton(true);
-    saveBtn.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-cursor: hand;");
+    saveBtn.setStyle("-fx-background-color: " + chrome.focusHex()
+        + "; -fx-text-fill: white; -fx-cursor: hand;");
     saveBtn.setOnAction(e -> {
       choice.set("save");
       dialog.close();
     });
 
     Button discardBtn = new Button("Don't save");
-    discardBtn.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: #cccccc; -fx-cursor: hand;");
+    discardBtn.setStyle("-fx-background-color: " + chrome.controlHex()
+        + "; -fx-text-fill: " + chrome.textHex() + "; -fx-cursor: hand;");
     discardBtn.setOnAction(e -> {
       choice.set("discard");
       dialog.close();
@@ -209,7 +213,8 @@ public class FileCommands {
 
     Button cancelBtn = new Button("Cancel");
     cancelBtn.setCancelButton(true);
-    cancelBtn.setStyle("-fx-background-color: #3c3c3c; -fx-text-fill: #cccccc; -fx-cursor: hand;");
+    cancelBtn.setStyle("-fx-background-color: " + chrome.controlHex()
+        + "; -fx-text-fill: " + chrome.textHex() + "; -fx-cursor: hand;");
     cancelBtn.setOnAction(e -> {
       choice.set("cancel");
       dialog.close();
@@ -272,10 +277,10 @@ public class FileCommands {
     wait.setTitle("Saving");
     wait.setResizable(false);
     Label waitLabel = new Label("Saving project…");
-    waitLabel.setStyle("-fx-text-fill: #cccccc;");
+    waitLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + ";");
     VBox waitRoot = new VBox(waitLabel);
     waitRoot.setPadding(new Insets(24));
-    waitRoot.setStyle("-fx-background-color: #2b2b2b;");
+    waitRoot.setStyle("-fx-background-color: " + AppTheme.chrome().panelHex() + ";");
     wait.setScene(new Scene(waitRoot));
 
     Path savePath = target;
@@ -364,9 +369,10 @@ public class FileCommands {
     dialog.setTitle("Session");
     dialog.setResizable(false);
 
+    var chrome = AppTheme.chrome();
     VBox root = new VBox(12);
     root.setPadding(new Insets(20));
-    root.setStyle("-fx-background-color: #2b2b2b;");
+    root.setStyle("-fx-background-color: " + chrome.panelHex() + ";");
 
     Label title = new Label(header != null ? header : "Error");
     title.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #ffffff;");
@@ -374,13 +380,14 @@ public class FileCommands {
     title.setMaxWidth(360);
 
     Label body = new Label(detail != null ? detail : "");
-    body.setStyle("-fx-font-size: 12px; -fx-text-fill: #cccccc;");
+    body.setStyle("-fx-font-size: 12px; -fx-text-fill: " + chrome.textHex() + ";");
     body.setWrapText(true);
     body.setMaxWidth(360);
 
     Button ok = new Button("OK");
     ok.setDefaultButton(true);
-    ok.setStyle("-fx-background-color: #0078d4; -fx-text-fill: white; -fx-cursor: hand;");
+    ok.setStyle("-fx-background-color: " + chrome.focusHex()
+        + "; -fx-text-fill: white; -fx-cursor: hand;");
     ok.setOnAction(e -> dialog.close());
 
     HBox buttons = new HBox(ok);

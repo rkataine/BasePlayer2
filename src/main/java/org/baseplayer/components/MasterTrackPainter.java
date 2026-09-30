@@ -200,7 +200,7 @@ public class MasterTrackPainter {
 
     if (!sampleRegistry.getDisplayedTrackIndices().isEmpty() && masterTrackHeight > 1) {
       // Inside the band (y == height is clipped); separates aggregate from track body.
-      gc.setStroke(DrawColors.BORDER);
+      gc.setStroke(org.baseplayer.ui.theme.AppTheme.chrome().border());
       gc.setLineWidth(1.0);
       double y = Math.floor(masterTrackHeight) - 0.5;
       gc.strokeLine(0, y, canvasWidth, y);
@@ -870,17 +870,24 @@ public class MasterTrackPainter {
     // Left scale
     double scaleX = 3;
     double scaleW = 28;
-    gc.setFill(Color.rgb(20, 20, 28, 0.55));
+    var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
+    var canvas = org.baseplayer.ui.theme.AppTheme.canvas();
+    Color scaleBg = Color.color(
+        chrome.elevated().getRed(),
+        chrome.elevated().getGreen(),
+        chrome.elevated().getBlue(),
+        org.baseplayer.ui.theme.AppTheme.isDark() ? 0.55 : 0.92);
+    gc.setFill(scaleBg);
     gc.fillRoundRect(scaleX - 1, top - 1, scaleW + 2, h + 2, 4, 4);
 
     gc.setFont(AppFonts.getFont("Segoe UI", 10));
-    gc.setFill(Color.web("#f0f0f4"));
+    gc.setFill(canvas.axisInk());
     gc.setTextBaseline(javafx.geometry.VPos.TOP);
     gc.fillText(String.valueOf(Math.max(1, maxCount)), scaleX + 3, top + 1);
     gc.setTextBaseline(javafx.geometry.VPos.BOTTOM);
     gc.fillText("0", scaleX + 3, top + h - 1);
 
-    gc.setStroke(Color.web("#d0d0d8"));
+    gc.setStroke(chrome.stroke());
     gc.setLineWidth(1.0);
     double axisX = scaleX + scaleW - 4;
     gc.strokeLine(axisX, top + 1, axisX, top + h - 1);
@@ -923,12 +930,12 @@ public class MasterTrackPainter {
       gc.setFill(Color.color(typeColor.getRed(), typeColor.getGreen(), typeColor.getBlue(), alpha));
       gc.fillRoundRect(legendX, legendY, swatchW, swatchH, 2, 2);
       if (!enabled) {
-        gc.setStroke(Color.web("#888"));
+        gc.setStroke(chrome.muted());
         gc.setLineWidth(1.2);
         gc.strokeLine(legendX + 1, legendY + swatchH - 1, legendX + swatchW - 1, legendY + 1);
       }
 
-      gc.setFill(enabled ? Color.web("#f2f2f6") : Color.web("#888890"));
+      gc.setFill(enabled ? canvas.axisInk() : chrome.muted());
       gc.fillText(label, legendX + swatchW + 4, legendY - 1);
 
       legendHits.add(new LegendHit(legendX - 2, legendY - 2, itemW + 4, swatchH + 4, type));

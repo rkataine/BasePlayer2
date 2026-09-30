@@ -5,8 +5,6 @@ import javafx.scene.canvas.Canvas;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
 
-import org.baseplayer.utils.DrawColors;
-
 public abstract class AggregateBandCanvas extends GenomicCanvas {
 
   private final DoubleProperty bandHeight;
@@ -51,7 +49,7 @@ public abstract class AggregateBandCanvas extends GenomicCanvas {
 
   @Override
   public void draw() {
-    getGraphicsContext2D().setFill(DrawColors.BACKGROUND);
+    getGraphicsContext2D().setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     getGraphicsContext2D().fillRect(0, 0, getWidth() + 1, getHeight() + 1);
     drawBand();
     super.draw();
