@@ -6,13 +6,17 @@ import javafx.scene.paint.LinearGradient;
 import javafx.scene.paint.Stop;
 
 /**
- * Centralized color constants for all drawing operations.
+ * Centralized color constants for genomic data drawing.
+ *
+ * <p>UI chrome / canvas <em>surface</em> colors are moving to
+ * {@link org.baseplayer.ui.theme.AppTheme}. Keep base/read/variant glyph colors
+ * here so they stay visible on both dark and light canvas backgrounds.
  */
 public final class DrawColors {
 
   private DrawColors() {} // Utility class
 
-  // ── UI theme colors ──
+  // ── UI / canvas surface (prefer AppTheme.chrome() / canvas() for new code) ──
   public static Color lineColor = new Color(0.5, 0.8, 0.8, 0.5);  // Mutable: changed by dark mode toggle
   public static final Color BACKGROUND = Color.web("#1e1e1e");       // Editor background
   public static final Color SIDEBAR = Color.web("#252526");          // Sidebar background

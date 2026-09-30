@@ -13,7 +13,6 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
@@ -286,34 +285,8 @@ public class SettingsDialog {
     }
   }
 
-  /** Apply dark-mode styling to combo boxes for visibility. */
+  /** Apply themed styling to combo boxes for visibility. */
   private static <T> void styleComboBox(ComboBox<T> comboBox) {
-    comboBox.setStyle(
-        "-fx-background-color: #333333;"
-            + "-fx-control-inner-background: #333333;"
-            + "-fx-text-fill: #dddddd;"
-            + "-fx-prompt-text-fill: #bbbbbb;"
-            + "-fx-mark-color: #dddddd;");
-    
-    // Set dark-themed cells for dropdown items
-    comboBox.setButtonCell(createDarkComboCell());
-    comboBox.setCellFactory(listView -> createDarkComboCell());
-  }
-
-  /** Create a dark-themed list cell for combo box items. */
-  private static <T> ListCell<T> createDarkComboCell() {
-    return new ListCell<>() {
-      @Override
-      protected void updateItem(T item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty || item == null) {
-          setText(null);
-          setStyle("-fx-text-fill: #dddddd;");
-          return;
-        }
-        setText(item.toString());
-        setStyle("-fx-text-fill: #dddddd;");
-      }
-    };
+    org.baseplayer.ui.controls.AppComboBox.style(comboBox);
   }
 }

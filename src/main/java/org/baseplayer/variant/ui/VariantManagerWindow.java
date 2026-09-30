@@ -54,6 +54,7 @@ public class VariantManagerWindow {
             Scene scene = new Scene(root, 1050, 700);
 
             // Apply the same theme and styles as the main application
+            org.baseplayer.ui.theme.AppTheme.setDark(MainApp.darkMode);
             if (MainApp.darkMode) {
                 scene.getStylesheets().add(MainApp.getResource("theme-dark.css").toExternalForm());
             } else {

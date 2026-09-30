@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.URL;
 
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.utils.DrawColors;
 import org.baseplayer.io.VcfManager;
 
@@ -144,14 +145,15 @@ public class MainApp extends Application {
      * Apply the current theme and application styles to the scene.
      */
     private static void applyTheme() {
+        AppTheme.setDark(darkMode);
         scene.getStylesheets().clear();
-        // Load theme first (defines CSS variables)
+        // Load theme first (defines CSS looked-up colors)
         if (darkMode) {
             scene.getStylesheets().add(getResource("theme-dark.css").toExternalForm());
         } else {
             scene.getStylesheets().add(getResource("theme-light.css").toExternalForm());
         }
-        // Then load application styles that use those variables
+        // Then load application styles that use those tokens
         scene.getStylesheets().add(getResource("application.css").toExternalForm());
     }
     
@@ -161,10 +163,8 @@ public class MainApp extends Application {
     public static void setDarkMode() {
         darkMode = !darkMode;
         applyTheme();
-        // Update draw colors based on theme
-        DrawColors.lineColor = darkMode 
-            ? new Color(0.3, 0.6, 0.6, 0.5) 
-            : new Color(0.5, 0.8, 0.8, 0.5);
+        // Canvas zoom-line tint follows canvas palette (painters still mostly dark).
+        DrawColors.lineColor = AppTheme.canvas().zoomLine();
         org.baseplayer.project.ProjectSessionState.get().markDirty();
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }

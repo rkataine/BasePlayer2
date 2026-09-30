@@ -13,6 +13,7 @@ import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.ui.controls.AppComboBox;
 import org.baseplayer.variant.VariantFilter;
 
 import javafx.beans.value.ChangeListener;
@@ -329,8 +330,7 @@ public class SampleComparisonPanel {
     nameLabel.setMaxWidth(Double.MAX_VALUE);
     HBox.setHgrow(nameLabel, Priority.ALWAYS);
 
-    ComboBox<String> roleBox = new ComboBox<>();
-    roleBox.getItems().addAll(
+    ComboBox<String> roleBox = AppComboBox.create(
         "Ignore",
         "Must be present",
         "Must be absent",

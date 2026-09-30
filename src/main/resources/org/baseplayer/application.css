@@ -29,13 +29,13 @@
 .flat-combo-box .list-cell {
   -fx-padding: 4px;
   padding: 4px;
-  -fx-text-fill: #cccccc;
+  -fx-text-fill: -bp-text;
 }
 
 .flat-combo-box {
-  -fx-background-color: #3c3c3c;
-  background-color: #3c3c3c;
-  -fx-border-color: #3c3c3c;
+  -fx-background-color: -bp-control;
+  background-color: -bp-control;
+  -fx-border-color: -bp-border;
   -fx-border-width: 1;
   -fx-padding: 1;
   padding: 1;
@@ -46,7 +46,53 @@
 }
 
 .flat-combo-box .arrow {
-  -fx-background-color: #cccccc;
+  -fx-background-color: -bp-text;
+}
+
+/* Shared panel ComboBox (AppComboBox) — closed control + popup list. */
+.app-combo-box {
+  -fx-background-color: -bp-control;
+  -fx-border-color: -bp-border;
+  -fx-border-width: 1;
+  -fx-padding: 1;
+}
+
+.app-combo-box .list-cell {
+  -fx-padding: 4px 8px;
+  -fx-text-fill: -bp-text;
+  -fx-background-color: transparent;
+}
+
+.app-combo-box .arrow-button {
+  -fx-background-color: transparent;
+}
+
+.app-combo-box .arrow {
+  -fx-background-color: -bp-text;
+}
+
+.app-combo-box:hover {
+  -fx-border-color: -bp-accent;
+}
+
+.combo-box-popup .list-view {
+  -fx-background-color: -bp-control;
+  -fx-control-inner-background: -bp-control;
+  -fx-background-insets: 0;
+  -fx-padding: 0;
+}
+
+.combo-box-popup .list-view .list-cell {
+  -fx-text-fill: -bp-text;
+  -fx-background-color: -bp-control;
+  -fx-padding: 4px 8px;
+}
+
+.combo-box-popup .list-view .list-cell:filled:hover,
+.combo-box-popup .list-view .list-cell:filled:selected,
+.combo-box-popup .list-view .list-cell:filled:selected:focused {
+  -fx-background-color: -bp-accent;
+  -fx-text-fill: #ffffff;
 }
 
 /* Anchor pane backgrounds for different panels */

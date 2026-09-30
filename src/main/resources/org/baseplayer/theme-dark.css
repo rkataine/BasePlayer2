@@ -1,9 +1,10 @@
 /* =============================================================================
    BasePlayer 2 - Dark Theme
-   JavaFX compatible styles (no CSS variables)
+   Looked-up -bp-* colors must stay in sync with AppTheme.CHROME_DARK / CANVAS_DARK.
    ============================================================================= */
 
 .root {
+    /* JavaFX Modena looked-ups */
     -fx-base: #1e1e1e;
     -fx-background: #1e1e1e;
     -fx-control-inner-background: #3c3c3c;
@@ -14,6 +15,15 @@
     -fx-selection-bar: #094771;
     -fx-selection-bar-non-focused: #37373d;
     -fx-text-fill: #cccccc;
-    -fx-text-background-color: #1e1e1e;
-}
+    /* Modena uses this for text ON backgrounds (list cells, etc.) — must be light in dark theme. */
+    -fx-text-background-color: #cccccc;
 
+    /* BasePlayer chrome tokens (= AppTheme.CHROME_DARK) */
+    -bp-surface: #1e1e1e;
+    -bp-panel: #252526;
+    -bp-control: #3c3c3c;
+    -bp-text: #cccccc;
+    -bp-text-muted: #bbbbbb;
+    -bp-border: #3c3c3c;
+    -bp-accent: #0e639c;
+}
