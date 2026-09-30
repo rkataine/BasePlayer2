@@ -41,7 +41,7 @@ import com.google.gson.GsonBuilder;
  */
 public final class VariantCacheStore {
 
-  public static final int SCHEMA_VERSION = 2;
+  public static final int SCHEMA_VERSION = 3;
   private static final int MAGIC = 0x42505631; // "BPV1"
   private static final String META_FILE = "meta.json";
   private static final String CHROM_SUFFIX = ".bpv.zst";
@@ -461,6 +461,13 @@ public final class VariantCacheStore {
       writeNullableString(out, ann.codonChange());
       out.writeInt(ann.codonNumber());
       out.writeBoolean(ann.isCancerGene());
+      List<String> genes = ann.overlappingGenes();
+      out.writeInt(genes != null ? genes.size() : 0);
+      if (genes != null) {
+        for (String g : genes) {
+          writeNullableString(out, g);
+        }
+      }
     }
   }
 
@@ -512,10 +519,18 @@ public final class VariantCacheStore {
       String codonChange = readNullableString(in);
       int codonNumber = in.readInt();
       boolean isCancerGene = in.readBoolean();
+      int geneCount = in.readInt();
+      List<String> overlappingGenes = new ArrayList<>(Math.max(0, geneCount));
+      for (int i = 0; i < geneCount; i++) {
+        String g = readNullableString(in);
+        if (g != null && !g.isBlank()) {
+          overlappingGenes.add(g);
+        }
+      }
       CosmicCensusEntry cosmic = CosmicGenes.getEntry(geneName);
       node.annotation = new VariantAnnotation(
           chrom, position, effect, geneName, transcriptId,
-          aaChange, codonChange, codonNumber, isCancerGene, cosmic);
+          aaChange, codonChange, codonNumber, isCancerGene, cosmic, overlappingGenes);
     }
 
     return node;

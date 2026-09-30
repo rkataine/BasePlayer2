@@ -305,9 +305,22 @@ public class LoadingPopup {
             return;
         }
         watchWindows();
-        Window top = findTopWindow();
+
+        // Hide with the app when another OS window is focused — JavaFX Popup can
+        // otherwise sit above every desktop window on Linux.
+        if (!isAppInForeground()) {
+            if (popup.isShowing()) {
+                popup.hide();
+            }
+            return;
+        }
+
+        Window top = findTopFocusedStage();
         if (top == null) {
             top = usableOwner(ownerHint);
+        }
+        if (top == null) {
+            top = findAnyUsableStage();
         }
         if (top == null) {
             popup.hide();
@@ -324,6 +337,7 @@ public class LoadingPopup {
             popup.hide();
         }
         popup.show(top, x, y);
+        watchWindow(popup);
     }
 
     private void cancel() {
@@ -338,35 +352,73 @@ public class LoadingPopup {
 
     private void watchWindows() {
         for (Window window : Window.getWindows()) {
-            window.focusedProperty().removeListener(focusListener);
-            window.focusedProperty().addListener(focusListener);
-            if (window instanceof Stage) {
-                Stage stage = (Stage) window;
-                stage.iconifiedProperty().removeListener(focusListener);
-                stage.iconifiedProperty().addListener(focusListener);
-                stage.xProperty().removeListener(boundsListener);
-                stage.yProperty().removeListener(boundsListener);
-                stage.widthProperty().removeListener(boundsListener);
-                stage.heightProperty().removeListener(boundsListener);
-                stage.xProperty().addListener(boundsListener);
-                stage.yProperty().addListener(boundsListener);
-                stage.widthProperty().addListener(boundsListener);
-                stage.heightProperty().addListener(boundsListener);
-            }
+            watchWindow(window);
         }
     }
 
-    private static Window findTopWindow() {
+    private void watchWindow(Window window) {
+        if (window == null) {
+            return;
+        }
+        window.focusedProperty().removeListener(focusListener);
+        window.focusedProperty().addListener(focusListener);
+        if (window instanceof Stage) {
+            Stage stage = (Stage) window;
+            stage.iconifiedProperty().removeListener(focusListener);
+            stage.iconifiedProperty().addListener(focusListener);
+            stage.xProperty().removeListener(boundsListener);
+            stage.yProperty().removeListener(boundsListener);
+            stage.widthProperty().removeListener(boundsListener);
+            stage.heightProperty().removeListener(boundsListener);
+            stage.xProperty().addListener(boundsListener);
+            stage.yProperty().addListener(boundsListener);
+            stage.widthProperty().addListener(boundsListener);
+            stage.heightProperty().addListener(boundsListener);
+        }
+    }
+
+    /**
+     * True when any BasePlayer window (stage or this loading popup) holds focus.
+     * False when another application is in front.
+     */
+    private boolean isAppInForeground() {
         for (Window window : Window.getWindows()) {
-            Stage stage = asUsableStage(window);
-            if (stage == null) {
+            if (!window.isFocused()) {
                 continue;
             }
-            if (stage.isFocused()) {
+            if (window == popup) {
+                return true;
+            }
+            if (asUsableStage(window) != null) {
+                return true;
+            }
+            if (window instanceof javafx.stage.PopupWindow pw) {
+                Window owner = pw.getOwnerWindow();
+                if (owner == popup || asUsableStage(owner) != null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Window findTopFocusedStage() {
+        for (Window window : Window.getWindows()) {
+            Stage stage = asUsableStage(window);
+            if (stage != null && stage.isFocused()) {
                 return stage;
             }
         }
-        // Nothing focused (app in background) - hide unless caller supplied an owner.
+        return null;
+    }
+
+    private static Window findAnyUsableStage() {
+        for (Window window : Window.getWindows()) {
+            Stage stage = asUsableStage(window);
+            if (stage != null) {
+                return stage;
+            }
+        }
         return null;
     }
 

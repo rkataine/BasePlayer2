@@ -75,8 +75,13 @@ public class InitializationService {
     
     try (Stream<Path> files = Files.list(annotationDir)) {
       files.filter(f -> {
-        String name = f.toString();
-        return name.endsWith(".gff3.gz") || name.endsWith(".gff3") || name.endsWith(".gtf.gz");
+        String name = f.getFileName().toString().toLowerCase();
+        return name.endsWith(".gff3.gz")
+            || name.endsWith(".gff3")
+            || name.endsWith(".gff.gz")
+            || name.endsWith(".gff")
+            || name.endsWith(".gtf.gz")
+            || name.endsWith(".gtf");
       }).forEach(gff3Path -> {
         String filename = gff3Path.getFileName().toString();
         annotations.add(filename);

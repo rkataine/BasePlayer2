@@ -13,11 +13,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.Cytoband;
+import org.baseplayer.io.Settings;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.GeneLocation;
@@ -28,17 +30,25 @@ import org.baseplayer.genome.gene.Transcript;
  */
 public final class AnnotationLoader {
   
-  private static final int CACHE_VERSION = 7;  // Increment when format changes (noncoding representative transcript + merged exons)
+  // v8: invalidate caches that may contain duplicated genes from concurrent loads
+  private static final int CACHE_VERSION = 8;
   private static final int TRANSCRIPT_CACHE_VERSION = 2;  // Version for non-MANE transcript cache (added CDS bounds)
+  private static final Path FALLBACK_GENE_ANNOTATION =
+      Path.of("genomes/GRCh38/annotation/Homo_sapiens.GRCh38.115.chr.gff3.gz");
+  private static final Object GENE_LOAD_LOCK = new Object();
+  private static final AtomicInteger geneLoadGeneration = new AtomicInteger();
   
   private AnnotationLoader() {} // Utility class
   
   /**
-   * Load cytobands from bands.txt file.
+   * Load cytobands from bands.txt for the current genome (if present).
    */
   public static void loadCytobands() {
-    Path bandsFile = Path.of("genomes/GRCh38/bands.txt");
-    if (!Files.exists(bandsFile)) return;
+    AnnotationData.getCytobands().clear();
+    AnnotationData.setCytobandsLoaded(false);
+
+    Path bandsFile = resolveBandsFile();
+    if (bandsFile == null || !Files.exists(bandsFile)) return;
     
     try {
       List<String> lines = Files.readAllLines(bandsFile);
@@ -59,17 +69,38 @@ public final class AnnotationLoader {
       System.err.println("Failed to load cytobands: " + e.getMessage());
     }
   }
+
+  private static Path resolveBandsFile() {
+    String genome = Settings.get().getLastGenome();
+    if (genome != null && !genome.isBlank()) {
+      Path candidate = Path.of("genomes", genome, "bands.txt");
+      // Never fall back to another assembly's bands — wrong ideogram.
+      return Files.exists(candidate) ? candidate : null;
+    }
+    Path fallback = Path.of("genomes/GRCh38/bands.txt");
+    return Files.exists(fallback) ? fallback : null;
+  }
   
   /**
-   * Load genes in background thread.
+   * Load genes in background thread for the currently selected genome/annotation.
+   * Concurrent calls are serialized; a newer request supersedes an older one.
    */
   public static void loadGenesBackground() {
+    final int generation = geneLoadGeneration.incrementAndGet();
     AnnotationData.setGenesLoading(true);
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
     
     Thread loadThread = new Thread(() -> {
-      // Load genes first (priority - enables immediate display)
-      loadGenes();
+      synchronized (GENE_LOAD_LOCK) {
+        if (generation != geneLoadGeneration.get()) {
+          return; // superseded by a newer load request
+        }
+        loadGenes();
+      }
+
+      if (generation != geneLoadGeneration.get()) {
+        return;
+      }
       
       javafx.application.Platform.runLater(() -> {
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -80,14 +111,28 @@ public final class AnnotationLoader {
       loadNonManeTranscripts();
     });
     loadThread.setDaemon(true);
+    loadThread.setName("gene-annotation-load");
     loadThread.start();
   }
   
   /**
-   * Load genes from GFF3 file or cache.
+   * Load genes from the selected annotation file (or GRCh38 fallback) / cache.
+   * Must be called under {@link #GENE_LOAD_LOCK} (or from a single thread).
+   * Builds into local maps and publishes atomically to avoid CME with the UI.
    */
   public static void loadGenes() {
-    Path gff3File = Path.of("genomes/GRCh38/annotation/Homo_sapiens.GRCh38.115.chr.gff3.gz");
+    AnnotationData.setGenesLoaded(false);
+    AnnotationData.setGenesLoading(true);
+
+    Path gff3File = resolveGeneAnnotationFile();
+    if (gff3File == null || !Files.exists(gff3File)) {
+      System.err.println("Gene annotation file not found"
+          + (gff3File != null ? ": " + gff3File : " (no genome/annotation selected)"));
+      AnnotationData.clearGenes();
+      AnnotationData.setGenesLoading(false);
+      return;
+    }
+
     Path cacheFile = Path.of(gff3File.toString() + ".cache");
     Path txCacheFile = Path.of(gff3File.toString() + ".transcripts.cache");
     
@@ -97,6 +142,7 @@ public final class AnnotationLoader {
         if (!Files.exists(gff3File) || 
             Files.getLastModifiedTime(cacheFile).compareTo(Files.getLastModifiedTime(gff3File)) >= 0) {
           if (loadGenesFromCache(cacheFile)) {
+            AnnotationData.setGenesLoading(false);
             return;
           }
         }
@@ -105,16 +151,13 @@ public final class AnnotationLoader {
       }
     }
     
-    if (!Files.exists(gff3File)) return;
-    
     // Temporary structures for parsing
     Map<String, GeneBuilder> geneBuilders = new HashMap<>();
     Map<String, TranscriptBuilder> transcriptBuilders = new HashMap<>();
     Map<String, List<long[]>> exonsByTranscript = new HashMap<>();
     Map<String, long[]> cdsBoundsByTranscript = new HashMap<>();  // CDS start/end per transcript
     
-    try (BufferedReader reader = new BufferedReader(
-           new InputStreamReader(new GZIPInputStream(Files.newInputStream(gff3File))))) {
+    try (BufferedReader reader = openAnnotationReader(gff3File)) {
       String line;
       while ((line = reader.readLine()) != null) {
         if (line.startsWith("#")) continue;
@@ -129,9 +172,9 @@ public final class AnnotationLoader {
         String strand = parts[6];
         String attributes = parts[8];
         
-        if (type.contains("gene")) {
+        if (type.equals("gene") || type.endsWith("_gene") || type.equals("pseudogene")) {
           parseGene(chrom, start, end, strand, attributes, geneBuilders);
-        } else if (type.equals("mRNA") || type.contains("transcript") || type.contains("RNA")) {
+        } else if (type.equals("mRNA") || type.contains("transcript") || type.endsWith("RNA")) {
           parseTranscript(start, end, attributes, transcriptBuilders);
         } else if (type.equals("exon")) {
           parseExon(start, end, attributes, exonsByTranscript);
@@ -140,10 +183,10 @@ public final class AnnotationLoader {
         }
       }
       
-      // Build final gene objects
-      buildGenes(geneBuilders, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
-      
-      AnnotationData.setGenesLoaded(true);
+      GeneLoadSnapshot snapshot = buildGenes(
+          geneBuilders, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
+      AnnotationData.replaceGeneAnnotation(
+          snapshot.byChrom, snapshot.searchMap, snapshot.biotypeMap, snapshot.names);
       
       // Save to cache for faster subsequent loads
       saveGenesToCache(cacheFile);
@@ -152,8 +195,38 @@ public final class AnnotationLoader {
       saveNonManeTranscriptsToCache(txCacheFile, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
       
     } catch (IOException e) {
-      System.err.println("Failed to load genes: " + e.getMessage());
+      System.err.println("Failed to load genes from " + gff3File + ": " + e.getMessage());
+      AnnotationData.clearGenes();
+    } finally {
+      AnnotationData.setGenesLoading(false);
     }
+  }
+
+  /**
+   * Resolve {@code genomes/<genome>/annotation/<file>} from Settings.
+   * Falls back to the bundled GRCh38 annotation when nothing is selected.
+   */
+  static Path resolveGeneAnnotationFile() {
+    String genome = Settings.get().getLastGenome();
+    String annotation = Settings.get().getLastAnnotation();
+    if (genome != null && !genome.isBlank()
+        && annotation != null && !annotation.isBlank()) {
+      Path selected = Path.of("genomes", genome, "annotation", annotation);
+      if (Files.exists(selected)) {
+        return selected;
+      }
+      System.err.println("Selected annotation missing: " + selected);
+    }
+    return Files.exists(FALLBACK_GENE_ANNOTATION) ? FALLBACK_GENE_ANNOTATION : null;
+  }
+
+  private static BufferedReader openAnnotationReader(Path annotationFile) throws IOException {
+    String name = annotationFile.getFileName().toString().toLowerCase();
+    if (name.endsWith(".gz")) {
+      return new BufferedReader(new InputStreamReader(
+          new GZIPInputStream(Files.newInputStream(annotationFile)), StandardCharsets.UTF_8));
+    }
+    return Files.newBufferedReader(annotationFile, StandardCharsets.UTF_8);
   }
   
   private static void parseGene(String chrom, long start, long end, String strand, 
@@ -228,7 +301,7 @@ public final class AnnotationLoader {
     }
   }
   
-  private static void buildGenes(Map<String, GeneBuilder> geneBuilders,
+  private static GeneLoadSnapshot buildGenes(Map<String, GeneBuilder> geneBuilders,
                                   Map<String, TranscriptBuilder> transcriptBuilders,
                                   Map<String, List<long[]>> exonsByTranscript,
                                   Map<String, long[]> cdsBoundsByTranscript) {
@@ -283,8 +356,13 @@ public final class AnnotationLoader {
         }
       }
     }
+
+    Map<String, List<Gene>> byChrom = new HashMap<>();
+    Map<String, GeneLocation> searchMap = new HashMap<>();
+    Map<String, String> biotypeMap = new HashMap<>();
+    List<String> names = new ArrayList<>(geneBuilders.size());
     
-    // Create final Gene objects
+    // Create final Gene objects into local maps (not published yet)
     for (GeneBuilder gb : geneBuilders.values()) {
       // Properly merge overlapping exons from all transcripts
       List<long[]> mergedExons = mergeOverlappingExons(gb.exons);
@@ -294,26 +372,21 @@ public final class AnnotationLoader {
           gb.description, gb.transcripts, mergedExons
       );
       
-      AnnotationData.getGenesByChrom()
-          .computeIfAbsent(gb.chrom, k -> new ArrayList<>())
-          .add(gene);
-      
-      AnnotationData.getGeneSearchMap().put(gb.name.toLowerCase(), 
-          new GeneLocation(gb.chrom, gb.start, gb.end));
-      
+      byChrom.computeIfAbsent(gb.chrom, k -> new ArrayList<>()).add(gene);
+      searchMap.put(gb.name.toLowerCase(), new GeneLocation(gb.chrom, gb.start, gb.end));
       if (gb.biotype != null) {
-        AnnotationData.getGeneBiotypeMap().put(gb.name.toLowerCase(), gb.biotype);
+        biotypeMap.put(gb.name.toLowerCase(), gb.biotype);
       }
-      
-      AnnotationData.getGeneNames().add(gb.name);
+      names.add(gb.name);
     }
     
-    sortGenesByStart();
-    AnnotationData.getGeneNames().sort(String.CASE_INSENSITIVE_ORDER);
+    sortGenesByStart(byChrom);
+    names.sort(String.CASE_INSENSITIVE_ORDER);
+    return new GeneLoadSnapshot(byChrom, searchMap, biotypeMap, names);
   }
 
-  private static void sortGenesByStart() {
-    for (List<Gene> genes : AnnotationData.getGenesByChrom().values()) {
+  private static void sortGenesByStart(Map<String, List<Gene>> byChrom) {
+    for (List<Gene> genes : byChrom.values()) {
       genes.sort((a, b) -> {
         int cmp = Long.compare(a.start(), b.start());
         if (cmp != 0) return cmp;
@@ -323,6 +396,12 @@ public final class AnnotationLoader {
       });
     }
   }
+
+  private record GeneLoadSnapshot(
+      Map<String, List<Gene>> byChrom,
+      Map<String, GeneLocation> searchMap,
+      Map<String, String> biotypeMap,
+      List<String> names) {}
   
   /**
    * Merge overlapping exon intervals into non-overlapping sorted intervals.
@@ -437,6 +516,10 @@ public final class AnnotationLoader {
       }
       
       int geneCount = in.readInt();
+      Map<String, List<Gene>> byChrom = new HashMap<>();
+      Map<String, GeneLocation> searchMap = new HashMap<>();
+      Map<String, String> biotypeMap = new HashMap<>();
+      List<String> names = new ArrayList<>(geneCount);
       
       for (int i = 0; i < geneCount; i++) {
         String chrom = ChromosomeNames.strip(in.readUTF());
@@ -487,25 +570,22 @@ public final class AnnotationLoader {
         Gene gene = new Gene(chrom, start, end, name, id, strand, biotype, 
                              description, transcripts, exons);
         
-        AnnotationData.getGenesByChrom().computeIfAbsent(chrom, k -> new ArrayList<>()).add(gene);
-        AnnotationData.getGeneSearchMap().put(name.toLowerCase(), new GeneLocation(chrom, start, end));
+        byChrom.computeIfAbsent(chrom, k -> new ArrayList<>()).add(gene);
+        searchMap.put(name.toLowerCase(), new GeneLocation(chrom, start, end));
         if (biotype != null && !biotype.isEmpty()) {
-          AnnotationData.getGeneBiotypeMap().put(name.toLowerCase(), biotype);
+          biotypeMap.put(name.toLowerCase(), biotype);
         }
-        AnnotationData.getGeneNames().add(name);
+        names.add(name);
       }
       
-      AnnotationData.getGeneNames().sort(String.CASE_INSENSITIVE_ORDER);
-      AnnotationData.setGenesLoaded(true);
+      sortGenesByStart(byChrom);
+      names.sort(String.CASE_INSENSITIVE_ORDER);
+      AnnotationData.replaceGeneAnnotation(byChrom, searchMap, biotypeMap, names);
       
       return true;
       
     } catch (IOException e) {
       System.err.println("Failed to load gene cache: " + e.getMessage());
-      // Clear any partial data
-      AnnotationData.getGenesByChrom().clear();
-      AnnotationData.getGeneSearchMap().clear();
-      AnnotationData.getGeneNames().clear();
       return false;
     }
   }
@@ -574,7 +654,11 @@ public final class AnnotationLoader {
   public static void loadNonManeTranscripts() {
     if (AnnotationData.isNonManeTranscriptsLoaded()) return;
     
-    Path txCacheFile = Path.of("genomes/GRCh38/annotation/Homo_sapiens.GRCh38.115.chr.gff3.gz.transcripts.cache");
+    Path annotationFile = resolveGeneAnnotationFile();
+    if (annotationFile == null) {
+      return;
+    }
+    Path txCacheFile = Path.of(annotationFile.toString() + ".transcripts.cache");
     if (!Files.exists(txCacheFile)) return;
     
     try (DataInputStream in = new DataInputStream(

@@ -282,21 +282,70 @@ public class VariantNode {
 
     public boolean isHeterozygous(int trackIndex) {
         SampleCall call = getSampleCall(trackIndex);
-        if (call == null || call.gt == null) return false;
-        return isHetGt(call.gt);
+        return call != null && isHetGt(call.gt);
     }
 
     public boolean isHomozygousAlt(int trackIndex) {
         SampleCall call = getSampleCall(trackIndex);
-        if (call == null || call.gt == null) return false;
-        String[] a = call.gt.split("[/|]");
-        return a.length >= 2 && a[0].equals(alt) && a[1].equals(alt);
+        return call != null && isHomAltGt(call.gt, alt);
     }
 
-    /** GT uses allele bases (e.g. "G/A"); het = both alleles present and differ. */
+    /** True if this call is heterozygous for the node's allele. */
+    public boolean isHeterozygous(SampleCall call) {
+        return call != null && isHetGt(call.gt);
+    }
+
+    /** True if this call is homozygous ALT for the node's allele. */
+    public boolean isHomozygousAlt(SampleCall call) {
+        return call != null && isHomAltGt(call.gt, alt);
+    }
+
+    /**
+     * GT alleles differ and neither is missing. Works for allele-base ({@code G/A})
+     * and numeric ({@code 0/1}) forms. Missing/NA GT returns false.
+     */
     public static boolean isHetGt(String gt) {
-        String[] a = gt.split("[/|]");
-        return a.length >= 2 && !a[0].equals(".") && !a[1].equals(".") && !a[0].equals(a[1]);
+        String[] a = splitGtAlleles(gt);
+        if (a == null) {
+            return false;
+        }
+        return !a[0].equals(a[1]);
+    }
+
+    /**
+     * Both alleles are the ALT. Accepts allele-base ({@code A/A}) and numeric
+     * ({@code 1/1}, {@code 1|1}) forms. Missing/NA GT returns false.
+     */
+    public static boolean isHomAltGt(String gt, String alt) {
+        String[] a = splitGtAlleles(gt);
+        if (a == null) {
+            return false;
+        }
+        if (alt != null && a[0].equals(alt) && a[1].equals(alt)) {
+            return true;
+        }
+        // Numeric diploid ALT (single-alt sites: allele index 1).
+        return a[0].equals("1") && a[1].equals("1");
+    }
+
+    /** Diploid allele pair, or null if GT is missing / unusable for zygosity. */
+    private static String[] splitGtAlleles(String gt) {
+        if (gt == null || gt.isBlank()) {
+            return null;
+        }
+        String trimmed = gt.trim();
+        if ("NA".equalsIgnoreCase(trimmed) || ".".equals(trimmed) || "./.".equals(trimmed)
+                || ".|.".equals(trimmed)) {
+            return null;
+        }
+        String[] a = trimmed.split("[/|]");
+        if (a.length < 2) {
+            return null;
+        }
+        if (".".equals(a[0]) || ".".equals(a[1])) {
+            return null;
+        }
+        return a;
     }
 
     @Override

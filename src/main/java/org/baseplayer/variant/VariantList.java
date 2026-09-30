@@ -1,6 +1,7 @@
 package org.baseplayer.variant;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -69,6 +70,11 @@ public class VariantList {
      * and gene-click sample subsets. Not stored on annotation gene objects.
      */
     private Map<String, Set<Integer>> geneSampleIndex = Map.of();
+    /**
+     * Same content as {@link #geneSampleIndex}, split by variant type so SV gene-level
+     * comparison can require N samples with a DEL (not DUP/TRA) in a gene.
+     */
+    private Map<VcfVariantType, Map<String, Set<Integer>>> geneSampleIndexByType = Map.of();
     private String geneSampleIndexFilterKey;
 
     /**
@@ -136,11 +142,15 @@ public class VariantList {
             current = current.next;
         }
 
-        if (current != null && current.position == position &&
-            current.ref.equals(ref) && current.alt.equals(alt)) {
-            current.addSample(call);
-            invalidateSampleIndexes();
-            return current;
+        // Scan every allele at this position before inserting a duplicate node.
+        while (current != null && current.position == position) {
+            if (sameAllele(current.ref, ref) && sameAllele(current.alt, alt)) {
+                current.addSample(call);
+                invalidateSampleIndexes();
+                return current;
+            }
+            prev = current;
+            current = current.next;
         }
 
         VariantNode newNode = new VariantNode(position, ref, alt, type);
@@ -188,12 +198,22 @@ public class VariantList {
             return head;
         }
 
+        // Fast path: next sample for the allele we just touched (hotspot / multi-sample VCF).
+        if (cursor != null && cursor.position == position
+                && sameAllele(cursor.ref, ref) && sameAllele(cursor.alt, alt)) {
+            cursor.addSample(call);
+            invalidateSampleIndexes();
+            return cursor;
+        }
+
         VariantNode prev;
         VariantNode current;
-        if (cursor != null && cursor.position <= position) {
+        if (cursor != null && cursor.position < position) {
             prev = cursor;
             current = cursor.next;
         } else {
+            // cursor is null, past this position, or at this position for another allele —
+            // locate the position run from the head so we do not miss an earlier allele.
             prev = null;
             current = head;
         }
@@ -203,11 +223,14 @@ public class VariantList {
             current = current.next;
         }
 
-        if (current != null && current.position == position
-                && current.ref.equals(ref) && current.alt.equals(alt)) {
-            current.addSample(call);
-            invalidateSampleIndexes();
-            return current;
+        while (current != null && current.position == position) {
+            if (sameAllele(current.ref, ref) && sameAllele(current.alt, alt)) {
+                current.addSample(call);
+                invalidateSampleIndexes();
+                return current;
+            }
+            prev = current;
+            current = current.next;
         }
 
         VariantNode newNode = new VariantNode(position, ref, alt, type);
@@ -218,11 +241,17 @@ public class VariantList {
         } else {
             newNode.next = current;
             prev.next = newNode;
-            if (current == null) tail = newNode;
+            if (current == null) {
+                tail = newNode;
+            }
         }
         size++;
         invalidateSampleIndexes();
         return newNode;
+    }
+
+    private static boolean sameAllele(String a, String b) {
+        return a == null ? b == null : a.equals(b);
     }
 
     /**
@@ -280,9 +309,14 @@ public class VariantList {
         clearVisibleChain();
 
         Map<String, Set<Integer>> geneTracks = null;
+        Map<VcfVariantType, Set<String>> passingGenesByType = null;
         Map<VariantNode, Set<Integer>> clusterTracks = null;
         if (filter != null && filter.isGeneLevel()) {
             geneTracks = ensureGeneSampleIndex(filter);
+            VariantFilter svSlice = filter.getSvSlice() != null ? filter.getSvSlice() : filter;
+            if (svSlice.isGeneLevel()) {
+                passingGenesByType = computePassingGenesByType(svSlice);
+            }
         } else if (filter != null && filter.hasComparisonWindow()) {
             clusterTracks = ensureClusterSampleIndex(filter);
         }
@@ -290,7 +324,8 @@ public class VariantList {
         VariantNode prevVisible = null;
         VariantNode current = head;
         while (current != null) {
-            if (isDrawableUnderFilter(current, filter, geneTracks, clusterTracks)) {
+            if (isDrawableUnderFilter(
+                    current, filter, geneTracks, passingGenesByType, clusterTracks)) {
                 current.nextVisible = null;
                 current.prevVisible = prevVisible;
                 if (prevVisible == null) {
@@ -324,12 +359,13 @@ public class VariantList {
             return geneSampleIndex;
         }
         Map<String, Set<Integer>> index = new HashMap<>();
+        Map<VcfVariantType, Map<String, Set<Integer>>> byType = new EnumMap<>(VcfVariantType.class);
         VariantNode current = head;
         while (current != null) {
             if (filter == null || filter.passesBaseNodeLevel(current)) {
-                String gene = geneKeyOf(current);
-                if (gene != null) {
-                    Set<Integer> tracks = index.computeIfAbsent(gene, g -> new HashSet<>());
+                List<String> genes = geneKeysOf(current);
+                if (!genes.isEmpty()) {
+                    Set<Integer> trackHits = null;
                     for (VariantNode.SampleCall call : current.getSamples()) {
                         if (call == null) continue;
                         if (filter != null && !filter.passesSampleThresholds(current, call)) {
@@ -337,7 +373,22 @@ public class VariantList {
                         }
                         int trackIndex = call.getTrackIndex();
                         if (trackIndex >= 0) {
-                            tracks.add(trackIndex);
+                            if (trackHits == null) {
+                                trackHits = new HashSet<>();
+                            }
+                            trackHits.add(trackIndex);
+                        }
+                    }
+                    if (trackHits != null && !trackHits.isEmpty()) {
+                        Map<String, Set<Integer>> typeIndex = null;
+                        if (current.type != null) {
+                            typeIndex = byType.computeIfAbsent(current.type, t -> new HashMap<>());
+                        }
+                        for (String gene : genes) {
+                            index.computeIfAbsent(gene, g -> new HashSet<>()).addAll(trackHits);
+                            if (typeIndex != null) {
+                                typeIndex.computeIfAbsent(gene, g -> new HashSet<>()).addAll(trackHits);
+                            }
                         }
                     }
                 }
@@ -345,6 +396,7 @@ public class VariantList {
             current = current.next;
         }
         geneSampleIndex = index;
+        geneSampleIndexByType = byType;
         geneSampleIndexFilterKey = key;
         return index;
     }
@@ -361,7 +413,78 @@ public class VariantList {
 
     public void clearGeneSampleIndex() {
         geneSampleIndex = Map.of();
+        geneSampleIndexByType = Map.of();
         geneSampleIndexFilterKey = null;
+    }
+
+    /**
+     * Per-type gene → samples (populated by {@link #ensureGeneSampleIndex}).
+     * Keys are lower-case gene symbols.
+     */
+    public Map<VcfVariantType, Map<String, Set<Integer>>> getGeneSampleIndexByType() {
+        return geneSampleIndexByType != null ? geneSampleIndexByType : Map.of();
+    }
+
+    /**
+     * Genes (lower case) whose type-scoped sample set passes {@code filter}'s min/max shared
+     * samples and group comparison. Call {@link #ensureGeneSampleIndex} first.
+     */
+    public Map<VcfVariantType, Set<String>> computePassingGenesByType(VariantFilter filter) {
+        Map<VcfVariantType, Set<String>> out = new EnumMap<>(VcfVariantType.class);
+        if (filter == null || geneSampleIndexByType == null || geneSampleIndexByType.isEmpty()) {
+            return out;
+        }
+        for (Map.Entry<VcfVariantType, Map<String, Set<Integer>>> typeEntry
+                : geneSampleIndexByType.entrySet()) {
+            Set<String> passing = new HashSet<>();
+            for (Map.Entry<String, Set<Integer>> geneEntry : typeEntry.getValue().entrySet()) {
+                Set<Integer> tracks = geneEntry.getValue();
+                // Genotype roles need per-call GT; defer those to per-node checks.
+                boolean groupOk = filter.hasActiveGenotypeGroupComparison()
+                    || filter.passesGroupComparison(tracks);
+                if (filter.passesSharedSampleCount(tracks) && groupOk) {
+                    passing.add(geneEntry.getKey());
+                }
+            }
+            if (!passing.isEmpty()) {
+                out.put(typeEntry.getKey(), passing);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Annotated gene symbols on {@code node} that appear in {@code passingGenesLower}
+     * (preserves annotation casing / order).
+     */
+    public static List<String> displayGenesPassing(VariantNode node, Set<String> passingGenesLower) {
+        if (node == null || passingGenesLower == null || passingGenesLower.isEmpty()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        if (node.annotation != null
+                && node.annotation.overlappingGenes() != null
+                && !node.annotation.overlappingGenes().isEmpty()) {
+            for (String name : node.annotation.overlappingGenes()) {
+                if (name == null || name.isBlank()) {
+                    continue;
+                }
+                String key = name.trim().toLowerCase(Locale.ROOT);
+                if (passingGenesLower.contains(key) && seen.add(key)) {
+                    out.add(name.trim());
+                }
+            }
+            return out;
+        }
+        String display = node.annotation != null ? node.annotation.geneName() : null;
+        if (display != null && !display.isBlank()) {
+            String key = display.trim().toLowerCase(Locale.ROOT);
+            if (passingGenesLower.contains(key)) {
+                return List.of(display.trim());
+            }
+        }
+        return List.of();
     }
 
     /**
@@ -480,6 +603,49 @@ public class VariantList {
         return name.isEmpty() ? null : name.toLowerCase(Locale.ROOT);
     }
 
+    /** All gene keys to index for a node (overlapping census genes, else primary geneName). */
+    private static List<String> geneKeysOf(VariantNode node) {
+        if (node == null || node.annotation == null) {
+            return List.of();
+        }
+        List<String> overlapping = node.annotation.overlappingGenes();
+        if (overlapping != null && !overlapping.isEmpty()) {
+            List<String> keys = new ArrayList<>(overlapping.size());
+            for (String name : overlapping) {
+                if (name == null || name.isBlank()) {
+                    continue;
+                }
+                keys.add(name.trim().toLowerCase(Locale.ROOT));
+            }
+            return keys;
+        }
+        String single = geneKeyOf(node);
+        return single != null ? List.of(single) : List.of();
+    }
+
+    /** Union of sample tracks for all genes annotated on {@code node}. */
+    public static Set<Integer> aggregatedTracksForGenes(
+            VariantNode node, Map<String, Set<Integer>> geneSampleIndex) {
+        if (geneSampleIndex == null || geneSampleIndex.isEmpty()) {
+            return Set.of();
+        }
+        List<String> genes = geneKeysOf(node);
+        if (genes.isEmpty()) {
+            return Set.of();
+        }
+        if (genes.size() == 1) {
+            return geneSampleIndex.getOrDefault(genes.get(0), Set.of());
+        }
+        Set<Integer> union = new HashSet<>();
+        for (String gene : genes) {
+            Set<Integer> tracks = geneSampleIndex.get(gene);
+            if (tracks != null) {
+                union.addAll(tracks);
+            }
+        }
+        return union;
+    }
+
     /**
      * Index key ignores shared-sample / group / geneLevel / window flags so the same index
      * serves gene-level filtering and gene-click extraction.
@@ -573,6 +739,7 @@ public class VariantList {
             VariantNode node,
             VariantFilter filter,
             Map<String, Set<Integer>> geneSampleIndex,
+            Map<VcfVariantType, Set<String>> passingGenesByType,
             Map<VariantNode, Set<Integer>> clusterSampleIndex) {
         if (node == null || node.getSampleCount() == 0) {
             return false;
@@ -580,14 +747,34 @@ public class VariantList {
         if (filter == null) {
             return true;
         }
+
+        // SV gene-level: visible iff base filters pass and ≥1 annotated gene passes type-scoped rules
+        if (filter.isGeneLevel()
+                && VariantTypeVisuals.isStructural(node.type)
+                && passingGenesByType != null) {
+            if (!filter.passesBaseNodeLevel(node)) {
+                return false;
+            }
+            Set<String> passing = passingGenesByType.get(node.type);
+            if (displayGenesPassing(node, passing).isEmpty()) {
+                return false;
+            }
+            VariantFilter svFilter = filter.getSvSlice() != null ? filter.getSvSlice() : filter;
+            if (svFilter.hasActiveGenotypeGroupComparison()
+                    && !svFilter.passesGroupComparison(node)) {
+                return false;
+            }
+            for (VariantNode.SampleCall call : node.getSamples()) {
+                if (filter.passesSampleThresholds(node, call)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         Set<Integer> aggregatedTracks = null;
         if (filter.isGeneLevel() && geneSampleIndex != null) {
-            String gene = geneKeyOf(node);
-            if (gene != null) {
-                aggregatedTracks = geneSampleIndex.getOrDefault(gene, Set.of());
-            } else {
-                aggregatedTracks = Set.of();
-            }
+            aggregatedTracks = aggregatedTracksForGenes(node, geneSampleIndex);
         } else if (filter.hasComparisonWindow() && clusterSampleIndex != null) {
             aggregatedTracks = clusterSampleIndex.getOrDefault(node, Set.of());
         }
@@ -1020,13 +1207,23 @@ public class VariantList {
      * present on UI-visible nodes (skips unannotated nodes).
      */
     public java.util.Set<org.baseplayer.variant.annotation.VariantEffect> collectVariantEffects() {
+        return collectVariantEffects(null);
+    }
+
+    /**
+     * Collect annotation effects present on drawable variants.
+     * When {@code variantClass} is non-null, only nodes of that class contribute.
+     */
+    public java.util.Set<org.baseplayer.variant.annotation.VariantEffect> collectVariantEffects(
+            VariantTypeVisuals.VariantClass variantClass) {
         java.util.Set<org.baseplayer.variant.annotation.VariantEffect> effects =
             java.util.EnumSet.noneOf(org.baseplayer.variant.annotation.VariantEffect.class);
         VariantNode current = head;
         while (current != null) {
             if (current.hasUiVisibleSample()
                 && current.annotation != null
-                && current.annotation.effect() != null) {
+                && current.annotation.effect() != null
+                && (variantClass == null || variantClass.contains(current.type))) {
                 effects.add(current.annotation.effect());
             }
             current = current.next;

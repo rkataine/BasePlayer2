@@ -1,6 +1,5 @@
 package org.baseplayer.components.sidebars;
 
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.Track;
 import org.baseplayer.features.TrackSettingsPopup;
 import org.baseplayer.services.DrawStackManager;
@@ -59,7 +58,13 @@ public class FeatureTrackListPanel extends TrackListPanel {
 
   @Override
   protected void onAfterVisibleTrackRangeChanged() {
-    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
+    for (org.baseplayer.draw.DrawStack stack : stacks.getStacks()) {
+      if (stack.featureTrackCanvas != null) {
+        stack.featureTrackCanvas.draw();
+      }
+    }
+    draw();
   }
 
   @Override

@@ -29,7 +29,7 @@ public class VariantBusyOverlay {
 
     public record LockTargets(
         TabPane filterTabPane,
-        Button annotateAllChromosomesButton,
+        List<Button> annotateAllChromosomesButtons,
         Button reloadBannerButton
     ) {}
 
@@ -196,8 +196,12 @@ public class VariantBusyOverlay {
         if (lockTargets.filterTabPane() != null) {
             lockTargets.filterTabPane().setDisable(locked);
         }
-        if (lockTargets.annotateAllChromosomesButton() != null) {
-            lockTargets.annotateAllChromosomesButton().setDisable(locked);
+        if (lockTargets.annotateAllChromosomesButtons() != null) {
+            for (Button button : lockTargets.annotateAllChromosomesButtons()) {
+                if (button != null) {
+                    button.setDisable(locked);
+                }
+            }
         }
         if (lockTargets.reloadBannerButton() != null) {
             lockTargets.reloadBannerButton().setDisable(locked);

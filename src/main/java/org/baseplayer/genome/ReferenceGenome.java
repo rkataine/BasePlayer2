@@ -63,15 +63,29 @@ public class ReferenceGenome {
     }
     
     public List<String> getStandardChromosomeNames() {
-        List<String> standard = chromosomes.keySet().stream()
-            .filter(this::isStandardChromosome)
-            .sorted(this::compareChromosomes)
-            .toList();
-        // Fall back to all contigs if no standard chromosome names matched
-        if (standard.isEmpty()) {
-            return List.copyOf(chromosomes.keySet());
+        List<String> all = List.copyOf(chromosomes.keySet());
+        // Human assemblies: keep 1–22/X/Y/MT and drop alts/unplaced.
+        // Other assemblies (e.g. yeast chrI–chrXVI) must not use that filter —
+        // Roman "X" alone would otherwise match and hide every other contig.
+        if (looksLikeHumanPrimaryAssembly(all)) {
+            return all.stream()
+                .filter(this::isStandardChromosome)
+                .sorted(this::compareChromosomes)
+                .toList();
         }
-        return standard;
+        return all.stream().sorted(this::compareChromosomes).toList();
+    }
+
+    /** True when the FAI has Arabic autosomes 1–22 (human-style primary naming). */
+    private static boolean looksLikeHumanPrimaryAssembly(List<String> names) {
+        for (String name : names) {
+            String bare = ChromosomeNames.strip(name);
+            Integer n = BaseUtils.tryParseInt(bare);
+            if (n != null && n >= 1 && n <= 22) {
+                return true;
+            }
+        }
+        return false;
     }
     
     private int compareChromosomes(String chr1, String chr2) {
@@ -84,20 +98,61 @@ public class ReferenceGenome {
         if (num1 != null && num2 != null) {
             return num1.compareTo(num2);
         }
+
+        Integer roman1 = romanValue(name1);
+        Integer roman2 = romanValue(name2);
+        if (roman1 != null && roman2 != null) {
+            return roman1.compareTo(roman2);
+        }
+
         if (num1 != null) return -1;
         if (num2 != null) return 1;
+        if (roman1 != null) return -1;
+        if (roman2 != null) return 1;
         
         int order1 = getChromosomeOrder(name1);
         int order2 = getChromosomeOrder(name2);
-        return Integer.compare(order1, order2);
+        int cmp = Integer.compare(order1, order2);
+        if (cmp != 0) {
+            return cmp;
+        }
+        return name1.compareToIgnoreCase(name2);
+    }
+
+    /** Yeast-style Roman contig names (I–XVI). */
+    private static Integer romanValue(String bare) {
+        if (bare == null || bare.isEmpty()) {
+            return null;
+        }
+        return switch (bare.toUpperCase()) {
+            case "I" -> 1;
+            case "II" -> 2;
+            case "III" -> 3;
+            case "IV" -> 4;
+            case "V" -> 5;
+            case "VI" -> 6;
+            case "VII" -> 7;
+            case "VIII" -> 8;
+            case "IX" -> 9;
+            case "X" -> 10;
+            case "XI" -> 11;
+            case "XII" -> 12;
+            case "XIII" -> 13;
+            case "XIV" -> 14;
+            case "XV" -> 15;
+            case "XVI" -> 16;
+            default -> null;
+        };
     }
     
     private int getChromosomeOrder(String name) {
+        // After Arabic autosomes / Roman contigs; never use 0 for X (that
+        // incorrectly sorts yeast chrX before chrI when Roman parsing is skipped).
         return switch (name) {
-            case "X" -> 0;
-            case "Y" -> 1;
-            case "MT", "M" -> 2;
-            default -> 3;
+            case "X" -> 23;
+            case "Y" -> 24;
+            case "MT", "M" -> 25;
+            default -> 100;
         };
     }
 

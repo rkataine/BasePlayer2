@@ -214,19 +214,10 @@ public class MenuBarController {
     ensureChromosomeMenu();
     chromosomeLabelMenu.getItems().clear();
     var refGenomeService = ServiceRegistry.getInstance().getReferenceGenomeService();
+    // Already sorted by ReferenceGenome.getStandardChromosomeNames()
     java.util.List<String> chroms = refGenomeService.hasGenome()
-        ? new java.util.ArrayList<>(refGenomeService.getCurrentGenome().getStandardChromosomeNames())
-        : new java.util.ArrayList<>();
-    chroms.sort((c1, c2) -> {
-      Integer n1 = BaseUtils.tryParseInt(c1);
-      Integer n2 = BaseUtils.tryParseInt(c2);
-      if (n1 != null && n2 != null) return n1.compareTo(n2);
-      if (n1 != null) return -1;
-      if (n2 != null) return 1;
-      int order1 = getChromOrder(c1);
-      int order2 = getChromOrder(c2);
-      return Integer.compare(order1, order2);
-    });
+        ? refGenomeService.getCurrentGenome().getStandardChromosomeNames()
+        : java.util.List.of();
 
     for (String chrom : chroms) {
       String label = org.baseplayer.utils.ChromosomeNames.forDisplay(chrom);
@@ -776,15 +767,5 @@ public class MenuBarController {
   private void toggleTheme() {
     MainApp.setDarkMode();
     updateThemeIcon();
-  }
-
-  
-  private static int getChromOrder(String name) {
-    return switch (name) {
-      case "X" -> 0;
-      case "Y" -> 1;
-      case "MT", "M" -> 2;
-      default -> 3;
-    };
   }
 }

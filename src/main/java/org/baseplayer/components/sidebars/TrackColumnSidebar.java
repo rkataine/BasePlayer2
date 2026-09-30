@@ -209,7 +209,7 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       trackViewportRegistry.clearVisibleTrackRange();
       trackViewportRegistry.setMasterBandHeightPixels(
           TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
-      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      redrawAfterVisibleTrackRangeChange();
       return;
     }
 
@@ -221,8 +221,14 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     if (!trackViewportRegistry.isTrackRowHeightLocked() && viewportHeight > 0) {
       trackViewportRegistry.ensureTrackRowHeightFitsViewport(viewportHeight);
     }
-    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    redrawAfterVisibleTrackRangeChange();
   }
+
+  /**
+   * Redraw only the track body + this sidebar after a visible-range change.
+   * Must not redraw aggregate bands (they do not depend on the viewport window).
+   */
+  protected abstract void redrawAfterVisibleTrackRangeChange();
 
   protected final boolean isControlsExpanded() {
     return trackViewportRegistry.getMasterBandHeightPixels()

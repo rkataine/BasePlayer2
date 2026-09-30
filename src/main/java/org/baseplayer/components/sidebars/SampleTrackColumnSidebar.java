@@ -77,6 +77,16 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   @Override
+  protected void redrawAfterVisibleTrackRangeChange() {
+    for (DrawStack stack : stackManager.getStacks()) {
+      if (stack.sampleTrackCanvas != null) {
+        stack.sampleTrackCanvas.draw();
+      }
+    }
+    draw();
+  }
+
+  @Override
   protected double estimateTrackBodyViewportHeightPixels() {
     if (!stackManager.isEmpty() && stackManager.getFirst().sampleTrackCanvas != null) {
       double canvasHeight = stackManager.getFirst().sampleTrackCanvas.getHeight();

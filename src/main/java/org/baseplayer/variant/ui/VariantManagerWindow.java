@@ -149,6 +149,34 @@ public class VariantManagerWindow {
         return currentController;
     }
 
+    /**
+     * Tear down the singleton window so the next {@link #show} rebuilds FXML from scratch.
+     * Used by New Project / Open Project session wipe.
+     */
+    public static void closeAndDispose() {
+        MinimizedVariantManagerWindow.handleCleanup();
+        MinimizedVariantManagerWindow.clearMinimizedFlag();
+
+        VariantManagerController controller = currentController;
+        Stage stage = currentStage;
+        currentController = null;
+        currentStage = null;
+        // Allow visibility listeners to re-attach on the next Stage.
+        listenersAttached = false;
+
+        if (controller != null) {
+            controller.cleanup();
+        }
+        if (stage != null) {
+            stage.setOnCloseRequest(null);
+            if (stage.isShowing()) {
+                stage.hide();
+            }
+            stage.close();
+        }
+        MenuBarController.updateVariantManagerButtonVisibility();
+    }
+
     public static void openVariantManager(Window owner, VcfManager vcfManager, Runnable onClose) {
         if (vcfManager == null || owner == null) {
             return;

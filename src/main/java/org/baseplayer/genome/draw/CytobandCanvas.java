@@ -207,22 +207,82 @@ public class CytobandCanvas extends Canvas {
     gc.fillRect(0, 0, getWidth(), getHeight());
     
     String currentChrom = drawStack.getChromosome();
+    if (currentChrom == null || drawStack.chromSize <= 0) return;
+
     double cytoWidth = getWidth() - 2 * CYTO_PADDING_X;
+    if (cytoWidth <= 0) return;
+
+    gc.save();
+    gc.setFont(AppFonts.getUIFont(AppFonts.SIZE_SMALL));
+    gc.setTextAlign(TextAlignment.CENTER);
+
+    boolean drewBands = false;
+    if (AnnotationData.isCytobandsLoaded()) {
+      drewBands = drawCytobands(currentChrom, cytoWidth);
+    }
+    if (!drewBands) {
+      drawPlainChromosomeBar(cytoWidth);
+    }
+
+    // Draw current view indicator (only if zoomed in)
+    boolean isZoomedOut = drawStack.getViewLength() >= drawStack.chromSize * 0.95;
+    if (!isZoomedOut) {
+      gc.setStroke(Color.DODGERBLUE);
+      gc.setLineWidth(2);
+      double xpos = CYTO_PADDING_X + (drawStack.getViewStart() / drawStack.chromSize) * cytoWidth;
+      double width = Math.max(20, (drawStack.getViewLength() / drawStack.chromSize) * cytoWidth);
+      
+      Color indicatorColor = Color.rgb(30, 144, 255, 0.5);
+      LinearGradient indicatorGradient = getCytobandGradient(indicatorColor);
+      gc.setFill(indicatorGradient);
+      gc.fillRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
+      gc.strokeRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
+    }
     
-    if (!AnnotationData.isCytobandsLoaded() || currentChrom == null) return;
+    if (selectDragging) {
+      double selectMinX = Math.max(CYTO_PADDING_X, Math.min(selectStartX, selectEndX));
+      double selectMaxX = Math.min(getWidth() - CYTO_PADDING_X, Math.max(selectStartX, selectEndX));
+      double selectWidth = Math.max(2, selectMaxX - selectMinX);
+      
+      gc.setStroke(Color.ORANGE);
+      gc.setLineWidth(2);
+      Color selectColor = Color.rgb(255, 165, 0, 0.5);
+      LinearGradient selectGradient = getCytobandGradient(selectColor);
+      gc.setFill(selectGradient);
+      gc.fillRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
+      gc.strokeRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
+    }
     
+    GeneLocation highlightedGeneLocation = AnnotationData.getHighlightedGeneLocation();
+    if (highlightedGeneLocation != null && 
+        highlightedGeneLocation.chrom().equals(drawStack.getChromosome())) {
+      double geneStartX = CYTO_PADDING_X + (highlightedGeneLocation.start() / drawStack.chromSize) * cytoWidth;
+      double geneEndX = CYTO_PADDING_X + (highlightedGeneLocation.end() / drawStack.chromSize) * cytoWidth;
+      double geneWidth = Math.max(2, geneEndX - geneStartX);
+      
+      gc.setStroke(Color.YELLOW);
+      gc.setLineWidth(2);
+      gc.setFill(Color.rgb(255, 255, 0, 0.5));
+      gc.fillRect(geneStartX, CYTO_PADDING_Y, geneWidth, CYTO_HEIGHT);
+      gc.strokeRect(geneStartX, CYTO_PADDING_Y, geneWidth, CYTO_HEIGHT);
+    }
+
+    gc.restore();
+  }
+
+  /** Draw ideogram bands for {@code currentChrom}. Returns true if any band was drawn. */
+  private boolean drawCytobands(String currentChrom, double cytoWidth) {
     // Find centromere positions
     double centroStart = -1;
+    boolean anyBand = false;
     for (Cytoband band : AnnotationData.getCytobands()) {
       if (!band.chrom().equals(currentChrom)) continue;
+      anyBand = true;
       if (band.stain().equals("acen")) {
         if (centroStart < 0) centroStart = band.start();
       }
     }
-    
-    gc.save();
-    gc.setFont(AppFonts.getUIFont(AppFonts.SIZE_SMALL));
-    gc.setTextAlign(TextAlignment.CENTER);
+    if (!anyBand) return false;
     
     // Draw each band
     for (Cytoband band : AnnotationData.getCytobands()) {
@@ -276,49 +336,17 @@ public class CytobandCanvas extends Canvas {
         gc.fillText(band.name(), xStart + bandWidth / 2, CYTO_PADDING_Y + CYTO_HEIGHT / 2 + 3);
       }
     }
+    return true;
+  }
 
-    // Draw current view indicator (only if zoomed in)
-    boolean isZoomedOut = drawStack.getViewLength() >= drawStack.chromSize * 0.95;
-    if (!isZoomedOut) {
-      gc.setStroke(Color.DODGERBLUE);
-      gc.setLineWidth(2);
-      double xpos = CYTO_PADDING_X + (drawStack.getViewStart() / drawStack.chromSize) * cytoWidth;
-      double width = Math.max(20, (drawStack.getViewLength() / drawStack.chromSize) * cytoWidth);
-      
-      Color indicatorColor = Color.rgb(30, 144, 255, 0.5);
-      LinearGradient indicatorGradient = getCytobandGradient(indicatorColor);
-      gc.setFill(indicatorGradient);
-      gc.fillRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
-      gc.strokeRoundRect(xpos, CYTO_PADDING_Y, width, CYTO_HEIGHT, 10, 10);
-    }
-    
-    if (selectDragging) {
-      double selectMinX = Math.max(CYTO_PADDING_X, Math.min(selectStartX, selectEndX));
-      double selectMaxX = Math.min(getWidth() - CYTO_PADDING_X, Math.max(selectStartX, selectEndX));
-      double selectWidth = Math.max(2, selectMaxX - selectMinX);
-      
-      gc.setStroke(Color.ORANGE);
-      gc.setLineWidth(2);
-      Color selectColor = Color.rgb(255, 165, 0, 0.5);
-      LinearGradient selectGradient = getCytobandGradient(selectColor);
-      gc.setFill(selectGradient);
-      gc.fillRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
-      gc.strokeRoundRect(selectMinX, CYTO_PADDING_Y, selectWidth, CYTO_HEIGHT, 10, 10);
-    }
-    
-    GeneLocation highlightedGeneLocation = AnnotationData.getHighlightedGeneLocation();
-    if (highlightedGeneLocation != null && 
-        highlightedGeneLocation.chrom().equals(drawStack.getChromosome())) {
-      double geneStartX = CYTO_PADDING_X + (highlightedGeneLocation.start() / drawStack.chromSize) * cytoWidth;
-      double geneEndX = CYTO_PADDING_X + (highlightedGeneLocation.end() / drawStack.chromSize) * cytoWidth;
-      double geneWidth = Math.max(2, geneEndX - geneStartX);
-      
-      gc.setStroke(Color.YELLOW);
-      gc.setLineWidth(2);
-      gc.setFill(Color.rgb(255, 255, 0, 0.5));
-      gc.fillRect(geneStartX, CYTO_PADDING_Y, geneWidth, CYTO_HEIGHT);
-      gc.strokeRect(geneStartX, CYTO_PADDING_Y, geneWidth, CYTO_HEIGHT);
-    }
+  /** Plain chromosome bar used when no cytoband data is available for this chrom. */
+  private void drawPlainChromosomeBar(double cytoWidth) {
+    Color baseColor = Color.gray(0.78);
+    gc.setFill(getCytobandGradient(baseColor));
+    gc.fillRoundRect(CYTO_PADDING_X, CYTO_PADDING_Y, cytoWidth, CYTO_HEIGHT, CYTO_ROUND * 2, CYTO_ROUND * 2);
+    gc.setStroke(Color.gray(0.55));
+    gc.setLineWidth(1);
+    gc.strokeRoundRect(CYTO_PADDING_X, CYTO_PADDING_Y, cytoWidth, CYTO_HEIGHT, CYTO_ROUND * 2, CYTO_ROUND * 2);
   }
   
   private Color getCytobandColor(String stain) {

@@ -103,13 +103,7 @@
                                     <CheckBox fx:id="selectAllTypesCheckBox" styleClass="filter-checkbox"/>
                                     <Label text="Variant Types" styleClass="section-header"/>
                                 </HBox>
-                                <GridPane fx:id="variantTypesContainer" hgap="12" vgap="6">
-                                    <columnConstraints>
-                                        <ColumnConstraints prefWidth="110" fillWidth="true"/>
-                                        <ColumnConstraints prefWidth="110" fillWidth="true"/>
-                                        <ColumnConstraints prefWidth="110" fillWidth="true"/>
-                                    </columnConstraints>
-                                </GridPane>
+                                <GridPane fx:id="variantTypesContainer" hgap="12" vgap="6"/>
                             </VBox>
 
                             <VBox spacing="8" fillWidth="true">
@@ -205,14 +199,34 @@
                             <TableView fx:id="svAllTable" styleClass="variant-table"/>
                         </StackPane>
                     </Tab>
-                    <Tab fx:id="svGeneTab" text="Gene-overlapping">
+                    <Tab fx:id="svDelTab" text="DEL">
                         <StackPane styleClass="table-container">
-                            <TableView fx:id="svGeneTable" styleClass="variant-table"/>
+                            <TableView fx:id="svDelTable" styleClass="variant-table"/>
                         </StackPane>
                     </Tab>
-                    <Tab fx:id="svOtherTab" text="Other">
+                    <Tab fx:id="svDupTab" text="DUP">
                         <StackPane styleClass="table-container">
-                            <TableView fx:id="svOtherTable" styleClass="variant-table"/>
+                            <TableView fx:id="svDupTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
+                    <Tab fx:id="svInvTab" text="INV">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svInvTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
+                    <Tab fx:id="svTraTab" text="TRA">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svTraTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
+                    <Tab fx:id="svBndTab" text="BND">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svBndTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
+                    <Tab fx:id="svInsTab" text="INS">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svInsTable" styleClass="variant-table"/>
                         </StackPane>
                     </Tab>
                 </TabPane>
@@ -254,13 +268,13 @@
                                 <Region HBox.hgrow="ALWAYS"/>
                                 <Button fx:id="refreshComparisonGroupsButton" text="Refresh" styleClass="secondary-button" onAction="#handleRefreshComparisonGroups"/>
                             </HBox>
-                            <Label text="For each named group, choose whether the variant (or gene / window cluster) must be present, must be absent, or is ignored."
+                            <Label text="For each named group, choose whether the variant (or gene / window cluster) must be present, must be absent, must be heterozygous, must be homozygous ALT, or is ignored. Genotype roles require at least one matching call in the group (same as present)."
                                    styleClass="subsection-label" wrapText="true"/>
                             <VBox fx:id="comparisonGroupsContainer" spacing="6" VBox.vgrow="ALWAYS"/>
                             <Label fx:id="groupComparisonSummaryLabel" text="No group constraints" styleClass="value-label" wrapText="true"/>
                         </VBox>
                         <VBox spacing="6">
-                            <Label text="When multiple groups require present" styleClass="section-header"/>
+                            <Label text="When multiple groups require present / genotype" styleClass="section-header"/>
                             <HBox spacing="16" alignment="CENTER_LEFT">
                                 <RadioButton fx:id="presentMatchAllRadio" text="All of them (AND)" selected="true" styleClass="filter-radio"/>
                                 <RadioButton fx:id="presentMatchAnyRadio" text="Any of them (OR)" styleClass="filter-radio"/>

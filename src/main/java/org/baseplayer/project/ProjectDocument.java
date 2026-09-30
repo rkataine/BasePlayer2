@@ -44,7 +44,7 @@ public class ProjectDocument {
     public List<Double> columnDividers;
   }
 
-  /** Shared session-available types + nested point/SV filter slices (incl. comparison). */
+  /** Shared session-available types (observed in VCF/cache) + nested point/SV filter slices. */
   public static class VariantFilterSpec {
     public List<String> availableTypes = new ArrayList<>();
     public List<String> availableEffects = new ArrayList<>();

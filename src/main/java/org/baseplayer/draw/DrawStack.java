@@ -116,6 +116,17 @@ public class DrawStack {
     chromosomeDropdown.setMinWidth(CHROM_DROPDOWN_MIN_WIDTH);
     chromosomeDropdown.setPrefWidth(120);
     chromosomeDropdown.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+    chromosomeDropdown.setConverter(new javafx.util.StringConverter<>() {
+      @Override
+      public String toString(String bare) {
+        return bare == null ? "" : org.baseplayer.utils.ChromosomeNames.forDisplay(bare);
+      }
+
+      @Override
+      public String fromString(String text) {
+        return org.baseplayer.utils.ChromosomeNames.strip(text);
+      }
+    });
     
     chromosomeDropdown.setOnAction(e -> {
       String selected = chromosomeDropdown.getValue();
@@ -325,11 +336,12 @@ public class DrawStack {
   }
 
   private void updateChromosomeDropdownWidthByLongestContig() {
-    double widestTextWidth = measureTextWidth(chromosome != null ? chromosome : "1");
+    double widestTextWidth = measureTextWidth(
+        org.baseplayer.utils.ChromosomeNames.forDisplay(chromosome != null ? chromosome : "1"));
 
     for (String contig : chromosomeDropdown.getItems()) {
       if (contig == null || contig.isBlank()) continue;
-      double width = measureTextWidth(contig);
+      double width = measureTextWidth(org.baseplayer.utils.ChromosomeNames.forDisplay(contig));
       if (width > widestTextWidth) {
         widestTextWidth = width;
       }

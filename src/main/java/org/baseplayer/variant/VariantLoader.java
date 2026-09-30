@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.samples.Sample;
@@ -20,6 +21,8 @@ public class VariantLoader {
     private final List<String> unmappedSamples;
     private final int totalVcfSampleCount; // cached so reader can be released after construction
     private String detectedNormalSample = null;
+    /** Notified for every variant record type seen while streaming (before load filters). */
+    private Consumer<VcfVariantType> typeObserver;
     
     public VariantLoader(VcfReader vcfReader) {
         this.vcfReader = vcfReader;
@@ -27,6 +30,16 @@ public class VariantLoader {
         detectSomaticVcf();
         this.vcfSampleToTrackIndex = buildSampleMapping();
         this.totalVcfSampleCount = vcfReader.getSampleNames().size();
+    }
+
+    public void setTypeObserver(Consumer<VcfVariantType> typeObserver) {
+        this.typeObserver = typeObserver;
+    }
+
+    private void observeType(VcfVariantType type) {
+        if (typeObserver != null && type != null) {
+            typeObserver.accept(type);
+        }
     }
 
     public void setVcfReader(VcfReader reader) {
@@ -162,6 +175,7 @@ public class VariantLoader {
 
         vcfReader.iterateChromosomeVariants(chromosome,
             snv -> {
+                observeType(snv.getType());
                 double siteQual = snv.getQuality();
                 List<String> alts = snv.getAlt();
                 for (String alt : alts) {
@@ -208,6 +222,7 @@ public class VariantLoader {
                 }
             },
             sv -> {
+                observeType(sv.getType());
                 svProcessed[0]++;
                 
                 List<String> alts = sv.getAlt();
@@ -331,6 +346,7 @@ public class VariantLoader {
         List<VcfSnvIndel> snvs = (List<VcfSnvIndel>) regionVariants.get("snvs");
         if (snvs != null) {
             for (VcfSnvIndel snv : snvs) {
+                observeType(snv.getType());
                 double siteQual = snv.getQuality();
                 List<String> alts = snv.getAlt();
                 for (String alt : alts) {
@@ -378,6 +394,7 @@ public class VariantLoader {
         List<VcfStructuralVariant> svs = (List<VcfStructuralVariant>) regionVariants.get("svs");
         if (svs != null) {
             for (VcfStructuralVariant sv : svs) {
+                observeType(sv.getType());
                 svProcessed[0]++;
                 List<String> alts = sv.getAlt();
                 double siteQual = sv.getQuality();

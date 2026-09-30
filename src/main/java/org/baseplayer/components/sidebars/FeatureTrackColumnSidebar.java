@@ -44,6 +44,16 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   @Override
+  protected void redrawAfterVisibleTrackRangeChange() {
+    for (org.baseplayer.draw.DrawStack stack : drawStackManager.getStacks()) {
+      if (stack.featureTrackCanvas != null) {
+        stack.featureTrackCanvas.draw();
+      }
+    }
+    draw();
+  }
+
+  @Override
   protected String getTitle() {
     return "Feature Tracks";
   }

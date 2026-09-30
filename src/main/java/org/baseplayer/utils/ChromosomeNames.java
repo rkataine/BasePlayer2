@@ -59,27 +59,22 @@ public final class ChromosomeNames {
 
   /**
    * Detect {@code "chr"} vs {@code ""} from contig/sequence names in a file or API.
-   * Prefers {@code "chr"} when any standard contig is prefixed.
+   * Prefers {@code "chr"} when any contig is prefixed (including non-human names
+   * like {@code chrI} / {@code chrXVI}).
    */
   public static String detectPrefix(Iterable<String> contigNames) {
     if (contigNames == null) {
       return NONE;
     }
-    boolean sawChr = false;
     for (String name : contigNames) {
       if (name == null || name.isBlank()) {
         continue;
       }
-      String bare = strip(name);
-      if (!isStandardBare(bare)) {
-        continue;
-      }
       if (name.length() > 3 && name.regionMatches(true, 0, "chr", 0, 3)) {
-        sawChr = true;
-        break;
+        return CHR_PREFIX;
       }
     }
-    return sawChr ? CHR_PREFIX : NONE;
+    return NONE;
   }
 
   public static String detectPrefix(String[] contigNames) {
@@ -98,15 +93,34 @@ public final class ChromosomeNames {
     return bare != null && bare.matches("^(\\d{1,2}|X|Y|MT?)$");
   }
 
-  /** Display form with {@code chr} for standard contigs (UI / clipboard). */
+  /**
+   * Display form for UI / clipboard. Uses the current reference genome's contig
+   * prefix when available (so yeast {@code I}…{@code XVI} become {@code chrI}…),
+   * otherwise {@code chr} for human-standard bare names only.
+   */
   public static String forDisplay(String chrom) {
     String bare = strip(chrom);
     if (bare == null || bare.isEmpty()) {
       return chrom;
     }
+    String prefix = currentGenomeChromPrefix();
+    if (prefix != null && !prefix.isEmpty()) {
+      return prefix + bare;
+    }
     if (isStandardBare(bare)) {
       return CHR_PREFIX + bare;
     }
     return bare;
+  }
+
+  private static String currentGenomeChromPrefix() {
+    try {
+      var genome = org.baseplayer.services.ServiceRegistry.getInstance()
+          .getReferenceGenomeService()
+          .getCurrentGenome();
+      return genome != null ? genome.getChromPrefix() : null;
+    } catch (Throwable ignored) {
+      return null;
+    }
   }
 }

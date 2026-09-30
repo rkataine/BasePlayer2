@@ -11,10 +11,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.annotation.AnnotationLoader;
+import org.baseplayer.components.sidebars.GenomeSidebar;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
@@ -337,21 +337,28 @@ public final class ProjectService {
     ProjectDocument.VariantFilterSpec spec = new ProjectDocument.VariantFilterSpec();
     if (filter == null) return spec;
 
+    EnumSet<VcfVariantType> observedTypes = EnumSet.noneOf(VcfVariantType.class);
+    EnumSet<VariantEffect> observedEffects = EnumSet.noneOf(VariantEffect.class);
+    if (vcfManager != null) {
+      observedTypes.addAll(vcfManager.getSessionAvailableTypes());
+      observedEffects.addAll(vcfManager.getSessionAvailableEffects());
+      for (VariantList list : vcfManager.snapshotVariantCache().values()) {
+        if (list != null && !list.isEmpty()) {
+          observedTypes.addAll(list.collectVariantTypes());
+          observedEffects.addAll(list.collectVariantEffects());
+        }
+      }
+    }
+
     VariantFilter point = filter.getPointSlice() != null ? filter.getPointSlice() : filter;
     VariantFilter sv = filter.getSvSlice() != null ? filter.getSvSlice() : null;
     spec.point = captureClassFilter(point);
     if (sv != null) {
       spec.sv = captureClassFilter(sv);
     } else {
-      ProjectDocument.ClassFilterSpec svSpec = captureClassFilter(point);
-      svSpec.allowedTypes.removeIf(name -> {
-        try {
-          return !org.baseplayer.variant.VariantTypeVisuals.isStructural(
-              org.baseplayer.variant.VcfVariantType.valueOf(name));
-        } catch (Exception e) {
-          return true;
-        }
-      });
+      // Legacy single filter: split point types into the point slice; leave SV empty
+      // when none were observed (do not invent a full structural inventory).
+      ProjectDocument.ClassFilterSpec svSpec = new ProjectDocument.ClassFilterSpec();
       spec.point.allowedTypes.removeIf(name -> {
         try {
           return org.baseplayer.variant.VariantTypeVisuals.isStructural(
@@ -360,9 +367,8 @@ public final class ProjectService {
           return true;
         }
       });
-      if (svSpec.allowedTypes.isEmpty()) {
-        for (org.baseplayer.variant.VcfVariantType t :
-            org.baseplayer.variant.VariantTypeVisuals.VariantClass.STRUCTURAL.allTypes()) {
+      for (VcfVariantType t : observedTypes) {
+        if (org.baseplayer.variant.VariantTypeVisuals.isStructural(t)) {
           svSpec.allowedTypes.add(t.name());
         }
       }
@@ -370,41 +376,26 @@ public final class ProjectService {
       for (VariantEffect e : VariantEffect.values()) {
         svSpec.allowedEffects.add(e.name());
       }
+      svSpec.minQuality = point.getMinQuality();
+      svSpec.minSharedSamples = point.getMinSharedSamples();
+      svSpec.maxSharedSamples = point.getMaxSharedSamples();
+      svSpec.geneLevel = point.isGeneLevel();
+      svSpec.comparisonWindowBp = point.getComparisonWindowBp();
       spec.sv = svSpec;
     }
 
-    EnumSet<VcfVariantType> availableTypes = EnumSet.noneOf(VcfVariantType.class);
-    EnumSet<VariantEffect> availableEffects = EnumSet.noneOf(VariantEffect.class);
-    availableTypes.addAll(filter.getAllowedTypes());
-    if (filter.getPointSlice() != null) {
-      availableTypes.addAll(filter.getPointSlice().getAllowedTypes());
-      availableEffects.addAll(filter.getPointSlice().getAllowedEffects());
+    // Never persist pass-all expansion for a class that was never seen in data.
+    if (!org.baseplayer.variant.VariantTypeVisuals.hasClass(
+            observedTypes, org.baseplayer.variant.VariantTypeVisuals.VariantClass.STRUCTURAL)
+        && spec.sv != null) {
+      spec.sv.allowedTypes.clear();
     }
-    if (filter.getSvSlice() != null) {
-      availableTypes.addAll(filter.getSvSlice().getAllowedTypes());
-      availableEffects.addAll(filter.getSvSlice().getAllowedEffects());
-    }
-    availableEffects.addAll(filter.getAllowedEffects());
-    if (vcfManager != null) {
-      availableTypes.addAll(vcfManager.getSessionAvailableTypes());
-      availableEffects.addAll(vcfManager.getSessionAvailableEffects());
-      for (VariantList list : vcfManager.snapshotVariantCache().values()) {
-        if (list != null && !list.isEmpty()) {
-          availableTypes.addAll(list.collectVariantTypes());
-          availableEffects.addAll(list.collectVariantEffects());
-        }
-      }
-    }
-    org.baseplayer.variant.ui.VariantManagerController controller =
-        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
-    if (controller != null) {
-      availableTypes.addAll(controller.snapshotUiAvailableTypes());
-      availableEffects.addAll(controller.snapshotUiAvailableEffects());
-    }
-    for (VcfVariantType t : availableTypes) {
+
+    // availableTypes / availableEffects: observed data only — never from allowedTypes.
+    for (VcfVariantType t : observedTypes) {
       spec.availableTypes.add(t.name());
     }
-    for (VariantEffect e : availableEffects) {
+    for (VariantEffect e : observedEffects) {
       spec.availableEffects.add(e.name());
     }
     return spec;
@@ -482,6 +473,7 @@ public final class ProjectService {
         }
       }
       if (pointTypes.isEmpty()) {
+        // Legacy flat filters with empty/missing types meant pass-all for point loads.
         pointTypes = org.baseplayer.variant.VariantTypeVisuals.VariantClass.POINT.allTypes();
       }
       point.setAllowedTypes(pointTypes);
@@ -501,25 +493,15 @@ public final class ProjectService {
         point.setAllowedFilterValues(new HashSet<>(spec.allowedFilterValues));
       }
 
+      // SV load slice: only types explicitly present in the flat allowed list.
+      // Empty is fine — ensureUnobservedClassSlicesPassAll expands at load time.
+      // Do not invent a full structural inventory or seed from availableTypes.
       sv = new VariantFilter();
       EnumSet<VcfVariantType> svTypes = EnumSet.noneOf(VcfVariantType.class);
       for (VcfVariantType t : types) {
         if (org.baseplayer.variant.VariantTypeVisuals.isStructural(t)) {
           svTypes.add(t);
         }
-      }
-      if (spec.availableTypes != null) {
-        for (String name : spec.availableTypes) {
-          try {
-            VcfVariantType t = VcfVariantType.valueOf(name);
-            if (org.baseplayer.variant.VariantTypeVisuals.isStructural(t)) {
-              svTypes.add(t);
-            }
-          } catch (Exception ignored) { /* skip */ }
-        }
-      }
-      if (svTypes.isEmpty()) {
-        svTypes = org.baseplayer.variant.VariantTypeVisuals.VariantClass.STRUCTURAL.allTypes();
       }
       sv.setAllowedTypes(svTypes);
       sv.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
@@ -537,6 +519,8 @@ public final class ProjectService {
   private static VariantFilter restoreClassFilter(ProjectDocument.ClassFilterSpec spec) {
     VariantFilter filter = new VariantFilter();
     if (spec == null) {
+      // Unobserved / missing class slice: empty allowedTypes (load expands).
+      filter.setAllowedTypes(EnumSet.noneOf(VcfVariantType.class));
       return filter;
     }
     filter.setMinQuality(spec.minQuality);
@@ -549,17 +533,16 @@ public final class ProjectService {
     filter.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
     filter.setGeneLevel(spec.geneLevel);
     filter.setComparisonWindowBp(Math.max(0, spec.comparisonWindowBp));
-    if (spec.allowedTypes != null && !spec.allowedTypes.isEmpty()) {
-      EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+    EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+    if (spec.allowedTypes != null) {
       for (String name : spec.allowedTypes) {
         try {
           types.add(VcfVariantType.valueOf(name));
         } catch (Exception ignored) { /* skip */ }
       }
-      if (!types.isEmpty()) {
-        filter.setAllowedTypes(types);
-      }
     }
+    // Explicit empty stays empty — do not leave the VariantFilter allOf default.
+    filter.setAllowedTypes(types);
     if (spec.allowedEffects != null && !spec.allowedEffects.isEmpty()) {
       EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
       for (String name : spec.allowedEffects) {
@@ -578,6 +561,11 @@ public final class ProjectService {
     return filter;
   }
 
+  /**
+   * Restore session-available types/effects from the project file when present.
+   * Otherwise leave empty — VCF streaming and variant-cache install fill them from data.
+   * Never seeds from {@code allowedTypes} / class filter specs.
+   */
   private static void restoreSessionAvailableFilters(ProjectDocument.VariantFilterSpec spec) {
     EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
     EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
@@ -596,47 +584,11 @@ public final class ProjectService {
           } catch (Exception ignored) { /* skip */ }
         }
       }
-      // Older sessions only stored allowed*; keep those checkboxes visible too.
-      if (spec.allowedTypes != null) {
-        for (String name : spec.allowedTypes) {
-          try {
-            types.add(VcfVariantType.valueOf(name));
-          } catch (Exception ignored) { /* skip */ }
-        }
-      }
-      if (spec.allowedEffects != null) {
-        for (String name : spec.allowedEffects) {
-          try {
-            effects.add(VariantEffect.valueOf(name));
-          } catch (Exception ignored) { /* skip */ }
-        }
-      }
-      addClassSpecTypes(spec.point, types, effects);
-      addClassSpecTypes(spec.sv, types, effects);
     }
-    VcfManager.getInstance().setSessionAvailableFilters(types, effects);
-  }
-
-  private static void addClassSpecTypes(
-      ProjectDocument.ClassFilterSpec classSpec,
-      EnumSet<VcfVariantType> types,
-      EnumSet<VariantEffect> effects) {
-    if (classSpec == null) {
-      return;
-    }
-    if (classSpec.allowedTypes != null) {
-      for (String name : classSpec.allowedTypes) {
-        try {
-          types.add(VcfVariantType.valueOf(name));
-        } catch (Exception ignored) { /* skip */ }
-      }
-    }
-    if (classSpec.allowedEffects != null) {
-      for (String name : classSpec.allowedEffects) {
-        try {
-          effects.add(VariantEffect.valueOf(name));
-        } catch (Exception ignored) { /* skip */ }
-      }
+    if (types.isEmpty() && effects.isEmpty()) {
+      VcfManager.getInstance().clearSessionAvailableFilters();
+    } else {
+      VcfManager.getInstance().setSessionAvailableFilters(types, effects);
     }
   }
 
@@ -746,10 +698,18 @@ public final class ProjectService {
       return;
     }
     Settings.get().setLastGenome(match.getName());
-    if (document.genome != null && document.genome.annotation != null) {
-      Settings.get().setLastAnnotation(document.genome.annotation);
+    String annotation = document.genome != null ? document.genome.annotation : null;
+    if (annotation != null && !annotation.isBlank()) {
+      Settings.get().setLastAnnotation(annotation);
     }
     init.selectReferenceGenome(match);
+
+    // Sidebar sync reloads cytobands/genes and updates combo boxes.
+    // Fall back to a direct reload if the sidebar is not constructed yet.
+    if (!GenomeSidebar.syncFromSettings()) {
+      AnnotationLoader.loadCytobands();
+      AnnotationLoader.loadGenesBackground();
+    }
   }
 
   private static void applyDarkMode(boolean wantDark) {
@@ -887,22 +847,16 @@ public final class ProjectService {
       }
     }
 
-    for (String absolute : uniqueAbsolutePaths) {
-      Path path = Path.of(absolute);
-      CountDownLatch latch = new CountDownLatch(1);
-      VcfManager.getInstance().loadVcfFileWithCallback(
-          path.toFile(),
-          latch::countDown,
-          true);
-      try {
-        if (!latch.await(120, TimeUnit.SECONDS)) {
-          warnings.add("Timed out loading VCF: " + path);
-        }
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        warnings.add("Interrupted loading VCF: " + path);
-      }
+    if (uniqueAbsolutePaths.isEmpty()) {
+      return;
     }
+
+    List<File> files = new ArrayList<>(uniqueAbsolutePaths.size());
+    for (String absolute : uniqueAbsolutePaths) {
+      files.add(Path.of(absolute).toFile());
+    }
+    // Same background task as track restore — no per-file "Opening VCF…" waits.
+    SampleDataManager.loadVcfFilesForSessionRestore(files, warnings);
   }
 
   private static void restoreFeatureTracks(

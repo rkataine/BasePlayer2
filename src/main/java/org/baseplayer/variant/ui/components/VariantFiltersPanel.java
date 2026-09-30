@@ -34,8 +34,11 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.util.Pair;
 
@@ -104,9 +107,11 @@ public class VariantFiltersPanel {
         Label reloadBannerLabel,
         Button reloadBannerButton,
         TextField minSvLengthField,
-        TextField maxSvLengthField
+        TextField maxSvLengthField,
+        Button annotateAllChromosomesButton,
+        TextField tableSearchField
     ) {
-        /** Point-mutation nodes without SV length fields. */
+        /** Point-mutation nodes without SV length / annotate / search fields. */
         public Nodes(
             GridPane variantTypesContainer,
             CheckBox selectAllTypesCheckBox,
@@ -149,6 +154,59 @@ public class VariantFiltersPanel {
                 reloadBanner,
                 reloadBannerLabel,
                 reloadBannerButton,
+                null,
+                null,
+                null,
+                null);
+        }
+
+        /** SV nodes with length fields but without annotate/search (compat). */
+        public Nodes(
+            GridPane variantTypesContainer,
+            CheckBox selectAllTypesCheckBox,
+            CheckBox selectAllEffectsCheckBox,
+            GridPane effectCategoriesContainer,
+            Slider qualitySlider,
+            Slider coverageSlider,
+            Slider alleleFreqSlider,
+            TextField qualityField,
+            TextField coverageField,
+            TextField alleleFreqField,
+            Label qualityValueLabel,
+            Label coverageValueLabel,
+            Label alleleFreqValueLabel,
+            CheckBox cancerOnlyCheckBox,
+            VBox advancedFiltersContainer,
+            Button addInfoFilterButton,
+            Button addFilterFieldButton,
+            HBox reloadBanner,
+            Label reloadBannerLabel,
+            Button reloadBannerButton,
+            TextField minSvLengthField,
+            TextField maxSvLengthField) {
+            this(
+                variantTypesContainer,
+                selectAllTypesCheckBox,
+                selectAllEffectsCheckBox,
+                effectCategoriesContainer,
+                qualitySlider,
+                coverageSlider,
+                alleleFreqSlider,
+                qualityField,
+                coverageField,
+                alleleFreqField,
+                qualityValueLabel,
+                coverageValueLabel,
+                alleleFreqValueLabel,
+                cancerOnlyCheckBox,
+                advancedFiltersContainer,
+                addInfoFilterButton,
+                addFilterFieldButton,
+                reloadBanner,
+                reloadBannerLabel,
+                reloadBannerButton,
+                minSvLengthField,
+                maxSvLengthField,
                 null,
                 null);
         }
@@ -201,11 +259,10 @@ public class VariantFiltersPanel {
         alleleFreqValue.setManaged(false);
 
         CheckBox selectAllEffects = new CheckBox();
-        selectAllEffects.setVisible(false);
-        selectAllEffects.setManaged(false);
+        selectAllEffects.getStyleClass().add("filter-checkbox");
         GridPane effectsContainer = new GridPane();
-        effectsContainer.setVisible(false);
-        effectsContainer.setManaged(false);
+        effectsContainer.setHgap(12);
+        effectsContainer.setVgap(6);
 
         CheckBox cancerOnly = new CheckBox("Cancer genes only (COSMIC Census)");
         cancerOnly.getStyleClass().add("filter-checkbox");
@@ -259,9 +316,23 @@ public class VariantFiltersPanel {
         HBox typesHeader = new HBox(8, selectAllTypes, new Label("SV Types"));
         typesHeader.setAlignment(Pos.CENTER_LEFT);
         ((Label) typesHeader.getChildren().get(1)).getStyleClass().add("section-header");
+        HBox effectsHeader = new HBox(8, selectAllEffects, new Label("Gene effect"));
+        effectsHeader.setAlignment(Pos.CENTER_LEFT);
+        ((Label) effectsHeader.getChildren().get(1)).getStyleClass().add("section-header");
         right.getChildren().addAll(
             new VBox(8, typesHeader, typesContainer),
+            new VBox(8, effectsHeader, effectsContainer),
             new VBox(8, new Label("Special Filters") {{ getStyleClass().add("section-header"); }}, cancerOnly));
+
+        Button annotateAll = new Button("Annotate All Chromosomes");
+        annotateAll.getStyleClass().add("secondary-button");
+        TextField searchField = new TextField();
+        searchField.setPromptText("Search genes, positions, mates…");
+        searchField.getStyleClass().addAll("filter-field", "table-search-field");
+        HBox.setHgrow(searchField, javafx.scene.layout.Priority.ALWAYS);
+        HBox annotateSearchRow = new HBox(8, annotateAll, searchField);
+        annotateSearchRow.setAlignment(Pos.CENTER_LEFT);
+        right.getChildren().add(annotateSearchRow);
 
         javafx.scene.control.SplitPane split = new javafx.scene.control.SplitPane(left, right);
         split.setDividerPositions(0.5);
@@ -289,7 +360,9 @@ public class VariantFiltersPanel {
             reloadLabel,
             reloadButton,
             minSvLen,
-            maxSvLen);
+            maxSvLen,
+            annotateAll,
+            searchField);
         return new Pair<>(split, nodes);
     }
 
@@ -628,14 +701,9 @@ public class VariantFiltersPanel {
     private Set<VcfVariantType> currentAllowedTypes() {
         Set<VcfVariantType> types = new HashSet<>();
         if (variantTypeCheckBoxes.isEmpty()) {
-            // No types observed for this class yet — allow the whole class so a newly
-            // added VCF of this class can load. Once types appear, checkboxes drive the set.
-            // (Unchecking every checkbox leaves entries in the map with selected=false → none.)
-            if (variantClass != null) {
-                types.addAll(variantClass.allTypes());
-            } else {
-                types.addAll(EnumSet.allOf(VcfVariantType.class));
-            }
+            // No types observed for this class yet — keep allowedTypes empty so legends /
+            // checkboxes stay empty. Load paths expand via ensureUnobservedClassSlicesPassAll.
+            // (Unchecking every checkbox leaves map entries with selected=false → also empty.)
             return types;
         }
         for (Map.Entry<VcfVariantType, CheckBox> entry : variantTypeCheckBoxes.entrySet()) {
@@ -657,6 +725,13 @@ public class VariantFiltersPanel {
                 effects.addAll(entry.getKey().effects);
             }
         }
+        // Effects without a checkbox (e.g. Coding / Non-coding on point) stay allowed.
+        Set<VariantEffect> coveredByUi = snapshotShownVariantEffects();
+        for (VariantEffect effect : VariantEffect.values()) {
+            if (!coveredByUi.contains(effect)) {
+                effects.add(effect);
+            }
+        }
         return effects;
     }
 
@@ -668,9 +743,10 @@ public class VariantFiltersPanel {
             List<VcfManager.CachedChromosomeVariants> sources,
             VariantFilter currentFilter) {
         Set<VcfVariantType> present = collectPresentVariantTypes(sources);
-        Set<VariantEffect> presentEffects = collectPresentVariantEffects(sources);
-        // Only types present in loaded sample data — do not seed from filter defaults
-        // or sticky session unions that invent absent classes.
+        // Single source: types observed on open VCFs (recorded at stream time).
+        present.addAll(VcfManager.getInstance().getSessionAvailableTypes());
+        Set<VariantEffect> presentEffects = collectPresentVariantEffects(sources, variantClass);
+        presentEffects.addAll(VcfManager.getInstance().getSessionAvailableEffects());
         if (variantClass != null) {
             present.removeIf(t -> t != null && !variantClass.contains(t));
         }
@@ -704,7 +780,22 @@ public class VariantFiltersPanel {
 
             Set<VcfVariantType> typesToShow = VariantTypeVisuals.typesForUi(present, variantClass);
 
-            int columnCount = 3;
+            Set<VcfVariantType> filterTypes = currentFilter != null && currentFilter.getAllowedTypes() != null
+                ? currentFilter.getAllowedTypes()
+                : Set.of();
+            // Empty allowedTypes means unobserved class (or exclude-all). Newly observed
+            // types default on; an explicit non-empty filter drives selection.
+            boolean filterDrivesSelection = !filterTypes.isEmpty();
+
+            int columnCount = Math.max(1, typesToShow.size());
+            GridPane typesGrid = nodes.variantTypesContainer();
+            typesGrid.getColumnConstraints().clear();
+            for (int c = 0; c < columnCount; c++) {
+                ColumnConstraints cc = new ColumnConstraints();
+                cc.setHgrow(Priority.SOMETIMES);
+                cc.setMinWidth(Region.USE_PREF_SIZE);
+                typesGrid.getColumnConstraints().add(cc);
+            }
             int index = 0;
             Set<VcfVariantType> placed = new HashSet<>();
             for (VcfVariantType type : typesToShow) {
@@ -712,10 +803,16 @@ public class VariantFiltersPanel {
                     continue;
                 }
                 CheckBox cb = new CheckBox(getVariantTypeLabel(type));
-                boolean selected = currentFilter != null
-                    ? currentFilter.getAllowedTypes().contains(type)
-                    : previousSelection.getOrDefault(type, true);
+                boolean selected;
+                if (previousSelection.containsKey(type)) {
+                    selected = Boolean.TRUE.equals(previousSelection.get(type));
+                } else if (filterDrivesSelection) {
+                    selected = filterTypes.contains(type);
+                } else {
+                    selected = true;
+                }
                 cb.setSelected(selected);
+                cb.setMinWidth(Region.USE_PREF_SIZE);
                 cb.getStyleClass().add("filter-checkbox");
                 cb.selectedProperty().addListener((obs, oldVal, newVal) -> {
                     updateSelectAllTypesState();
@@ -730,7 +827,7 @@ public class VariantFiltersPanel {
                     placed.add(linked);
                 }
 
-                nodes.variantTypesContainer().add(cb, index % columnCount, index / columnCount);
+                typesGrid.add(cb, index % columnCount, index / columnCount);
                 index++;
             }
 
@@ -762,13 +859,23 @@ public class VariantFiltersPanel {
                 ? EnumSet.copyOf(presentEffects)
                 : EnumSet.noneOf(VariantEffect.class);
 
-            int columnCount = 4;
+            int columnCount = variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL ? 2 : 4;
             int index = 0;
             for (EffectCategory category : EffectCategory.values()) {
+                // Point UI: skip generic Coding / Non-coding — keep the specific categories.
+                if (variantClass != VariantTypeVisuals.VariantClass.STRUCTURAL
+                        && (category == EffectCategory.CODING || category == EffectCategory.NONCODING)) {
+                    continue;
+                }
+                if (variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL
+                        && category != EffectCategory.NONCODING
+                        && category != EffectCategory.INTERGENIC) {
+                    continue;
+                }
                 if (!category.matchesAny(present)) {
                     continue;
                 }
-                CheckBox cb = new CheckBox(category.label);
+                CheckBox cb = new CheckBox(effectCategoryLabel(category));
                 boolean selected = currentFilter != null
                     ? category.matchesAllowed(currentFilter.getAllowedEffects())
                     : previousSelection.getOrDefault(category, true);
@@ -1267,17 +1374,31 @@ public class VariantFiltersPanel {
     }
 
     private static Set<VariantEffect> collectPresentVariantEffects(
-            List<VcfManager.CachedChromosomeVariants> sources) {
+            List<VcfManager.CachedChromosomeVariants> sources,
+            VariantTypeVisuals.VariantClass variantClass) {
         Set<VariantEffect> combined = EnumSet.noneOf(VariantEffect.class);
         if (sources == null) {
             return combined;
         }
         for (VcfManager.CachedChromosomeVariants cached : sources) {
             VariantList variants = cached.variants();
-            if (variants != null && !variants.isEmpty()) {
-                combined.addAll(variants.collectVariantEffects());
+            if (variants == null || variants.isEmpty()) {
+                continue;
             }
+            combined.addAll(variants.collectVariantEffects(variantClass));
         }
         return combined;
+    }
+
+    /** Display label for effect checkboxes (SV uses gene-overlap wording). */
+    private String effectCategoryLabel(EffectCategory category) {
+        if (variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL) {
+            return switch (category) {
+                case NONCODING -> "Gene-overlapping";
+                case INTERGENIC -> "No gene";
+                default -> category.label;
+            };
+        }
+        return category.label;
     }
 }

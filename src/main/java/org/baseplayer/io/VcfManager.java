@@ -73,15 +73,6 @@ public class VcfManager {
     private final Set<VcfVariantType> canvasHiddenTypes =
         EnumSet.noneOf(VcfVariantType.class);
 
-    /**
-     * Types/effects that should appear as Variant Manager checkboxes even when the
-     * current loaded cache was filtered down (persisted in the project session).
-     */
-    private final Set<VcfVariantType> sessionAvailableTypes =
-        EnumSet.noneOf(VcfVariantType.class);
-    private final Set<VariantEffect> sessionAvailableEffects =
-        EnumSet.noneOf(VariantEffect.class);
-
     // Whether a background load is in progress
     private boolean loading = false;
 
@@ -290,9 +281,6 @@ public class VcfManager {
     /** Trigger variant load for every visible stack: cached chromosome, else the on-screen window. */
     public void loadVariantsForCurrentView() {
         syncCurrentFilterFromOpenVariantManager();
-        if (currentFilter != null) {
-            currentFilter.ensureUnobservedClassSlicesPassAll();
-        }
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty() || loadedVcfs.isEmpty()) return;
         for (DrawStack stack : stackManager.getStacks()) {
@@ -365,7 +353,7 @@ public class VcfManager {
             lastLoadManualChromosomeSelection = true;
         }
 
-        VariantFilter requestFilterSnapshot = currentFilter.copy();
+        VariantFilter requestFilterSnapshot = loadTimeFilterSnapshot();
         VariantList cachedVariants = findCachedVariantList(chromosome);
         
         if (shouldReuseCachedVariants(chromosome, start, end, cachedVariants, requestFilterSnapshot)) {
@@ -438,7 +426,7 @@ public class VcfManager {
         final String targetChromosome = chromosome;
         final long regionStart = start;
         final long regionEnd = end;
-        final VariantFilter loadFilterSnapshot = currentFilter.copy();
+        final VariantFilter loadFilterSnapshot = loadTimeFilterSnapshot();
         final String loadFilterKeySnapshot = loadFilterSnapshot.toStableKey();
         loading = true;
         final int vcfCountBefore = loadedVcfs.size();
@@ -465,10 +453,12 @@ public class VcfManager {
 
                         try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
                             vcfData.loader.setVcfReader(reader);
+                            vcfData.loader.setTypeObserver(vcfData::noteType);
                             cursor = vcfData.loader.streamRegionVariantsToList(
                                 targetChromosome, regionStart, regionEnd, mergedList, cursor, null, loadFilterSnapshot);
                         } catch (IOException e) {
                         } finally {
+                            vcfData.loader.setTypeObserver(null);
                             vcfData.loader.setVcfReader(null);
                         }
 
@@ -484,18 +474,11 @@ public class VcfManager {
                     VariantAnnotator annotator = new VariantAnnotator(
                         ServiceRegistry.getInstance().getReferenceGenomeService());
                     annotator.annotate(result, targetChromosome);
-                    
-                    // Filter variants: keep only those that pass the complete filter (samples + effects)
-                    // retainVariants removes variants that don't match the predicate
-                    result.retainVariants(node -> {
-                        // Keep a variant if it has at least one sample passing the filter
-                        for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (loadFilterSnapshot.passes(node, call)) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    });
+                    noteObservedEffectsFromList(result);
+
+                    // Filter variants: keep alleles that pass type/effect/Q/DP/AF.
+                    // Gene-level / cohort comparison is display-only — do not prune the cache.
+                    result.retainVariants(loadFilterSnapshot::passesCacheRetention);
                     result.rebuildVisibleChain(loadFilterSnapshot);
 
                     return result;
@@ -565,6 +548,20 @@ public class VcfManager {
         if (fromUi != null) {
             this.currentFilter = fromUi;
         }
+    }
+
+    /**
+     * Copy of {@link #currentFilter} with empty class slices expanded for load only.
+     * Does not mutate the UI / session filter (so pass-all does not feed legends or saves).
+     */
+    private VariantFilter loadTimeFilterSnapshot() {
+        return loadTimeFilterSnapshot(currentFilter);
+    }
+
+    private static VariantFilter loadTimeFilterSnapshot(VariantFilter filter) {
+        VariantFilter snap = filter == null ? new VariantFilter() : filter.copy();
+        snap.ensureUnobservedClassSlicesPassAll();
+        return snap;
     }
 
     private void fireAndClearChromosomeReadyCallback() {
@@ -687,7 +684,6 @@ public class VcfManager {
                 stack.sampleAggregateCanvas.draw();
             }
         }
-        rebuildSessionAvailableFromCaches();
     }
 
     private void clearVariantListsForChromosome(String chromosome) {
@@ -717,7 +713,7 @@ public class VcfManager {
             }
             VariantList cached = findCachedVariantList(next.chromosome());
             if (cached != null && shouldReuseCachedVariants(next.chromosome(), next.start(), next.end(),
-                    cached, currentFilter.copy())) {
+                    cached, loadTimeFilterSnapshot())) {
                 displayCachedVariants(next.chromosome(), cached);
                 continue;
             }
@@ -805,7 +801,6 @@ public class VcfManager {
         currentFilter = new VariantFilter();
         filterGeneration.incrementAndGet();
         clearCanvasTypeVisibility();
-        clearSessionAvailableFilters();
         onChromosomeVariantsReady = null;
         TranscriptCdsCache.getInstance().clearMemory();
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
@@ -862,7 +857,7 @@ public class VcfManager {
         Consumer<AllChromosomeProgress> onProgress,
         Consumer<AllChromosomeAnnotationResult> onComplete) {
 
-        final VariantFilter filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
+        final VariantFilter filterSnapshot = loadTimeFilterSnapshot(filter);
         final List<File> filesSnapshot = getLoadedVcfFiles();
         final int totalChromosomes = chromosomes.size();
         final int samplesPerChromosome = Math.max(1,
@@ -1107,6 +1102,7 @@ public class VcfManager {
                 VariantLoader loader;
                 if (matched != null) {
                     matched.loader.setVcfReader(reader);
+                    matched.loader.setTypeObserver(matched::noteType);
                     loader = matched.loader;
                 } else {
                     loader = new VariantLoader(reader);
@@ -1125,6 +1121,7 @@ public class VcfManager {
                 warnings.add("Load failed for " + file.getName() + " (" + chromosome + "): " + e.getMessage());
             } finally {
                 if (matched != null) {
+                    matched.loader.setTypeObserver(null);
                     matched.loader.setVcfReader(null);
                 }
             }
@@ -1140,20 +1137,13 @@ public class VcfManager {
 
         try {
             annotator.annotate(variants, chromosome);
+            noteObservedEffectsFromList(variants);
         } catch (Throwable t) {
             warnings.add("Annotation failed for " + chromosome + ": " + t.getMessage());
             return 0;
         }
 
-        variants.retainVariants(node -> {
-            // Keep a variant if it has at least one sample passing the filter
-            for (VariantNode.SampleCall call : node.getSamples()) {
-                if (filter.passes(node, call)) {
-                    return true;
-                }
-            }
-            return false;
-        });
+        variants.retainVariants(filter::passesCacheRetention);
         variants.rebuildVisibleChain(filter);
 
         // Mark the variants as annotated and store the filter info
@@ -1241,8 +1231,12 @@ public class VcfManager {
      * Safe to call from any thread.
      */
     public void applyFilter(VariantFilter filter, String chromosome) {
+        boolean changed = filterChanged(filter);
         this.currentFilter = filter;
         filterGeneration.incrementAndGet();
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+        }
         // Rebuild visible skip chains for cached lists, then redraw.
         Platform.runLater(() -> {
             rebuildVisibleChainsForCache(filter);
@@ -1335,62 +1329,182 @@ public class VcfManager {
         return loaded.getAllowedTypes() != null && loaded.getAllowedTypes().contains(type);
     }
 
+    /**
+     * Types observed in any currently open VCF (union of {@link VcfData#getObservedTypes()}).
+     * Recorded while streaming, before load filters — so a DEL-only reload does not erase
+     * other types that were already seen for that file.
+     */
     public synchronized Set<VcfVariantType> getSessionAvailableTypes() {
-        return EnumSet.copyOf(sessionAvailableTypes);
+        EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData != null) {
+                types.addAll(vcfData.observedTypes);
+            }
+        }
+        return types;
     }
 
+    /** Effects observed in any currently open VCF (union of {@link VcfData#getObservedEffects()}). */
     public synchronized Set<VariantEffect> getSessionAvailableEffects() {
-        return EnumSet.copyOf(sessionAvailableEffects);
+        EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData != null) {
+                effects.addAll(vcfData.observedEffects);
+            }
+        }
+        return effects;
     }
 
+    /**
+     * Seed observed types/effects onto every open VCF (e.g. after cache install).
+     * Callers must pass types actually seen in data — never filter allowedTypes defaults.
+     */
     public synchronized void setSessionAvailableFilters(
             Set<VcfVariantType> types, Set<VariantEffect> effects) {
-        sessionAvailableTypes.clear();
-        if (types != null && !types.isEmpty()) {
-            sessionAvailableTypes.addAll(types);
-        }
-        sessionAvailableEffects.clear();
-        if (effects != null && !effects.isEmpty()) {
-            sessionAvailableEffects.addAll(effects);
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null) {
+                continue;
+            }
+            vcfData.observedTypes.clear();
+            vcfData.observedEffects.clear();
+            vcfData.noteTypes(types);
+            vcfData.noteEffects(effects);
         }
     }
 
-    /** Grow the session available sets with newly observed present types/effects. */
+    /** Grow observed types/effects on every open VCF (e.g. legend prompt to add types). */
     public synchronized void unionSessionAvailableFilters(
             Set<VcfVariantType> types, Set<VariantEffect> effects) {
-        if (types != null && !types.isEmpty()) {
-            sessionAvailableTypes.addAll(types);
-        }
-        if (effects != null && !effects.isEmpty()) {
-            sessionAvailableEffects.addAll(effects);
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null) {
+                continue;
+            }
+            vcfData.noteTypes(types);
+            vcfData.noteEffects(effects);
         }
     }
 
     public synchronized void clearSessionAvailableFilters() {
-        sessionAvailableTypes.clear();
-        sessionAvailableEffects.clear();
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null) {
+                continue;
+            }
+            vcfData.observedTypes.clear();
+            vcfData.observedEffects.clear();
+        }
     }
 
     /**
-     * Replace session-available types/effects with exactly what is present in cached
-     * variant lists (no hardcoded inventories). Call after loads and after samples
-     * are removed so aggregate legends / Variant Manager drop types that no longer exist.
+     * @deprecated Observed types live on each {@link VcfData}; getters union them live.
+     * Kept as a no-op so older call sites compile until cleaned up.
      */
+    @Deprecated
     public synchronized void rebuildSessionAvailableFromCaches() {
-        EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
-        EnumSet<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
-        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
-        for (VariantList list : variantCache.values()) {
-            if (list == null || list.isEmpty() || seen.put(list, Boolean.TRUE) != null) {
+        // no-op: getSessionAvailableTypes/Effects read VcfData.observed* directly
+    }
+
+    /**
+     * Drop VCFs that no longer have an open sample track referencing their file.
+     * Call after sample removal so types/effects disappear when no sample still owns them.
+     */
+    public synchronized void unloadVcfsWithNoOpenSamples() {
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        java.util.Iterator<VcfData> it = loadedVcfs.iterator();
+        while (it.hasNext()) {
+            VcfData vcfData = it.next();
+            if (vcfData == null || hasOpenSampleForVcf(vcfData, registry)) {
                 continue;
             }
-            types.addAll(list.collectVariantTypes());
-            effects.addAll(list.collectVariantEffects());
+            try {
+                if (vcfData.reader != null) {
+                    vcfData.reader.close();
+                }
+            } catch (IOException e) {
+                System.err.println("Error closing VCF: " + e.getMessage());
+            }
+            vcfData.reader = null;
+            if (vcfData.loader != null) {
+                vcfData.loader.setVcfReader(null);
+                vcfData.loader.setTypeObserver(null);
+            }
+            it.remove();
         }
-        sessionAvailableTypes.clear();
-        sessionAvailableTypes.addAll(types);
-        sessionAvailableEffects.clear();
-        sessionAvailableEffects.addAll(effects);
+        if (loadedVcfs.isEmpty()) {
+            variantCache.clear();
+            lastLoadedChromosome = null;
+            clearCanvasTypeVisibility();
+        }
+    }
+
+    private boolean hasOpenSampleForVcf(VcfData vcfData, SampleRegistry registry) {
+        if (vcfData == null || vcfData.file == null || registry == null) {
+            return false;
+        }
+        String path = normalizeVcfPath(vcfData.file);
+        if (path.isEmpty()) {
+            return false;
+        }
+        for (SampleTrack track : registry.getSampleTracks()) {
+            if (track == null) {
+                continue;
+            }
+            for (org.baseplayer.samples.Sample sample : track.getSamples()) {
+                if (sample == null || sample.getDataType() != org.baseplayer.samples.Sample.DataType.VCF) {
+                    continue;
+                }
+                if (sample.getPath() == null) {
+                    continue;
+                }
+                if (path.equals(normalizeVcfPath(sample.getPath().toFile()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * After annotation, record effects on each open VCF that contributed a call on the node.
+     */
+    private synchronized void noteObservedEffectsFromList(VariantList list) {
+        if (list == null || list.isEmpty() || loadedVcfs.isEmpty()) {
+            return;
+        }
+        Map<String, VcfData> byPath = new HashMap<>();
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null || vcfData.file == null) {
+                continue;
+            }
+            String path = normalizeVcfPath(vcfData.file);
+            if (!path.isEmpty()) {
+                byPath.put(path, vcfData);
+            }
+        }
+        if (byPath.isEmpty()) {
+            return;
+        }
+        for (VariantNode node = list.getFirst(); node != null; node = node.next) {
+            if (node.annotation == null || node.annotation.effect() == null) {
+                continue;
+            }
+            VariantEffect effect = node.annotation.effect();
+            for (VariantNode.SampleCall call : node.getSamples()) {
+                SampleTrack track = call != null ? call.getTrack() : null;
+                if (track == null) {
+                    continue;
+                }
+                for (org.baseplayer.samples.Sample sample : track.getSamples()) {
+                    if (sample == null || sample.getDataType() != org.baseplayer.samples.Sample.DataType.VCF
+                        || sample.getPath() == null) {
+                        continue;
+                    }
+                    VcfData vcfData = byPath.get(normalizeVcfPath(sample.getPath().toFile()));
+                    if (vcfData != null) {
+                        vcfData.noteEffect(effect);
+                    }
+                }
+            }
+        }
     }
 
     private void redrawCanvasesForTypeVisibility() {
@@ -1408,9 +1522,23 @@ public class VcfManager {
     /** Set filter state for future loads only; does not redraw current data. */
     public synchronized void setCurrentFilterForNextLoad(VariantFilter filter) {
         if (filter != null) {
+            boolean changed = filterChanged(filter);
             this.currentFilter = filter;
             filterGeneration.incrementAndGet();
+            if (changed) {
+                ProjectSessionState.get().markDirty();
+            }
         }
+    }
+
+    private boolean filterChanged(VariantFilter next) {
+        if (next == null) {
+            return currentFilter != null;
+        }
+        if (currentFilter == null) {
+            return true;
+        }
+        return !java.util.Objects.equals(next.toStableKey(), currentFilter.toStableKey());
     }
 
     /** Get a copy of the filter used to load current chromosome variants. */
@@ -1425,8 +1553,12 @@ public class VcfManager {
     /** Update filter and reload chromosome variants from VCF to materialize with new filter settings. */
     public synchronized void reloadChromosomeForFilter(String chromosome, VariantFilter filter) {
         if (filter == null) return;
+        boolean changed = filterChanged(filter);
         this.currentFilter = filter;
         filterGeneration.incrementAndGet();
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+        }
         DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
         DrawStack stack = sm.getStacks().stream()
             .filter(s -> s.getChromosome().equals(chromosome))
@@ -1576,9 +1708,19 @@ public class VcfManager {
     public boolean installCachedVariantLists(Map<String, VariantList> lists) {
         if (lists == null || lists.isEmpty()) return false;
 
-        VariantFilter filterSnapshot = currentFilter.copy();
+        VariantFilter filterSnapshot = loadTimeFilterSnapshot();
         String filterKey = filterSnapshot.toStableKey();
         int vcfCount = loadedVcfs.size();
+
+        EnumSet<VcfVariantType> cacheTypes = EnumSet.noneOf(VcfVariantType.class);
+        EnumSet<VariantEffect> cacheEffects = EnumSet.noneOf(VariantEffect.class);
+        for (VariantList list : lists.values()) {
+            if (list == null || list.isEmpty()) {
+                continue;
+            }
+            cacheTypes.addAll(list.collectVariantTypes());
+            cacheEffects.addAll(list.collectVariantEffects());
+        }
 
         synchronized (this) {
             variantCache.clear();
@@ -1588,16 +1730,29 @@ public class VcfManager {
                 prepareSessionCachedListForReuse(list, filterSnapshot, filterKey, vcfCount);
                 putVariantList(entry.getKey(), list);
             }
+            // Observed types come from data (cache here), never from filter specs.
+            if (!cacheTypes.isEmpty() || !cacheEffects.isEmpty()) {
+                for (VcfData vcfData : loadedVcfs) {
+                    if (vcfData == null) {
+                        continue;
+                    }
+                    vcfData.noteTypes(cacheTypes);
+                    vcfData.noteEffects(cacheEffects);
+                }
+            }
         }
 
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         lastLoadedChromosome = null;
+        // Visibility uses the load-time expansion so empty unobserved class slices
+        // do not hide variants that the cache already contains.
+        VariantFilter visibilityFilter = loadTimeFilterSnapshot();
         for (DrawStack stack : stackManager.getStacks()) {
             String chrom = stack.getChromosome();
             VariantList list = chrom != null ? findCachedVariantList(chrom) : null;
             if (list != null) {
                 lastLoadedChromosome = chrom;
-                list.ensureVisibleChain(currentFilter);
+                list.ensureVisibleChain(visibilityFilter);
             }
         }
         updateCanvasesWithVariants(null);
@@ -1769,12 +1924,57 @@ public class VcfManager {
         final File file;
         /** Contig prefix in this VCF ({@code ""} or {@code "chr"}). */
         public final String chromPrefix;
+        /**
+         * Variant types seen while streaming this file (before load filters).
+         * Cleared only when this VCF is unloaded.
+         */
+        final Set<VcfVariantType> observedTypes = EnumSet.noneOf(VcfVariantType.class);
+        /** Annotation effects seen on alleles from this file. */
+        final Set<VariantEffect> observedEffects = EnumSet.noneOf(VariantEffect.class);
         
         public VcfData(VcfReader reader, VariantLoader loader, File file) {
             this.reader = reader;
             this.loader = loader;
             this.file = file;
             this.chromPrefix = reader != null ? reader.getChromPrefix() : org.baseplayer.utils.ChromosomeNames.NONE;
+        }
+
+        void noteType(VcfVariantType type) {
+            if (type != null) {
+                observedTypes.add(type);
+            }
+        }
+
+        void noteTypes(java.util.Collection<VcfVariantType> types) {
+            if (types == null || types.isEmpty()) {
+                return;
+            }
+            for (VcfVariantType type : types) {
+                noteType(type);
+            }
+        }
+
+        void noteEffect(VariantEffect effect) {
+            if (effect != null) {
+                observedEffects.add(effect);
+            }
+        }
+
+        void noteEffects(java.util.Collection<VariantEffect> effects) {
+            if (effects == null || effects.isEmpty()) {
+                return;
+            }
+            for (VariantEffect effect : effects) {
+                noteEffect(effect);
+            }
+        }
+
+        public Set<VcfVariantType> getObservedTypes() {
+            return EnumSet.copyOf(observedTypes);
+        }
+
+        public Set<VariantEffect> getObservedEffects() {
+            return EnumSet.copyOf(observedEffects);
         }
     }
 }

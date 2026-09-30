@@ -6,20 +6,28 @@ import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.Transcript;
-import org.baseplayer.variant.VcfVariantType;
-import org.baseplayer.variant.VariantList;
-import org.baseplayer.variant.VariantNode;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.BaseUtils;
+import org.baseplayer.utils.ChromosomeNames;
+import org.baseplayer.variant.VariantList;
+import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VariantTypeVisuals;
+import org.baseplayer.variant.VcfVariantType;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Annotates variants against loaded gene models.
  * Performs a 3-base reference fetch only for coding SNVs.
+ * Structural variants are annotated with cancer-census genes only (type-specific rules).
  */
 public class VariantAnnotator {
+
+    private enum Direction { UPSTREAM, DOWNSTREAM }
 
     private final ReferenceGenomeService refService;
 
@@ -32,17 +40,59 @@ public class VariantAnnotator {
         if (variants == null || variants.isEmpty()) return;
 
         Map<String, List<Gene>> byChrom = AnnotationData.getGenesByChrom();
-        String chromKey = org.baseplayer.utils.ChromosomeNames.strip(chromosome);
+        String chromKey = ChromosomeNames.strip(chromosome);
         List<Gene> genes = byChrom.getOrDefault(chromKey, List.of());
 
         VariantNode node = variants.getFirst();
         while (node != null) {
-            node.annotation = annotateVariant(node, chromKey, genes);
+            node.annotation = annotateVariant(node, chromKey, genes, byChrom);
             node = node.next;
         }
     }
 
-    private VariantAnnotation annotateVariant(VariantNode node, String chromosome, List<Gene> genes) {
+    private VariantAnnotation annotateVariant(
+            VariantNode node,
+            String chromosome,
+            List<Gene> genes,
+            Map<String, List<Gene>> byChrom) {
+        if (VariantTypeVisuals.isStructural(node.type)) {
+            return annotateStructural(node, chromosome, genes, byChrom);
+        }
+        return annotatePoint(node, chromosome, genes);
+    }
+
+    private VariantAnnotation annotateStructural(
+            VariantNode node,
+            String chromosome,
+            List<Gene> genes,
+            Map<String, List<Gene>> byChrom) {
+        List<String> censusGenes = switch (node.type) {
+            case SV_DELETION -> {
+                long end = node.svEnd > node.position ? node.svEnd : node.position;
+                yield overlappingCensusGenes(genes, node.position, end, CosmicGenes::isTumorSuppressor);
+            }
+            case SV_DUPLICATION -> {
+                long end = node.svEnd > node.position ? node.svEnd : node.position;
+                yield overlappingCensusGenes(genes, node.position, end, CosmicGenes::isOncogene);
+            }
+            case SV_INVERSION -> inversionNearestCensusGenes(genes, node);
+            case SV_TRANSLOCATION, SV_BREAKEND -> translocationNearestCensusGenes(node, genes, byChrom);
+            case SV_INSERTION -> nearestCensusAtLocus(genes, node.position);
+            default -> List.of();
+        };
+
+        String primary = censusGenes.isEmpty() ? null : censusGenes.get(0);
+        boolean isCancer = !censusGenes.isEmpty();
+        CosmicCensusEntry cosmic = primary != null ? CosmicGenes.getEntry(primary) : null;
+        VariantEffect effect = isCancer ? VariantEffect.NONCODING_GENE : VariantEffect.INTERGENIC;
+
+        return new VariantAnnotation(
+            chromosome, node.position, effect,
+            primary, null, null, null, 0,
+            isCancer, cosmic, censusGenes);
+    }
+
+    private VariantAnnotation annotatePoint(VariantNode node, String chromosome, List<Gene> genes) {
         // Find the best overlapping gene (prefer protein-coding, prefer MANE transcript)
         Gene bestGene = null;
         Transcript bestTx = null;
@@ -69,7 +119,7 @@ public class VariantAnnotator {
 
         if (bestGene == null) {
             return new VariantAnnotation(chromosome, node.position, VariantEffect.INTERGENIC,
-                null, null, null, null, 0, false, null);
+                null, null, null, null, 0, false, null, List.of());
         }
 
         boolean isReverse = "-".equals(bestGene.strand());
@@ -129,10 +179,198 @@ public class VariantAnnotator {
 
         boolean isCancerGene = CosmicGenes.isCosmicGene(bestGene.name());
         CosmicCensusEntry cosmicEntry = isCancerGene ? CosmicGenes.getEntry(bestGene.name()) : null;
+        List<String> overlapping = isCancerGene ? List.of(bestGene.name()) : List.of();
 
         return new VariantAnnotation(chromosome, node.position, effect,
             bestGene.name(), bestTx.id(), aaChange, codonChange, codonNumber,
-            isCancerGene, cosmicEntry);
+            isCancerGene, cosmicEntry, overlapping);
+    }
+
+    // ── SV census-gene helpers ────────────────────────────────────────────────
+
+    /** All CGC genes overlapping inclusive [start, end] on a start-sorted gene list. */
+    static List<String> overlappingCensusGenes(List<Gene> genes, long start, long end) {
+        return overlappingCensusGenes(genes, start, end, CosmicGenes::isCosmicGene);
+    }
+
+    /**
+     * CGC genes overlapping inclusive [start, end], kept only when {@code roleFilter} accepts the symbol.
+     * Use {@link CosmicGenes#isTumorSuppressor} for deletions and {@link CosmicGenes#isOncogene} for duplications
+     * (dual-role genes pass both filters).
+     */
+    static List<String> overlappingCensusGenes(
+            List<Gene> genes,
+            long start,
+            long end,
+            java.util.function.Predicate<String> roleFilter) {
+        if (genes == null || genes.isEmpty() || roleFilter == null) {
+            return List.of();
+        }
+        long qStart = Math.min(start, end);
+        long qEnd = Math.max(start, end);
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (Gene gene : genes) {
+            if (gene.start() > qEnd) {
+                break;
+            }
+            if (gene.end() < qStart) {
+                continue;
+            }
+            if (gene.name() == null || gene.name().isBlank()) {
+                continue;
+            }
+            if (!roleFilter.test(gene.name())) {
+                continue;
+            }
+            if (seen.add(gene.name())) {
+                out.add(gene.name());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * INV: at each breakpoint, nearest CGC gene upstream and downstream (deduped, order preserved).
+     */
+    private static List<String> inversionNearestCensusGenes(List<Gene> genes, VariantNode node) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> out = new ArrayList<>();
+        long left = node.position;
+        long right = node.svEnd > node.position ? node.svEnd : node.position;
+        addNearestPair(genes, left, out, seen);
+        if (right != left) {
+            addNearestPair(genes, right, out, seen);
+        }
+        return out;
+    }
+
+    /** TRA/BND: nearest CGC at primary and mate breakpoints. */
+    private static List<String> translocationNearestCensusGenes(
+            VariantNode node,
+            List<Gene> primaryGenes,
+            Map<String, List<Gene>> byChrom) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> out = new ArrayList<>();
+
+        String primaryNearest = nearestCensusGeneAnySide(primaryGenes, node.position);
+        if (primaryNearest != null) {
+            seen.add(primaryNearest);
+            out.add(primaryNearest);
+        }
+
+                String mateChrom = node.mateChromosome();
+        long matePos = node.matePosition();
+        if (mateChrom != null && !mateChrom.isBlank() && matePos >= 0) {
+            String mateKey = ChromosomeNames.strip(mateChrom);
+            List<Gene> mateGenes = byChrom.getOrDefault(mateKey, List.of());
+            String mateNearest = nearestCensusGeneAnySide(mateGenes, matePos);
+            if (mateNearest != null && seen.add(mateNearest)) {
+                out.add(mateNearest);
+            }
+        }
+        return out;
+    }
+
+    private static List<String> nearestCensusAtLocus(List<Gene> genes, long pos) {
+        String name = nearestCensusGeneAnySide(genes, pos);
+        return name != null ? List.of(name) : List.of();
+    }
+
+    private static void addNearestPair(List<Gene> genes, long pos, List<String> out, Set<String> seen) {
+        String up = nearestCensusGene(genes, pos, Direction.UPSTREAM);
+        String down = nearestCensusGene(genes, pos, Direction.DOWNSTREAM);
+        if (up != null && seen.add(up)) {
+            out.add(up);
+        }
+        if (down != null && seen.add(down)) {
+            out.add(down);
+        }
+    }
+
+    /**
+     * Nearest CGC gene: genes containing {@code pos} win (distance 0);
+     * otherwise closest by genomic distance in the requested direction.
+     * UPSTREAM = gene entirely to the left (gene.end &lt; pos) or overlapping left edge.
+     * DOWNSTREAM = gene entirely to the right (gene.start &gt; pos) or overlapping right edge.
+     * Overlapping genes are accepted for both directions (distance 0).
+     */
+    static String nearestCensusGene(List<Gene> genes, long pos, Direction direction) {
+        if (genes == null || genes.isEmpty()) {
+            return null;
+        }
+        String best = null;
+        long bestDist = Long.MAX_VALUE;
+
+        for (Gene gene : genes) {
+            if (!CosmicGenes.isCosmicGene(gene.name())) {
+                continue;
+            }
+            boolean overlaps = gene.start() <= pos && gene.end() >= pos;
+            long dist;
+            if (overlaps) {
+                dist = 0;
+            } else if (direction == Direction.UPSTREAM) {
+                if (gene.end() >= pos) {
+                    continue; // not upstream
+                }
+                dist = pos - gene.end();
+            } else {
+                if (gene.start() <= pos) {
+                    continue; // not downstream
+                }
+                dist = gene.start() - pos;
+            }
+            if (dist < bestDist
+                    || (dist == bestDist && (best == null || gene.name().compareTo(best) < 0))) {
+                bestDist = dist;
+                best = gene.name();
+            }
+            // Genes are sorted by start; once past and looking downstream we can stop early
+            // only when we've already found a non-overlapping downstream hit and gene.start keeps growing.
+            if (direction == Direction.DOWNSTREAM && !overlaps && gene.start() > pos && dist > bestDist) {
+                // still need to scan — overlapping later genes won't happen; but a closer start won't either
+                // once gene.start - pos >= bestDist for non-overlap. Safe break when gene.start - pos >= bestDist.
+                if (gene.start() - pos >= bestDist && bestDist < Long.MAX_VALUE) {
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Closest CGC on either side (or overlapping). */
+    static String nearestCensusGeneAnySide(List<Gene> genes, long pos) {
+        String up = nearestCensusGene(genes, pos, Direction.UPSTREAM);
+        String down = nearestCensusGene(genes, pos, Direction.DOWNSTREAM);
+        if (up == null) {
+            return down;
+        }
+        if (down == null) {
+            return up;
+        }
+        long upDist = censusDistance(genes, up, pos);
+        long downDist = censusDistance(genes, down, pos);
+        if (upDist <= downDist) {
+            return up;
+        }
+        return down;
+    }
+
+    private static long censusDistance(List<Gene> genes, String name, long pos) {
+        for (Gene gene : genes) {
+            if (!name.equals(gene.name())) {
+                continue;
+            }
+            if (gene.start() <= pos && gene.end() >= pos) {
+                return 0;
+            }
+            if (gene.end() < pos) {
+                return pos - gene.end();
+            }
+            return gene.start() - pos;
+        }
+        return Long.MAX_VALUE;
     }
 
     private VariantEffect classifyEffect(VariantNode node, Transcript tx, boolean isReverse, String biotype) {

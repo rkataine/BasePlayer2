@@ -46,4 +46,40 @@ public record CosmicCensusEntry(
   public boolean hasCancerSyndrome() {
     return cancerSyndrome != null && !cancerSyndrome.isEmpty();
   }
+
+  /**
+   * True when Role in Cancer lists TSG (tumor suppressor), including dual-role genes.
+   */
+  public boolean isTumorSuppressor() {
+    return roleContains("tsg");
+  }
+
+  /**
+   * True when Role in Cancer lists oncogene, including dual-role genes.
+   */
+  public boolean isOncogene() {
+    return roleContains("oncogene");
+  }
+
+  private boolean roleContains(String token) {
+    if (roleInCancer == null || roleInCancer.isBlank()) {
+      return false;
+    }
+    String lower = roleInCancer.toLowerCase();
+    int idx = 0;
+    while (idx < lower.length()) {
+      int found = lower.indexOf(token, idx);
+      if (found < 0) {
+        return false;
+      }
+      boolean startOk = found == 0 || !Character.isLetterOrDigit(lower.charAt(found - 1));
+      int end = found + token.length();
+      boolean endOk = end >= lower.length() || !Character.isLetterOrDigit(lower.charAt(end));
+      if (startOk && endOk) {
+        return true;
+      }
+      idx = found + 1;
+    }
+    return false;
+  }
 }

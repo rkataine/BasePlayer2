@@ -81,8 +81,8 @@ public class VariantManagerController implements Initializable {
     @FXML private SplitPane svMainSplitPane;
     @FXML private VBox svFiltersHost;
     @FXML private TabPane svResultsTabPane;
-    @FXML private Tab svAllTab, svGeneTab, svOtherTab;
-    @FXML private TableView<?> svAllTable, svGeneTable, svOtherTable;
+    @FXML private Tab svAllTab, svDelTab, svDupTab, svInvTab, svTraTab, svBndTab, svInsTab;
+    @FXML private TableView<?> svAllTable, svDelTable, svDupTable, svInvTable, svTraTable, svBndTable, svInsTable;
 
     // Loading Modal
     @FXML private VBox loadingModal;
@@ -159,6 +159,8 @@ public class VariantManagerController implements Initializable {
     // filterTabPane is the outer mode pane (Point | SV). Kept name for FXML compatibility.
     @FXML private Button annotateAllChromosomesButton;
     @FXML private TextField tableSearchField;
+    private Button svAnnotateAllChromosomesButton;
+    private TextField svTableSearchField;
 
     // Agent Tab
     @FXML private Tab agentTab;
@@ -296,7 +298,7 @@ public class VariantManagerController implements Initializable {
         busyOverlay.setLockTargets(
             new VariantBusyOverlay.LockTargets(
                 filterTabPane,
-                annotateAllChromosomesButton,
+                annotateLockButtons(),
                 reloadBannerButton));
         busyOverlay.setOnCancel(this::handleCancelLoadingModal);
 
@@ -306,9 +308,6 @@ public class VariantManagerController implements Initializable {
             tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (variantTable != null) {
                     variantTable.setTableSearchQuery(newVal);
-                }
-                if (svVariantTable != null) {
-                    svVariantTable.setSearchQuery(newVal);
                 }
             });
         }
@@ -402,8 +401,17 @@ public class VariantManagerController implements Initializable {
         }
 
         if (pointFilters != null && pointResults != null) {
+            pointToolTabPane.setMinHeight(48);
+            pointToolTabPane.setPrefHeight(Region.USE_COMPUTED_SIZE);
+            if (pointResults instanceof Region resultsRegion) {
+                resultsRegion.setMinHeight(120);
+            }
             pointMainSplitPane.getItems().setAll(pointToolTabPane, pointResults);
             pointMainSplitPane.setDividerPositions(0.45);
+            // Allow collapsing filters almost fully so the table can fill the window.
+            SplitPane.setResizableWithParent(pointToolTabPane, true);
+            SplitPane.setResizableWithParent(pointResults, true);
+            wireResultsExpandDivider(pointMainSplitPane);
         }
 
         // ── SV workspace: tool tabs above results ────────────────────────────
@@ -466,8 +474,16 @@ public class VariantManagerController implements Initializable {
         svToolTabPane.getTabs().addAll(svFiltersTab, svComparisonTab, svControlTab, svAgentTab);
 
         if (svResults != null) {
+            svToolTabPane.setMinHeight(48);
+            svToolTabPane.setPrefHeight(Region.USE_COMPUTED_SIZE);
+            if (svResults instanceof Region resultsRegion) {
+                resultsRegion.setMinHeight(120);
+            }
             svMainSplitPane.getItems().setAll(svToolTabPane, svResults);
             svMainSplitPane.setDividerPositions(0.45);
+            SplitPane.setResizableWithParent(svToolTabPane, true);
+            SplitPane.setResizableWithParent(svResults, true);
+            wireResultsExpandDivider(svMainSplitPane);
         }
 
         if (pointWorkspace != null) {
@@ -488,6 +504,42 @@ public class VariantManagerController implements Initializable {
         }
     }
 
+    /**
+     * Make the vertical results divider easy to use: drag expands the table over filters;
+     * double-click maximizes results.
+     */
+    private static void wireResultsExpandDivider(SplitPane split) {
+        if (split == null) {
+            return;
+        }
+        if (!split.getStyleClass().contains("variant-manager-split")) {
+            split.getStyleClass().add("variant-manager-split");
+        }
+        Runnable apply = () -> {
+            for (Node child : split.lookupAll(".split-pane-divider")) {
+                if (!child.getStyleClass().contains("variant-results-divider")) {
+                    child.getStyleClass().add("variant-results-divider");
+                }
+                if (child instanceof Region region) {
+                    // Must call setters — minHeight()/prefHeight() only return properties.
+                    region.setMinHeight(18);
+                    region.setPrefHeight(18);
+                    region.setMaxHeight(18);
+                }
+                child.setOnMouseClicked(e -> {
+                    if (e.getClickCount() == 2) {
+                        // Collapse tool/filter pane; results take nearly the full height.
+                        split.setDividerPositions(0.06);
+                        e.consume();
+                    }
+                });
+            }
+        };
+        Platform.runLater(apply);
+        // Skin/dividers may appear after first layout.
+        split.skinProperty().addListener((obs, o, n) -> Platform.runLater(apply));
+    }
+
     private static Tab findTabByText(TabPane pane, String text) {
         if (pane == null || text == null) {
             return null;
@@ -498,6 +550,28 @@ public class VariantManagerController implements Initializable {
             }
         }
         return null;
+    }
+
+    private void refreshBusyOverlayLockTargets() {
+        if (busyOverlay == null) {
+            return;
+        }
+        busyOverlay.setLockTargets(
+            new VariantBusyOverlay.LockTargets(
+                filterTabPane,
+                annotateLockButtons(),
+                reloadBannerButton));
+    }
+
+    private List<Button> annotateLockButtons() {
+        List<Button> buttons = new ArrayList<>(2);
+        if (annotateAllChromosomesButton != null) {
+            buttons.add(annotateAllChromosomesButton);
+        }
+        if (svAnnotateAllChromosomesButton != null) {
+            buttons.add(svAnnotateAllChromosomesButton);
+        }
+        return buttons;
     }
 
     private void installStructuralFiltersPanel() {
@@ -513,6 +587,18 @@ public class VariantManagerController implements Initializable {
         if (svNodes.reloadBannerButton() != null) {
             svNodes.reloadBannerButton().setOnAction(e -> handleReloadFilteredVariants());
         }
+        if (svNodes.annotateAllChromosomesButton() != null) {
+            svAnnotateAllChromosomesButton = svNodes.annotateAllChromosomesButton();
+            svAnnotateAllChromosomesButton.setOnAction(e -> handleAnnotateAllChromosomes());
+        }
+        if (svNodes.tableSearchField() != null) {
+            svTableSearchField = svNodes.tableSearchField();
+            svTableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
+                if (svVariantTable != null) {
+                    svVariantTable.setSearchQuery(newVal);
+                }
+            });
+        }
 
         VariantFiltersPanel svFiltersPanel = new VariantFiltersPanel();
         svFiltersPanel.install(
@@ -524,20 +610,36 @@ public class VariantManagerController implements Initializable {
         if (svWorkspace != null) {
             svWorkspace.setFilters(svFiltersPanel);
         }
+        refreshBusyOverlayLockTargets();
     }
 
     private void initializeSvVariantTable() {
         if (svAllTable == null) {
             return;
         }
+        Map<VcfVariantType, TableView<?>> typeTables = new EnumMap<>(VcfVariantType.class);
+        typeTables.put(VcfVariantType.SV_DELETION, svDelTable);
+        typeTables.put(VcfVariantType.SV_DUPLICATION, svDupTable);
+        typeTables.put(VcfVariantType.SV_INVERSION, svInvTable);
+        typeTables.put(VcfVariantType.SV_TRANSLOCATION, svTraTable);
+        typeTables.put(VcfVariantType.SV_BREAKEND, svBndTable);
+        typeTables.put(VcfVariantType.SV_INSERTION, svInsTable);
+
+        Map<VcfVariantType, Tab> typeTabs = new EnumMap<>(VcfVariantType.class);
+        typeTabs.put(VcfVariantType.SV_DELETION, svDelTab);
+        typeTabs.put(VcfVariantType.SV_DUPLICATION, svDupTab);
+        typeTabs.put(VcfVariantType.SV_INVERSION, svInvTab);
+        typeTabs.put(VcfVariantType.SV_TRANSLOCATION, svTraTab);
+        typeTabs.put(VcfVariantType.SV_BREAKEND, svBndTab);
+        typeTabs.put(VcfVariantType.SV_INSERTION, svInsTab);
+
         svVariantTable = new SvVariantTable(
             svAllTable,
-            svGeneTable,
-            svOtherTable,
             svAllTab,
-            svGeneTab,
-            svOtherTab,
-            this::handlePositionClick);
+            typeTables,
+            typeTabs,
+            this::handlePositionClick,
+            this::handleSvRowDoubleClick);
         svVariantTable.initializeColumns();
     }
 
@@ -553,9 +655,7 @@ public class VariantManagerController implements Initializable {
         loadFilterState(currentFilter);
 
         sourceVariantLists = getCachedVariantSources();
-        if (vcfManager != null) {
-            vcfManager.rebuildSessionAvailableFromCaches();
-        }
+        // Observed types live on each open VcfData; getters union them.
 
         // Populate variant type filters dynamically
         VariantFilter typeFilter = vcfManager.getCurrentLoadedFilter();
@@ -738,6 +838,9 @@ public class VariantManagerController implements Initializable {
         loadFilterState(defaults);
         if (tableSearchField != null) {
             tableSearchField.clear();
+        }
+        if (svTableSearchField != null) {
+            svTableSearchField.clear();
         }
         if (variantTable != null) {
             variantTable.setTableSearchQuery("");
@@ -1066,6 +1169,106 @@ public class VariantManagerController implements Initializable {
     }
 
     /**
+     * Double-click SV row: full span for DEL/DUP/INV; dual-stack for TRA/BND; breakpoint otherwise.
+     */
+    public void handleSvRowDoubleClick(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+        VariantNode node = row.node();
+        String rowChromosome = row.chromosome();
+        if (rowChromosome == null || rowChromosome.isBlank()) {
+            rowChromosome = chromosome;
+        }
+        final String chrom = rowChromosome;
+        List<SampleTrack> tracks = resolveTracksFromCalls(node.getSamples());
+
+        if (node.type == VcfVariantType.SV_TRANSLOCATION || node.type == VcfVariantType.SV_BREAKEND) {
+            navigateSvTranslocation(chrom, node, tracks);
+            return;
+        }
+
+        if ((node.type == VcfVariantType.SV_DELETION
+                || node.type == VcfVariantType.SV_DUPLICATION
+                || node.type == VcfVariantType.SV_INVERSION)
+                && node.svEnd > node.position) {
+            long[] view = paddedSvSpan(node.position, node.svEnd);
+            final long navStart = view[0];
+            final long navEnd = view[1];
+            navigateAndApplySampleFilter(
+                () -> {
+                    NavigationCommands.navigateToPosition(chrom, (int) navStart, (int) navEnd);
+                    tryLoadRegionVariants(chrom, navStart, navEnd);
+                },
+                tracks,
+                "SV:" + chrom + ":" + node.position + "-" + node.svEnd);
+            return;
+        }
+
+        handlePositionClick(row);
+    }
+
+    private void navigateSvTranslocation(String primaryChrom, VariantNode node, List<SampleTrack> tracks) {
+        long primaryPos = node.position;
+        long[] primaryView = paddedBreakpointWindow(primaryPos);
+        String mateChrom = node.mateChromosome();
+        long matePos = node.matePosition();
+
+        navigateAndApplySampleFilter(
+            () -> {
+                DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+                List<org.baseplayer.draw.DrawStack> stacks =
+                    stackManager != null ? stackManager.getStacks() : List.of();
+
+                if (!stacks.isEmpty()) {
+                    stacks.get(0).navigateTo(primaryChrom, primaryView[0], primaryView[1]);
+                } else {
+                    NavigationCommands.navigateToPosition(
+                        primaryChrom, (int) primaryView[0], (int) primaryView[1]);
+                }
+                tryLoadRegionVariants(primaryChrom, primaryView[0], primaryView[1]);
+
+                if (mateChrom != null && !mateChrom.isBlank() && matePos >= 0) {
+                    long[] mateView = paddedBreakpointWindow(matePos);
+                    if (stacks.size() >= 2) {
+                        stacks.get(1).navigateTo(mateChrom, mateView[0], mateView[1]);
+                        tryLoadRegionVariants(mateChrom, mateView[0], mateView[1]);
+                    } else {
+                        org.baseplayer.controllers.MainController.addStackAtRegion(
+                            mateChrom, mateView[0], mateView[1]);
+                    }
+                }
+            },
+            tracks,
+            "TRA:" + primaryChrom + ":" + primaryPos);
+    }
+
+    private static long[] paddedSvSpan(long start, long end) {
+        long span = Math.max(1, end - start);
+        long pad = Math.max(500, Math.min(50_000, span / 10));
+        long viewStart = Math.max(1, start - pad);
+        long viewEnd = end + pad;
+        return new long[] { viewStart, viewEnd };
+    }
+
+    private static long[] paddedBreakpointWindow(long position) {
+        long half = 500;
+        long start = Math.max(1, position - half);
+        return new long[] { start, position + half };
+    }
+
+    private void tryLoadRegionVariants(String chrom, long start, long end) {
+        if (vcfManager == null || chrom == null || chrom.isBlank()) {
+            return;
+        }
+        try {
+            vcfManager.loadRegionVariants(chrom, start, end);
+        } catch (Exception ignored) {
+            // Navigation still succeeds without a forced VCF load
+        }
+    }
+
+    /**
      * Resolve unique sample tracks from per-variant sample calls.
      */
     private List<SampleTrack> resolveTracksFromCalls(java.util.List<VariantNode.SampleCall> samples) {
@@ -1250,23 +1453,24 @@ public class VariantManagerController implements Initializable {
     }
 
     private VariantFilter buildFilterFromUI() {
-        // Unobserved class panels (empty checkboxes) allow that whole class so a later
-        // VCF of the other mode can still load. Legends / mode tabs use loaded data only.
+        // Unobserved class panels write empty allowedTypes. Load paths expand via
+        // ensureUnobservedClassSlicesPassAll so a later VCF of that class is not blocked.
+        // Legends / checkboxes use session observed types only — never invent here.
         VariantFilter point = pointWorkspace != null
             ? pointWorkspace.writeSlice()
-            : passAllSlice(VariantTypeVisuals.VariantClass.POINT);
+            : emptyUnobservedSlice(VariantTypeVisuals.VariantClass.POINT);
         VariantFilter sv = svWorkspace != null
             ? svWorkspace.writeSlice()
-            : passAllSlice(VariantTypeVisuals.VariantClass.STRUCTURAL);
+            : emptyUnobservedSlice(VariantTypeVisuals.VariantClass.STRUCTURAL);
 
         VariantFilter merged = new VariantFilter();
         merged.setClassSlices(point, sv);
         return merged;
     }
 
-    private static VariantFilter passAllSlice(VariantTypeVisuals.VariantClass mode) {
+    private static VariantFilter emptyUnobservedSlice(VariantTypeVisuals.VariantClass mode) {
         VariantFilter slice = new VariantFilter();
-        slice.setAllowedTypes(mode.allTypes());
+        slice.setAllowedTypes(EnumSet.noneOf(VcfVariantType.class));
         if (mode == VariantTypeVisuals.VariantClass.STRUCTURAL) {
             slice.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
         }
@@ -1586,9 +1790,6 @@ public class VariantManagerController implements Initializable {
             lastSeenVariantsRevision = revision;
             clearTableItemsForChromosomeSwitch();
             setPlaceholder("No variants available");
-            if (vcfManager != null) {
-                vcfManager.rebuildSessionAvailableFromCaches();
-            }
             for (VariantClassWorkspace ws : workspaces()) {
                 ws.populateTypes(sourceVariantLists, null);
             }
@@ -1613,10 +1814,6 @@ public class VariantManagerController implements Initializable {
         }
 
         lastSeenVariantsRevision = revision;
-
-        if (vcfManager != null) {
-            vcfManager.rebuildSessionAvailableFromCaches();
-        }
 
         // Update variant type filters after load completes to avoid repeated full-list scans
         // during progressive loading.
@@ -1713,8 +1910,10 @@ public class VariantManagerController implements Initializable {
             List<VariantTable.TableRow> intronic = new ArrayList<>();
             List<VariantTable.TableRow> intergenic = new ArrayList<>();
             List<VariantTable.TableRow> svAll = new ArrayList<>();
-            List<VariantTable.TableRow> svGene = new ArrayList<>();
-            List<VariantTable.TableRow> svOther = new ArrayList<>();
+            Map<VcfVariantType, List<VariantTable.TableRow>> svByType = new EnumMap<>(VcfVariantType.class);
+            for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
+                svByType.put(type, new ArrayList<>());
+            }
 
             try {
                 for (VcfManager.CachedChromosomeVariants cached : snapshots) {
@@ -1725,22 +1924,79 @@ public class VariantManagerController implements Initializable {
                     }
 
                     VariantNode node = variants.getFirst();
-                    Map<String, Set<Integer>> geneTracks = filterSnapshot.isGeneLevel()
-                        ? variants.ensureGeneSampleIndex(filterSnapshot)
-                        : null;
+                    VariantFilter svSlice = filterSnapshot.getSvSlice() != null
+                        ? filterSnapshot.getSvSlice()
+                        : filterSnapshot;
+                    VariantFilter pointSlice = filterSnapshot.getPointSlice() != null
+                        ? filterSnapshot.getPointSlice()
+                        : filterSnapshot;
+                    boolean svGeneLevel = svSlice.isGeneLevel();
+                    boolean pointGeneLevel = pointSlice.isGeneLevel();
+                    Map<String, Set<Integer>> geneTracks = null;
+                    Map<VcfVariantType, Set<String>> passingGenesByType = null;
+                    if (svGeneLevel || pointGeneLevel) {
+                        variants.ensureGeneSampleIndex(filterSnapshot);
+                    }
+                    if (svGeneLevel) {
+                        passingGenesByType = variants.computePassingGenesByType(svSlice);
+                    }
+                    if (pointGeneLevel) {
+                        geneTracks = variants.ensureGeneSampleIndex(filterSnapshot);
+                    }
                     Map<VariantNode, Set<Integer>> clusterTracks =
-                        !filterSnapshot.isGeneLevel() && filterSnapshot.hasComparisonWindow()
+                        !svGeneLevel && !pointGeneLevel && filterSnapshot.hasComparisonWindow()
                             ? variants.ensureClusterSampleIndex(filterSnapshot)
                             : null;
                     while (node != null) {
+                        boolean isSv = VariantTypeVisuals.isStructural(node.type);
+                        if (isSv && svGeneLevel) {
+                            if (!filterSnapshot.passesBaseNodeLevel(node)) {
+                                node = node.next;
+                                continue;
+                            }
+                            Set<String> passing = passingGenesByType != null
+                                ? passingGenesByType.get(node.type)
+                                : null;
+                            List<String> displayGenes =
+                                VariantList.displayGenesPassing(node, passing);
+                            if (displayGenes.isEmpty()) {
+                                node = node.next;
+                                continue;
+                            }
+                            if (svSlice.hasActiveGenotypeGroupComparison()
+                                    && !svSlice.passesGroupComparison(node)) {
+                                node = node.next;
+                                continue;
+                            }
+                            int passSamples = 0;
+                            for (VariantNode.SampleCall call : node.getSamples()) {
+                                if (filterSnapshot.passesSampleThresholds(node, call)) {
+                                    passSamples++;
+                                }
+                            }
+                            if (passSamples > 0) {
+                                // One table row per overlapping gene so nested grouping
+                                // places the SV under every gene it hits (not only primary).
+                                for (String gene : displayGenes) {
+                                    if (gene == null || gene.isBlank()) {
+                                        continue;
+                                    }
+                                    VariantTable.TableRow row = new VariantTable.TableRow(
+                                        sourceChromosome, node, List.of(gene.trim()));
+                                    svAll.add(row);
+                                    List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
+                                    if (typeBucket != null) {
+                                        typeBucket.add(row);
+                                    }
+                                }
+                            }
+                            node = node.next;
+                            continue;
+                        }
+
                         Set<Integer> aggregatedTracks = null;
                         if (geneTracks != null) {
-                            String gene = node.annotation != null && node.annotation.geneName() != null
-                                ? node.annotation.geneName().trim().toLowerCase(java.util.Locale.ROOT)
-                                : null;
-                            aggregatedTracks = gene != null && !gene.isEmpty()
-                                ? geneTracks.getOrDefault(gene, Set.of())
-                                : Set.of();
+                            aggregatedTracks = VariantList.aggregatedTracksForGenes(node, geneTracks);
                         } else if (clusterTracks != null) {
                             aggregatedTracks = clusterTracks.getOrDefault(node, Set.of());
                         }
@@ -1757,12 +2013,11 @@ public class VariantManagerController implements Initializable {
                         }
                         if (passSamples > 0) {
                             VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
-                            if (VariantTypeVisuals.isStructural(node.type)) {
+                            if (isSv) {
                                 svAll.add(row);
-                                if (SvVariantTable.isGeneOverlapping(node)) {
-                                    svGene.add(row);
-                                } else {
-                                    svOther.add(row);
+                                List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
+                                if (typeBucket != null) {
+                                    typeBucket.add(row);
                                 }
                             } else {
                                 VariantAnnotation ann = node.annotation;
@@ -1800,10 +2055,14 @@ public class VariantManagerController implements Initializable {
                     FXCollections.observableArrayList(intergenic));
                 if (svVariantTable != null) {
                     svVariantTable.setDisplayContext(filterSnapshot);
-                    svVariantTable.setItems(
-                        FXCollections.observableArrayList(svAll),
-                        FXCollections.observableArrayList(svGene),
-                        FXCollections.observableArrayList(svOther));
+                    Map<VcfVariantType, ObservableList<VariantTable.TableRow>> byType =
+                        new EnumMap<>(VcfVariantType.class);
+                    for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
+                        List<VariantTable.TableRow> bucket = svByType.get(type);
+                        byType.put(type, FXCollections.observableArrayList(
+                            bucket != null ? bucket : List.of()));
+                    }
+                    svVariantTable.setItems(FXCollections.observableArrayList(svAll), byType);
                 }
 
                 boolean pointEmpty = coding.isEmpty() && intronic.isEmpty() && intergenic.isEmpty();
@@ -1816,9 +2075,9 @@ public class VariantManagerController implements Initializable {
                 if (svVariantTable != null) {
                     if (svEmpty) {
                         svVariantTable.setPlaceholders(
-                            "No structural variants match current filter settings", "", "");
+                            "No structural variants match current filter settings", "");
                     } else {
-                        svVariantTable.setPlaceholders("", "", "");
+                        svVariantTable.setPlaceholders("", "");
                     }
                 }
 
@@ -1874,7 +2133,7 @@ public class VariantManagerController implements Initializable {
         }
         if (svVariantTable != null) {
             svVariantTable.setBaseTabTitles();
-            svVariantTable.setPlaceholders(text, "", "");
+            svVariantTable.setPlaceholders(text, "");
         }
     }
 

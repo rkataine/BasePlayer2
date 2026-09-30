@@ -228,7 +228,7 @@ public class VariantDrawer {
             if (slot == null) {
                 continue;
             }
-            if (filter != null && !filter.passesSampleThresholds(node, call)) {
+            if (filter != null && !filter.passesSampleDisplay(node, call)) {
                 continue;
             }
 

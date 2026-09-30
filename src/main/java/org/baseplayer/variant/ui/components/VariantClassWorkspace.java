@@ -79,8 +79,9 @@ public final class VariantClassWorkspace {
         if (filters != null) {
             filters.writeTo(slice);
         } else {
-            // No filter UI yet — allow the whole class so future VCFs of this mode can load.
-            slice.setAllowedTypes(mode.allTypes());
+            // No filter UI yet — empty types (unobserved). Load expands via
+            // ensureUnobservedClassSlicesPassAll; do not invent legends/checkboxes.
+            slice.setAllowedTypes(EnumSet.noneOf(VcfVariantType.class));
             if (mode == VariantTypeVisuals.VariantClass.STRUCTURAL) {
                 slice.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
             }

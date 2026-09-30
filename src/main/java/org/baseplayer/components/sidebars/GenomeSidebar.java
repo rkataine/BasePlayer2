@@ -3,12 +3,14 @@ package org.baseplayer.components.sidebars;
 import java.util.List;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.components.AnnotationOptionsDialog;
 import org.baseplayer.genome.ReferenceGenome;
 import org.baseplayer.io.Settings;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.services.InitializationService;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
@@ -27,19 +29,42 @@ import javafx.scene.layout.VBox;
  */
 public class GenomeSidebar extends SidebarBase {
 
+  private static GenomeSidebar instance;
+
   private final ComboBox<ReferenceGenome> referenceComboBox  = new ComboBox<>();
   private final ComboBox<String>          annotationComboBox = new ComboBox<>();
   private final Label projectNameLabel = new Label("Untitled");
 
   private final InitializationService initializationService;
+  private boolean suppressAnnotationReload;
 
   public GenomeSidebar(StackPane parent, InitializationService initializationService) {
     super(parent, DEFAULT_HEADER_HEIGHT);
     this.initializationService = initializationService;
+    instance = this;
 
     buildContent();
     setupProjectNameLabel();
     loadAvailableGenomes();
+  }
+
+  /**
+   * Sync combo boxes and reload cytobands/genes from {@link Settings}
+   * (used after project open restores {@code genome.id} / {@code genome.annotation}).
+   *
+   * @return true if the sidebar was available and sync was scheduled/ran
+   */
+  public static boolean syncFromSettings() {
+    GenomeSidebar sidebar = instance;
+    if (sidebar == null) {
+      return false;
+    }
+    if (Platform.isFxApplicationThread()) {
+      sidebar.applySettingsToUi();
+    } else {
+      Platform.runLater(sidebar::applySettingsToUi);
+    }
+    return true;
   }
 
   // ── SidebarBase contract ──────────────────────────────────────────────────
@@ -84,8 +109,14 @@ public class GenomeSidebar extends SidebarBase {
     annotationComboBox.getStyleClass().add("minimal-combo-box");
     annotationComboBox.setPromptText("Annotations");
     annotationComboBox.setOnAction(e -> {
+      if (suppressAnnotationReload) {
+        return;
+      }
       String sel = annotationComboBox.getValue();
-      if (sel != null) Settings.get().setLastAnnotation(sel);
+      if (sel != null) {
+        Settings.get().setLastAnnotation(sel);
+        AnnotationLoader.loadGenesBackground();
+      }
     });
 
     Label referenceLabel = new Label("Reference genome");
@@ -124,10 +155,10 @@ public class GenomeSidebar extends SidebarBase {
     };
     refresh.run();
     session.addListener(s -> {
-      if (javafx.application.Platform.isFxApplicationThread()) {
+      if (Platform.isFxApplicationThread()) {
         refresh.run();
       } else {
-        javafx.application.Platform.runLater(refresh);
+        Platform.runLater(refresh);
       }
     });
   }
@@ -137,7 +168,6 @@ public class GenomeSidebar extends SidebarBase {
   private void loadAvailableGenomes() {
     List<ReferenceGenome> genomes = initializationService.loadAvailableGenomes();
     referenceComboBox.getItems().addAll(genomes);
-    referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
 
     String lastGenome = Settings.get().getLastGenome();
     ReferenceGenome selected = null;
@@ -151,31 +181,91 @@ public class GenomeSidebar extends SidebarBase {
     } else if (!genomes.isEmpty()) {
       referenceComboBox.getSelectionModel().selectFirst();
     }
+    // Wire action after initial select so programmatic select does not double-load genes.
+    referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
     onReferenceGenomeSelected();
   }
 
+  /**
+   * Apply Settings genome/annotation to the combo boxes and reload annotation data.
+   * Does not overwrite Settings when the saved annotation is missing from disk.
+   */
+  private void applySettingsToUi() {
+    String lastGenome = Settings.get().getLastGenome();
+    String lastAnnotation = Settings.get().getLastAnnotation();
+
+    ReferenceGenome match = null;
+    if (lastGenome != null && !lastGenome.isBlank()) {
+      match = referenceComboBox.getItems().stream()
+          .filter(g -> lastGenome.equals(g.getName()))
+          .findFirst()
+          .orElse(null);
+    }
+
+    referenceComboBox.setOnAction(null);
+    try {
+      if (match != null) {
+        referenceComboBox.getSelectionModel().select(match);
+        initializationService.selectReferenceGenome(match);
+      }
+
+      loadAvailableAnnotations(false);
+
+      if (lastAnnotation != null && !lastAnnotation.isBlank()) {
+        suppressAnnotationReload = true;
+        try {
+          if (annotationComboBox.getItems().contains(lastAnnotation)) {
+            annotationComboBox.getSelectionModel().select(lastAnnotation);
+          }
+        } finally {
+          suppressAnnotationReload = false;
+        }
+        // Keep project annotation even if the file is temporarily missing from the combo.
+        Settings.get().setLastAnnotation(lastAnnotation);
+      }
+      if (lastGenome != null && !lastGenome.isBlank()) {
+        Settings.get().setLastGenome(lastGenome);
+      }
+
+      AnnotationLoader.loadCytobands();
+      AnnotationLoader.loadGenesBackground();
+    } finally {
+      referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
+    }
+  }
+
   private void loadAvailableAnnotations() {
+    loadAvailableAnnotations(true);
+  }
+
+  private void loadAvailableAnnotations(boolean persistSelection) {
     ReferenceGenome genome = referenceComboBox.getValue();
     String genomeName = genome != null ? genome.getName() : "GRCh38";
 
-    annotationComboBox.getItems().clear();
-    List<String> annotations = initializationService.loadAvailableAnnotations(genomeName);
-    annotationComboBox.getItems().addAll(annotations);
+    suppressAnnotationReload = true;
+    try {
+      annotationComboBox.getItems().clear();
+      List<String> annotations = initializationService.loadAvailableAnnotations(genomeName);
+      annotationComboBox.getItems().addAll(annotations);
 
-    if (!annotations.isEmpty()) {
-      // Restore last used annotation if it belongs to this genome
-      String lastAnnotation = Settings.get().getLastAnnotation();
-      if (lastAnnotation != null && annotations.contains(lastAnnotation)) {
-        annotationComboBox.getSelectionModel().select(lastAnnotation);
-      } else {
-        String defaultAnnotation = initializationService.findDefaultAnnotation(annotations);
-        if (defaultAnnotation != null) {
-          annotationComboBox.getSelectionModel().select(defaultAnnotation);
+      if (!annotations.isEmpty()) {
+        // Restore last used annotation if it belongs to this genome
+        String lastAnnotation = Settings.get().getLastAnnotation();
+        if (lastAnnotation != null && annotations.contains(lastAnnotation)) {
+          annotationComboBox.getSelectionModel().select(lastAnnotation);
+        } else {
+          String defaultAnnotation = initializationService.findDefaultAnnotation(annotations);
+          if (defaultAnnotation != null) {
+            annotationComboBox.getSelectionModel().select(defaultAnnotation);
+          }
         }
       }
+      if (persistSelection) {
+        Settings.get().setLastAnnotation(annotationComboBox.getValue());
+      }
+    } finally {
+      suppressAnnotationReload = false;
     }
-    // Save whatever is now selected
-    Settings.get().setLastAnnotation(annotationComboBox.getValue());
   }
 
   private void onReferenceGenomeSelected() {
@@ -184,5 +274,7 @@ public class GenomeSidebar extends SidebarBase {
     Settings.get().setLastGenome(genome.getName());
     initializationService.selectReferenceGenome(genome);
     loadAvailableAnnotations();
+    AnnotationLoader.loadCytobands();
+    AnnotationLoader.loadGenesBackground();
   }
 }

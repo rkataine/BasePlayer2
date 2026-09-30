@@ -7,13 +7,13 @@ import java.util.Set;
 
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.components.SampleTrackControls;
-import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.draw.ReadColorMode;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
@@ -86,7 +86,13 @@ public class SampleTrackListPanel extends TrackListPanel {
 
   @Override
   protected void onAfterVisibleTrackRangeChanged() {
-    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
+    for (org.baseplayer.draw.DrawStack stack : stacks.getStacks()) {
+      if (stack.sampleTrackCanvas != null) {
+        stack.sampleTrackCanvas.draw();
+      }
+    }
+    draw();
   }
 
   @Override

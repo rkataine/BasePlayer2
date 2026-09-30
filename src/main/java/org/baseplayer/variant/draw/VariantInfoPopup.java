@@ -92,9 +92,9 @@ public class VariantInfoPopup extends InfoPopup {
       }
       if (call.gt != null && !call.gt.isBlank()) {
         c.row("Genotype", call.gt);
-        if (VariantNode.isHetGt(call.gt)) {
+        if (node.isHeterozygous(call)) {
           c.row("Zygosity", "Heterozygous");
-        } else if (isHomAlt(node, call)) {
+        } else if (node.isHomozygousAlt(call)) {
           c.row("Zygosity", "Homozygous ALT");
         }
       }
@@ -118,8 +118,10 @@ public class VariantInfoPopup extends InfoPopup {
     if (ann == null) {
       c.text("Not annotated yet. Run annotation in Variant Manager for this chromosome.");
     } else {
-      if (ann.geneName() != null && !ann.geneName().isBlank()) {
-        c.row("Gene", ann.geneName());
+      String genes = ann.genesDisplay();
+      if (genes != null && !genes.isBlank()) {
+        c.row(ann.overlappingGenes() != null && ann.overlappingGenes().size() > 1
+            ? "Genes" : "Gene", genes);
       }
       if (ann.effect() != null) {
         c.row("Effect", ann.effect().displayName());
@@ -200,14 +202,6 @@ public class VariantInfoPopup extends InfoPopup {
       return call.sample.getName();
     }
     return null;
-  }
-
-  private static boolean isHomAlt(VariantNode node, VariantNode.SampleCall call) {
-    if (call.gt == null || node.alt == null) {
-      return false;
-    }
-    String[] a = call.gt.split("[/|]");
-    return a.length >= 2 && a[0].equals(node.alt) && a[1].equals(node.alt);
   }
 
   private static String typeLabel(VcfVariantType type) {

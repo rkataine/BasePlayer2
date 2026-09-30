@@ -67,7 +67,10 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     @Override
     protected void onVisibleTrackRangeOrRowHeightChanged() {
-        notifyVariantIndexDirty();
+        // Viewport range / row height only affects which sample rows are drawn.
+        // Aggregate density is over the displayed subset (filter / gene focus), not the
+        // visible window — do not clear or recompute density here (causes flashing).
+        invalidateSampleTrackVariantIndexes();
     }
 
     public ObservableList<SampleTrack> getSampleTracks() {
@@ -525,11 +528,24 @@ public class SampleRegistry extends TrackViewportRegistry {
         setMasterBandHeightPixels(height);
     }
 
-    private void notifyVariantIndexDirty() {
+    private void invalidateSampleTrackVariantIndexes() {
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.sampleTrackCanvas != null) {
                 stack.sampleTrackCanvas.invalidateVariantIndex();
+            }
+        }
+    }
+
+    private void notifyVariantIndexDirty() {
+        invalidateSampleTrackVariantIndexes();
+        // Density bins are keyed by displayed-sample subset; gene focus / text
+        // filter / track-list changes must recompute or the aggregate band keeps
+        // the old heights. Visible-range scrolling must not call this.
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.forceCalculateDensity();
             }
         }
     }

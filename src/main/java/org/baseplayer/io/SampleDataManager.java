@@ -175,8 +175,8 @@ public class SampleDataManager {
       purge.accept(cached);
     }
 
-    // Types/legends must follow remaining sample data — not a sticky union of past types.
-    VcfManager.getInstance().rebuildSessionAvailableFromCaches();
+    // Drop VCFs with no remaining open sample; types follow open VcfData only.
+    VcfManager.getInstance().unloadVcfsWithNoOpenSamples();
     for (DrawStack stack : stackManager.getStacks()) {
       if (stack.sampleTrackCanvas != null) {
         stack.sampleTrackCanvas.invalidateVariantIndex();
@@ -555,6 +555,80 @@ public class SampleDataManager {
     return null;
   }
 
+  /**
+   * Open and register many VCFs on the calling thread (no nested ThreadRunner tasks).
+   * Used by project restore after sample tracks already exist — maps onto those tracks
+   * immediately so the opener does not wait through per-file "Opening VCF…" / sample UI.
+   */
+  public static void loadVcfFilesForSessionRestore(List<File> files, List<String> warnings) {
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    boolean addedTracks = false;
+
+    for (File file : files) {
+      if (Thread.currentThread().isInterrupted()) {
+        return;
+      }
+      if (file == null || !file.exists()) {
+        if (warnings != null) {
+          warnings.add("Missing VCF: " + file);
+        }
+        continue;
+      }
+      if (VcfManager.getInstance().isVcfFileLoaded(file)) {
+        continue;
+      }
+
+      try {
+        Path vcfPath = file.toPath();
+        VcfReader reader = new VcfReader(vcfPath);
+        VariantLoader loader = new VariantLoader(reader);
+
+        List<String> unmappedSamples = loader.getUnmappedSamples();
+        VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
+        if (vcfData == null) {
+          try { reader.close(); } catch (IOException ignored) {}
+          loader.setVcfReader(null);
+          continue;
+        }
+
+        // Tracks were restored first; only create rows for truly new sample IDs.
+        if (!unmappedSamples.isEmpty()) {
+          for (String sampleName : unmappedSamples) {
+            SampleTrack track = new SampleTrack(sampleName);
+            registry.getSampleTracks().add(track);
+            registry.getSampleList().add(sampleName);
+          }
+          addedTracks = true;
+          loader.updateMapping();
+        } else {
+          loader.updateMapping();
+        }
+
+        attachVcfSamplesToMappedTracks(loader, vcfPath);
+
+        try { reader.close(); } catch (IOException ignored) {}
+        vcfData.reader = null;
+        loader.setVcfReader(null);
+
+        if (loader.getMappedSampleCount() == 0 && warnings != null) {
+          warnings.add("Could not map any samples from VCF: " + file.getName());
+        }
+      } catch (Exception e) {
+        if (warnings != null) {
+          warnings.add("Failed to load VCF " + file.getName() + ": " + e.getMessage());
+        }
+        System.err.println("Failed to load VCF during session restore: " + file + " - " + e.getMessage());
+      }
+    }
+
+    if (addedTracks) {
+      registry.includeNewTracksAtEndResetHeight();
+    }
+  }
+
   private static void loadVcfFileSynchronously(File file) throws IOException {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
@@ -683,7 +757,6 @@ public class SampleDataManager {
     for (org.baseplayer.variant.VariantList cached : VcfManager.getInstance().snapshotVariantCache().values()) {
       invalidate.accept(cached);
     }
-    VcfManager.getInstance().rebuildSessionAvailableFromCaches();
     VcfManager.getInstance().bumpVariantsRevision();
     org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -731,11 +804,9 @@ public class SampleDataManager {
       }
     }
 
-    org.baseplayer.variant.ui.VariantManagerController variantController = 
-        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
-    if (variantController != null) {
-      variantController.resetToProjectDefaults();
-    }
+    // Dispose Variant Manager so Open Project / next VCF gets a fresh FXML UI
+    // (partial reset left SV tabs/filters from the previous project).
+    org.baseplayer.variant.ui.VariantManagerWindow.closeAndDispose();
 
     ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());

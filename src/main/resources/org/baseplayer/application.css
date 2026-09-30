@@ -282,9 +282,24 @@ VBox {
   -fx-padding: 0;
 }
 
-.variant-manager-split > .split-pane-divider {
-  -fx-background-color: #3a3a3a;
-  -fx-padding: 0 0 1 0;
+/* Vertical split between filters/tools and results table: wide grab zone + clear bar. */
+.variant-manager-split > .split-pane-divider,
+.variant-results-divider {
+  -fx-padding: 0;
+  -fx-min-height: 18;
+  -fx-pref-height: 18;
+  -fx-max-height: 18;
+  -fx-background-color: #2a3542, #5a7a8a;
+  -fx-background-insets: 0, 7 0 7 0;
+  -fx-background-radius: 0;
+  -fx-border-color: transparent;
+  -fx-cursor: v-resize;
+}
+
+.variant-manager-split > .split-pane-divider:hover,
+.variant-results-divider:hover {
+  -fx-background-color: #314554, #7fdbff;
+  -fx-background-insets: 0, 6 0 6 0;
 }
 
 .tab-content-split {
@@ -528,8 +543,8 @@ VBox {
 
 /* Variant tables */
 .table-container {
-    -fx-background-color: #1e1e1e;
-  -fx-padding: 8 10 10 10;
+    -fx-background-color: #b9cddc;
+  -fx-padding: 8;
   -fx-border-color: #3c3c3c;
   -fx-border-width: 1px 0 0 0;
 }
@@ -587,6 +602,436 @@ VBox {
 
 .variant-table .placeholder .label {
     -fx-text-fill: #888888;
+}
+
+/* Nested Gene → Variant → Sample: light-blue rows, distinct dark headers, dark body text.
+   .root-pane .label forces white — every body text rule must beat that specificity. */
+.variant-nested-container {
+    -fx-background-color: #b9cddc;
+}
+
+.variant-nested-scroll {
+    -fx-background-color: #b9cddc;
+    -fx-background: #b9cddc;
+    -fx-padding: 0;
+}
+
+.variant-nested-scroll > .viewport {
+    -fx-background-color: #b9cddc;
+}
+
+.vn-sticky-headers {
+    -fx-background-color: #b9cddc;
+    /* Outer inset matches .vn-thread-list; top gap uses shared 4px rhythm. */
+    -fx-padding: 4 8 0 8;
+}
+
+.vn-pin-bar {
+    -fx-background-color: #b9cddc;
+    -fx-padding: 4 8 0 8;
+}
+
+.vn-node-pinned {
+    -fx-background-color: #9eb9ce;
+}
+
+.vn-header {
+    -fx-padding: 0;
+    -fx-spacing: 0;
+}
+
+.vn-header-gene {
+    -fx-background-color: #1a3a48;
+    /* Match .vn-node-gene left border reservation. */
+    -fx-border-color: transparent;
+    -fx-border-width: 0 0 0 3;
+}
+
+.vn-header-variant {
+    -fx-background-color: #1a3a48;
+}
+
+.vn-header-sample {
+    -fx-background-color: #1a3a48;
+}
+
+.vn-header-inline {
+    -fx-padding: 0;
+}
+
+.root-pane .vn-header-label,
+.vn-header-label {
+    -fx-text-fill: #d7e6ef;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-text-overrun: ellipsis;
+    -fx-alignment: CENTER_LEFT;
+}
+
+/* Shared 4px padding/gap throughout the nested table. */
+.vn-col {
+    -fx-padding: 4;
+}
+
+.vn-col-sep {
+    -fx-background-color: #b9cddc;
+}
+
+.vn-col-sep-resize {
+    -fx-cursor: h-resize;
+    -fx-background-color: #9bb4c8;
+}
+
+.vn-col-sep-resize:hover {
+    -fx-background-color: #7a9bb3;
+}
+
+.vn-header-sortable {
+    -fx-cursor: hand;
+    -fx-alignment: CENTER_LEFT;
+    -fx-spacing: 4;
+}
+
+.root-pane .vn-header-sortable:hover .vn-header-label,
+.root-pane .vn-header-sortable:hover .vn-header-sort-arrow,
+.vn-header-sortable:hover .vn-header-label,
+.vn-header-sortable:hover .vn-header-sort-arrow {
+    -fx-text-fill: #ffffff;
+}
+
+.root-pane .vn-header-sortable-active .vn-header-label,
+.root-pane .vn-header-sortable-active .vn-header-sort-arrow,
+.vn-header-sortable-active .vn-header-label,
+.vn-header-sortable-active .vn-header-sort-arrow {
+    -fx-text-fill: #7fdbff;
+}
+
+.root-pane .vn-header-sort-arrow,
+.vn-header-sort-arrow {
+    -fx-text-fill: #7fdbff;
+    -fx-font-size: 9px;
+    -fx-font-weight: bold;
+    -fx-padding: 0;
+    -fx-min-width: 10;
+    -fx-alignment: CENTER;
+}
+
+.vn-thread-list {
+    -fx-background-color: #b9cddc;
+    -fx-control-inner-background: #b9cddc;
+    -fx-background-insets: 0;
+    -fx-padding: 0 8 8 8;
+}
+
+.vn-thread-list .list-cell {
+    -fx-background-color: #b9cddc;
+    -fx-padding: 4 0 0 0;
+}
+
+.vn-thread-list .list-cell:filled:selected,
+.vn-thread-list .list-cell:filled:selected:focused,
+.vn-thread-list .list-cell:filled:hover {
+    -fx-background-color: #b9cddc;
+}
+
+.vn-thread-list .virtual-flow,
+.vn-thread-list .clipped-container,
+.vn-thread-list .sheet {
+    -fx-background-color: #b9cddc;
+}
+
+/* Light scrollbars for the nested variant table (override global dark scroll-bar). */
+.vn-thread-list .scroll-bar,
+.variant-nested-container .scroll-bar,
+.table-container .scroll-bar {
+    -fx-background-color: #b9cddc;
+}
+
+.vn-thread-list .scroll-bar:vertical,
+.variant-nested-container .scroll-bar:vertical,
+.table-container .scroll-bar:vertical {
+    -fx-pref-width: 12;
+}
+
+.vn-thread-list .scroll-bar:horizontal,
+.variant-nested-container .scroll-bar:horizontal,
+.table-container .scroll-bar:horizontal {
+    -fx-pref-height: 12;
+}
+
+.vn-thread-list .scroll-bar .track,
+.variant-nested-container .scroll-bar .track,
+.table-container .scroll-bar .track {
+    -fx-background-color: #c9d8e4;
+}
+
+.vn-thread-list .scroll-bar .thumb,
+.variant-nested-container .scroll-bar .thumb,
+.table-container .scroll-bar .thumb {
+    -fx-background-color: #8aa0b0;
+    -fx-background-radius: 5;
+}
+
+.vn-thread-list .scroll-bar .thumb:hover,
+.variant-nested-container .scroll-bar .thumb:hover,
+.table-container .scroll-bar .thumb:hover {
+    -fx-background-color: #6a8496;
+}
+
+.vn-thread-list .scroll-bar .thumb:pressed,
+.variant-nested-container .scroll-bar .thumb:pressed,
+.table-container .scroll-bar .thumb:pressed {
+    -fx-background-color: #1a3a48;
+}
+
+.vn-thread-list .scroll-bar .increment-button,
+.vn-thread-list .scroll-bar .decrement-button,
+.variant-nested-container .scroll-bar .increment-button,
+.variant-nested-container .scroll-bar .decrement-button,
+.table-container .scroll-bar .increment-button,
+.table-container .scroll-bar .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.vn-thread-list .scroll-bar .increment-arrow,
+.vn-thread-list .scroll-bar .decrement-arrow,
+.variant-nested-container .scroll-bar .increment-arrow,
+.variant-nested-container .scroll-bar .decrement-arrow,
+.table-container .scroll-bar .increment-arrow,
+.table-container .scroll-bar .decrement-arrow {
+    -fx-background-color: transparent;
+}
+
+.root-pane .vn-empty-label,
+.vn-empty-label {
+    -fx-text-fill: #1a2a36;
+    -fx-font-size: 13px;
+    -fx-padding: 24;
+}
+
+.vn-branch-root {
+    -fx-spacing: 4;
+    -fx-background-color: #b9cddc;
+}
+
+.vn-branch {
+    -fx-padding: 0;
+    -fx-background-color: #b9cddc;
+}
+
+.vn-branch-children {
+    -fx-padding: 0;
+    -fx-background-color: #b9cddc;
+    -fx-spacing: 4;
+}
+
+.vn-gutter {
+    -fx-cursor: hand;
+    -fx-background-color: transparent;
+    -fx-border-color: transparent transparent transparent #4a6a7a;
+    -fx-border-width: 0 0 0 2;
+    -fx-border-insets: 0 0 0 7;
+}
+
+.vn-gutter:hover {
+    -fx-border-color: transparent transparent transparent #1a3a48;
+    -fx-background-color: transparent;
+}
+
+.vn-gutter-gene {
+    -fx-border-color: transparent transparent transparent #3a5a6a;
+}
+
+.vn-gutter-gene:hover {
+    -fx-border-color: transparent transparent transparent #1a3a48;
+    -fx-background-color: transparent;
+}
+
+.vn-gutter-variant {
+    -fx-border-color: transparent transparent transparent #3a5a6a;
+}
+
+.vn-gutter-variant:hover {
+    -fx-border-color: transparent transparent transparent #1a3a48;
+    -fx-background-color: transparent;
+}
+
+.vn-node {
+    -fx-padding: 0;
+    -fx-spacing: 0;
+    -fx-background-radius: 4;
+}
+
+.vn-node-gene {
+    -fx-background-color: #d6e8f4;
+    -fx-cursor: hand;
+    /* Reserve left border width so cancer accent does not shift columns. */
+    -fx-border-color: transparent;
+    -fx-border-width: 0 0 0 3;
+    -fx-border-radius: 0 4 4 0;
+}
+
+.vn-node-gene:hover {
+    -fx-background-color: #c4dceb;
+}
+
+.vn-node-gene-cancer {
+    -fx-background-color: #f0d8c8;
+    -fx-border-color: #c85424;
+}
+
+.vn-node-variant {
+    -fx-background-color: #d6e8f4;
+    -fx-cursor: hand;
+}
+
+.vn-node-variant:hover {
+    -fx-background-color: #c4dceb;
+}
+
+.vn-node-sample {
+    -fx-background-color: #d6e8f4;
+    -fx-padding: 0;
+}
+
+.vn-node-sample:hover {
+    -fx-background-color: #c4dceb;
+}
+
+.root-pane .vn-toggle,
+.vn-toggle {
+    -fx-background-color: #eef5fa;
+    -fx-text-fill: #1a1a1a;
+    -fx-background-radius: 9;
+    -fx-border-color: #6a8a9a;
+    -fx-border-radius: 9;
+    -fx-border-width: 1;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-cursor: hand;
+    -fx-alignment: center;
+}
+
+.root-pane .vn-toggle-open,
+.vn-toggle-open {
+    -fx-background-color: #1a3a48;
+    -fx-text-fill: #ffffff;
+    -fx-border-color: #1a3a48;
+}
+
+.root-pane .vn-toggle-closed,
+.vn-toggle-closed {
+    -fx-background-color: #eef5fa;
+    -fx-text-fill: #1a1a1a;
+}
+
+.root-pane .vn-toggle:hover,
+.vn-toggle:hover {
+    -fx-background-color: #9eb9ce;
+    -fx-border-color: #1a3a48;
+}
+
+.root-pane .vn-title,
+.vn-title {
+    -fx-text-fill: #1a1a1a;
+    -fx-font-weight: bold;
+    -fx-font-size: 13px;
+}
+
+.root-pane .vn-title-cancer,
+.vn-title-cancer {
+    -fx-text-fill: #9a3a10;
+}
+
+.root-pane .vn-meta,
+.vn-meta {
+    -fx-text-fill: #2a3a46;
+    -fx-font-size: 11px;
+    -fx-font-family: "Consolas", "Menlo", "Courier New", monospace;
+    -fx-text-overrun: ellipsis;
+}
+
+.root-pane .vn-desc,
+.vn-desc {
+    -fx-text-fill: #2a3a46;
+    -fx-font-size: 11px;
+    -fx-text-overrun: ellipsis;
+    -fx-opacity: 0.95;
+}
+
+.root-pane .vn-summary,
+.vn-summary {
+    -fx-text-fill: #1a1a1a;
+    -fx-font-size: 12px;
+    -fx-text-overrun: ellipsis;
+}
+
+.root-pane .vn-cell-gt,
+.vn-cell-gt {
+    -fx-text-fill: #6a4e00;
+    -fx-font-weight: bold;
+    -fx-text-overrun: ellipsis;
+}
+
+.root-pane .vn-cell-af,
+.vn-cell-af {
+    -fx-text-fill: #0b5a8c;
+    -fx-font-weight: bold;
+    -fx-text-overrun: ellipsis;
+}
+
+.root-pane .vn-tier-badge,
+.vn-tier-badge {
+    -fx-background-color: #c85424;
+    -fx-text-fill: #ffffff;
+    -fx-padding: 1 5 1 5;
+    -fx-background-radius: 3;
+    -fx-font-size: 9px;
+    -fx-font-weight: bold;
+}
+
+.root-pane .vn-fx-syn, .vn-fx-syn { -fx-text-fill: #0e7a3a; }
+.root-pane .vn-fx-mis, .vn-fx-mis { -fx-text-fill: #9a7a00; }
+.root-pane .vn-fx-trunc, .vn-fx-trunc { -fx-text-fill: #b01e18; }
+.root-pane .vn-fx-nc, .vn-fx-nc { -fx-text-fill: #3a4a56; }
+.root-pane .vn-fx-default, .vn-fx-default { -fx-text-fill: #1a1a1a; }
+
+.vn-type-chip {
+    -fx-alignment: CENTER_LEFT;
+    -fx-spacing: 4;
+    -fx-cursor: hand;
+    -fx-padding: 0;
+    -fx-background-radius: 3;
+}
+
+.vn-type-chip:hover {
+    -fx-background-color: rgba(26, 58, 72, 0.12);
+}
+
+.vn-type-chip-active {
+    -fx-background-color: rgba(26, 58, 72, 0.22);
+}
+
+.vn-type-chip-muted {
+    -fx-opacity: 0.4;
+}
+
+.vn-type-swatch {
+    -fx-min-width: 10;
+    -fx-pref-width: 10;
+    -fx-max-width: 10;
+    -fx-min-height: 10;
+    -fx-pref-height: 10;
+    -fx-max-height: 10;
+    -fx-background-radius: 2;
+}
+
+.root-pane .vn-type-count,
+.vn-type-count {
+    -fx-text-fill: #1a1a1a;
+    -fx-font-size: 11px;
+    -fx-font-family: "Consolas", "Menlo", "Courier New", monospace;
 }
 
 /* Sample list */

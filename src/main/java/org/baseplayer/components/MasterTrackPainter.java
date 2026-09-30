@@ -1,7 +1,6 @@
 package org.baseplayer.components;
 
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,8 +55,6 @@ public class MasterTrackPainter {
   }
 
   private volatile List<SvSpan> densitySvSpans = java.util.List.of();
-  private volatile Set<VcfVariantType> presentTypes =
-      EnumSet.noneOf(VcfVariantType.class);
 
   private record LegendHit(double x, double y, double w, double h, VcfVariantType displayType) {
     boolean contains(double px, double py) {
@@ -78,12 +75,10 @@ public class MasterTrackPainter {
 
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
-    refreshPresentTypesFromList();
   }
 
   public void clearVariantList() {
     this.variantList = null;
-    presentTypes = EnumSet.noneOf(VcfVariantType.class);
     clearDensityArrays();
     densityCached = null;
     densityCachedStart = -1;
@@ -95,26 +90,16 @@ public class MasterTrackPainter {
     return variantList;
   }
 
-  /** Re-read types from the current list (e.g. after a sample was removed from shared caches). */
+  /** Kept for callers after sample removal; legends read open-VCF observed types. */
   public void refreshPresentTypesFromList() {
-    Set<VcfVariantType> fromList = variantList != null && !variantList.isEmpty()
-        ? EnumSet.copyOf(variantList.collectVariantTypes())
-        : EnumSet.noneOf(VcfVariantType.class);
-    presentTypes = fromList;
+    // no-op: legendTypeUniverse uses VcfManager.getSessionAvailableTypes()
   }
 
   /**
-   * Types for legends: only types present in current / cached sample data.
-   * Does not invent types from filter defaults.
+   * Types for legends: observed on any currently open VCF (single source of truth).
    */
   private Set<VcfVariantType> legendTypeUniverse() {
-    refreshPresentTypesFromList();
-    EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
-    if (presentTypes != null && !presentTypes.isEmpty()) {
-      types.addAll(presentTypes);
-    }
-    types.addAll(VcfManager.getInstance().getSessionAvailableTypes());
-    return types;
+    return VcfManager.getInstance().getSessionAvailableTypes();
   }
 
   private void clearDensityArrays() {
@@ -579,7 +564,7 @@ public class MasterTrackPainter {
       if (idx == null) {
         continue;
       }
-      if (activeFilter != null && !activeFilter.passesSampleThresholds(node, call)) {
+      if (activeFilter != null && !activeFilter.passesSampleDisplay(node, call)) {
         continue;
       }
       passingIndices.add(idx);
@@ -710,7 +695,7 @@ public class MasterTrackPainter {
         if (!displayedTrackToIndex.containsKey(call.getTrack())) {
           continue;
         }
-        if (activeFilter != null && !activeFilter.passesSampleThresholds(node, call)) {
+        if (activeFilter != null && !activeFilter.passesSampleDisplay(node, call)) {
           continue;
         }
         count++;

@@ -1,242 +1,233 @@
 package org.baseplayer.variant.ui.components;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
-import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
-import org.baseplayer.variant.annotation.VariantAnnotation;
-import org.baseplayer.variant.annotation.VariantEffect;
-import org.baseplayer.variant.ui.components.VariantTable.TableRow;
 
-import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tab;
-import javafx.scene.control.TableColumn;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableView;
 
 /**
- * Structural-variant result tables: All / Gene-overlapping / Other.
+ * Structural-variant results using the same nested Gene → Variant → Sample look
+ * as {@link VariantTable}.
  */
-public class SvVariantTable {
+public class SvVariantTable extends AbstractNestedVariantTable {
 
-  private final Tab allTab;
-  private final Tab geneTab;
-  private final Tab otherTab;
-  private final TableView<TableRow> allTable;
-  private final TableView<TableRow> geneTable;
-  private final TableView<TableRow> otherTable;
+    public static final VcfVariantType[] TYPE_ORDER = {
+        VcfVariantType.SV_DELETION,
+        VcfVariantType.SV_DUPLICATION,
+        VcfVariantType.SV_INVERSION,
+        VcfVariantType.SV_TRANSLOCATION,
+        VcfVariantType.SV_BREAKEND,
+        VcfVariantType.SV_INSERTION
+    };
 
-  private VariantFilter displayFilter = new VariantFilter();
-  private ObservableList<TableRow> allItems = FXCollections.observableArrayList();
-  private ObservableList<TableRow> geneItems = FXCollections.observableArrayList();
-  private ObservableList<TableRow> otherItems = FXCollections.observableArrayList();
-  private String searchQuery = "";
+    private final Tab allTab;
+    private final NestedPanel allPanel;
+    private final Map<VcfVariantType, Tab> typeTabs = new EnumMap<>(VcfVariantType.class);
+    private final Map<VcfVariantType, NestedPanel> typePanels = new EnumMap<>(VcfVariantType.class);
 
-  private final Consumer<TableRow> onPositionClick;
+    private ObservableList<TableRow> allItems = FXCollections.observableArrayList();
+    private final Map<VcfVariantType, ObservableList<TableRow>> typeItems = new EnumMap<>(VcfVariantType.class);
+    private String searchQuery = "";
 
-  @SuppressWarnings("unchecked")
-  public SvVariantTable(
-      TableView<?> allTable,
-      TableView<?> geneTable,
-      TableView<?> otherTable,
-      Tab allTab,
-      Tab geneTab,
-      Tab otherTab,
-      Consumer<TableRow> onPositionClick) {
-    this.allTab = allTab;
-    this.geneTab = geneTab;
-    this.otherTab = otherTab;
-    this.allTable = (TableView<TableRow>) allTable;
-    this.geneTable = (TableView<TableRow>) geneTable;
-    this.otherTable = (TableView<TableRow>) otherTable;
-    this.onPositionClick = onPositionClick != null ? onPositionClick : r -> {};
-  }
+    private final Consumer<TableRow> onPositionClick;
+    private final Consumer<TableRow> onRowDoubleClick;
 
-  public void initializeColumns() {
-    setupTable(allTable);
-    setupTable(geneTable);
-    setupTable(otherTable);
-  }
+    public SvVariantTable(
+            TableView<?> allTable,
+            Tab allTab,
+            Map<VcfVariantType, TableView<?>> typeTableMap,
+            Map<VcfVariantType, Tab> typeTabMap,
+            Consumer<TableRow> onPositionClick,
+            Consumer<TableRow> onRowDoubleClick) {
+        super();
+        this.allTab = allTab;
+        this.onPositionClick = onPositionClick != null ? onPositionClick : r -> {};
+        this.onRowDoubleClick = onRowDoubleClick != null ? onRowDoubleClick : r -> {};
 
-  private void setupTable(TableView<TableRow> table) {
-    table.getColumns().clear();
-    table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        // Gene double-click unused for SV; position / row double-click navigate.
+        this.allPanel = mountNestedPanel(
+            allTable,
+            VariantDetailLayout.STRUCTURAL,
+            false,
+            this.onRowDoubleClick,
+            this.onPositionClick,
+            () -> this.displayFilter);
 
-    table.getColumns().add(col("Type", 70, row -> VariantTypeVisuals.shortLabel(row.node().type)));
-    table.getColumns().add(col("Position", 180, this::formatPosition));
-    table.getColumns().add(col("Length", 90, this::formatLength));
-    table.getColumns().add(col("Mate", 140, this::formatMate));
-    table.getColumns().add(col("Gene(s)", 160, this::formatGenes));
-    table.getColumns().add(col("Samples", 70, row ->
-        String.valueOf(displayFilter.countPassingSamples(row.node()))));
-    table.getColumns().add(col("QUAL", 70, row -> {
-      double q = row.node().siteQuality;
-      return q >= 0 ? String.format(Locale.ROOT, "%.0f", q) : "—";
-    }));
-
-    table.setRowFactory(tv -> {
-      javafx.scene.control.TableRow<TableRow> row = new javafx.scene.control.TableRow<>();
-      row.setOnMouseClicked(e -> {
-        if (e.getClickCount() == 1 && !row.isEmpty()) {
-          onPositionClick.accept(row.getItem());
+        for (VcfVariantType type : TYPE_ORDER) {
+            TableView<?> tv = typeTableMap != null ? typeTableMap.get(type) : null;
+            Tab tab = typeTabMap != null ? typeTabMap.get(type) : null;
+            if (tab != null) {
+                typeTabs.put(type, tab);
+            }
+            typeItems.put(type, FXCollections.observableArrayList());
+            if (tv != null) {
+                NestedPanel panel = mountNestedPanel(
+                    tv,
+                    VariantDetailLayout.STRUCTURAL,
+                    false,
+                    this.onRowDoubleClick,
+                    this.onPositionClick,
+                    () -> this.displayFilter);
+                if (panel != null) {
+                    typePanels.put(type, panel);
+                }
+            }
         }
-      });
-      return row;
-    });
-  }
-
-  private TableColumn<TableRow, String> col(String title, double width, Function<TableRow, String> value) {
-    TableColumn<TableRow, String> column = new TableColumn<>(title);
-    column.setPrefWidth(width);
-    column.setCellValueFactory(cd ->
-        new SimpleStringProperty(cd.getValue() == null ? "" : value.apply(cd.getValue())));
-    return column;
-  }
-
-  private String formatPosition(TableRow row) {
-    VariantNode node = row.node();
-    String chrom = row.chromosome();
-    if (node.svEnd > node.position) {
-      return chrom + ":" + node.position + "–" + node.svEnd;
     }
-    return chrom + ":" + node.position;
-  }
 
-  private String formatLength(TableRow row) {
-    long len = VariantTypeVisuals.svSpanLengthBp(row.node());
-    if (len < 0) {
-      return "—";
+    @Override
+    public void initializeColumns() {
+        // Nested panels are mounted in the constructor.
     }
-    if (len >= 1_000_000) {
-      return String.format(Locale.ROOT, "%.1f Mb", len / 1_000_000.0);
-    }
-    if (len >= 1_000) {
-      return String.format(Locale.ROOT, "%.1f kb", len / 1_000.0);
-    }
-    return len + " bp";
-  }
 
-  private String formatMate(TableRow row) {
-    VariantNode node = row.node();
-    VcfVariantType type = node.type;
-    if (type != VcfVariantType.SV_TRANSLOCATION && type != VcfVariantType.SV_BREAKEND) {
-      return "—";
+    public void setItems(
+            ObservableList<TableRow> all,
+            Map<VcfVariantType, ObservableList<TableRow>> byType) {
+        allItems = all != null ? all : FXCollections.observableArrayList();
+        for (VcfVariantType type : TYPE_ORDER) {
+            ObservableList<TableRow> items = byType != null ? byType.get(type) : null;
+            typeItems.put(type, items != null ? items : FXCollections.observableArrayList());
+        }
+        applySearch();
     }
-    if (node.svChr2 == null || node.svChr2.isBlank()) {
-      return "—";
+
+    public void setSearchQuery(String query) {
+        searchQuery = query != null ? query.trim() : "";
+        applySearch();
     }
-    if (node.svEnd2 >= 0) {
-      return node.svChr2 + ":" + node.svEnd2;
+
+    public void setPlaceholders(String allText, String typeText) {
+        if (allPanel != null) {
+            allPanel.setPlaceholder(new Label(allText != null ? allText : ""));
+        }
+        Label typeLabel = new Label(typeText != null ? typeText : "");
+        for (NestedPanel panel : typePanels.values()) {
+            panel.setPlaceholder(new Label(typeLabel.getText()));
+        }
     }
-    return node.svChr2;
-  }
 
-  private String formatGenes(TableRow row) {
-    VariantAnnotation ann = row.node().annotation;
-    if (ann == null || ann.geneName() == null || ann.geneName().isBlank()) {
-      return "—";
+    public void setBaseTabTitles() {
+        setTitle(allTab, "All", 0, false);
+        TabPane pane = allTab != null ? allTab.getTabPane() : null;
+        for (VcfVariantType type : TYPE_ORDER) {
+            Tab tab = typeTabs.get(type);
+            setTitle(tab, VariantTypeVisuals.shortLabel(type), 0, false);
+            if (tab != null) {
+                tab.setDisable(false);
+                if (pane != null && !pane.getTabs().contains(tab)) {
+                    pane.getTabs().add(insertIndexForType(pane, type), tab);
+                }
+            }
+        }
     }
-    return ann.geneName();
-  }
 
-  public void setDisplayContext(VariantFilter filter) {
-    this.displayFilter = filter != null ? filter.copy() : new VariantFilter();
-  }
+    private void applySearch() {
+        boolean expand = !searchQuery.isEmpty();
+        ObservableList<TableRow> all = filter(allItems);
+        if (allPanel != null) {
+            allPanel.setGroups(buildGeneGroups(all, false, displayFilter, expand));
+        }
+        setTitle(allTab, "All", countUniqueNodes(all), true);
 
-  public void setItems(
-      ObservableList<TableRow> all,
-      ObservableList<TableRow> gene,
-      ObservableList<TableRow> other) {
-    allItems = all != null ? all : FXCollections.observableArrayList();
-    geneItems = gene != null ? gene : FXCollections.observableArrayList();
-    otherItems = other != null ? other : FXCollections.observableArrayList();
-    applySearch();
-  }
-
-  public void setSearchQuery(String query) {
-    searchQuery = query != null ? query.trim() : "";
-    applySearch();
-  }
-
-  public void setPlaceholders(String allText, String geneText, String otherText) {
-    allTable.setPlaceholder(new Label(allText != null ? allText : ""));
-    geneTable.setPlaceholder(new Label(geneText != null ? geneText : ""));
-    otherTable.setPlaceholder(new Label(otherText != null ? otherText : ""));
-  }
-
-  public void setBaseTabTitles() {
-    setTitle(allTab, "All", 0, false);
-    setTitle(geneTab, "Gene-overlapping", 0, false);
-    setTitle(otherTab, "Other", 0, false);
-  }
-
-  private void applySearch() {
-    ObservableList<TableRow> all = filter(allItems);
-    ObservableList<TableRow> gene = filter(geneItems);
-    ObservableList<TableRow> other = filter(otherItems);
-    allTable.setItems(all);
-    geneTable.setItems(gene);
-    otherTable.setItems(other);
-    setTitle(allTab, "All", all.size(), true);
-    setTitle(geneTab, "Gene-overlapping", gene.size(), true);
-    setTitle(otherTab, "Other", other.size(), true);
-  }
-
-  private ObservableList<TableRow> filter(ObservableList<TableRow> source) {
-    if (source == null || source.isEmpty()) {
-      return FXCollections.observableArrayList();
+        TabPane pane = allTab != null ? allTab.getTabPane() : null;
+        for (VcfVariantType type : TYPE_ORDER) {
+            ObservableList<TableRow> filtered = filter(typeItems.get(type));
+            NestedPanel panel = typePanels.get(type);
+            if (panel != null) {
+                panel.setGroups(buildGeneGroups(filtered, false, displayFilter, expand));
+            }
+            Tab tab = typeTabs.get(type);
+            setTitle(tab, VariantTypeVisuals.shortLabel(type), countUniqueNodes(filtered), true);
+            if (tab != null && pane != null && !pane.getTabs().contains(tab)) {
+                pane.getTabs().add(insertIndexForType(pane, type), tab);
+            }
+        }
     }
-    if (searchQuery.isEmpty()) {
-      return source;
-    }
-    String q = searchQuery.toLowerCase(Locale.ROOT);
-    List<TableRow> matched = new ArrayList<>();
-    for (TableRow row : source) {
-      if (rowMatches(row, q)) {
-        matched.add(row);
-      }
-    }
-    return FXCollections.observableArrayList(matched);
-  }
 
-  private boolean rowMatches(TableRow row, String q) {
-    if (row == null || row.node() == null) {
-      return false;
+    private static int countUniqueNodes(ObservableList<TableRow> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        java.util.IdentityHashMap<VariantNode, Boolean> seen = new java.util.IdentityHashMap<>();
+        for (TableRow row : rows) {
+            if (row != null && row.node() != null) {
+                seen.put(row.node(), Boolean.TRUE);
+            }
+        }
+        return seen.size();
     }
-    if (formatPosition(row).toLowerCase(Locale.ROOT).contains(q)) return true;
-    if (formatGenes(row).toLowerCase(Locale.ROOT).contains(q)) return true;
-    if (formatMate(row).toLowerCase(Locale.ROOT).contains(q)) return true;
-    if (VariantTypeVisuals.shortLabel(row.node().type).toLowerCase(Locale.ROOT).contains(q)) return true;
-    VariantEffect effect = row.node().annotation != null ? row.node().annotation.effect() : null;
-    if (effect != null && effect.displayName().toLowerCase(Locale.ROOT).contains(q)) return true;
-    return false;
-  }
 
-  private static void setTitle(Tab tab, String base, int count, boolean withCount) {
-    if (tab == null) {
-      return;
+    private int insertIndexForType(TabPane pane, VcfVariantType type) {
+        int orderIndex = 0;
+        for (int i = 0; i < TYPE_ORDER.length; i++) {
+            if (TYPE_ORDER[i] == type) {
+                orderIndex = i;
+                break;
+            }
+        }
+        int pos = 1;
+        for (int i = 0; i < orderIndex; i++) {
+            Tab earlier = typeTabs.get(TYPE_ORDER[i]);
+            if (earlier != null && pane.getTabs().contains(earlier)) {
+                pos++;
+            }
+        }
+        return Math.min(pos, pane.getTabs().size());
     }
-    tab.setText(withCount ? base + " (" + count + ")" : base);
-  }
 
-  /** True when annotation indicates a gene-overlapping (non-intergenic) SV. */
-  public static boolean isGeneOverlapping(VariantNode node) {
-    if (node == null) {
-      return false;
+    private ObservableList<TableRow> filter(ObservableList<TableRow> source) {
+        if (source == null || source.isEmpty()) {
+            return FXCollections.observableArrayList();
+        }
+        if (searchQuery.isEmpty()) {
+            return source;
+        }
+        String q = searchQuery.toLowerCase(Locale.ROOT);
+        List<TableRow> matched = new ArrayList<>();
+        for (TableRow row : source) {
+            if (rowMatches(row, q)) {
+                matched.add(row);
+            }
+        }
+        return FXCollections.observableArrayList(matched);
     }
-    VariantAnnotation ann = node.annotation;
-    if (ann == null) {
-      return false;
+
+    private boolean rowMatches(TableRow row, String q) {
+        if (matchesSearch(row, q, displayFilter)) {
+            return true;
+        }
+        if (row == null || row.node() == null) {
+            return false;
+        }
+        if (formatSvPosition(row).toLowerCase(Locale.ROOT).contains(q)) {
+            return true;
+        }
+        if (formatSvMate(row).toLowerCase(Locale.ROOT).contains(q)) {
+            return true;
+        }
+        if (formatSvLength(row).toLowerCase(Locale.ROOT).contains(q)) {
+            return true;
+        }
+        return VariantTypeVisuals.shortLabel(row.node().type).toLowerCase(Locale.ROOT).contains(q);
     }
-    VariantEffect effect = ann.effect();
-    return effect != null && effect != VariantEffect.INTERGENIC;
-  }
+
+    private static void setTitle(Tab tab, String base, int count, boolean withCount) {
+        if (tab == null) {
+            return;
+        }
+        tab.setText(withCount ? base + " (" + count + ")" : base);
+    }
 }

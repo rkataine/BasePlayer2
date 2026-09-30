@@ -231,6 +231,18 @@ public final class CosmicGenes {
     if (!loaded) load();
     return geneName != null ? censusData.get(geneName) : null;
   }
+
+  /** Tumor suppressor (Role in Cancer contains TSG), including dual-role genes. */
+  public static boolean isTumorSuppressor(String geneName) {
+    CosmicCensusEntry entry = getEntry(geneName);
+    return entry != null && entry.isTumorSuppressor();
+  }
+
+  /** Oncogene (Role in Cancer contains oncogene), including dual-role genes. */
+  public static boolean isOncogene(String geneName) {
+    CosmicCensusEntry entry = getEntry(geneName);
+    return entry != null && entry.isOncogene();
+  }
   
   /**
    * Get all COSMIC gene symbols.
