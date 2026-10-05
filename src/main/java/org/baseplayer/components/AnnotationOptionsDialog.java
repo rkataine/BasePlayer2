@@ -76,6 +76,8 @@ public final class AnnotationOptionsDialog {
           stack.chromosomeCanvas.setShowManeOnly(maneOnly);
         }
       }
+      org.baseplayer.project.SessionDocumentSync.writeUiManeOnly(maneOnly);
+      org.baseplayer.project.ProjectSessionState.get().markDirty();
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
       dialog.close();
     });

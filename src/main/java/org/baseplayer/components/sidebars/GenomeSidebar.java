@@ -276,6 +276,10 @@ public class GenomeSidebar extends SidebarBase {
       }
       if (persistSelection) {
         Settings.get().setLastAnnotation(annotationComboBox.getValue());
+        ReferenceGenome currentGenome = referenceComboBox.getValue();
+        org.baseplayer.project.SessionDocumentSync.writeGenome(
+            currentGenome != null ? currentGenome.getName() : Settings.get().getLastGenome(),
+            annotationComboBox.getValue());
       }
     } finally {
       suppressAnnotationReload = false;
@@ -290,5 +294,8 @@ public class GenomeSidebar extends SidebarBase {
     loadAvailableAnnotations();
     AnnotationLoader.loadCytobands();
     AnnotationLoader.loadGenesBackground();
+    org.baseplayer.project.SessionDocumentSync.writeGenome(
+        genome.getName(), Settings.get().getLastAnnotation());
+    org.baseplayer.project.ProjectSessionState.get().markDirty();
   }
 }

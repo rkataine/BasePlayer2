@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.features.Track;
+import org.baseplayer.project.ProjectSessionState;
+import org.baseplayer.project.SessionDocumentSync;
 
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
@@ -16,6 +18,9 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
   public FeatureTrackViewportRegistry() {
     featureTracks.addListener((ListChangeListener<Track>) change -> {
       normalizeVisibleRangeAfterDisplayedTrackCountChange();
+      if (!ProjectSessionState.get().isSuppressingDirty()) {
+        SessionDocumentSync.writeFeatureTracksFromRuntime(ProjectSessionState.get().getFile());
+      }
     });
   }
 
@@ -24,6 +29,9 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
     // Callers that need a frame (range apply, sidebar scroll, add/remove) already
     // toggle GenomicCanvas.update. Avoid toggling here — ensure() runs during draw
     // and a nested update would re-enter redrawAll on every height refit.
+    if (!ProjectSessionState.get().isSuppressingDirty()) {
+      SessionDocumentSync.writeViewportsFromRuntime();
+    }
   }
 
   public ObservableList<Track> getFeatureTracks() {

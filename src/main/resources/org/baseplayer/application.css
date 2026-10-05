@@ -139,16 +139,17 @@ VBox {
 
 .minimal-combo-box .list-cell {
   -fx-padding: 2px 4px;
-  -fx-text-fill: -bp-accent;
+  /* Match .chromosome-label / gene-search accent (not the darker -bp-accent). */
+  -fx-text-fill: #569cd6;
   -fx-background-color: transparent;
 }
 
 .minimal-combo-box .list-cell:hover {
-  -fx-background-color: rgba(0, 90, 158, 0.12);
+  -fx-background-color: rgba(86, 156, 214, 0.14);
 }
 
 .minimal-combo-box .list-cell:filled:selected {
-  -fx-background-color: rgba(0, 90, 158, 0.22);
+  -fx-background-color: rgba(86, 156, 214, 0.22);
 }
 
 .minimal-combo-box .arrow-button {

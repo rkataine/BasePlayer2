@@ -16,6 +16,7 @@ import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.project.ProjectSessionState;
+import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
@@ -793,6 +794,7 @@ public class SampleDataManager {
 
     VcfManager.getInstance().closeCurrentVcf();
     org.baseplayer.io.Settings.get().resetDefaults();
+    ProjectSessionState.get().resetDocument();
 
     var stackManager = ServiceRegistry.getInstance().getDrawStackManager();
     for (var stack : stackManager.getStacks()) {
@@ -811,6 +813,12 @@ public class SampleDataManager {
 
     ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  /** Refresh live document sample-track paths after add/remove (SSOT). */
+  public static void syncSampleTracksToDocument() {
+    SessionDocumentSync.writeSampleTracksFromRuntime(ProjectSessionState.get().getFile());
+    SessionDocumentSync.writeSampleGroupsFromRegistry();
   }
 }
 

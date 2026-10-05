@@ -11,7 +11,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
 /**
- * Gson read/write for {@link ProjectDocument}.
+ * Gson read/write / deep-copy for {@link ProjectDocument}.
  */
 public final class ProjectSerializer {
 
@@ -38,5 +38,14 @@ public final class ProjectSerializer {
       }
       return doc;
     }
+  }
+
+  /** Deep copy via Gson (safe snapshot for async save). */
+  public static ProjectDocument deepCopy(ProjectDocument document) {
+    if (document == null) {
+      return new ProjectDocument();
+    }
+    ProjectDocument copy = GSON.fromJson(GSON.toJson(document), ProjectDocument.class);
+    return copy != null ? copy : new ProjectDocument();
   }
 }

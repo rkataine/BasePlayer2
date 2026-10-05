@@ -1,18 +1,20 @@
 package org.baseplayer.draw;
 
 import org.baseplayer.controllers.MainController;
-import org.baseplayer.features.DefaultFeatureTracks;
 import org.baseplayer.genome.GenomicRegion;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.CytobandCanvas;
 import org.baseplayer.genome.gene.draw.ChromosomeCanvas;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.project.ProjectSessionState;
+import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.NavigationState;
 import org.baseplayer.services.ServiceRegistry;
+
+import java.util.List;
 
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -226,14 +228,6 @@ public class DrawStack {
     VBox.setVgrow(featureBodyStack, Priority.ALWAYS);
     featureColumn.getChildren().addAll(featureMasterStack, featureBodyStack);
 
-    // Seed defaults only for a fresh untitled session. An open project file owns
-    // its feature-track list — absence there must not be refilled by a new stack.
-    if (featureTrackCanvas.getTracks().isEmpty()
-        && ProjectSessionState.get().getFile() == null) {
-      featureTrackCanvas.addTrack(DefaultFeatureTracks.createPhyloP());
-      featureTrackCanvas.addTrack(DefaultFeatureTracks.createGnomad());
-    }
-
     chromContainer.setOnMouseEntered(e -> updateControlsVisibility());
     chromContainer.setOnMouseExited(e -> closeButton.setVisible(false));
     sampleColumn.setOnMouseEntered(e -> updateControlsVisibility());
@@ -316,7 +310,14 @@ public class DrawStack {
     
     setRegion(chrom, (long) start, (long) end);
     sampleTrackCanvas.zoomAnimation(start, end);
-    org.baseplayer.project.ProjectSessionState.get().markDirty();
+    ProjectSessionState.get().markDirty();
+    if (!ProjectSessionState.get().isSuppressingDirty()) {
+      List<DrawStack> all = ServiceRegistry.getInstance().getDrawStackManager().getStacks();
+      int stackIndex = all.indexOf(this);
+      if (stackIndex >= 0) {
+        SessionDocumentSync.writeStack(stackIndex, chrom, start, end);
+      }
+    }
   }
 
   public void switchToChromosome(String chrom) {

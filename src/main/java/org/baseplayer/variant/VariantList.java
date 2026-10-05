@@ -304,8 +304,12 @@ public class VariantList {
      * Rebuild {@link VariantNode#nextVisible}/{@link VariantNode#prevVisible} and seek indexes
      * for {@code filter}. A node is visible if it passes node-level checks and has at least one
      * sample call passing sample thresholds (same rule as drawing).
+     *
+     * <p>In LOH mode, synthesizes missing homozygous-cohort AA ({@code 0/0}) calls before
+     * visibility is evaluated so canvas/density match the table after annotate-all or reload.
      */
     public void rebuildVisibleChain(VariantFilter filter) {
+        ensureLohAaCalls(filter);
         clearVisibleChain();
 
         Map<String, Set<Integer>> geneTracks = null;
@@ -346,6 +350,23 @@ public class VariantList {
         }
 
         visibleFilterKey = filterKeyOf(filter);
+    }
+
+    /**
+     * When {@code filter} is in LOH mode, add missing AA calls on homozygous-cohort tracks
+     * at heterozygous-cohort marker sites. Idempotent.
+     */
+    public void ensureLohAaCalls(VariantFilter filter) {
+        if (filter == null || !filter.isLohMode() || head == null) {
+            return;
+        }
+        int added = 0;
+        for (VariantNode node = head; node != null; node = node.next) {
+            added += filter.addMissingLohAaCalls(node);
+        }
+        if (added > 0) {
+            invalidateSampleIndexes();
+        }
     }
 
     /**

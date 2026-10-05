@@ -55,12 +55,20 @@ public class SampleRegistry extends TrackViewportRegistry {
             invalidateDisplayedTrackIndicesCache();
             normalizeVisibleRangeAfterDisplayedTrackCountChange();
             notifyVariantIndexDirty();
-            // Keep session dirty in sync even when callers forget markDirty().
-            Runnable mark = () -> ProjectSessionState.get().markDirty();
+            // Keep session dirty + live document sampleTracks in sync.
+            Runnable sync = () -> {
+                ProjectSessionState.get().markDirty();
+                if (ProjectSessionState.get().isSuppressingDirty()) {
+                    return;
+                }
+                org.baseplayer.project.SessionDocumentSync.writeSampleTracksFromRuntime(
+                    ProjectSessionState.get().getFile());
+                org.baseplayer.project.SessionDocumentSync.writeSampleGroupsFromRegistry();
+            };
             if (Platform.isFxApplicationThread()) {
-                mark.run();
+                sync.run();
             } else {
-                Platform.runLater(mark);
+                Platform.runLater(sync);
             }
         });
     }
@@ -71,6 +79,9 @@ public class SampleRegistry extends TrackViewportRegistry {
         // Aggregate density is over the displayed subset (filter / gene focus), not the
         // visible window — do not clear or recompute density here (causes flashing).
         invalidateSampleTrackVariantIndexes();
+        if (!ProjectSessionState.get().isSuppressingDirty()) {
+            org.baseplayer.project.SessionDocumentSync.writeViewportsFromRuntime();
+        }
     }
 
     public ObservableList<SampleTrack> getSampleTracks() {
@@ -243,6 +254,8 @@ public class SampleRegistry extends TrackViewportRegistry {
         normalizeVisibleRangeAfterDisplayedTrackCountChange();
         if (!oldQuery.equals(this.activeSampleFilterQuery)) {
             notifyVariantIndexDirty();
+            org.baseplayer.project.SessionDocumentSync.writeSampleFilter(
+                this.activeSampleFilterQuery, focusedGeneName);
         }
     }
 
@@ -324,6 +337,8 @@ public class SampleRegistry extends TrackViewportRegistry {
         if (changed) {
             bumpGeneFocusRevision();
             notifyVariantIndexDirty();
+            org.baseplayer.project.SessionDocumentSync.writeSampleFilter(
+                activeSampleFilterQuery, focusedGeneName);
         }
     }
 
@@ -569,6 +584,9 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     private void bumpSampleGroupsRevision() {
         sampleGroupsRevision.set(sampleGroupsRevision.get() + 1);
+        if (!ProjectSessionState.get().isSuppressingDirty()) {
+            org.baseplayer.project.SessionDocumentSync.writeSampleGroupsFromRegistry();
+        }
     }
 
     /** Drop all group definitions and clear membership on every track. */

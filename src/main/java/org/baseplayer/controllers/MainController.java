@@ -85,7 +85,8 @@ public class MainController {
   private final SidebarController sidebarController = new SidebarController();
   private boolean updatingVerticalDividers = false;
   private boolean applyingDividers = false;
-  private static final double FEATURE_MIN_HEIGHT_PADDING_PX = 12;
+  /** Breathing room under the feature sidebar button row when no tracks are loaded. */
+  private static final double FEATURE_MIN_HEIGHT_PADDING_PX = 6;
 
   // Shared glasspane over the alignment split area for cross-stack connector arcs.
   private Canvas crossStackOverlayCanvas;
@@ -167,22 +168,57 @@ public class MainController {
     FeatureTrackViewportRegistry featureRegistry =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
     int trackCount = featureRegistry.getDisplayedTrackCount();
-    double bodyHeight = TrackViewportRegistry.DEFAULT_TRACK_ROW_HEIGHT_PIXELS
-        * Math.max(1, trackCount);
     if (trackCount > 0) {
+      double bodyHeight = TrackViewportRegistry.DEFAULT_TRACK_ROW_HEIGHT_PIXELS * trackCount;
       featureRegistry.setVisibleTrackRange(0, trackCount - 1, bodyHeight);
     }
 
-    if (featureTracksPane != null) {
-      featureTracksPane.setMinHeight(0);
-      featureTracksPane.setPrefHeight(82 + bodyHeight);
-    }
+    // Empty: button-row height + padding. With tracks: master + visible body + padding.
+    applyFeatureTracksPaneFloor();
 
     featureRegistry.getFeatureTracks().addListener((ListChangeListener<? super org.baseplayer.features.Track>) change ->
-        Platform.runLater(this::enforceVerticalDividerBounds));
+        Platform.runLater(() -> {
+          applyFeatureTracksPaneFloor();
+          if (featureRegistry.getDisplayedTrackCount() <= 0) {
+            fitEmptyFeaturePaneToButtonRow();
+          } else {
+            enforceVerticalDividerBounds();
+          }
+        }));
 
     featureTrackColumnSidebar.draw();
-    enforceVerticalDividerBounds();
+    fitEmptyFeaturePaneToButtonRow();
+  }
+
+  private void applyFeatureTracksPaneFloor() {
+    if (featureTracksPane == null) {
+      return;
+    }
+    double floor = getFeatureTracksFloorHeight();
+    featureTracksPane.setMinHeight(floor);
+    featureTracksPane.setPrefHeight(floor);
+  }
+
+  /** Collapse an empty feature strip to the sidebar button row + padding. */
+  private void fitEmptyFeaturePaneToButtonRow() {
+    applyFeatureTracksPaneFloor();
+    if (mainSplit == null || mainSplit.getDividers().size() < 2) {
+      enforceVerticalDividerBounds();
+      return;
+    }
+    if (ServiceRegistry.getInstance().getFeatureTrackViewportRegistry().getDisplayedTrackCount() > 0) {
+      enforceVerticalDividerBounds();
+      return;
+    }
+    double featureNorm = toNorm(getFeatureTracksFloorHeight());
+    if (featureNorm <= 0) {
+      Platform.runLater(this::fitEmptyFeaturePaneToButtonRow);
+      return;
+    }
+    double pos0 = mainSplit.getDividers().get(0).getPosition();
+    double minSampleNorm = toNorm(getSamplePaneMinHeight());
+    double pos1 = Math.min(pos0 + featureNorm, 1.0 - minSampleNorm);
+    setVerticalDividerPositions(pos0, Math.max(pos0, pos1));
   }
 
   private void setupCrossStackOverlay() {
@@ -455,23 +491,16 @@ public class MainController {
 
   private double getFeatureTracksFloorHeight() {
     var featureRegistry = ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
-    // No tracks: allow the feature pane to collapse fully.
-    if (featureRegistry.getDisplayedTrackCount() <= 0) {
-      return 0;
-    }
     double masterHeight = Math.max(
         TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
         featureRegistry.getMasterBandHeightPixels());
-    int bodySlots = featureRegistry.getVisibleTrackSlotCount();
-    if (bodySlots <= 0) {
-      bodySlots = 1;
+    if (featureRegistry.getDisplayedTrackCount() <= 0) {
+      // No tracks: only the sidebar button row (+ / settings) plus a little padding.
+      return masterHeight + FEATURE_MIN_HEIGHT_PADDING_PX;
     }
+    int bodySlots = Math.max(1, featureRegistry.getVisibleTrackSlotCount());
     double bodyHeight = bodySlots * TrackViewportRegistry.DEFAULT_TRACK_ROW_HEIGHT_PIXELS;
-    double floor = masterHeight + bodyHeight;
-    if (featureTracksPane != null) {
-      floor = Math.max(floor, featureTracksPane.getMinHeight());
-    }
-    return Math.max(0, floor + FEATURE_MIN_HEIGHT_PADDING_PX);
+    return Math.max(0, masterHeight + bodyHeight + FEATURE_MIN_HEIGHT_PADDING_PX);
   }
 
   private double getSamplePaneMinHeight() {

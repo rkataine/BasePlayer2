@@ -6,12 +6,23 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Versioned JSON DTO for BasePlayer session save/load.
- * Live runtime state stays in DrawStack / registries; this is snapshot-only.
+ * Live session document (SSOT) and project JSON schema.
  *
- * <p>Gson serializes every public field. Prefer adding new session state as public
- * fields on these nested specs so save/load picks them up without serializer changes;
- * wire capture/restore in {@link ProjectService} for the runtime objects.
+ * <p>The app mutates one instance held by {@link ProjectSessionState}. Save deep-copies
+ * and serializes it; load replaces it and rebuilds ephemeral runtime (handles, caches, FX)
+ * via {@link SessionRuntime}.
+ *
+ * <h2>Adding a new durable setting</h2>
+ * <ol>
+ *   <li>Add a public field on this class or a nested spec (Gson persists it automatically).</li>
+ *   <li>Bind the UI control to write that field and call {@link ProjectSessionState#markDirty()}.</li>
+ *   <li>If a runtime service needs the value, read it from the live document (or derive a working
+ *       object from it on apply) — do not keep a divergent second copy.</li>
+ *   <li>No new save/load scrape code is required unless you introduce a non-Gson type.</li>
+ * </ol>
+ *
+ * <p>Ephemeral state (open BAM/VCF handles, {@code VariantList} caches, FX canvases) must not
+ * be stored here.
  */
 public class ProjectDocument {
 
@@ -87,7 +98,7 @@ public class ProjectDocument {
     public int comparisonWindowBp;
     /** {@code ALL} or {@code ANY} for multi-group present/genotype roles. */
     public String presentMatchMode;
-    /** Active group roles ({@link #GroupRoleSpec}); IGNORE roles are omitted. */
+    /** Active group roles ({@link GroupRoleSpec}); IGNORE roles are omitted. */
     public List<GroupRoleSpec> groupRoles = new ArrayList<>();
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
@@ -133,7 +144,7 @@ public class ProjectDocument {
 
   public static class SampleTrackSpec {
     public String displayName;
-    /** Membership in {@link #sampleGroups} (ordered); empty / null = ungrouped. */
+    /** Membership in {@link ProjectDocument#sampleGroups} (ordered); empty / null = ungrouped. */
     public List<Integer> groupIds = new ArrayList<>();
     public List<SampleFileSpec> samples = new ArrayList<>();
   }

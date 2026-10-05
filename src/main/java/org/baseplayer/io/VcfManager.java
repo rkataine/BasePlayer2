@@ -21,6 +21,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.project.ProjectSessionState;
+import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.RegionFetchCache;
@@ -1242,6 +1243,10 @@ public class VcfManager {
         filterGeneration.incrementAndGet();
         if (changed) {
             ProjectSessionState.get().markDirty();
+        }
+        // Keep live session document filter specs in sync (SSOT).
+        if (!ProjectSessionState.get().isSuppressingDirty()) {
+            SessionDocumentSync.writeVariantFilterFromRuntime(this);
         }
         // Rebuild visible skip chains for cached lists, then redraw.
         Platform.runLater(() -> {

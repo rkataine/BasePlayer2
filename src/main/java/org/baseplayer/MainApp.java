@@ -168,6 +168,7 @@ public class MainApp extends Application {
         org.baseplayer.components.sidebars.GenomeSidebar.redrawThemeChrome();
         org.baseplayer.variant.ui.VariantManagerWindow.refreshTheme();
         org.baseplayer.project.ProjectSessionState.get().markDirty();
+        org.baseplayer.project.SessionDocumentSync.writeUiDarkMode(darkMode);
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
     public static URL getResource(String string) {

@@ -14,7 +14,8 @@ import org.baseplayer.io.VcfManager;
 import org.baseplayer.services.ServiceRegistry;
 
 /**
- * Lightweight UI session state for the open project file (not a domain store).
+ * Open-project bookkeeping plus the live {@link ProjectDocument} (session SSOT).
+ * Durable settings live on {@link #getDocument()}; save serializes a deep copy of it.
  */
 public final class ProjectSessionState {
 
@@ -24,12 +25,38 @@ public final class ProjectSessionState {
   private String name = "Untitled";
   private boolean dirty;
   private boolean suppressDirty;
+  private ProjectDocument document = new ProjectDocument();
   private final List<Consumer<ProjectSessionState>> listeners = new ArrayList<>();
 
   private ProjectSessionState() {}
 
   public static ProjectSessionState get() {
     return INSTANCE;
+  }
+
+  /** Live session document — mutate in place; Save deep-copies this. */
+  public ProjectDocument getDocument() {
+    if (document == null) {
+      document = new ProjectDocument();
+    }
+    if (document.name == null || document.name.isBlank()) {
+      document.name = name;
+    }
+    return document;
+  }
+
+  /** Replace the live document (project open). Does not mark dirty. */
+  public void replaceDocument(ProjectDocument doc) {
+    this.document = doc != null ? doc : new ProjectDocument();
+    if (this.document.name != null && !this.document.name.isBlank()) {
+      this.name = this.document.name;
+    }
+  }
+
+  /** Reset to an empty live document (New Project / clear). */
+  public void resetDocument() {
+    this.document = new ProjectDocument();
+    this.document.name = "Untitled";
   }
 
   public Path getFile() {
@@ -65,6 +92,11 @@ public final class ProjectSessionState {
    */
   public void setSuppressDirty(boolean suppress) {
     this.suppressDirty = suppress;
+  }
+
+  /** True while a project is being opened/restored — skip live-document sync from list listeners. */
+  public boolean isSuppressingDirty() {
+    return suppressDirty;
   }
 
   /**
@@ -113,6 +145,7 @@ public final class ProjectSessionState {
     } else {
       this.name = "Untitled";
     }
+    getDocument().name = this.name;
     this.dirty = false;
     this.suppressDirty = false;
     notifyListeners();
@@ -123,6 +156,7 @@ public final class ProjectSessionState {
     this.name = "Untitled";
     this.dirty = false;
     this.suppressDirty = false;
+    resetDocument();
     notifyListeners();
   }
 
@@ -130,6 +164,7 @@ public final class ProjectSessionState {
     String next = (name == null || name.isBlank()) ? "Untitled" : name;
     if (!Objects.equals(this.name, next)) {
       this.name = next;
+      getDocument().name = next;
       notifyListeners();
     }
   }
