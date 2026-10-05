@@ -280,9 +280,15 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   private boolean hasAnySuspended() {
-    for (SampleTrack sampleTrack : sampleRegistry.getSampleTracks()) {
-      for (Sample sample : sampleTrack.getSamples()) {
-        if (sample.isSuspended()) {
+    // Snapshot: sampleTracks / samples may be mutated while the FX thread redraws.
+    List<SampleTrack> tracks = List.copyOf(sampleRegistry.getSampleTracks());
+    for (SampleTrack sampleTrack : tracks) {
+      if (sampleTrack == null) {
+        continue;
+      }
+      List<Sample> samples = List.copyOf(sampleTrack.getSamples());
+      for (Sample sample : samples) {
+        if (sample != null && sample.isSuspended()) {
           return true;
         }
       }

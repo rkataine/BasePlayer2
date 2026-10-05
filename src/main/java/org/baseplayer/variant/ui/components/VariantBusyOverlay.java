@@ -76,7 +76,20 @@ public class VariantBusyOverlay {
     }
 
     public void show(String message) {
+        show(message, true);
+    }
+
+    /**
+     * Show the loading modal. When {@code cancellable} is false, the Cancel button is hidden
+     * (used for short non-interruptible work such as Excel export).
+     */
+    public void show(String message, boolean cancellable) {
         applyLoadingModalVisuals(message);
+        if (nodes != null && nodes.loadingCancelButton() != null) {
+            nodes.loadingCancelButton().setManaged(cancellable);
+            nodes.loadingCancelButton().setVisible(cancellable);
+            nodes.loadingCancelButton().setDisable(!cancellable);
+        }
         if (nodes != null && nodes.loadingModal() != null) {
             nodes.loadingModal().setVisible(true);
             nodes.loadingModal().setManaged(true);
@@ -117,6 +130,10 @@ public class VariantBusyOverlay {
 
     /**
      * Sync overlay + lock targets with ThreadRunner busy state and annotation flag.
+     *
+     * <p>When only ThreadRunner work is active, the app-wide {@code LoadingPopup} already
+     * shows progress — keep filters locked but do not paint a second "Loading" label on
+     * the Variant Manager dimmer (it sits behind the popup).
      */
     public void syncBusyOverlay() {
         boolean tasksRunning = !ThreadRunner.get().getActiveTasks().isEmpty();
@@ -125,11 +142,12 @@ public class VariantBusyOverlay {
             allChromosomeAnnotationTask = null;
         }
         boolean busy = tasksRunning || allChromosomeAnnotationRunning;
-        if (busy) {
-            setControlsLocked(true);
+        setControlsLocked(busy);
+        if (allChromosomeAnnotationRunning) {
             showBusyOverlay();
+        } else if (tasksRunning) {
+            hideVisualOnly();
         } else {
-            setControlsLocked(false);
             hide();
         }
     }

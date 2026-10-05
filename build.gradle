@@ -47,7 +47,7 @@ sourceSets {
     main {
         resources {
             srcDirs = ["src/main/resources"]
-            includes = ["**/*.fxml", "**/*.css", "**/*.png", "**/*.jpg", "**/*.tsv"]
+            includes = ["**/*.fxml", "**/*.css", "**/*.png", "**/*.jpg", "**/*.tsv", "**/*.xml"]
         }
     }
 }
@@ -66,6 +66,11 @@ dependencies {
     // Ikonli icon font library for JavaFX
     implementation 'org.kordamp.ikonli:ikonli-javafx:12.3.1'
     implementation 'org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1'
+
+    // Excel (.xlsx) export for Variant Manager
+    implementation 'org.apache.poi:poi-ooxml:5.3.0'
+    // POI pulls log4j-api; provide an implementation to silence the runtime warning
+    runtimeOnly 'org.apache.logging.log4j:log4j-core:2.24.3'
 }
 
 // ── jpackage packaging (cross-platform + macOS-specific knobs) ─────────────

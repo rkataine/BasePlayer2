@@ -6,9 +6,12 @@ import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.gene.GeneLocation;
+import org.baseplayer.io.UserPreferences;
+import org.baseplayer.io.VariantTableExcelWriter;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.LoadingManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
@@ -26,6 +29,7 @@ import org.baseplayer.variant.ui.components.SampleComparisonPanel;
 import org.baseplayer.variant.ui.components.SvVariantTable;
 import org.baseplayer.variant.ui.components.VariantBusyOverlay;
 import org.baseplayer.variant.ui.components.VariantClassWorkspace;
+import org.baseplayer.variant.ui.components.VariantExcelExportBuilder;
 import org.baseplayer.variant.ui.components.VariantFiltersPanel;
 import org.baseplayer.variant.ui.components.VariantTable;
 
@@ -39,8 +43,13 @@ import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
 import javafx.scene.Node;
 import javafx.scene.control.*;
+import javafx.scene.paint.Color;
+import javafx.stage.FileChooser;
 import javafx.util.Duration;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -49,6 +58,9 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.net.URL;
+
+import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
+import org.kordamp.ikonli.javafx.FontIcon;
 
 /**
  * Controller for the FXML-based Variant Manager dialog.
@@ -159,8 +171,10 @@ public class VariantManagerController implements Initializable {
     // filterTabPane is the outer mode pane (Point | SV). Kept name for FXML compatibility.
     @FXML private Button annotateAllChromosomesButton;
     @FXML private TextField tableSearchField;
+    @FXML private Button excelExportButton;
     private Button svAnnotateAllChromosomesButton;
     private TextField svTableSearchField;
+    private Button svExcelExportButton;
 
     // Agent Tab
     @FXML private Tab agentTab;
@@ -311,6 +325,7 @@ public class VariantManagerController implements Initializable {
                 }
             });
         }
+        setupExcelExportButton(excelExportButton, false);
 
         restructureModeWorkspaces();
 
@@ -598,6 +613,10 @@ public class VariantManagerController implements Initializable {
                     svVariantTable.setSearchQuery(newVal);
                 }
             });
+        }
+        if (svNodes.excelExportButton() != null) {
+            svExcelExportButton = svNodes.excelExportButton();
+            setupExcelExportButton(svExcelExportButton, true);
         }
 
         VariantFiltersPanel svFiltersPanel = new VariantFiltersPanel();
@@ -1479,6 +1498,168 @@ public class VariantManagerController implements Initializable {
 
     // ── Action Handlers ───────────────────────────────────────────────────────
 
+    private void setupExcelExportButton(Button button, boolean structural) {
+        if (button == null) {
+            return;
+        }
+        FontIcon icon = new FontIcon(FontAwesomeSolid.FILE_EXCEL);
+        icon.setIconSize(14);
+        icon.setIconColor(Color.web("#217346"));
+        button.setText("");
+        button.setGraphic(icon);
+        if (button.getTooltip() == null) {
+            button.setTooltip(new Tooltip("Export to Excel"));
+        }
+        button.setOnAction(e -> {
+            if (structural) {
+                exportVariantsToExcel(true);
+            } else {
+                exportVariantsToExcel(false);
+            }
+        });
+        setExcelExportButtonVisible(button, false);
+    }
+
+    private static void setExcelExportButtonVisible(Button button, boolean visible) {
+        if (button == null) {
+            return;
+        }
+        button.setVisible(visible);
+        button.setManaged(visible);
+    }
+
+    @FXML
+    private void handleExportExcel() {
+        exportVariantsToExcel(false);
+    }
+
+    private void exportVariantsToExcel(boolean structural) {
+        if (structural) {
+            if (svVariantTable == null
+                    || svVariantTable.getDisplayedAllRows() == null
+                    || svVariantTable.getDisplayedAllRows().isEmpty()) {
+                showExcelInfo("No variants available to export.");
+                return;
+            }
+        } else {
+            VariantTable table = variantTable();
+            if (table == null
+                    || (isEmpty(table.getDisplayedCodingRows())
+                        && isEmpty(table.getDisplayedIntronicRows())
+                        && isEmpty(table.getDisplayedIntergenicRows()))) {
+                showExcelInfo("No variants available to export.");
+                return;
+            }
+        }
+
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Export Variants to Excel");
+        chooser.getExtensionFilters().add(
+            new FileChooser.ExtensionFilter("Excel Workbook", "*.xlsx"));
+        chooser.setInitialFileName(structural ? "structural_variants.xlsx" : "variants.xlsx");
+        File lastDir = UserPreferences.getLastDirectory("XLSX");
+        if (lastDir != null) {
+            try {
+                chooser.setInitialDirectory(lastDir);
+            } catch (IllegalArgumentException ignored) {
+                // Directory unavailable; FileChooser uses its default.
+            }
+        }
+
+        File chosen = chooser.showSaveDialog(stage != null ? stage : MainApp.stage);
+        if (chosen == null) {
+            return;
+        }
+        File target = chosen.getName().toLowerCase(Locale.ROOT).endsWith(".xlsx")
+            ? chosen
+            : new File(chosen.getParentFile(), chosen.getName() + ".xlsx");
+        UserPreferences.setLastDirectory("XLSX", target);
+
+        final Path path = target.toPath();
+        final boolean exportSv = structural;
+        ThreadRunner.get().submit(
+            "Exporting to Excel…",
+            () -> {
+                try {
+                    List<VariantTableExcelWriter.SheetData> sheetsToWrite = exportSv
+                        ? buildSvExcelSheets()
+                        : buildPointExcelSheets();
+                    if (sheetsToWrite.isEmpty()) {
+                        return new IOException("No variants available to export.");
+                    }
+                    VariantTableExcelWriter.write(
+                        path,
+                        sheetsToWrite,
+                        (current, total) -> LoadingManager.get().setProgress(current, total));
+                    return null;
+                } catch (Exception ex) {
+                    return ex;
+                }
+            },
+            error -> {
+                if (error != null) {
+                    Alert alert = new Alert(Alert.AlertType.ERROR);
+                    alert.setTitle("Export to Excel");
+                    alert.setHeaderText("Failed to write Excel file");
+                    alert.setContentText(error.getMessage() != null ? error.getMessage() : error.toString());
+                    if (stage != null) {
+                        alert.initOwner(stage);
+                    }
+                    alert.showAndWait();
+                }
+            });
+    }
+
+    private void showExcelInfo(String message) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle("Export to Excel");
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        if (stage != null) {
+            alert.initOwner(stage);
+        }
+        alert.showAndWait();
+    }
+
+    private static boolean isEmpty(ObservableList<?> rows) {
+        return rows == null || rows.isEmpty();
+    }
+
+    private List<VariantTableExcelWriter.SheetData> buildPointExcelSheets() {
+        VariantTable table = variantTable();
+        if (table == null) {
+            return List.of();
+        }
+        VariantFilter filter = table.getDisplayFilter();
+        List<VariantTableExcelWriter.SheetData> sheets = new ArrayList<>(3);
+        addBuiltSheet(sheets, VariantExcelExportBuilder.buildPointSheet(
+            "Coding", table.getDisplayedCodingRows(), filter, false));
+        addBuiltSheet(sheets, VariantExcelExportBuilder.buildPointSheet(
+            "Intronic", table.getDisplayedIntronicRows(), filter, false));
+        addBuiltSheet(sheets, VariantExcelExportBuilder.buildPointSheet(
+            "Intergenic", table.getDisplayedIntergenicRows(), filter, true));
+        return sheets;
+    }
+
+    private List<VariantTableExcelWriter.SheetData> buildSvExcelSheets() {
+        if (svVariantTable == null) {
+            return List.of();
+        }
+        VariantTableExcelWriter.SheetData sheet = VariantExcelExportBuilder.buildStructuralSheet(
+            "Structural",
+            svVariantTable.getDisplayedAllRows(),
+            svVariantTable.getDisplayFilter());
+        return sheet != null ? List.of(sheet) : List.of();
+    }
+
+    private static void addBuiltSheet(
+            List<VariantTableExcelWriter.SheetData> sheets,
+            VariantTableExcelWriter.SheetData sheet) {
+        if (sheet != null) {
+            sheets.add(sheet);
+        }
+    }
+
     @FXML
     private void handleAnnotateAllChromosomes() {
         if (vcfManager == null || isAllChromosomeAnnotationRunning()) {
@@ -2074,6 +2255,8 @@ public class VariantManagerController implements Initializable {
 
                 boolean pointEmpty = coding.isEmpty() && intronic.isEmpty() && intergenic.isEmpty();
                 boolean svEmpty = svAll.isEmpty();
+                setExcelExportButtonVisible(excelExportButton, !pointEmpty);
+                setExcelExportButtonVisible(svExcelExportButton, !svEmpty);
                 if (pointEmpty) {
                     setPlaceholder("No point mutations match current filter settings");
                 } else {
@@ -2142,6 +2325,8 @@ public class VariantManagerController implements Initializable {
             svVariantTable.setBaseTabTitles();
             svVariantTable.setPlaceholders(text, "");
         }
+        setExcelExportButtonVisible(excelExportButton, false);
+        setExcelExportButtonVisible(svExcelExportButton, false);
     }
 
     private void setupWindowVisibilityListeners() {

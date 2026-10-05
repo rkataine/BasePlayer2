@@ -78,18 +78,21 @@ public class FileDialog {
     savePaths.put("CTRL", "DefaultControlDir");
     savePaths.put("BED", "TrackDir");
     savePaths.put("JSON", "DefaultProjectDir");
+    savePaths.put("XLSX", "DefaultExportDir");
     File home = new File(System.getProperty("user.home"));
     defaultPaths.put("VCF", home);
     defaultPaths.put("BAM", home);
     defaultPaths.put("CTRL", home);
     defaultPaths.put("BED", home);
     defaultPaths.put("JSON", home);
+    defaultPaths.put("XLSX", home);
 
     filefilters.put("VCF", "*.vcf.gz");
     filefilters.put("BAM", "*.bam, *.cram");
     filefilters.put("CTRL", "*.vcf.gz");
     filefilters.put("BED", "*.bed, *.bed.gz, *.bedgraph.gz, *.gff.gz, *.gff3.gz, *.bigwig, *.bw, *.bigbed, *.bb");
     filefilters.put("JSON", "*.json");
+    filefilters.put("XLSX", "*.xlsx");
  
   }
 }

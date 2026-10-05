@@ -133,6 +133,9 @@
                                 <TextField fx:id="tableSearchField" promptText="Search genes, effects…"
                                            styleClass="filter-field table-search-field"
                                            HBox.hgrow="ALWAYS"/>
+                                <Button fx:id="excelExportButton" styleClass="icon-button"
+                                        visible="false" managed="false"
+                                        onAction="#handleExportExcel"/>
                             </HBox>
                         </VBox>
                     </ScrollPane>

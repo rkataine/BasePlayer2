@@ -1,6 +1,6 @@
 {
   "java.configuration.updateBuildConfiguration": "automatic",
-  "java.debug.settings.hotCodeReplace": "auto",
+  "java.debug.settings.hotCodeReplace": "manual",
   "java.autobuild.enabled": false,
   "java.configuration.runtimes": [
     {

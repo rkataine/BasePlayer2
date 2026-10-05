@@ -109,6 +109,11 @@ public class SvVariantTable extends AbstractNestedVariantTable {
         applySearch();
     }
 
+    /** Post-search rows currently shown in the All SV tab. */
+    public ObservableList<TableRow> getDisplayedAllRows() {
+        return filter(allItems);
+    }
+
     public void setPlaceholders(String allText, String typeText) {
         if (allPanel != null) {
             allPanel.setPlaceholder(new Label(allText != null ? allText : ""));

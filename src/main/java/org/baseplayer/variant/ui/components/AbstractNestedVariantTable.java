@@ -255,6 +255,25 @@ public abstract class AbstractNestedVariantTable {
         return tableSearchQuery;
     }
 
+    /** Post-search coding rows currently shown in the Gene tab. */
+    public ObservableList<TableRow> getDisplayedCodingRows() {
+        return filterRows(allCodingItems);
+    }
+
+    /** Post-search rows currently shown in the Intronic tab. */
+    public ObservableList<TableRow> getDisplayedIntronicRows() {
+        return filterRows(allIntronicItems);
+    }
+
+    /** Post-search rows currently shown in the Intergenic tab. */
+    public ObservableList<TableRow> getDisplayedIntergenicRows() {
+        return filterRows(allIntergenicItems);
+    }
+
+    public VariantFilter getDisplayFilter() {
+        return displayFilter;
+    }
+
     private void applyTableSearch() {
         ObservableList<TableRow> coding = filterRows(allCodingItems);
         ObservableList<TableRow> intronic = filterRows(allIntronicItems);
@@ -2074,7 +2093,7 @@ public abstract class AbstractNestedVariantTable {
     }
 
 
-    protected static String formatSvPosition(TableRow row) {
+    public static String formatSvPosition(TableRow row) {
         if (row == null || row.node() == null) {
             return "—";
         }
@@ -2086,7 +2105,7 @@ public abstract class AbstractNestedVariantTable {
         return chrom + ":" + node.position;
     }
 
-    protected static String formatSvLength(TableRow row) {
+    public static String formatSvLength(TableRow row) {
         if (row == null || row.node() == null) {
             return "—";
         }
@@ -2103,7 +2122,7 @@ public abstract class AbstractNestedVariantTable {
         return len + " bp";
     }
 
-    protected static String formatSvMate(TableRow row) {
+    public static String formatSvMate(TableRow row) {
         if (row == null || row.node() == null) {
             return "—";
         }
@@ -2123,7 +2142,7 @@ public abstract class AbstractNestedVariantTable {
         return mateChrom;
     }
 
-    protected static String formatSvQual(TableRow row) {
+    public static String formatSvQual(TableRow row) {
         if (row == null || row.node() == null) {
             return "—";
         }
@@ -2296,7 +2315,19 @@ public abstract class AbstractNestedVariantTable {
         return rowTextColor(row != null ? row.node() : null);
     }
 
-    private static String resolveTableColumnValue(TableRow row, String property, VariantFilter filter) {
+    /** Gene label for export; falls back to chromosome when no gene is set. */
+    public static String exportGeneName(TableRow row) {
+        String gene = rowGeneName(row);
+        if (gene != null && !gene.isBlank()) {
+            return gene;
+        }
+        if (row != null && row.chromosome() != null && !row.chromosome().isBlank()) {
+            return ChromosomeNames.forDisplay(row.chromosome());
+        }
+        return "";
+    }
+
+    public static String resolveTableColumnValue(TableRow row, String property, VariantFilter filter) {
         VariantNode node = row != null ? row.node() : null;
         if (node == null) {
             return "";

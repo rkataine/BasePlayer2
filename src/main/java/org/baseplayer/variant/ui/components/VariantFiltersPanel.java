@@ -34,6 +34,7 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -109,7 +110,8 @@ public class VariantFiltersPanel {
         TextField minSvLengthField,
         TextField maxSvLengthField,
         Button annotateAllChromosomesButton,
-        TextField tableSearchField
+        TextField tableSearchField,
+        Button excelExportButton
     ) {
         /** Point-mutation nodes without SV length / annotate / search fields. */
         public Nodes(
@@ -154,6 +156,7 @@ public class VariantFiltersPanel {
                 reloadBanner,
                 reloadBannerLabel,
                 reloadBannerButton,
+                null,
                 null,
                 null,
                 null,
@@ -207,6 +210,7 @@ public class VariantFiltersPanel {
                 reloadBannerButton,
                 minSvLengthField,
                 maxSvLengthField,
+                null,
                 null,
                 null);
         }
@@ -330,7 +334,12 @@ public class VariantFiltersPanel {
         searchField.setPromptText("Search genes, positions, mates…");
         searchField.getStyleClass().addAll("filter-field", "table-search-field");
         HBox.setHgrow(searchField, javafx.scene.layout.Priority.ALWAYS);
-        HBox annotateSearchRow = new HBox(8, annotateAll, searchField);
+        Button excelExport = new Button();
+        excelExport.getStyleClass().add("icon-button");
+        excelExport.setTooltip(new Tooltip("Export to Excel"));
+        excelExport.setVisible(false);
+        excelExport.setManaged(false);
+        HBox annotateSearchRow = new HBox(8, annotateAll, searchField, excelExport);
         annotateSearchRow.setAlignment(Pos.CENTER_LEFT);
         right.getChildren().add(annotateSearchRow);
 
@@ -362,7 +371,8 @@ public class VariantFiltersPanel {
             minSvLen,
             maxSvLen,
             annotateAll,
-            searchField);
+            searchField,
+            excelExport);
         return new Pair<>(split, nodes);
     }
 
