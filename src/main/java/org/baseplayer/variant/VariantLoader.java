@@ -512,21 +512,15 @@ public class VariantLoader {
 
         Boolean isHomRef = (Boolean) gtMap.get("isHomRef");
         Boolean isNoCall = (Boolean) gtMap.get("isNoCall");
-        
-        // Skip if HomRef or NoCall
-        if (Boolean.TRUE.equals(isNoCall)) {
-            // System.err.println("[VariantLoader.getSampleCallForAllele] Sample '" + sampleName + "' is NoCall");
-            return null;
-        }
-        
-        if (Boolean.TRUE.equals(isHomRef)) {
-            // System.err.println("[VariantLoader.getSampleCallForAllele] Sample '" + sampleName + "' is HomRef");
+
+        // Skip HomRef / NoCall at load. In LOH mode, missing calls at marker-het
+        // sites are added as AA (0/0) by VariantFilter.addMissingLohAaCalls.
+        if (Boolean.TRUE.equals(isNoCall) || Boolean.TRUE.equals(isHomRef)) {
             return null;
         }
 
         String gt = (String) gtMap.get("GT");
-        // System.err.println("[VariantLoader.getSampleCallForAllele] Sample '" + sampleName + "', GT=" + gt + ", altAllele=" + altAllele);
-        
+
         // For SV breakends with GT=NA, accept them as present (NA = variant found)
         if ("NA".equalsIgnoreCase(gt)) {
             // System.err.println("[VariantLoader.getSampleCallForAllele]   GT=NA (breakend with no explicit genotype) -> ACCEPT");

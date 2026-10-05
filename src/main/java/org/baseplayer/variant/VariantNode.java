@@ -300,6 +300,36 @@ public class VariantNode {
         return call != null && isHomAltGt(call.gt, alt);
     }
 
+    /** True if this call is homozygous REF for the node's allele. */
+    public boolean isHomozygousRef(SampleCall call) {
+        return call != null && isHomRefGt(call.gt, ref);
+    }
+
+    /** True if the call carries the ALT (het or homozygous ALT), not HomRef/NA. */
+    public boolean isAltCarrier(SampleCall call) {
+        return call != null && (isHeterozygous(call) || isHomozygousAlt(call));
+    }
+
+    /**
+     * LOH allele class relative to this site's REF/ALT.
+     * {@code AA}=hom-ref, {@code AB}=het, {@code BB}=hom-alt; null if unusable.
+     */
+    public String lohAlleleClass(SampleCall call) {
+        if (call == null) {
+            return null;
+        }
+        if (isHomozygousRef(call)) {
+            return "AA";
+        }
+        if (isHeterozygous(call)) {
+            return "AB";
+        }
+        if (isHomozygousAlt(call)) {
+            return "BB";
+        }
+        return null;
+    }
+
     /**
      * GT alleles differ and neither is missing. Works for allele-base ({@code G/A})
      * and numeric ({@code 0/1}) forms. Missing/NA GT returns false.
@@ -326,6 +356,21 @@ public class VariantNode {
         }
         // Numeric diploid ALT (single-alt sites: allele index 1).
         return a[0].equals("1") && a[1].equals("1");
+    }
+
+    /**
+     * Both alleles are the REF. Accepts allele-base ({@code A/A}) and numeric
+     * ({@code 0/0}, {@code 0|0}) forms. Missing/NA GT returns false.
+     */
+    public static boolean isHomRefGt(String gt, String ref) {
+        String[] a = splitGtAlleles(gt);
+        if (a == null) {
+            return false;
+        }
+        if (ref != null && a[0].equals(ref) && a[1].equals(ref)) {
+            return true;
+        }
+        return a[0].equals("0") && a[1].equals("0");
     }
 
     /** Diploid allele pair, or null if GT is missing / unusable for zygosity. */

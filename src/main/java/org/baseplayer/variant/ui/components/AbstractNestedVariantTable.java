@@ -1674,7 +1674,15 @@ public abstract class AbstractNestedVariantTable {
             pad.setPrefWidth(GUTTER_WIDTH);
             pad.setMaxWidth(GUTTER_WIDTH);
 
-            String gt = call.gt != null && !call.gt.isBlank() ? call.gt : "—";
+            VariantFilter activeFilter = filterSupplier != null ? filterSupplier.get() : null;
+            String rawGt = call.gt != null && !call.gt.isBlank() ? call.gt : "—";
+            String gt = rawGt;
+            if (activeFilter != null && activeFilter.isLohMode()) {
+                String loh = row.node().lohAlleleClass(call);
+                if (loh != null) {
+                    gt = loh;
+                }
+            }
             String af = call.alleleFraction >= 0
                 ? String.format(Locale.ROOT, "%.2f", call.alleleFraction) : "—";
             String gq = call.quality >= 0
@@ -1683,6 +1691,9 @@ public abstract class AbstractNestedVariantTable {
 
             Label name = fixedCol(sampleDisplayName(call), widths.sampleName, "vn-title");
             Label gtLabel = fixedCol(gt, widths.gt, "vn-cell-gt");
+            if (!gt.equals(rawGt)) {
+                Tooltip.install(gtLabel, new Tooltip("LOH " + gt + "  (GT " + rawGt + ")"));
+            }
             Label afLabel = fixedCol(af, widths.af, "vn-cell-af");
             Label gqLabel = fixedCol(gq, widths.gq, "vn-summary");
             Label dpLabel = fixedCol(dp, widths.dp, "vn-summary");

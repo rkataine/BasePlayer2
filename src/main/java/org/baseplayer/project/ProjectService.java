@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.annotation.AnnotationLoader;
@@ -30,6 +31,7 @@ import org.baseplayer.io.Settings;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.Sample;
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.FeatureTrackViewportRegistry;
@@ -112,11 +114,23 @@ public final class ProjectService {
     }
 
     VcfManager vcfManager = VcfManager.getInstance();
+    for (SampleGroup group : samples.getSampleGroups()) {
+      if (group == null) {
+        continue;
+      }
+      ProjectDocument.SampleGroupSpec groupSpec = new ProjectDocument.SampleGroupSpec();
+      groupSpec.id = group.getId();
+      groupSpec.name = group.getName();
+      groupSpec.color = group.toCssHex();
+      doc.sampleGroups.add(groupSpec);
+    }
+
     List<SampleTrack> sampleTracks = samples.getSampleTracks();
     for (int trackIndex = 0; trackIndex < sampleTracks.size(); trackIndex++) {
       SampleTrack track = sampleTracks.get(trackIndex);
       ProjectDocument.SampleTrackSpec trackSpec = new ProjectDocument.SampleTrackSpec();
       trackSpec.displayName = track.getDisplayName();
+      trackSpec.groupIds = new ArrayList<>(track.getGroupIds());
 
       for (Sample sample : track.getSamples()) {
         if (sample.getDataType() == Sample.DataType.VCF && sample.getPath() != null) {
@@ -416,6 +430,21 @@ public final class ProjectService {
     spec.maxSharedSamples = filter.getMaxSharedSamples();
     spec.geneLevel = filter.isGeneLevel();
     spec.comparisonWindowBp = filter.getComparisonWindowBp();
+    if (filter.getPresentMatchMode() != null) {
+      spec.presentMatchMode = filter.getPresentMatchMode().name();
+    }
+    if (filter.getGroupRoles() != null) {
+      for (Map.Entry<Integer, VariantFilter.GroupRole> entry : filter.getGroupRoles().entrySet()) {
+        if (entry.getKey() == null || entry.getValue() == null
+            || entry.getValue() == VariantFilter.GroupRole.IGNORE) {
+          continue;
+        }
+        ProjectDocument.GroupRoleSpec roleSpec = new ProjectDocument.GroupRoleSpec();
+        roleSpec.groupId = entry.getKey();
+        roleSpec.role = entry.getValue().name();
+        spec.groupRoles.add(roleSpec);
+      }
+    }
     for (VcfVariantType t : filter.getAllowedTypes()) {
       if (t != null) spec.allowedTypes.add(t.name());
     }
@@ -513,7 +542,90 @@ public final class ProjectService {
     }
 
     filter.setClassSlices(point, sv);
+    resolveGroupTrackIndices(filter);
     return filter;
+  }
+
+  private static void restoreComparisonRoles(
+      VariantFilter filter, ProjectDocument.ClassFilterSpec spec) {
+    if (filter == null || spec == null) {
+      return;
+    }
+    if (spec.presentMatchMode != null && !spec.presentMatchMode.isBlank()) {
+      try {
+        filter.setPresentMatchMode(
+            VariantFilter.PresentMatchMode.valueOf(spec.presentMatchMode.trim().toUpperCase(Locale.ROOT)));
+      } catch (IllegalArgumentException ignored) {
+        filter.setPresentMatchMode(VariantFilter.PresentMatchMode.ALL);
+      }
+    }
+    Map<Integer, VariantFilter.GroupRole> roles = new HashMap<>();
+    if (spec.groupRoles != null) {
+      for (ProjectDocument.GroupRoleSpec roleSpec : spec.groupRoles) {
+        if (roleSpec == null || roleSpec.role == null || roleSpec.role.isBlank()) {
+          continue;
+        }
+        try {
+          VariantFilter.GroupRole role =
+              VariantFilter.GroupRole.valueOf(roleSpec.role.trim().toUpperCase(Locale.ROOT));
+          if (role != VariantFilter.GroupRole.IGNORE) {
+            roles.put(roleSpec.groupId, role);
+          }
+        } catch (IllegalArgumentException ignored) {
+          // skip unknown role names from older / future files
+        }
+      }
+    }
+    filter.setGroupRoles(roles);
+  }
+
+  /**
+   * Rebuild cohort track-index maps from the live {@link SampleRegistry} so restored
+   * group roles work before the user re-applies Sample Comparison.
+   */
+  private static void resolveGroupTrackIndices(VariantFilter filter) {
+    if (filter == null) {
+      return;
+    }
+    if (filter.getPointSlice() != null) {
+      resolveGroupTrackIndicesLocal(filter.getPointSlice());
+    }
+    if (filter.getSvSlice() != null) {
+      resolveGroupTrackIndicesLocal(filter.getSvSlice());
+    }
+    resolveGroupTrackIndicesLocal(filter);
+  }
+
+  private static void resolveGroupTrackIndicesLocal(VariantFilter filter) {
+    if (filter == null || filter.getGroupRoles() == null || filter.getGroupRoles().isEmpty()) {
+      return;
+    }
+    Map<Integer, Set<Integer>> byGroup = new HashMap<>();
+    for (Integer id : filter.getGroupRoles().keySet()) {
+      byGroup.put(id, new HashSet<>());
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<SampleTrack> tracks = registry.getSampleTracks();
+    for (int i = 0; i < tracks.size(); i++) {
+      SampleTrack track = tracks.get(i);
+      if (track == null) {
+        continue;
+      }
+      if (!track.hasGroup()) {
+        Set<Integer> ungrouped = byGroup.get(VariantFilter.UNGROUPED_COHORT_ID);
+        if (ungrouped != null) {
+          ungrouped.add(i);
+        }
+        continue;
+      }
+      for (int cohortId : track.getGroupIds()) {
+        Set<Integer> indices = byGroup.get(cohortId);
+        if (indices != null) {
+          indices.add(i);
+        }
+      }
+    }
+    filter.setGroupTrackIndices(byGroup);
   }
 
   private static VariantFilter restoreClassFilter(ProjectDocument.ClassFilterSpec spec) {
@@ -533,6 +645,7 @@ public final class ProjectService {
     filter.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
     filter.setGeneLevel(spec.geneLevel);
     filter.setComparisonWindowBp(Math.max(0, spec.comparisonWindowBp));
+    restoreComparisonRoles(filter, spec);
     EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
     if (spec.allowedTypes != null) {
       for (String name : spec.allowedTypes) {
@@ -740,6 +853,7 @@ public final class ProjectService {
   private static void restoreSampleTracks(
       ProjectDocument document, Path projectFile, List<String> warnings) {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    restoreSampleGroups(document, registry);
     if (document.sampleTracks == null) return;
 
     for (ProjectDocument.SampleTrackSpec trackSpec : document.sampleTracks) {
@@ -814,6 +928,7 @@ public final class ProjectService {
         if (track == null) {
           continue;
         }
+        applyTrackGroupMembership(track, trackSpec.groupIds, registry);
         registry.getSampleTracks().add(track);
         registry.getSampleList().add(track.getDisplayName());
       } catch (Exception e) {
@@ -823,6 +938,47 @@ public final class ProjectService {
     }
     if (!registry.getSampleTracks().isEmpty()) {
       registry.includeNewTracksAtEndResetHeight();
+    }
+  }
+
+  private static void restoreSampleGroups(ProjectDocument document, SampleRegistry registry) {
+    if (registry == null) {
+      return;
+    }
+    List<SampleGroup> groups = new ArrayList<>();
+    if (document != null && document.sampleGroups != null) {
+      for (ProjectDocument.SampleGroupSpec spec : document.sampleGroups) {
+        if (spec == null || spec.id < 0) {
+          continue;
+        }
+        Color color = null;
+        if (spec.color != null && !spec.color.isBlank()) {
+          try {
+            color = Color.web(spec.color);
+          } catch (Exception ignored) {
+            color = null;
+          }
+        }
+        groups.add(new SampleGroup(spec.id, spec.name, color));
+      }
+    }
+    registry.replaceSampleGroups(groups);
+  }
+
+  private static void applyTrackGroupMembership(
+      SampleTrack track, List<Integer> groupIds, SampleRegistry registry) {
+    if (track == null) {
+      return;
+    }
+    track.clearGroup();
+    if (groupIds == null || groupIds.isEmpty() || registry == null) {
+      return;
+    }
+    for (Integer groupId : groupIds) {
+      if (groupId == null || groupId < 0 || registry.getSampleGroup(groupId) == null) {
+        continue;
+      }
+      track.addGroupId(groupId);
     }
   }
 
@@ -957,6 +1113,7 @@ public final class ProjectService {
     FeatureTrackViewportRegistry features =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
 
+    // Tracks (and group membership) are already restored; resolve cohort indices here.
     VariantFilter filter = restoreFilter(document.variantFilter);
     restoreSessionAvailableFilters(document.variantFilter);
     VcfManager.getInstance().applyFilter(filter);

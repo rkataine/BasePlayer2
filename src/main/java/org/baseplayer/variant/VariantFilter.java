@@ -24,13 +24,17 @@ public class VariantFilter {
         ABSENT,
         /** At least one cohort sample must pass thresholds and be heterozygous. */
         HETEROZYGOUS,
-        /** At least one cohort sample must pass thresholds and be homozygous ALT. */
-        HOMOZYGOUS_ALT
+        /**
+         * At least one cohort sample must be homozygous.
+         * Alone: homozygous ALT only.
+         * With {@link #HETEROZYGOUS} on another group (LOH mode): AA or BB.
+         */
+        HOMOZYGOUS
     }
 
     /**
      * When multiple groups are marked {@link GroupRole#PRESENT}, {@link GroupRole#HETEROZYGOUS},
-     * or {@link GroupRole#HOMOZYGOUS_ALT}, require the constraint in every such group (AND) or
+     * or {@link GroupRole#HOMOZYGOUS}, require the constraint in every such group (AND) or
      * in at least one (OR). Absent groups are always AND.
      */
     public enum PresentMatchMode {
@@ -165,21 +169,102 @@ public class VariantFilter {
             if (role == GroupRole.PRESENT
                 || role == GroupRole.ABSENT
                 || role == GroupRole.HETEROZYGOUS
-                || role == GroupRole.HOMOZYGOUS_ALT) {
+                || role == GroupRole.HOMOZYGOUS) {
                 return true;
             }
         }
         return false;
     }
 
-    /** True when any group requires a genotype (het / hom-alt), not just presence. */
+    /** True when any group requires a genotype (het / hom), not just presence. */
     public boolean hasActiveGenotypeGroupComparison() {
         for (GroupRole role : groupRoles.values()) {
-            if (role == GroupRole.HETEROZYGOUS || role == GroupRole.HOMOZYGOUS_ALT) {
+            if (role == GroupRole.HETEROZYGOUS || role == GroupRole.HOMOZYGOUS) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * LOH mode: one group is {@link GroupRole#HETEROZYGOUS} (markers) and another
+     * is {@link GroupRole#HOMOZYGOUS} (AA/BB). Does not change VCF loading — het
+     * filter is applied at comparison time; missing genotypes get AA via
+     * {@link #addMissingLohAaCalls}.
+     */
+    public boolean isLohMode() {
+        if (hasClassSlices()) {
+            return (pointSlice != null && pointSlice.isLohModeLocal())
+                || (svSlice != null && svSlice.isLohModeLocal());
+        }
+        return isLohModeLocal();
+    }
+
+    private boolean isLohModeLocal() {
+        boolean hasHeterozygous = false;
+        boolean hasHomozygous = false;
+        for (GroupRole role : groupRoles.values()) {
+            if (role == GroupRole.HETEROZYGOUS) {
+                hasHeterozygous = true;
+            } else if (role == GroupRole.HOMOZYGOUS) {
+                hasHomozygous = true;
+            }
+        }
+        return hasHeterozygous && hasHomozygous;
+    }
+
+    /**
+     * In LOH mode, at heterozygous-cohort (marker) sites add a {@code 0/0} (AA)
+     * {@link VariantNode.SampleCall} for each {@link GroupRole#HOMOZYGOUS} track
+     * that has no genotype (ALT lost). Skips tracks that already have a call.
+     *
+     * @return number of AA calls added on this node
+     */
+    public int addMissingLohAaCalls(VariantNode node) {
+        if (node != null && hasClassSlices()) {
+            return classSlice(node.type).addMissingLohAaCalls(node);
+        }
+        if (!isLohModeLocal() || node == null) {
+            return 0;
+        }
+        Set<Integer> hetTracks = tracksForRole(GroupRole.HETEROZYGOUS);
+        Set<Integer> homTracks = tracksForRole(GroupRole.HOMOZYGOUS);
+        if (hetTracks.isEmpty() || homTracks.isEmpty()) {
+            return 0;
+        }
+        if (!hasPassingZygosityInCohort(node, hetTracks, Zygosity.HET)) {
+            return 0;
+        }
+
+        int added = 0;
+        for (Integer trackIndex : homTracks) {
+            if (trackIndex == null || trackIndex < 0) {
+                continue;
+            }
+            if (node.getSampleCall(trackIndex) != null) {
+                continue;
+            }
+            String gt = (node.ref != null && !node.ref.isBlank())
+                ? node.ref + "/" + node.ref
+                : "0/0";
+            node.addSample(new VariantNode.SampleCall(trackIndex, gt, -1, -1, 0.0));
+            added++;
+        }
+        return added;
+    }
+
+    private Set<Integer> tracksForRole(GroupRole role) {
+        Set<Integer> tracks = new HashSet<>();
+        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
+            if (entry.getValue() != role) {
+                continue;
+            }
+            Set<Integer> cohort = groupTrackIndices.get(entry.getKey());
+            if (cohort != null) {
+                tracks.addAll(cohort);
+            }
+        }
+        return tracks;
     }
 
     public Set<VcfVariantType> getAllowedTypes() { return allowedTypes; }
@@ -396,7 +481,10 @@ public class VariantFilter {
 
         if (call != null) {
             if (f.minDepth > 0 && call.depth >= 0 && call.depth < f.minDepth) return false;
-            if (f.minAlleleFraction > 0 && call.alleleFraction >= 0
+            // HomRef / AF=0: alt fraction is not meaningful — do not reject on min AF.
+            boolean homRefLike = call.alleleFraction == 0
+                || (call.gt != null && VariantNode.isHomRefGt(call.gt, null));
+            if (!homRefLike && f.minAlleleFraction > 0 && call.alleleFraction >= 0
                 && call.alleleFraction < f.minAlleleFraction) {
                 return false;
             }
@@ -600,7 +688,8 @@ public class VariantFilter {
     /**
      * Compare presence / zygosity across named groups using quality/depth/AF thresholds.
      * Present and genotype roles use {@link #presentMatchMode}; absent groups must all lack
-     * the variant. Heterozygous / homozygous-alt require at least one matching call in the cohort.
+     * the variant. Heterozygous / homozygous roles require at least one matching call.
+     * {@link GroupRole#HOMOZYGOUS}: ALT-only unless LOH mode (HETEROZYGOUS + HOMOZYGOUS), then AA or BB.
      */
     public boolean passesGroupComparison(VariantNode node) {
         if (node == null) return false;
@@ -610,6 +699,7 @@ public class VariantFilter {
 
         boolean anyPresentMatched = false;
         boolean anyPresentConfigured = false;
+        boolean lohMode = isLohModeLocal();
 
         for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
             GroupRole role = entry.getValue();
@@ -619,18 +709,22 @@ public class VariantFilter {
             Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
 
             if (role == GroupRole.ABSENT) {
-                if (hasPassingCallInCohort(node, tracks)) {
+                if (hasPassingAltCallInCohort(node, tracks)) {
                     return false;
                 }
                 continue;
             }
 
-            // PRESENT, HETEROZYGOUS, HOMOZYGOUS_ALT — all use presentMatchMode.
+            // PRESENT, HETEROZYGOUS, HOMOZYGOUS — use presentMatchMode.
             anyPresentConfigured = true;
             boolean matched = switch (role) {
-                case HETEROZYGOUS -> hasPassingZygosityInCohort(node, tracks, true);
-                case HOMOZYGOUS_ALT -> hasPassingZygosityInCohort(node, tracks, false);
-                default -> hasPassingCallInCohort(node, tracks); // PRESENT
+                case HETEROZYGOUS -> hasPassingZygosityInCohort(node, tracks, Zygosity.HET);
+                case HOMOZYGOUS -> lohMode
+                    ? hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ANY)
+                    : hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ALT);
+                // PRESENT: alt carriers; in LOH mode HomRef (AA) also counts as present.
+                default -> hasPassingAltCallInCohort(node, tracks)
+                    || (lohMode && hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_REF));
             };
 
             if (presentMatchMode == PresentMatchMode.ALL) {
@@ -657,7 +751,7 @@ public class VariantFilter {
         if (!hasActiveGroupComparison()) {
             return true;
         }
-        // Fail closed: set-based path cannot verify het/hom-alt.
+        // Fail closed: set-based path cannot verify het/hom/LOH.
         if (hasActiveGenotypeGroupComparison()) {
             return false;
         }
@@ -697,6 +791,8 @@ public class VariantFilter {
         return true;
     }
 
+    private enum Zygosity { HET, HOM_ALT, HOM_REF, HOM_ANY }
+
     private static boolean intersects(Set<Integer> a, Set<Integer> b) {
         if (a == null || a.isEmpty() || b == null || b.isEmpty()) {
             return false;
@@ -711,26 +807,8 @@ public class VariantFilter {
         return false;
     }
 
-    private boolean hasPassingCallInCohort(VariantNode node, Set<Integer> trackIndices) {
-        if (trackIndices == null || trackIndices.isEmpty()) {
-            return false;
-        }
-        for (VariantNode.SampleCall call : node.getSamples()) {
-            if (call == null) continue;
-            int trackIndex = call.getTrackIndex();
-            if (!trackIndices.contains(trackIndex)) continue;
-            if (passesSampleThresholds(node, call)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * @param heterozygous {@code true} for het, {@code false} for homozygous ALT
-     */
-    private boolean hasPassingZygosityInCohort(
-            VariantNode node, Set<Integer> trackIndices, boolean heterozygous) {
+    /** Alt-carrier (het / hom-alt) presence — HomRef does not count as mutated. */
+    private boolean hasPassingAltCallInCohort(VariantNode node, Set<Integer> trackIndices) {
         if (trackIndices == null || trackIndices.isEmpty()) {
             return false;
         }
@@ -739,7 +817,30 @@ public class VariantFilter {
             int trackIndex = call.getTrackIndex();
             if (!trackIndices.contains(trackIndex)) continue;
             if (!passesSampleThresholds(node, call)) continue;
-            if (heterozygous ? node.isHeterozygous(call) : node.isHomozygousAlt(call)) {
+            if (node.isAltCarrier(call)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasPassingZygosityInCohort(
+            VariantNode node, Set<Integer> trackIndices, Zygosity zygosity) {
+        if (trackIndices == null || trackIndices.isEmpty()) {
+            return false;
+        }
+        for (VariantNode.SampleCall call : node.getSamples()) {
+            if (call == null) continue;
+            int trackIndex = call.getTrackIndex();
+            if (!trackIndices.contains(trackIndex)) continue;
+            if (!passesSampleThresholds(node, call)) continue;
+            boolean match = switch (zygosity) {
+                case HET -> node.isHeterozygous(call);
+                case HOM_ALT -> node.isHomozygousAlt(call);
+                case HOM_REF -> node.isHomozygousRef(call);
+                case HOM_ANY -> node.isHomozygousRef(call) || node.isHomozygousAlt(call);
+            };
+            if (match) {
                 return true;
             }
         }
@@ -769,12 +870,15 @@ public class VariantFilter {
         return shared >= minSharedSamples && shared <= maxSharedSamples;
     }
 
-    /** Count sample calls that pass per-sample quality/depth/AF thresholds. */
+    /**
+     * Count alt-carrier sample calls that pass per-sample thresholds.
+     * HomRef (AA) does not inflate shared-sample counts.
+     */
     public int countPassingSamples(VariantNode node) {
         if (node == null) return 0;
         int count = 0;
         for (VariantNode.SampleCall call : node.getSamples()) {
-            if (passesSampleThresholds(node, call)) {
+            if (passesSampleThresholds(node, call) && node.isAltCarrier(call)) {
                 count++;
             }
         }
@@ -794,7 +898,11 @@ public class VariantFilter {
             return false;
         }
         if (f.minDepth > 0 && call.depth >= 0 && call.depth < f.minDepth) return false;
-        if (f.minAlleleFraction > 0 && call.alleleFraction >= 0 && call.alleleFraction < f.minAlleleFraction) {
+        // HomRef AF is alt fraction (~0); do not reject AA on min AF.
+        if (!node.isHomozygousRef(call)
+            && f.minAlleleFraction > 0
+            && call.alleleFraction >= 0
+            && call.alleleFraction < f.minAlleleFraction) {
             return false;
         }
 
@@ -803,15 +911,20 @@ public class VariantFilter {
 
     /**
      * Thresholds plus group-role genotype/presence constraints for table display.
-     * When a sample belongs to a heterozygous / homozygous-alt / present cohort, it must
-     * satisfy that role; non-matching calls (e.g. het in a must-be-homozygous group) are
-     * excluded. With genotype roles active, samples outside those cohorts are also hidden.
+     * HomRef rows are hidden unless LOH mode (het + hom groups) is active.
      */
     public boolean passesSampleDisplay(VariantNode node, VariantNode.SampleCall call) {
         if (node != null && hasClassSlices()) {
             return classSlice(node.type).passesSampleDisplay(node, call);
         }
-        return passesSampleThresholds(node, call) && passesSampleGroupConstraint(node, call);
+        if (!passesSampleThresholds(node, call)) {
+            return false;
+        }
+        // HomRef (AA) rows only in LOH mode.
+        if (node.isHomozygousRef(call) && !isLohModeLocal()) {
+            return false;
+        }
+        return passesSampleGroupConstraint(node, call);
     }
 
     /**
@@ -834,6 +947,7 @@ public class VariantFilter {
             return !hasActiveGenotypeGroupComparison();
         }
 
+        boolean lohMode = isLohModeLocal();
         boolean inConstrainedCohort = false;
         for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
             GroupRole role = entry.getValue();
@@ -844,21 +958,36 @@ public class VariantFilter {
             if (cohort == null || !cohort.contains(trackIndex)) {
                 continue;
             }
-            inConstrainedCohort = true;
-            if (role == GroupRole.HETEROZYGOUS && !node.isHeterozygous(call)) {
-                return false;
+            if (role == GroupRole.HETEROZYGOUS) {
+                if (lohMode) {
+                    // Marker / het cohort is filter context only in LOH — hide from table.
+                    return false;
+                }
+                if (!node.isHeterozygous(call)) {
+                    return false;
+                }
             }
-            if (role == GroupRole.HOMOZYGOUS_ALT && !node.isHomozygousAlt(call)) {
-                return false;
+            inConstrainedCohort = true;
+            if (role == GroupRole.HOMOZYGOUS) {
+                boolean ok = lohMode
+                    ? (node.isHomozygousRef(call) || node.isHomozygousAlt(call))
+                    : node.isHomozygousAlt(call);
+                if (!ok) {
+                    return false;
+                }
             }
             // PRESENT: thresholds already checked by caller
         }
 
-        // Genotype LOH-style filters: only show samples that belong to a constrained cohort.
-        if (hasActiveGenotypeGroupComparison() && !inConstrainedCohort) {
-            return false;
+        if (inConstrainedCohort) {
+            return true;
         }
-        return true;
+        // LOH mode: still show AA/BB outcomes for samples outside named roles.
+        if (lohMode && (node.isHomozygousRef(call) || node.isHomozygousAlt(call))) {
+            return true;
+        }
+        // Genotype filters: hide samples outside constrained cohorts.
+        return !hasActiveGenotypeGroupComparison();
     }
 
     /** Count calls that pass {@link #passesSampleDisplay} (table / comparison-aware). */

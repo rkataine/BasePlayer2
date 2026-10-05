@@ -1916,6 +1916,8 @@ public class VariantManagerController implements Initializable {
             }
 
             try {
+                boolean lohMode = filterSnapshot.isLohMode();
+
                 for (VcfManager.CachedChromosomeVariants cached : snapshots) {
                     String sourceChromosome = cached.chromosome();
                     VariantList variants = cached.variants();
@@ -1948,6 +1950,9 @@ public class VariantManagerController implements Initializable {
                             ? variants.ensureClusterSampleIndex(filterSnapshot)
                             : null;
                     while (node != null) {
+                        if (lohMode) {
+                            filterSnapshot.addMissingLohAaCalls(node);
+                        }
                         boolean isSv = VariantTypeVisuals.isStructural(node.type);
                         if (isSv && svGeneLevel) {
                             if (!filterSnapshot.passesBaseNodeLevel(node)) {
@@ -1970,7 +1975,8 @@ public class VariantManagerController implements Initializable {
                             }
                             int passSamples = 0;
                             for (VariantNode.SampleCall call : node.getSamples()) {
-                                if (filterSnapshot.passesSampleThresholds(node, call)) {
+                                if (filterSnapshot.passesSampleThresholds(node, call)
+                                        && node.isAltCarrier(call)) {
                                     passSamples++;
                                 }
                             }
@@ -2007,7 +2013,8 @@ public class VariantManagerController implements Initializable {
 
                         int passSamples = 0;
                         for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (filterSnapshot.passesSampleThresholds(node, call)) {
+                            if (filterSnapshot.passesSampleThresholds(node, call)
+                                    && node.isAltCarrier(call)) {
                                 passSamples++;
                             }
                         }

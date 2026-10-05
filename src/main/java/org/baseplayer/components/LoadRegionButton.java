@@ -17,6 +17,7 @@ import org.baseplayer.io.VcfManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.RegionFetchCache;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.VariantList;
 
 /**
  * Overlay control shown when the current viewport is outside cached VCF data.
@@ -148,12 +149,20 @@ public class LoadRegionButton extends StackPane {
             return;
         }
 
-        boolean isCached = regionFetchCache.isFetched(
-            "VCF", region.chrom(), (long) region.start(), (long) region.end());
+        // Clamp to genomic coords — gene padding can leave start < 1 on the stack region.
+        long viewStart = Math.max(1L, (long) region.start());
+        long viewEnd = Math.max(viewStart, (long) region.end());
+
+        VariantList loaded = VcfManager.getInstance().getCachedVariants(region.chrom());
+        boolean isCached = regionFetchCache.isFetched("VCF", region.chrom(), viewStart, viewEnd)
+            // Annotate-all / session restore used to skip RegionFetchCache; VariantList wins.
+            || (loaded != null && loaded.isRegionLoaded(viewStart, viewEnd));
         var fetchedRegions = regionFetchCache.getFetched("VCF", region.chrom());
+        boolean hasAnyCoverage = !fetchedRegions.isEmpty()
+            || (loaded != null && !loaded.isEmpty());
 
         // Show when this chrom has some VCF coverage but the viewport is not fully covered.
-        boolean shouldShowButton = !isCached && !fetchedRegions.isEmpty();
+        boolean shouldShowButton = !isCached && hasAnyCoverage;
 
         if (loading && !VcfManager.getInstance().isLoading()) {
             loading = false;

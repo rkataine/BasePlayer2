@@ -8,10 +8,14 @@ import java.util.Map;
 /**
  * Versioned JSON DTO for BasePlayer session save/load.
  * Live runtime state stays in DrawStack / registries; this is snapshot-only.
+ *
+ * <p>Gson serializes every public field. Prefer adding new session state as public
+ * fields on these nested specs so save/load picks them up without serializer changes;
+ * wire capture/restore in {@link ProjectService} for the runtime objects.
  */
 public class ProjectDocument {
 
-  public int schemaVersion = 2;
+  public int schemaVersion = 3;
   public String name;
 
   public GenomeSpec genome = new GenomeSpec();
@@ -22,6 +26,8 @@ public class ProjectDocument {
   public ViewportSpec featureViewport = new ViewportSpec();
   public SampleFilterSpec sampleFilter = new SampleFilterSpec();
   public List<StackSpec> stacks = new ArrayList<>();
+  /** Named sample groups (sidebar colors); membership is on {@link SampleTrackSpec#groupIds}. */
+  public List<SampleGroupSpec> sampleGroups = new ArrayList<>();
   public List<SampleTrackSpec> sampleTracks = new ArrayList<>();
   /** Legacy top-level VCF list; new saves omit this and nest VCFs under samples. */
   @Deprecated
@@ -79,10 +85,26 @@ public class ProjectDocument {
     public int maxSharedSamples = Integer.MAX_VALUE;
     public boolean geneLevel;
     public int comparisonWindowBp;
+    /** {@code ALL} or {@code ANY} for multi-group present/genotype roles. */
+    public String presentMatchMode;
+    /** Active group roles ({@link #GroupRoleSpec}); IGNORE roles are omitted. */
+    public List<GroupRoleSpec> groupRoles = new ArrayList<>();
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
     public List<String> allowedFilterValues = new ArrayList<>();
+  }
+
+  /** One sample-group comparison role (ids match {@link SampleGroupSpec#id}). */
+  public static class GroupRoleSpec {
+    public int groupId;
+    public String role;
+  }
+
+  public static class SampleGroupSpec {
+    public int id;
+    public String name;
+    public String color;
   }
 
   public static class ViewportSpec {
@@ -111,6 +133,8 @@ public class ProjectDocument {
 
   public static class SampleTrackSpec {
     public String displayName;
+    /** Membership in {@link #sampleGroups} (ordered); empty / null = ungrouped. */
+    public List<Integer> groupIds = new ArrayList<>();
     public List<SampleFileSpec> samples = new ArrayList<>();
   }
 

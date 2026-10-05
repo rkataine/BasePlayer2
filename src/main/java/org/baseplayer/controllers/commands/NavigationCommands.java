@@ -254,16 +254,20 @@ public class NavigationCommands {
     // Navigate first so the stack chromosome matches the load target. Loading before
     // navigate left the old VariantList on the canvas (clear only hits stacks already
     // on the new chrom) and kept obsolete in-flight loads for the previous chrom.
+    // Load the same padded viewport the canvas shows — marking only gene coords left
+    // Load Region visible because the view extends past the gene.
     long[] view = geneViewBounds(loc);
     stack.navigateTo(loc.chrom(), view[0], view[1]);
     if (loadVariantRegion) {
-      VcfManager.getInstance().loadRegionVariants(loc.chrom(), loc.start(), loc.end());
+      VcfManager.getInstance().loadRegionVariants(loc.chrom(), view[0], view[1]);
     }
   }
 
   private static long[] geneViewBounds(GeneLocation loc) {
     long padding = Math.max(1000L, (loc.end() - loc.start()) / 2);
-    return new long[] { loc.start() - padding, loc.end() + padding };
+    long start = Math.max(1L, loc.start() - padding);
+    long end = Math.max(start, loc.end() + padding);
+    return new long[] { start, end };
   }
   
   /**

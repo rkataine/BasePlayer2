@@ -1065,6 +1065,9 @@ public class VcfManager {
         boolean fullRegionLoaded = hasCache && isChromosomeFullyLoadedForCache(cachedVariants, loadEnd);
 
         if (hasCache && annotated && nonEmpty && vcfCountMatches && filterCompatible && fullRegionLoaded) {
+            // Keep fetch-cache / loaded-region markers in sync with annotate-all reuse.
+            cachedVariants.addLoadedRegion(1, Long.MAX_VALUE);
+            markVcfRegionFetched(chromosome, 1, Long.MAX_VALUE, cachedVariants);
             if (onSampleProgress != null) {
                 int samples = Math.max(1,
                     loadedVcfs.stream().mapToInt(vcf -> Math.max(1, vcf.loader.getMappedSampleCount())).sum());
@@ -1146,13 +1149,16 @@ public class VcfManager {
         variants.retainVariants(filter::passesCacheRetention);
         variants.rebuildVisibleChain(filter);
 
-        // Mark the variants as annotated and store the filter info
+        // Mark the variants as annotated and store the filter info.
+        // Use Long.MAX_VALUE so isFullChromosomeCached / RegionFetchCache agree with
+        // loadRegionVariants full-chromosome loads (gene viewports with padding still match).
         String filterKey = filter.toStableKey();
         variants.setLoadedFilterKey(filterKey);
         variants.setLoadedFilter(filter.copy());
         variants.setAnnotated(true);
-        variants.addLoadedRegion(1, loadEnd);
+        variants.addLoadedRegion(1, Long.MAX_VALUE);
         variants.setVcfCountWhenLoaded(files.size());
+        markVcfRegionFetched(chromosome, 1, Long.MAX_VALUE, variants);
         variantsRevision.incrementAndGet();
 
         if (onSampleProgress != null) {
@@ -1724,11 +1730,13 @@ public class VcfManager {
 
         synchronized (this) {
             variantCache.clear();
+            ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
             for (Map.Entry<String, VariantList> entry : lists.entrySet()) {
                 VariantList list = entry.getValue();
                 if (list == null) continue;
                 prepareSessionCachedListForReuse(list, filterSnapshot, filterKey, vcfCount);
                 putVariantList(entry.getKey(), list);
+                markVcfRegionFetched(entry.getKey(), 1, Long.MAX_VALUE, list);
             }
             // Observed types come from data (cache here), never from filter specs.
             if (!cacheTypes.isEmpty() || !cacheEffects.isEmpty()) {

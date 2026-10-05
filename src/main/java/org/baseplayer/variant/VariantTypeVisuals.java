@@ -77,6 +77,11 @@ public final class VariantTypeVisuals {
     };
   }
 
+  /** Faint red for LOH-mode homozygous REF (AA / 0/0) alleles on sample tracks. */
+  public static Color lohAaColor() {
+    return Color.rgb(220, 90, 90);
+  }
+
   /**
    * Types shown as filter checkboxes / density legends for the given present set.
    * Point and SV types are listed independently (no indel↔SV merging).

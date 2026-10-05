@@ -335,11 +335,11 @@ public class SampleComparisonPanel {
         "Must be present",
         "Must be absent",
         "Must be heterozygous",
-        "Must be homozygous (ALT)");
+        "Must be homozygous");
     VariantFilter.GroupRole currentRole =
         comparisonGroupRoles.getOrDefault(groupId, VariantFilter.GroupRole.IGNORE);
     roleBox.setValue(roleLabel(currentRole));
-    roleBox.setPrefWidth(168);
+    roleBox.setPrefWidth(180);
     roleBox.valueProperty().addListener((obs, oldVal, newVal) -> {
       VariantFilter.GroupRole role = roleFromLabel(newVal);
       if (role == VariantFilter.GroupRole.IGNORE) {
@@ -363,16 +363,23 @@ public class SampleComparisonPanel {
       case PRESENT -> "Must be present";
       case ABSENT -> "Must be absent";
       case HETEROZYGOUS -> "Must be heterozygous";
-      case HOMOZYGOUS_ALT -> "Must be homozygous (ALT)";
-      default -> "Ignore";
+      case HOMOZYGOUS -> "Must be homozygous";
+      case IGNORE -> "Ignore";
     };
   }
 
   private static VariantFilter.GroupRole roleFromLabel(String label) {
     if ("Must be present".equals(label)) return VariantFilter.GroupRole.PRESENT;
     if ("Must be absent".equals(label)) return VariantFilter.GroupRole.ABSENT;
-    if ("Must be heterozygous".equals(label)) return VariantFilter.GroupRole.HETEROZYGOUS;
-    if ("Must be homozygous (ALT)".equals(label)) return VariantFilter.GroupRole.HOMOZYGOUS_ALT;
+    if ("Must be heterozygous".equals(label)
+        || "Reference / parental / markers".equals(label)) {
+      return VariantFilter.GroupRole.HETEROZYGOUS;
+    }
+    if ("Must be homozygous".equals(label)
+        || "Must be homozygous (ALT)".equals(label)
+        || "Must be homozygous (REF)".equals(label)) {
+      return VariantFilter.GroupRole.HOMOZYGOUS;
+    }
     return VariantFilter.GroupRole.IGNORE;
   }
 
@@ -381,38 +388,46 @@ public class SampleComparisonPanel {
     List<String> present = new ArrayList<>();
     List<String> absent = new ArrayList<>();
     List<String> heterozygous = new ArrayList<>();
-    List<String> homozygousAlt = new ArrayList<>();
+    List<String> homozygous = new ArrayList<>();
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
     for (Map.Entry<Integer, VariantFilter.GroupRole> entry : comparisonGroupRoles.entrySet()) {
       String label = groupDisplayName(registry, entry.getKey());
-      if (entry.getValue() == VariantFilter.GroupRole.PRESENT) {
-        present.add(label);
-      } else if (entry.getValue() == VariantFilter.GroupRole.ABSENT) {
-        absent.add(label);
-      } else if (entry.getValue() == VariantFilter.GroupRole.HETEROZYGOUS) {
-        heterozygous.add(label);
-      } else if (entry.getValue() == VariantFilter.GroupRole.HOMOZYGOUS_ALT) {
-        homozygousAlt.add(label);
+      VariantFilter.GroupRole role = entry.getValue();
+      if (role == null) {
+        continue;
+      }
+      switch (role) {
+        case PRESENT -> present.add(label);
+        case ABSENT -> absent.add(label);
+        case HETEROZYGOUS -> heterozygous.add(label);
+        case HOMOZYGOUS -> homozygous.add(label);
+        case IGNORE -> { /* not shown in summary */ }
       }
     }
     if (present.isEmpty() && absent.isEmpty()
-        && heterozygous.isEmpty() && homozygousAlt.isEmpty()) {
+        && heterozygous.isEmpty() && homozygous.isEmpty()) {
       nodes.groupComparisonSummaryLabel().setText("No group constraints");
       return;
     }
+    boolean lohMode = !heterozygous.isEmpty() && !homozygous.isEmpty();
     StringBuilder sb = new StringBuilder();
     String presentJoiner =
         selectedPresentMatchMode() == VariantFilter.PresentMatchMode.ANY ? " or " : " and ";
+    if (lohMode) {
+      sb.append("LOH: het ").append(String.join(presentJoiner, heterozygous))
+          .append(" → hom AA/BB ").append(String.join(presentJoiner, homozygous));
+    } else {
+      if (!heterozygous.isEmpty()) {
+        sb.append("Het: ").append(String.join(presentJoiner, heterozygous));
+      }
+      if (!homozygous.isEmpty()) {
+        if (sb.length() > 0) sb.append("  ·  ");
+        sb.append("Hom ALT: ").append(String.join(presentJoiner, homozygous));
+      }
+    }
     if (!present.isEmpty()) {
+      if (sb.length() > 0) sb.append("  ·  ");
       sb.append("Present: ").append(String.join(presentJoiner, present));
-    }
-    if (!heterozygous.isEmpty()) {
-      if (sb.length() > 0) sb.append("  ·  ");
-      sb.append("Het: ").append(String.join(presentJoiner, heterozygous));
-    }
-    if (!homozygousAlt.isEmpty()) {
-      if (sb.length() > 0) sb.append("  ·  ");
-      sb.append("Hom ALT: ").append(String.join(presentJoiner, homozygousAlt));
     }
     if (!absent.isEmpty()) {
       if (sb.length() > 0) sb.append("  ·  ");

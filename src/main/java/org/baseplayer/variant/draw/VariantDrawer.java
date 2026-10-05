@@ -199,8 +199,13 @@ public class VariantDrawer {
             double sampleHeight,
             int[] lastDrawnPixelX) {
         int xPixel = (int) x;
+        boolean lohMode = filter != null && filter.isLohMode();
         for (VariantNode.SampleCall call : node.getSamples()) {
             if (call == null) {
+                continue;
+            }
+            boolean homRef = node.isHomozygousRef(call);
+            if (homRef && !lohMode) {
                 continue;
             }
             SampleTrack track = call.getTrack();
@@ -237,8 +242,8 @@ public class VariantDrawer {
 
     private void drawVariantLine(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,
                                  double x, double y, double sampleHeight) {
-        Color baseColor = getVariantColor(variant.type);
-        double opacity = callOpacity(call, 1.0);
+        Color baseColor = colorForCall(variant, call);
+        double opacity = callOpacity(call, 1.0, variant.isHomozygousRef(call));
 
         gc.setStroke(baseColor);
         gc.setLineWidth(1.0);
@@ -247,7 +252,7 @@ public class VariantDrawer {
         double lineHeight = sampleHeight >= 3 ? sampleHeight : 1;
         gc.strokeLine(x, y, x, y + lineHeight);
 
-        if (call != null && call.gt != null && sampleHeight >= 6) {
+        if (call != null && call.gt != null && sampleHeight >= 6 && !variant.isHomozygousRef(call)) {
             String[] a = call.gt.split("[/|]");
             if (a.length >= 2 && a[0].equals(variant.alt) && a[1].equals(variant.alt)) {
                 gc.setFill(baseColor);
@@ -264,8 +269,8 @@ public class VariantDrawer {
     private void drawVariantRect(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,
                                  Function<Double, Double> chromPosToScreenPos, double canvasWidth,
                                  double startX, double y, double sampleHeight) {
-        Color baseColor = getVariantColor(variant.type);
-        double opacity = callOpacity(call, 0.85);
+        Color baseColor = colorForCall(variant, call);
+        double opacity = callOpacity(call, 0.85, variant.isHomozygousRef(call));
 
         double endX = chromPosToScreenPos.apply((double) alleleEndExclusive(variant));
         double x1 = Math.max(0, Math.min(startX, endX));
@@ -298,8 +303,8 @@ public class VariantDrawer {
                            Function<Double, Double> chromPosToScreenPos, double canvasWidth,
                            double startX, double y, double sampleHeight,
                            boolean recordHit) {
-        Color baseColor = getVariantColor(variant.type);
-        double opacity = callOpacity(call, 0.7);
+        Color baseColor = colorForCall(variant, call);
+        double opacity = callOpacity(call, 0.7, variant.isHomozygousRef(call));
 
         double endX = chromPosToScreenPos.apply((double) variant.svEnd);
 
@@ -341,10 +346,14 @@ public class VariantDrawer {
         return node.position + 1;
     }
 
-    private static double callOpacity(VariantNode.SampleCall call, double base) {
+    private static double callOpacity(VariantNode.SampleCall call, double base, boolean lohAa) {
         double opacity = base;
+        if (lohAa) {
+            // Keep AA marks distinctly faint vs ALT carriers.
+            opacity *= 0.4;
+        }
         if (call != null) {
-            if (call.gt != null && VariantNode.isHetGt(call.gt)) {
+            if (!lohAa && call.gt != null && VariantNode.isHetGt(call.gt)) {
                 opacity *= 0.75;
             }
             if (call.quality >= 0 && call.quality < MIN_QUALITY_FULL_OPACITY) {
@@ -361,8 +370,11 @@ public class VariantDrawer {
         return call != null && call.isUiOverlay();
     }
 
-    private Color getVariantColor(VcfVariantType type) {
-        return VariantTypeVisuals.color(type);
+    private Color colorForCall(VariantNode variant, VariantNode.SampleCall call) {
+        if (variant != null && variant.isHomozygousRef(call)) {
+            return VariantTypeVisuals.lohAaColor();
+        }
+        return VariantTypeVisuals.color(variant != null ? variant.type : null);
     }
 
     public void markIndexDirty() {

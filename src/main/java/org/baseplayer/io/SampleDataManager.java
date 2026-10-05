@@ -784,7 +784,8 @@ public class SampleDataManager {
     }
     registry.getSampleTracks().clear();
     registry.getSampleList().clear();
-    
+    registry.clearSampleGroups();
+
     registry.clearAllSubsetSources();
     registry.clearVisibleRange();
     registry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);

@@ -556,6 +556,9 @@ public class MasterTrackPainter {
       if (call == null) {
         continue;
       }
+      if (node.isHomozygousRef(call)) {
+        continue;
+      }
       SampleTrack track = call.getTrack();
       if (track == null) {
         continue;
@@ -690,6 +693,9 @@ public class MasterTrackPainter {
       int count = 0;
       for (VariantNode.SampleCall call : node.getSamples()) {
         if (call == null || call.getTrack() == null) {
+          continue;
+        }
+        if (node.isHomozygousRef(call)) {
           continue;
         }
         if (!displayedTrackToIndex.containsKey(call.getTrack())) {

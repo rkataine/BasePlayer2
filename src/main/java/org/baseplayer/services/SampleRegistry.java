@@ -105,6 +105,7 @@ public class SampleRegistry extends TrackViewportRegistry {
         focusedGeneName = null;
         focusedGeneLocus = null;
         bumpGeneFocusRevision();
+        clearSampleGroups();
         invalidateDisplayedTrackIndicesCache();
         clearVisibleRange();
         setHoveredTrackIndex(-1);
@@ -568,6 +569,46 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     private void bumpSampleGroupsRevision() {
         sampleGroupsRevision.set(sampleGroupsRevision.get() + 1);
+    }
+
+    /** Drop all group definitions and clear membership on every track. */
+    public void clearSampleGroups() {
+        if (sampleGroups.isEmpty() && nextSampleGroupId == 1) {
+            for (SampleTrack track : sampleTracks) {
+                if (track != null && track.hasGroup()) {
+                    track.clearGroup();
+                }
+            }
+            return;
+        }
+        for (SampleTrack track : sampleTracks) {
+            if (track != null) {
+                track.clearGroup();
+            }
+        }
+        sampleGroups.clear();
+        nextSampleGroupId = 1;
+        bumpSampleGroupsRevision();
+    }
+
+    /**
+     * Replace group definitions from a project snapshot (preserves ids).
+     * Does not assign track membership — callers set {@link SampleTrack#addGroupId} after.
+     */
+    public void replaceSampleGroups(List<SampleGroup> groups) {
+        sampleGroups.clear();
+        int maxId = 0;
+        if (groups != null) {
+            for (SampleGroup group : groups) {
+                if (group == null || group.getId() < 0) {
+                    continue;
+                }
+                sampleGroups.put(group.getId(), group);
+                maxId = Math.max(maxId, group.getId());
+            }
+        }
+        nextSampleGroupId = maxId + 1;
+        bumpSampleGroupsRevision();
     }
 
     public List<SampleGroup> getSampleGroups() {

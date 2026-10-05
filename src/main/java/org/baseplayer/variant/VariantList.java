@@ -368,6 +368,9 @@ public class VariantList {
                     Set<Integer> trackHits = null;
                     for (VariantNode.SampleCall call : current.getSamples()) {
                         if (call == null) continue;
+                        if (current.isHomozygousRef(call)) {
+                            continue; // HomRef is not a mutated sample
+                        }
                         if (filter != null && !filter.passesSampleThresholds(current, call)) {
                             continue;
                         }
@@ -519,6 +522,7 @@ public class VariantList {
             Set<Integer> tracks = new HashSet<>();
             for (VariantNode.SampleCall call : nodes.get(i).getSamples()) {
                 if (call == null) continue;
+                if (nodes.get(i).isHomozygousRef(call)) continue;
                 if (!filter.passesSampleThresholds(nodes.get(i), call)) continue;
                 int trackIndex = call.getTrackIndex();
                 if (trackIndex >= 0) {
