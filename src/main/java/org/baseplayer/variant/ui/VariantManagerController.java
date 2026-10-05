@@ -1581,7 +1581,7 @@ public class VariantManagerController implements Initializable {
             "Exporting to Excel…",
             () -> {
                 try {
-                    List<VariantTableExcelWriter.SheetData> sheetsToWrite = exportSv
+                    List<VariantTableExcelWriter.SheetSource> sheetsToWrite = exportSv
                         ? buildSvExcelSheets()
                         : buildPointExcelSheets();
                     if (sheetsToWrite.isEmpty()) {
@@ -1625,27 +1625,27 @@ public class VariantManagerController implements Initializable {
         return rows == null || rows.isEmpty();
     }
 
-    private List<VariantTableExcelWriter.SheetData> buildPointExcelSheets() {
+    private List<VariantTableExcelWriter.SheetSource> buildPointExcelSheets() {
         VariantTable table = variantTable();
         if (table == null) {
             return List.of();
         }
         VariantFilter filter = table.getDisplayFilter();
-        List<VariantTableExcelWriter.SheetData> sheets = new ArrayList<>(3);
-        addBuiltSheet(sheets, VariantExcelExportBuilder.buildPointSheet(
+        List<VariantTableExcelWriter.SheetSource> sheets = new ArrayList<>(3);
+        addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
             "Coding", table.getDisplayedCodingRows(), filter, false));
-        addBuiltSheet(sheets, VariantExcelExportBuilder.buildPointSheet(
+        addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
             "Intronic", table.getDisplayedIntronicRows(), filter, false));
-        addBuiltSheet(sheets, VariantExcelExportBuilder.buildPointSheet(
+        addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
             "Intergenic", table.getDisplayedIntergenicRows(), filter, true));
         return sheets;
     }
 
-    private List<VariantTableExcelWriter.SheetData> buildSvExcelSheets() {
+    private List<VariantTableExcelWriter.SheetSource> buildSvExcelSheets() {
         if (svVariantTable == null) {
             return List.of();
         }
-        VariantTableExcelWriter.SheetData sheet = VariantExcelExportBuilder.buildStructuralSheet(
+        VariantTableExcelWriter.SheetSource sheet = VariantExcelExportBuilder.structuralSheet(
             "Structural",
             svVariantTable.getDisplayedAllRows(),
             svVariantTable.getDisplayFilter());
@@ -1653,8 +1653,8 @@ public class VariantManagerController implements Initializable {
     }
 
     private static void addBuiltSheet(
-            List<VariantTableExcelWriter.SheetData> sheets,
-            VariantTableExcelWriter.SheetData sheet) {
+            List<VariantTableExcelWriter.SheetSource> sheets,
+            VariantTableExcelWriter.SheetSource sheet) {
         if (sheet != null) {
             sheets.add(sheet);
         }
