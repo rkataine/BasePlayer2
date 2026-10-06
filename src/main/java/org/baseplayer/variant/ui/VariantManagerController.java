@@ -2156,7 +2156,11 @@ public class VariantManagerController implements Initializable {
                             }
                             int passSamples = 0;
                             for (VariantNode.SampleCall call : node.getSamples()) {
-                                if (filterSnapshot.passesSampleThresholds(node, call)
+                                if (lohMode) {
+                                    if (filterSnapshot.passesSampleDisplay(node, call)) {
+                                        passSamples++;
+                                    }
+                                } else if (filterSnapshot.passesSampleThresholds(node, call)
                                         && node.isAltCarrier(call)) {
                                     passSamples++;
                                 }
@@ -2194,7 +2198,12 @@ public class VariantManagerController implements Initializable {
 
                         int passSamples = 0;
                         for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (filterSnapshot.passesSampleThresholds(node, call)
+                            if (lohMode) {
+                                // LOH outcomes include HomRef AA; use display rules.
+                                if (filterSnapshot.passesSampleDisplay(node, call)) {
+                                    passSamples++;
+                                }
+                            } else if (filterSnapshot.passesSampleThresholds(node, call)
                                     && node.isAltCarrier(call)) {
                                 passSamples++;
                             }

@@ -116,6 +116,10 @@ public class ProjectDocument {
     public int id;
     public String name;
     public String color;
+    /** Parental track name/key within this lineage group; null/absent if unset. */
+    public String parentalTrackName;
+    /** Parent sample-group id; omit or {@code -1} for a top-level group. */
+    public int parentGroupId = -1;
   }
 
   public static class ViewportSpec {

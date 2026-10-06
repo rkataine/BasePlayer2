@@ -84,8 +84,12 @@ public class AppDialog {
   private boolean confirmed;
 
   protected AppDialog(Window owner, String windowTitle) {
+    this(owner, windowTitle, Modality.WINDOW_MODAL);
+  }
+
+  protected AppDialog(Window owner, String windowTitle, Modality modality) {
     stage = new Stage(StageStyle.UTILITY);
-    stage.initModality(Modality.WINDOW_MODAL);
+    stage.initModality(modality != null ? modality : Modality.WINDOW_MODAL);
     Window resolvedOwner = owner != null ? owner : MainApp.stage;
     if (resolvedOwner != null) {
       stage.initOwner(resolvedOwner);

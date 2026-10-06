@@ -55,6 +55,7 @@ public class FileCommands {
       case "BED" -> SampleDataManager.addBedSampleFile();
       case "BIGWIG" -> SampleDataManager.addBigWigFile();
       case "VCF" -> SampleDataManager.addVcfFile();
+      case "DIR" -> SampleDataManager.openDirectorySamples();
       case "SES" -> handleSessionAction(action);
       case "CTRL" -> System.out.println("File menu action not implemented yet: " + fileType);
       default -> System.out.println("Unknown file menu action: " + fileType);

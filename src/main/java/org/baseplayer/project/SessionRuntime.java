@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -309,7 +310,25 @@ public final class SessionRuntime {
             color = null;
           }
         }
-        groups.add(new SampleGroup(spec.id, spec.name, color));
+        SampleGroup group = new SampleGroup(spec.id, spec.name, color);
+        group.setParentalTrackName(spec.parentalTrackName);
+        group.setParentGroupId(spec.parentGroupId);
+        groups.add(group);
+      }
+      // One nesting level only; drop invalid parent links (missing parent or nested subgroup).
+      Map<Integer, SampleGroup> byId = new LinkedHashMap<>();
+      for (SampleGroup group : groups) {
+        byId.put(group.getId(), group);
+      }
+      for (SampleGroup group : groups) {
+        int parentId = group.getParentGroupId();
+        if (parentId < 0) {
+          continue;
+        }
+        SampleGroup parent = byId.get(parentId);
+        if (parent == null || parent.isSubgroup() || parent.getId() == group.getId()) {
+          group.setParentGroupId(SampleGroup.NO_PARENT);
+        }
       }
     }
     registry.replaceSampleGroups(groups);
@@ -707,6 +726,33 @@ public final class SessionRuntime {
       }
     }
     filter.setGroupTrackIndices(byGroup);
+    filter.setGroupLineageScope(resolveGroupLineageScope(byGroup.keySet(), registry));
+  }
+
+  private static Map<Integer, Integer> resolveGroupLineageScope(
+      Set<Integer> groupIds, SampleRegistry registry) {
+    Map<Integer, Integer> scopes = new HashMap<>();
+    if (groupIds == null || groupIds.isEmpty()) {
+      return scopes;
+    }
+    for (Integer groupId : groupIds) {
+      if (groupId == null) {
+        continue;
+      }
+      if (groupId == VariantFilter.UNGROUPED_COHORT_ID) {
+        scopes.put(groupId, VariantFilter.UNGROUPED_COHORT_ID);
+        continue;
+      }
+      SampleGroup group = registry != null ? registry.getSampleGroup(groupId) : null;
+      if (group == null) {
+        scopes.put(groupId, groupId);
+      } else if (group.isRoot()) {
+        scopes.put(groupId, group.getId());
+      } else {
+        scopes.put(groupId, group.getParentGroupId());
+      }
+    }
+    return scopes;
   }
 
   private static VariantFilter restoreClassFilter(ProjectDocument.ClassFilterSpec spec) {

@@ -328,13 +328,17 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     MenuItem vcfItem = new MenuItem("VCF");
     vcfItem.setOnAction(e -> SampleDataManager.addVcfFile());
 
+    MenuItem directoryItem = new MenuItem("Directory…");
+    directoryItem.setOnAction(e -> SampleDataManager.openDirectorySamples());
+
     MenuItem bedItem = new MenuItem("BED");
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
 
     MenuItem bigwigItem = new MenuItem("BigWig");
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
 
-    menu.getItems().addAll(bamItem, vcfItem, new SeparatorMenuItem(), bedItem, bigwigItem);
+    menu.getItems().addAll(
+        bamItem, vcfItem, directoryItem, new SeparatorMenuItem(), bedItem, bigwigItem);
     return menu;
   }
 

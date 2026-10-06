@@ -66,6 +66,12 @@ public class VariantFilter {
     private Map<Integer, GroupRole> groupRoles = new HashMap<>();
     /** Resolved track indices per group id at apply time. */
     private Map<Integer, Set<Integer>> groupTrackIndices = new HashMap<>();
+    /**
+     * Maps each group id to its lineage scope id (root group id, or
+     * {@link #UNGROUPED_COHORT_ID}). Roles are evaluated per lineage so one
+     * group's constraints do not hide another lineage's variants.
+     */
+    private Map<Integer, Integer> groupLineageScope = new HashMap<>();
     private Set<VcfVariantType> allowedTypes = EnumSet.allOf(VcfVariantType.class);
     private Set<VariantEffect> allowedEffects = EnumSet.allOf(VariantEffect.class);
     private boolean showCoding = true;
@@ -164,6 +170,16 @@ public class VariantFilter {
         }
     }
 
+    public Map<Integer, Integer> getGroupLineageScope() {
+        return groupLineageScope;
+    }
+
+    public void setGroupLineageScope(Map<Integer, Integer> groupLineageScope) {
+        this.groupLineageScope = groupLineageScope != null
+            ? new HashMap<>(groupLineageScope)
+            : new HashMap<>();
+    }
+
     public boolean hasActiveGroupComparison() {
         for (GroupRole role : groupRoles.values()) {
             if (role == GroupRole.PRESENT
@@ -201,9 +217,37 @@ public class VariantFilter {
     }
 
     private boolean isLohModeLocal() {
+        Map<Integer, Boolean> hetByLineage = new HashMap<>();
+        Map<Integer, Boolean> homByLineage = new HashMap<>();
+        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
+            GroupRole role = entry.getValue();
+            if (role != GroupRole.HETEROZYGOUS && role != GroupRole.HOMOZYGOUS) {
+                continue;
+            }
+            int lineageId = lineageScopeOf(entry.getKey());
+            if (role == GroupRole.HETEROZYGOUS) {
+                hetByLineage.put(lineageId, true);
+            } else {
+                homByLineage.put(lineageId, true);
+            }
+        }
+        for (Integer lineageId : hetByLineage.keySet()) {
+            if (Boolean.TRUE.equals(homByLineage.get(lineageId))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** LOH mode for the lineage that owns {@code groupId}, if known. */
+    private boolean isLohModeForLineage(int lineageId) {
         boolean hasHeterozygous = false;
         boolean hasHomozygous = false;
-        for (GroupRole role : groupRoles.values()) {
+        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
+            if (lineageScopeOf(entry.getKey()) != lineageId) {
+                continue;
+            }
+            GroupRole role = entry.getValue();
             if (role == GroupRole.HETEROZYGOUS) {
                 hasHeterozygous = true;
             } else if (role == GroupRole.HOMOZYGOUS) {
@@ -227,36 +271,46 @@ public class VariantFilter {
         if (!isLohModeLocal() || node == null) {
             return 0;
         }
-        Set<Integer> hetTracks = tracksForRole(GroupRole.HETEROZYGOUS);
-        Set<Integer> homTracks = tracksForRole(GroupRole.HOMOZYGOUS);
-        if (hetTracks.isEmpty() || homTracks.isEmpty()) {
-            return 0;
-        }
-        if (!hasPassingZygosityInCohort(node, hetTracks, Zygosity.HET)) {
-            return 0;
-        }
 
         int added = 0;
-        for (Integer trackIndex : homTracks) {
-            if (trackIndex == null || trackIndex < 0) {
+        Map<Integer, List<Map.Entry<Integer, GroupRole>>> byLineage = rolesGroupedByLineage();
+        for (Map.Entry<Integer, List<Map.Entry<Integer, GroupRole>>> lineageEntry
+            : byLineage.entrySet()) {
+            if (!isLohModeForRoles(lineageEntry.getValue())) {
                 continue;
             }
-            if (node.getSampleCall(trackIndex) != null) {
+            Set<Integer> hetTracks = tracksForRoleInEntries(
+                lineageEntry.getValue(), GroupRole.HETEROZYGOUS);
+            Set<Integer> homTracks = tracksForRoleInEntries(
+                lineageEntry.getValue(), GroupRole.HOMOZYGOUS);
+            if (hetTracks.isEmpty() || homTracks.isEmpty()) {
                 continue;
             }
-            String gt = (node.ref != null && !node.ref.isBlank())
-                ? node.ref + "/" + node.ref
-                : "0/0";
-            node.addSample(new VariantNode.SampleCall(trackIndex, gt, -1, -1, 0.0));
-            added++;
+            if (!hasPassingZygosityInCohort(node, hetTracks, Zygosity.HET)) {
+                continue;
+            }
+            for (Integer trackIndex : homTracks) {
+                if (trackIndex == null || trackIndex < 0) {
+                    continue;
+                }
+                if (node.getSampleCall(trackIndex) != null) {
+                    continue;
+                }
+                String gt = (node.ref != null && !node.ref.isBlank())
+                    ? node.ref + "/" + node.ref
+                    : "0/0";
+                node.addSample(new VariantNode.SampleCall(trackIndex, gt, -1, -1, 0.0));
+                added++;
+            }
         }
         return added;
     }
 
-    private Set<Integer> tracksForRole(GroupRole role) {
+    private Set<Integer> tracksForRoleInEntries(
+        List<Map.Entry<Integer, GroupRole>> roles, GroupRole wanted) {
         Set<Integer> tracks = new HashSet<>();
-        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
-            if (entry.getValue() != role) {
+        for (Map.Entry<Integer, GroupRole> entry : roles) {
+            if (entry.getValue() != wanted) {
                 continue;
             }
             Set<Integer> cohort = groupTrackIndices.get(entry.getKey());
@@ -434,6 +488,7 @@ public class VariantFilter {
         for (Map.Entry<Integer, Set<Integer>> entry : this.groupTrackIndices.entrySet()) {
             copy.groupTrackIndices.put(entry.getKey(), new HashSet<>(entry.getValue()));
         }
+        copy.groupLineageScope = new HashMap<>(this.groupLineageScope);
         // EnumSet.copyOf throws on empty collections — keep noneOf for "exclude all".
         copy.allowedTypes = this.allowedTypes == null || this.allowedTypes.isEmpty()
             ? EnumSet.noneOf(VcfVariantType.class)
@@ -687,9 +742,15 @@ public class VariantFilter {
 
     /**
      * Compare presence / zygosity across named groups using quality/depth/AF thresholds.
-     * Present and genotype roles use {@link #presentMatchMode}; absent groups must all lack
-     * the variant. Heterozygous / homozygous roles require at least one matching call.
-     * {@link GroupRole#HOMOZYGOUS}: ALT-only unless LOH mode (HETEROZYGOUS + HOMOZYGOUS), then AA or BB.
+     * Roles are evaluated <b>per lineage</b> (root group + its subgroups). Each lineage's
+     * internal comparison is independent: the site is kept if <b>any</b> involved lineage
+     * passes (e.g. LOH in group B still shows when group A fails at the same site).
+     * When every involved lineage fails, the site is kept only if an unconstrained sample
+     * (ignore / outside those roles) still has a passing alt call.
+     * A solitary heterozygous/homozygous/present role does not filter sites.
+     * Within a lineage, {@link #presentMatchMode} applies; absent groups are always AND.
+     * {@link GroupRole#HOMOZYGOUS}: ALT-only unless LOH mode (HETEROZYGOUS + HOMOZYGOUS
+     * in the same lineage), then AA or BB.
      */
     public boolean passesGroupComparison(VariantNode node) {
         if (node == null) return false;
@@ -697,15 +758,86 @@ public class VariantFilter {
             return true;
         }
 
-        boolean anyPresentMatched = false;
-        boolean anyPresentConfigured = false;
-        boolean lohMode = isLohModeLocal();
+        boolean anyLineageApplied = false;
+        boolean anyLineagePassed = false;
+        Set<Integer> allConstrainedTracks = new HashSet<>();
 
+        Map<Integer, List<Map.Entry<Integer, GroupRole>>> rolesByLineage = rolesGroupedByLineage();
+        for (Map.Entry<Integer, List<Map.Entry<Integer, GroupRole>>> lineageEntry
+            : rolesByLineage.entrySet()) {
+            List<Map.Entry<Integer, GroupRole>> lineageRoles = lineageEntry.getValue();
+            if (lineageRoles.isEmpty() || !lineageHasSiteLevelComparison(lineageRoles)) {
+                continue;
+            }
+            addConstrainedTracks(allConstrainedTracks, lineageRoles);
+            if (!lineageHasAnyCall(node, lineageRoles)) {
+                // Lineage not involved at this site — do not apply its constraints.
+                continue;
+            }
+            anyLineageApplied = true;
+            if (passesLineageGroupComparison(node, lineageRoles)) {
+                anyLineagePassed = true;
+            }
+        }
+
+        if (!anyLineageApplied) {
+            return true;
+        }
+        if (anyLineagePassed) {
+            return true;
+        }
+        // Every involved lineage failed — keep only for unconstrained samples.
+        return hasPassingAltCallOutside(node, allConstrainedTracks);
+    }
+
+    private Map<Integer, List<Map.Entry<Integer, GroupRole>>> rolesGroupedByLineage() {
+        Map<Integer, List<Map.Entry<Integer, GroupRole>>> byLineage = new HashMap<>();
         for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
             GroupRole role = entry.getValue();
             if (role == null || role == GroupRole.IGNORE) {
                 continue;
             }
+            int lineageId = lineageScopeOf(entry.getKey());
+            byLineage.computeIfAbsent(lineageId, key -> new ArrayList<>()).add(entry);
+        }
+        return byLineage;
+    }
+
+    private int lineageScopeOf(int groupId) {
+        Integer scope = groupLineageScope.get(groupId);
+        return scope != null ? scope : groupId;
+    }
+
+    private boolean lineageHasAnyCall(
+        VariantNode node, List<Map.Entry<Integer, GroupRole>> lineageRoles) {
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
+            Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
+            if (tracks == null || tracks.isEmpty()) {
+                continue;
+            }
+            for (Integer trackIndex : tracks) {
+                if (trackIndex != null && node.getSampleCall(trackIndex) != null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean passesLineageGroupComparison(
+        VariantNode node, List<Map.Entry<Integer, GroupRole>> lineageRoles) {
+        // A solitary present/genotype role is not a within-group comparison — do not
+        // drop sites for other samples. Sample-row display still enforces the role.
+        if (!lineageHasSiteLevelComparison(lineageRoles)) {
+            return true;
+        }
+
+        boolean anyPresentMatched = false;
+        boolean anyPresentConfigured = false;
+        boolean lohMode = isLohModeForRoles(lineageRoles);
+
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
+            GroupRole role = entry.getValue();
             Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
 
             if (role == GroupRole.ABSENT) {
@@ -715,14 +847,12 @@ public class VariantFilter {
                 continue;
             }
 
-            // PRESENT, HETEROZYGOUS, HOMOZYGOUS — use presentMatchMode.
             anyPresentConfigured = true;
             boolean matched = switch (role) {
                 case HETEROZYGOUS -> hasPassingZygosityInCohort(node, tracks, Zygosity.HET);
                 case HOMOZYGOUS -> lohMode
                     ? hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ANY)
                     : hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ALT);
-                // PRESENT: alt carriers; in LOH mode HomRef (AA) also counts as present.
                 default -> hasPassingAltCallInCohort(node, tracks)
                     || (lohMode && hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_REF));
             };
@@ -743,6 +873,44 @@ public class VariantFilter {
     }
 
     /**
+     * Site-level filtering runs only when the lineage has a real comparison:
+     * an {@link GroupRole#ABSENT} constraint, or at least two present/genotype roles
+     * (e.g. parental het + offspring present/hom). A single "must be heterozygous"
+     * alone must not hide other groups' or ignored samples' variants.
+     */
+    private static boolean lineageHasSiteLevelComparison(
+        List<Map.Entry<Integer, GroupRole>> lineageRoles) {
+        int presentTypeCount = 0;
+        boolean hasAbsent = false;
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
+            GroupRole role = entry.getValue();
+            if (role == null || role == GroupRole.IGNORE) {
+                continue;
+            }
+            if (role == GroupRole.ABSENT) {
+                hasAbsent = true;
+            } else {
+                presentTypeCount++;
+            }
+        }
+        return hasAbsent || presentTypeCount >= 2;
+    }
+
+    private static boolean isLohModeForRoles(List<Map.Entry<Integer, GroupRole>> roles) {
+        boolean hasHeterozygous = false;
+        boolean hasHomozygous = false;
+        for (Map.Entry<Integer, GroupRole> entry : roles) {
+            GroupRole role = entry.getValue();
+            if (role == GroupRole.HETEROZYGOUS) {
+                hasHeterozygous = true;
+            } else if (role == GroupRole.HOMOZYGOUS) {
+                hasHomozygous = true;
+            }
+        }
+        return hasHeterozygous && hasHomozygous;
+    }
+
+    /**
      * Group comparison against a precomputed set of mutated sample track indices (gene level).
      * Presence/absence only — genotype roles cannot be evaluated from track sets alone;
      * callers should use {@link #passesGroupComparison(VariantNode)} when genotype roles are active.
@@ -757,14 +925,101 @@ public class VariantFilter {
         }
         Set<Integer> samples = sampleTrackIndices != null ? sampleTrackIndices : Set.of();
 
+        boolean anyLineageApplied = false;
+        boolean anyLineagePassed = false;
+        Set<Integer> allConstrainedTracks = new HashSet<>();
+
+        Map<Integer, List<Map.Entry<Integer, GroupRole>>> rolesByLineage = rolesGroupedByLineage();
+        for (Map.Entry<Integer, List<Map.Entry<Integer, GroupRole>>> lineageEntry
+            : rolesByLineage.entrySet()) {
+            List<Map.Entry<Integer, GroupRole>> lineageRoles = lineageEntry.getValue();
+            if (lineageRoles.isEmpty() || !lineageHasSiteLevelComparison(lineageRoles)) {
+                continue;
+            }
+            addConstrainedTracks(allConstrainedTracks, lineageRoles);
+            if (!lineageIntersectsSamples(samples, lineageRoles)) {
+                continue;
+            }
+            anyLineageApplied = true;
+            if (passesLineageGroupComparison(samples, lineageRoles)) {
+                anyLineagePassed = true;
+            }
+        }
+
+        if (!anyLineageApplied) {
+            return true;
+        }
+        if (anyLineagePassed) {
+            return true;
+        }
+        return hasSampleOutside(samples, allConstrainedTracks);
+    }
+
+    private void addConstrainedTracks(
+        Set<Integer> into, List<Map.Entry<Integer, GroupRole>> lineageRoles) {
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
+            Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
+            if (tracks != null) {
+                into.addAll(tracks);
+            }
+        }
+    }
+
+    private boolean hasPassingAltCallOutside(VariantNode node, Set<Integer> excludedTracks) {
+        if (node == null || excludedTracks == null) {
+            return false;
+        }
+        for (VariantNode.SampleCall call : node.getSamples()) {
+            if (call == null) {
+                continue;
+            }
+            int trackIndex = call.getTrackIndex();
+            if (excludedTracks.contains(trackIndex)) {
+                continue;
+            }
+            if (!passesSampleThresholds(node, call)) {
+                continue;
+            }
+            if (node.isAltCarrier(call)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasSampleOutside(Set<Integer> samples, Set<Integer> excludedTracks) {
+        if (samples == null || samples.isEmpty()) {
+            return false;
+        }
+        for (Integer trackIndex : samples) {
+            if (trackIndex != null && (excludedTracks == null || !excludedTracks.contains(trackIndex))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean lineageIntersectsSamples(
+        Set<Integer> samples, List<Map.Entry<Integer, GroupRole>> lineageRoles) {
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
+            if (intersects(samples, groupTrackIndices.get(entry.getKey()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean passesLineageGroupComparison(
+        Set<Integer> samples, List<Map.Entry<Integer, GroupRole>> lineageRoles) {
+        if (!lineageHasSiteLevelComparison(lineageRoles)) {
+            return true;
+        }
+
         boolean anyPresentMatched = false;
         boolean anyPresentConfigured = false;
 
-        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
             GroupRole role = entry.getValue();
-            if (role == null || role == GroupRole.IGNORE) {
-                continue;
-            }
             Set<Integer> cohort = groupTrackIndices.get(entry.getKey());
             boolean present = intersects(samples, cohort);
 
@@ -911,7 +1166,7 @@ public class VariantFilter {
 
     /**
      * Thresholds plus group-role genotype/presence constraints for table display.
-     * HomRef rows are hidden unless LOH mode (het + hom groups) is active.
+     * HomRef rows are shown only for homozygous-role tracks in a lineage that is in LOH mode.
      */
     public boolean passesSampleDisplay(VariantNode node, VariantNode.SampleCall call) {
         if (node != null && hasClassSlices()) {
@@ -920,8 +1175,7 @@ public class VariantFilter {
         if (!passesSampleThresholds(node, call)) {
             return false;
         }
-        // HomRef (AA) rows only in LOH mode.
-        if (node.isHomozygousRef(call) && !isLohModeLocal()) {
+        if (node.isHomozygousRef(call) && !isLohHomRefTrack(call.getTrackIndex())) {
             return false;
         }
         return passesSampleGroupConstraint(node, call);
@@ -944,11 +1198,15 @@ public class VariantFilter {
 
         int trackIndex = call.getTrackIndex();
         if (trackIndex < 0) {
-            return !hasActiveGenotypeGroupComparison();
+            return true;
         }
 
-        boolean lohMode = isLohModeLocal();
-        boolean inConstrainedCohort = false;
+        // Within-group comparison failed for this track's lineage at this site —
+        // hide constrained samples; other lineages remain visible independently.
+        if (isConstrainedTrackInFailedLineage(node, trackIndex)) {
+            return false;
+        }
+
         for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
             GroupRole role = entry.getValue();
             if (role == null || role == GroupRole.IGNORE || role == GroupRole.ABSENT) {
@@ -958,6 +1216,7 @@ public class VariantFilter {
             if (cohort == null || !cohort.contains(trackIndex)) {
                 continue;
             }
+            boolean lohMode = isLohModeForLineage(lineageScopeOf(entry.getKey()));
             if (role == GroupRole.HETEROZYGOUS) {
                 if (lohMode) {
                     // Marker / het cohort is filter context only in LOH — hide from table.
@@ -967,7 +1226,6 @@ public class VariantFilter {
                     return false;
                 }
             }
-            inConstrainedCohort = true;
             if (role == GroupRole.HOMOZYGOUS) {
                 boolean ok = lohMode
                     ? (node.isHomozygousRef(call) || node.isHomozygousAlt(call))
@@ -979,15 +1237,63 @@ public class VariantFilter {
             // PRESENT: thresholds already checked by caller
         }
 
-        if (inConstrainedCohort) {
-            return true;
+        return true;
+    }
+
+    /** True when {@code trackIndex} is in a HOMOZYGOUS cohort of a lineage in LOH mode. */
+    private boolean isLohHomRefTrack(int trackIndex) {
+        if (trackIndex < 0) {
+            return false;
         }
-        // LOH mode: still show AA/BB outcomes for samples outside named roles.
-        if (lohMode && (node.isHomozygousRef(call) || node.isHomozygousAlt(call))) {
-            return true;
+        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
+            if (entry.getValue() != GroupRole.HOMOZYGOUS) {
+                continue;
+            }
+            if (!isLohModeForLineage(lineageScopeOf(entry.getKey()))) {
+                continue;
+            }
+            Set<Integer> cohort = groupTrackIndices.get(entry.getKey());
+            if (cohort != null && cohort.contains(trackIndex)) {
+                return true;
+            }
         }
-        // Genotype filters: hide samples outside constrained cohorts.
-        return !hasActiveGenotypeGroupComparison();
+        return false;
+    }
+
+    /**
+     * True when {@code trackIndex} belongs to a constrained cohort of a lineage whose
+     * site-level comparison fails on {@code node}.
+     */
+    private boolean isConstrainedTrackInFailedLineage(VariantNode node, int trackIndex) {
+        Map<Integer, List<Map.Entry<Integer, GroupRole>>> rolesByLineage = rolesGroupedByLineage();
+        for (Map.Entry<Integer, List<Map.Entry<Integer, GroupRole>>> lineageEntry
+            : rolesByLineage.entrySet()) {
+            List<Map.Entry<Integer, GroupRole>> lineageRoles = lineageEntry.getValue();
+            if (!lineageHasSiteLevelComparison(lineageRoles)) {
+                continue;
+            }
+            if (!lineageContainsTrack(lineageRoles, trackIndex)) {
+                continue;
+            }
+            if (!lineageHasAnyCall(node, lineageRoles)) {
+                continue;
+            }
+            if (!passesLineageGroupComparison(node, lineageRoles)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean lineageContainsTrack(
+        List<Map.Entry<Integer, GroupRole>> lineageRoles, int trackIndex) {
+        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
+            Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
+            if (tracks != null && tracks.contains(trackIndex)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Count calls that pass {@link #passesSampleDisplay} (table / comparison-aware). */

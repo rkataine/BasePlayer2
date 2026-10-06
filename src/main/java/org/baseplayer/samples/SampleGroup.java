@@ -8,9 +8,15 @@ import javafx.scene.paint.Color;
  */
 public final class SampleGroup {
 
+  public static final int NO_PARENT = -1;
+
   private final int id;
   private String name;
   private Color color;
+  /** Parent group id, or {@link #NO_PARENT} for a top-level group. */
+  private int parentGroupId = NO_PARENT;
+  /** Display/name key of the parental track in this lineage; null if unset. */
+  private String parentalTrackName;
 
   public SampleGroup(int id, String name, Color color) {
     this.id = id;
@@ -20,6 +26,23 @@ public final class SampleGroup {
 
   public int getId() {
     return id;
+  }
+
+  /** Parent group id, or {@link #NO_PARENT} if this is a root group. */
+  public int getParentGroupId() {
+    return parentGroupId;
+  }
+
+  public void setParentGroupId(int parentGroupId) {
+    this.parentGroupId = parentGroupId >= 0 ? parentGroupId : NO_PARENT;
+  }
+
+  public boolean isRoot() {
+    return parentGroupId < 0;
+  }
+
+  public boolean isSubgroup() {
+    return parentGroupId >= 0;
   }
 
   public String getName() {
@@ -40,6 +63,32 @@ public final class SampleGroup {
     if (color != null) {
       this.color = color;
     }
+  }
+
+  /** Parental track name/key for this lineage group, or {@code null}. */
+  public String getParentalTrackName() {
+    return parentalTrackName;
+  }
+
+  public void setParentalTrackName(String parentalTrackName) {
+    if (parentalTrackName == null || parentalTrackName.isBlank()) {
+      this.parentalTrackName = null;
+    } else {
+      this.parentalTrackName = parentalTrackName.trim();
+    }
+  }
+
+  public void clearParentalTrackName() {
+    this.parentalTrackName = null;
+  }
+
+  /** Whether {@code track} is the designated parental for this group. */
+  public boolean isParental(SampleTrack track) {
+    if (track == null || parentalTrackName == null || parentalTrackName.isBlank()) {
+      return false;
+    }
+    String key = parentalTrackName;
+    return key.equals(track.getName()) || key.equals(track.getDisplayName());
   }
 
   public String toCssHex() {

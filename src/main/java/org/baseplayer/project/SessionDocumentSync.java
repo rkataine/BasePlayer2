@@ -115,6 +115,8 @@ public final class SessionDocumentSync {
       groupSpec.id = group.getId();
       groupSpec.name = group.getName();
       groupSpec.color = group.toCssHex();
+      groupSpec.parentalTrackName = group.getParentalTrackName();
+      groupSpec.parentGroupId = group.getParentGroupId();
       doc.sampleGroups.add(groupSpec);
     }
     // Membership is stored on track specs — refresh if tracks already present.

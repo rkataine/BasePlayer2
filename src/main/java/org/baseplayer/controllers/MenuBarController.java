@@ -774,6 +774,12 @@ public class MenuBarController {
   public void removeStack(ActionEvent event) { ViewCommands.removeStack(); }
   public void setDarkMode(ActionEvent event) { ViewCommands.toggleDarkMode(); }
   public void cleanMemory(ActionEvent event) { runGarbageCollectionAndRefresh(); }
+
+  @FXML
+  public void openSampleOpenErrors(ActionEvent event) {
+    org.baseplayer.components.SampleOpenFailuresDialog.openFromTools();
+  }
+
   public void clearAllData(ActionEvent event) { FileCommands.newProject(); }
   public void newProject(ActionEvent event) { FileCommands.newProject(); }
 

@@ -5,9 +5,17 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.SampleOpenFailuresDialog;
+import org.baseplayer.components.sidebars.OpenDirectorySamplesDialog;
+import org.baseplayer.components.sidebars.SelectSampleDirectoriesDialog;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
@@ -18,6 +26,7 @@ import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.samples.Sample;
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
@@ -37,6 +46,436 @@ public class SampleDataManager {
 
   private SampleDataManager() {
     // Utility class
+  }
+
+  /**
+   * Choose a parent folder (JavaFX), multi-select sample directories, then
+   * settings modal for the first. If “apply settings to other directories” is
+   * chosen, remaining dirs open with the same settings and no further modals.
+   */
+  public static void openDirectorySamples() {
+    SelectSampleDirectoriesDialog.show(MainApp.stage)
+        .ifPresent(SampleDataManager::openDirectorySamples);
+  }
+
+  /** Open the given directories with per-first / apply-to-rest settings modals. */
+  public static void openDirectorySamples(List<File> selectedDirs) {
+    if (selectedDirs == null || selectedDirs.isEmpty()) {
+      return;
+    }
+    List<File> batch = new ArrayList<>();
+    for (File dir : selectedDirs) {
+      if (dir != null && dir.isDirectory() && !listSampleFiles(dir).isEmpty()) {
+        batch.add(dir);
+      } else if (dir != null) {
+        System.err.println("No sample files found in: " + dir);
+      }
+    }
+    if (batch.isEmpty()) {
+      return;
+    }
+
+    for (int i = 0; i < batch.size(); i++) {
+      File dir = batch.get(i);
+      Set<SampleFileKind> available = detectTypesInDirectory(dir);
+      if (available.isEmpty()) {
+        System.err.println("No sample files found in: " + dir);
+        continue;
+      }
+
+      int remainingIncludingThis = batch.size() - i;
+      var settingsOpt = OpenDirectorySamplesDialog.show(
+          MainApp.stage, dir.getName(), remainingIncludingThis, available);
+      if (settingsOpt.isEmpty()) {
+        if (i == 0) {
+          return;
+        }
+        continue;
+      }
+      OpenDirectorySamplesDialog.Result settings = settingsOpt.get();
+
+      if (settings.applyToAll()) {
+        // One load job for this dir + the rest — avoids parallel loads interleaving tracks.
+        List<File> toOpen = new ArrayList<>(batch.subList(i, batch.size()));
+        openDirectoriesWithSettings(toOpen, settings);
+        return;
+      }
+
+      openDirectoriesWithSettings(List.of(dir), settings);
+    }
+  }
+
+  /** One directory with samples, or immediate subfolders that contain samples. */
+  static List<File> resolveDirectoryBatch(File chosen) {
+    if (chosen == null || !chosen.isDirectory()) {
+      return List.of();
+    }
+    if (!listSampleFiles(chosen).isEmpty()) {
+      return List.of(chosen);
+    }
+    File[] children = chosen.listFiles(File::isDirectory);
+    if (children == null || children.length == 0) {
+      return List.of();
+    }
+    List<File> batch = new ArrayList<>();
+    for (File child : children) {
+      if (child != null && !listSampleFiles(child).isEmpty()) {
+        batch.add(child);
+      }
+    }
+    batch.sort((a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+    return batch;
+  }
+
+  static Set<SampleFileKind> detectTypesInDirectory(File dir) {
+    EnumSet<SampleFileKind> kinds = EnumSet.noneOf(SampleFileKind.class);
+    for (File file : listSampleFiles(dir)) {
+      SampleFileKind kind = SampleFileKind.fromFile(file);
+      if (kind != null) {
+        kinds.add(kind);
+      }
+    }
+    return kinds;
+  }
+
+  public static List<File> listSampleFiles(File dir) {
+    if (dir == null || !dir.isDirectory()) {
+      return List.of();
+    }
+    File[] files = dir.listFiles(File::isFile);
+    if (files == null || files.length == 0) {
+      return List.of();
+    }
+    List<File> result = new ArrayList<>();
+    for (File file : files) {
+      if (SampleFileKind.fromFile(file) != null) {
+        result.add(file);
+      }
+    }
+    result.sort((a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+    return result;
+  }
+
+  static List<File> listFilesOfKinds(File dir, Set<SampleFileKind> kinds) {
+    if (kinds == null || kinds.isEmpty()) {
+      return List.of();
+    }
+    List<File> result = new ArrayList<>();
+    for (File file : listSampleFiles(dir)) {
+      SampleFileKind kind = SampleFileKind.fromFile(file);
+      if (kind != null && kinds.contains(kind)) {
+        result.add(file);
+      }
+    }
+    return result;
+  }
+
+  private static void openDirectoriesWithSettings(
+      List<File> dirs, OpenDirectorySamplesDialog.Result settings) {
+    if (dirs == null || dirs.isEmpty() || settings == null) {
+      return;
+    }
+
+    Map<File, List<File>> bamByDir = new LinkedHashMap<>();
+    Map<File, List<File>> bedByDir = new LinkedHashMap<>();
+    List<File> allVcfs = new ArrayList<>();
+    List<File> allBigWigs = new ArrayList<>();
+    Map<File, String> groupNameByDir = new LinkedHashMap<>();
+
+    for (File dir : dirs) {
+      if (dir == null) {
+        continue;
+      }
+      List<File> files = listFilesOfKinds(dir, settings.types());
+      if (files.isEmpty()) {
+        continue;
+      }
+      groupNameByDir.put(dir, dir.getName());
+      for (File file : files) {
+        SampleFileKind kind = SampleFileKind.fromFile(file);
+        if (kind == null) {
+          continue;
+        }
+        switch (kind) {
+          case BAM -> bamByDir.computeIfAbsent(dir, key -> new ArrayList<>()).add(file);
+          case BED -> bedByDir.computeIfAbsent(dir, key -> new ArrayList<>()).add(file);
+          case VCF -> allVcfs.add(file);
+          case BIGWIG -> allBigWigs.add(file);
+        }
+      }
+    }
+
+    boolean loadBamOrBed = !bamByDir.isEmpty() || !bedByDir.isEmpty();
+    if (loadBamOrBed) {
+      SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
+      ThreadRunner.get().submit(
+          "Loading directory samples",
+          () -> loadBamAndBedSamples(bamByDir, bedByDir, settings.separateTracks(), failures),
+          createdByDir -> {
+            if (createdByDir != null && settings.addToGroup()) {
+              assignDirectoryGroups(createdByDir, groupNameByDir);
+            }
+            SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+            if (registry.getDisplayedTrackCount() > 0) {
+              registry.showAllTracksResetHeight();
+            }
+            ProjectSessionState.get().markDirty();
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+            MainController.initializeLoadRegionButton();
+            MainController.addLoadRegionButtonToViewport();
+
+            if (!allVcfs.isEmpty()) {
+              loadDirectoryVcfs(allVcfs, settings.addToGroup(), groupNameByDir, failures);
+            } else {
+              failures.commitAndShowLater();
+            }
+            for (File bigWig : allBigWigs) {
+              addBigWigFile(bigWig);
+            }
+          });
+    } else {
+      if (!allVcfs.isEmpty()) {
+        loadDirectoryVcfs(allVcfs, settings.addToGroup(), groupNameByDir, null);
+      }
+      for (File bigWig : allBigWigs) {
+        addBigWigFile(bigWig);
+      }
+    }
+  }
+
+  private static Map<File, List<SampleTrack>> loadBamAndBedSamples(
+      Map<File, List<File>> bamByDir,
+      Map<File, List<File>> bedByDir,
+      boolean separateTracks,
+      SampleOpenFailuresDialog failures) {
+    Map<File, List<SampleTrack>> created = new LinkedHashMap<>();
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+
+    // BAM load on background; track creation must be on FX — collect Samples first.
+    Map<File, List<Sample>> bamSamplesByDir = new LinkedHashMap<>();
+    Map<File, List<Sample>> bedSamplesByDir = new LinkedHashMap<>();
+
+    int total = 0;
+    for (List<File> files : bamByDir.values()) {
+      total += files.size();
+    }
+    for (List<File> files : bedByDir.values()) {
+      total += files.size();
+    }
+    int index = 0;
+
+    for (Map.Entry<File, List<File>> entry : bamByDir.entrySet()) {
+      List<Sample> samples = new ArrayList<>();
+      for (File file : entry.getValue()) {
+        index++;
+        org.baseplayer.services.LoadingManager.get().setProgress(index, Math.max(1, total));
+        try {
+          samples.add(new Sample(file.toPath()));
+        } catch (IOException e) {
+          System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
+          if (failures != null) {
+            failures.add(file, e.getMessage());
+          }
+        }
+      }
+      if (!samples.isEmpty()) {
+        bamSamplesByDir.put(entry.getKey(), samples);
+      }
+    }
+
+    for (Map.Entry<File, List<File>> entry : bedByDir.entrySet()) {
+      List<Sample> samples = new ArrayList<>();
+      for (File file : entry.getValue()) {
+        index++;
+        org.baseplayer.services.LoadingManager.get().setProgress(index, Math.max(1, total));
+        try {
+          BedTrack bedTrack = new BedTrack(file.toPath());
+          samples.add(new Sample(file.toPath(), bedTrack));
+        } catch (IOException e) {
+          System.err.println("Failed to open BED: " + file + " - " + e.getMessage());
+          if (failures != null) {
+            failures.add(file, e.getMessage());
+          }
+        }
+      }
+      if (!samples.isEmpty()) {
+        bedSamplesByDir.put(entry.getKey(), samples);
+      }
+    }
+
+    Map<File, List<SampleTrack>> fxCreated = new LinkedHashMap<>();
+    if (Platform.isFxApplicationThread()) {
+      createTracksFromSamples(bamSamplesByDir, bedSamplesByDir, separateTracks, registry, fxCreated);
+    } else {
+      CountDownLatch latch = new CountDownLatch(1);
+      Platform.runLater(() -> {
+        try {
+          createTracksFromSamples(
+              bamSamplesByDir, bedSamplesByDir, separateTracks, registry, fxCreated);
+        } finally {
+          latch.countDown();
+        }
+      });
+      try {
+        latch.await();
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    created.putAll(fxCreated);
+    return created;
+  }
+
+  private static void createTracksFromSamples(
+      Map<File, List<Sample>> bamSamplesByDir,
+      Map<File, List<Sample>> bedSamplesByDir,
+      boolean separateTracks,
+      SampleRegistry registry,
+      Map<File, List<SampleTrack>> out) {
+    for (Map.Entry<File, List<Sample>> entry : bamSamplesByDir.entrySet()) {
+      List<SampleTrack> tracks = out.computeIfAbsent(entry.getKey(), key -> new ArrayList<>());
+      if (separateTracks) {
+        for (Sample sample : entry.getValue()) {
+          SampleTrack track = new SampleTrack(sample);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(sample.getName());
+          tracks.add(track);
+        }
+      } else if (!entry.getValue().isEmpty()) {
+        Sample first = entry.getValue().get(0);
+        SampleTrack track = new SampleTrack(first);
+        for (int i = 1; i < entry.getValue().size(); i++) {
+          track.addSample(entry.getValue().get(i));
+        }
+        registry.getSampleTracks().add(track);
+        registry.getSampleList().add(track.getName());
+        tracks.add(track);
+      }
+    }
+    for (Map.Entry<File, List<Sample>> entry : bedSamplesByDir.entrySet()) {
+      List<SampleTrack> tracks = out.computeIfAbsent(entry.getKey(), key -> new ArrayList<>());
+      if (separateTracks) {
+        for (Sample sample : entry.getValue()) {
+          SampleTrack track = new SampleTrack(sample);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(sample.getName());
+          tracks.add(track);
+        }
+      } else if (!entry.getValue().isEmpty()) {
+        Sample first = entry.getValue().get(0);
+        SampleTrack track = new SampleTrack(first);
+        for (int i = 1; i < entry.getValue().size(); i++) {
+          track.addSample(entry.getValue().get(i));
+        }
+        registry.getSampleTracks().add(track);
+        registry.getSampleList().add(track.getName());
+        tracks.add(track);
+      }
+    }
+  }
+
+  private static void assignDirectoryGroups(
+      Map<File, List<SampleTrack>> createdByDir, Map<File, String> groupNameByDir) {
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    for (Map.Entry<File, List<SampleTrack>> entry : createdByDir.entrySet()) {
+      String groupName = groupNameByDir.get(entry.getKey());
+      if (groupName == null || groupName.isBlank() || entry.getValue().isEmpty()) {
+        continue;
+      }
+      SampleGroup group = ensureDirectoryGroup(registry, groupName);
+      registry.setTracksExclusiveGroup(entry.getValue(), group.getId());
+    }
+  }
+
+  private static SampleGroup ensureDirectoryGroup(SampleRegistry registry, String groupName) {
+    SampleGroup group = registry.findSampleGroupByName(groupName);
+    if (group == null) {
+      group = registry.createSampleGroup(groupName, null);
+    }
+    return group;
+  }
+
+  private static void loadDirectoryVcfs(
+      List<File> vcfFiles,
+      boolean addToGroup,
+      Map<File, String> groupNameByDir,
+      SampleOpenFailuresDialog priorFailures) {
+    if (vcfFiles == null || vcfFiles.isEmpty()) {
+      if (priorFailures != null) {
+        priorFailures.commitAndShowLater();
+      }
+      return;
+    }
+    final int totalFiles = vcfFiles.size();
+    SampleOpenFailuresDialog failures =
+        priorFailures != null ? priorFailures : SampleOpenFailuresDialog.create();
+    ThreadRunner.get().submit(
+        "Loading VCF files",
+        () -> {
+          try {
+            return loadVcfFilesBatchWithProgress(vcfFiles, totalFiles, failures);
+          } finally {
+            // no-op
+          }
+        },
+        result -> {
+          if (addToGroup) {
+            assignTracksUnderDirectories(groupNameByDir);
+          }
+          // Commit errors first, then start variant load; popup is deferred/non-modal
+          // so it cannot block FX the way showAndWait did.
+          failures.commitToSessionLog();
+          Platform.runLater(() -> {
+            VcfManager.getInstance().loadVariantsForCurrentView();
+            org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+                MainApp.stage, VcfManager.getInstance(), null);
+            MainController.initializeLoadRegionButton();
+            MainController.addLoadRegionButtonToViewport();
+            SampleOpenFailuresDialog.showPendingNonModal();
+          });
+        });
+  }
+
+  /** Assign any track that has a sample file under {@code dir} to that directory's group. */
+  private static void assignTracksUnderDirectories(Map<File, String> groupNameByDir) {
+    if (groupNameByDir == null || groupNameByDir.isEmpty()) {
+      return;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    Map<File, Path> dirPaths = new LinkedHashMap<>();
+    for (File dir : groupNameByDir.keySet()) {
+      dirPaths.put(dir, dir.toPath().toAbsolutePath().normalize());
+    }
+    Map<String, List<SampleTrack>> byGroupName = new LinkedHashMap<>();
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Map.Entry<File, Path> entry : dirPaths.entrySet()) {
+        if (trackHasSampleInDirectory(track, entry.getValue())) {
+          String name = groupNameByDir.get(entry.getKey());
+          byGroupName.computeIfAbsent(name, key -> new ArrayList<>()).add(track);
+          break;
+        }
+      }
+    }
+    for (Map.Entry<String, List<SampleTrack>> entry : byGroupName.entrySet()) {
+      SampleGroup group = ensureDirectoryGroup(registry, entry.getKey());
+      registry.setTracksExclusiveGroup(entry.getValue(), group.getId());
+    }
+  }
+
+  private static boolean trackHasSampleInDirectory(SampleTrack track, Path dirPath) {
+    for (Sample sample : track.getSamples()) {
+      if (sample == null || sample.getPath() == null) {
+        continue;
+      }
+      Path parent = sample.getPath().toAbsolutePath().normalize().getParent();
+      if (dirPath.equals(parent)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -78,6 +517,7 @@ public class SampleDataManager {
     
     final int totalFiles = files.size();
     addedSamples.addAll(files.stream().map(File::getName).toList());
+    SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
 
     runner.submit("Loading BAM/CRAM files",
         () -> {
@@ -94,6 +534,7 @@ public class SampleDataManager {
                 loaded.add(new Sample(file.toPath()));
               } catch (IOException e) {
                 System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
+                failures.add(file, e.getMessage());
               }
             }
             return loaded;
@@ -116,6 +557,7 @@ public class SampleDataManager {
             
             org.baseplayer.controllers.MainController.initializeLoadRegionButton();
             org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
+            failures.commitAndShowLater();
         });
 
     return addedSamples;
@@ -236,6 +678,7 @@ public class SampleDataManager {
           try { return new Sample(file.toPath()); }
           catch (IOException e) {
             System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
+            SampleOpenFailuresDialog.create().add(file, e.getMessage()).commitAndShowLater();
             return null;
           }
         },
@@ -287,6 +730,7 @@ public class SampleDataManager {
             return new Sample(file.toPath(), bedTrack);
           } catch (IOException e) {
             System.err.println("Failed to open BED: " + file + " - " + e.getMessage());
+            SampleOpenFailuresDialog.create().add(file, e.getMessage()).commitAndShowLater();
             return null;
           }
         },
@@ -338,6 +782,7 @@ public class SampleDataManager {
             return new Sample(file.toPath(), bedTrack);
           } catch (IOException e) {
             System.err.println("Failed to open BED: " + file + " - " + e.getMessage());
+            SampleOpenFailuresDialog.create().add(file, e.getMessage()).commitAndShowLater();
             return null;
           }
         },
@@ -492,19 +937,22 @@ public class SampleDataManager {
 
     
     final int totalFiles = files.size();
+    SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
     ThreadRunner.get().submit(
         "Loading VCF files",
       () -> {
         try {
-          return loadVcfFilesBatchWithProgress(files, totalFiles);
+          return loadVcfFilesBatchWithProgress(files, totalFiles, failures);
         } finally {
           //VcfManager.getInstance().setSuppressVariantLoading(false);
         }
       },
         result -> {
+            failures.commitToSessionLog();
             // Start Phase 2 on the next FX pulse so the Phase 1 task can
             // complete and be removed first. This avoids task overlap that can
-            // cause popup message/progress churn.
+            // cause popup message/progress churn. Error popup is non-modal and
+            // deferred so it does not block variant loading.
             Platform.runLater(() -> {
               VcfManager.getInstance().loadVariantsForCurrentView();
               org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
@@ -513,12 +961,14 @@ public class SampleDataManager {
               // Initialize LoadRegionButton listener and add to viewport
               org.baseplayer.controllers.MainController.initializeLoadRegionButton();
               org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
+              SampleOpenFailuresDialog.showPendingNonModal();
             });
         }
     );
   }
   
-  private static Void loadVcfFilesBatchWithProgress(List<File> files, int totalFiles) {
+  private static Void loadVcfFilesBatchWithProgress(
+      List<File> files, int totalFiles, SampleOpenFailuresDialog failures) {
     for (int index = 0; index < files.size(); index++) {
       if (Thread.currentThread().isInterrupted()) {
         return null;
@@ -527,6 +977,9 @@ public class SampleDataManager {
       File file = files.get(index);
       if (file == null || !file.exists()) {
         System.err.println("Skipping missing file: " + file);
+        if (failures != null) {
+          failures.add(file, "file not found");
+        }
         continue;
       }
 
@@ -545,6 +998,9 @@ public class SampleDataManager {
         }
         System.err.println("Failed to load VCF: " + file + " - " + e.getMessage());
         e.printStackTrace();
+        if (failures != null) {
+          failures.add(file, e.getMessage());
+        }
       }
 
       // Redraw every 10 files to allow the spinner to animate between bursts
@@ -641,6 +1097,10 @@ public class SampleDataManager {
     
     Path vcfPath = file.toPath();
     VcfReader reader = new VcfReader(vcfPath);
+    if (!reader.hasTbiOrCsiIndex()) {
+      try { reader.close(); } catch (IOException ignored) {}
+      throw new IOException("Tabix/CSI index (.tbi/.csi) not found for: " + vcfPath);
+    }
     VariantLoader loader = new VariantLoader(reader);
     
     List<String> unmappedSamples = loader.getUnmappedSamples();

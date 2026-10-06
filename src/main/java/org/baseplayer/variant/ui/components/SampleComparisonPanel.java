@@ -92,6 +92,7 @@ public class SampleComparisonPanel {
     }
     filter.setGroupRoles(roles);
     filter.setGroupTrackIndices(resolveGroupTrackIndices(roles.keySet()));
+    filter.setGroupLineageScope(resolveGroupLineageScope(roles.keySet()));
     filter.setPresentMatchMode(selectedPresentMatchMode());
   }
 
@@ -193,13 +194,21 @@ public class SampleComparisonPanel {
             ungroupedCount,
             Color.web("#888888")));
 
-    for (SampleGroup group : registry.getSampleGroups()) {
+    for (SampleGroup group : registry.getRootGroups()) {
       nodes.comparisonGroupsContainer().getChildren().add(
           buildComparisonGroupRow(
               group.getId(),
               group.getName(),
               registry.countTracksInGroup(group.getId()),
               group.getColor()));
+      for (SampleGroup child : registry.getChildGroups(group.getId())) {
+        nodes.comparisonGroupsContainer().getChildren().add(
+            buildComparisonGroupRow(
+                child.getId(),
+                "  · " + child.getName(),
+                registry.countTracksInGroup(child.getId()),
+                child.getColor()));
+      }
     }
 
     if (registry.getSampleGroups().isEmpty() && ungroupedCount == 0) {
@@ -483,6 +492,36 @@ public class SampleComparisonPanel {
       }
     }
     return byGroup;
+  }
+
+  /**
+   * Map each compared group id to its lineage root (or ungrouped sentinel).
+   * Comparison constraints are evaluated per lineage.
+   */
+  private Map<Integer, Integer> resolveGroupLineageScope(Set<Integer> groupIds) {
+    Map<Integer, Integer> scopes = new HashMap<>();
+    if (groupIds == null || groupIds.isEmpty()) {
+      return scopes;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    for (Integer groupId : groupIds) {
+      if (groupId == null) {
+        continue;
+      }
+      if (groupId == VariantFilter.UNGROUPED_COHORT_ID) {
+        scopes.put(groupId, VariantFilter.UNGROUPED_COHORT_ID);
+        continue;
+      }
+      SampleGroup group = registry.getSampleGroup(groupId);
+      if (group == null) {
+        scopes.put(groupId, groupId);
+      } else if (group.isRoot()) {
+        scopes.put(groupId, group.getId());
+      } else {
+        scopes.put(groupId, group.getParentGroupId());
+      }
+    }
+    return scopes;
   }
 
   private boolean isSuppressing() {

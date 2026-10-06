@@ -195,7 +195,11 @@ public class MainController {
       return;
     }
     double floor = getFeatureTracksFloorHeight();
-    featureTracksPane.setMinHeight(floor);
+    // Keep SplitPane minHeight at 0 so dragging the gene (divider 0) can
+    // temporarily shrink this pane; the divider-0 listener then moves divider 1
+    // to preserve feature height. A real minHeight equal to the collapsed
+    // floor blocks that first step, so the gene divider cannot move down.
+    featureTracksPane.setMinHeight(0);
     featureTracksPane.setPrefHeight(floor);
   }
 

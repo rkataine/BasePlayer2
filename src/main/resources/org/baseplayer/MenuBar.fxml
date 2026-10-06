@@ -30,6 +30,7 @@
             <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open BED track file(s)" />
             <MenuItem id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig track file(s)" />
             <MenuItem id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF file(s)" />
+            <MenuItem id="LOAD_DIR" onAction="#openFileMenu" text="Open Directory…" />
             <Menu fx:id="recentFilesMenu" text="Open Recent Samples" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />
             <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save Project" />
@@ -43,6 +44,7 @@
           <MenuItem text="Table Browser" />
           <MenuItem text="Settings" onAction="#openSettings" />
           <SeparatorMenuItem />
+          <MenuItem text="Sample open errors…" onAction="#openSampleOpenErrors" />
           <MenuItem text="Clean memory" onAction="#cleanMemory" />
         </items>
       </Menu>

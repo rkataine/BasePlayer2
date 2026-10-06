@@ -47,6 +47,8 @@ public class SampleTrackListPanel extends TrackListPanel {
   private static final double GROUP_BAR_WIDTH = 4;
   private static final double GROUP_BAR_GAP = 1;
   private static final double GROUP_BAR_STRIDE = GROUP_BAR_WIDTH + GROUP_BAR_GAP;
+  /** Extra space after root bars before indented subgroup bars. */
+  private static final double SUBGROUP_INDENT_GAP = GROUP_BAR_STRIDE;
 
   private final SampleRegistry sampleRegistry;
   private final Set<Integer> selectedTrackIndices = new LinkedHashSet<>();
@@ -60,6 +62,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     super(parent, sampleRegistry);
     this.sampleRegistry = sampleRegistry;
     sampleRegistry.setTrackIconActionHandler(this::handleTrackRowIconClick);
+    sampleRegistry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) -> draw());
   }
 
   @Override
@@ -257,13 +260,13 @@ public class SampleTrackListPanel extends TrackListPanel {
       double fillY = Math.max(rowY, 0);
       double fillH = Math.min(rowY + rowHeight, panelHeightPixels) - fillY;
       boolean isHovered = backingTrackIndex == hoverIndex;
-      List<Color> groupColors = sampleTrack != null
-          ? sampleRegistry.getSidebarColorsForTrack(sampleTrack)
+      List<SampleRegistry.SidebarLineageAccent> lineageAccents = sampleTrack != null
+          ? sampleRegistry.getSidebarLineageAccents(sampleTrack)
           : List.of();
       boolean selected = selectedTrackIndices.contains(backingTrackIndex);
       boolean showWhiteLead = selected || isHovered;
       if (fillH > 0) {
-        drawMembershipBars(gc, fillY, Math.max(fillH, 1), groupColors, showWhiteLead);
+        drawMembershipBars(gc, fillY, Math.max(fillH, 1), lineageAccents, showWhiteLead);
       }
 
       // When rows are too short for a name, only keep the color accent; hover shows the label.
@@ -274,7 +277,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       double textY = rowY + NAME_FONT.getSize() + 2;
       if (textY > 0) {
         String displayName = sampleTrack != null ? sampleTrack.getDisplayName() : "";
-        double nameX = nameTextX(groupColors.size(), showWhiteLead);
+        double nameX = nameTextX(lineageAccents, showWhiteLead);
         gc.save();
         gc.beginPath();
         gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
@@ -378,14 +381,15 @@ public class SampleTrackListPanel extends TrackListPanel {
   }
 
   /**
-   * Left accent bars: optional white lead (hover/selection), then one bar per group.
-   * The white lead shifts group bars to the right.
+   * Left accent bars: optional white lead, then root-group bars, then (if any) an
+   * indent gap and subgroup bars further to the right. Subgroup membership still
+   * expands to show the parent root color first.
    */
   private void drawMembershipBars(
       javafx.scene.canvas.GraphicsContext graphics,
       double fillY,
       double fillH,
-      List<Color> groupColors,
+      List<SampleRegistry.SidebarLineageAccent> lineageAccents,
       boolean whiteLead) {
     double x = 0;
     if (whiteLead) {
@@ -393,22 +397,61 @@ public class SampleTrackListPanel extends TrackListPanel {
       graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
       x += GROUP_BAR_STRIDE;
     }
-    for (Color color : groupColors) {
-      if (color == null) {
+    if (lineageAccents == null || lineageAccents.isEmpty()) {
+      return;
+    }
+
+    int subgroupCount = 0;
+    for (SampleRegistry.SidebarLineageAccent accent : lineageAccents) {
+      if (accent == null || accent.rootColor() == null) {
         continue;
       }
-      graphics.setFill(color);
+      graphics.setFill(accent.rootColor());
+      graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
+      x += GROUP_BAR_STRIDE;
+      if (accent.hasSubgroup()) {
+        subgroupCount++;
+      }
+    }
+
+    if (subgroupCount == 0) {
+      return;
+    }
+    x += SUBGROUP_INDENT_GAP;
+    for (SampleRegistry.SidebarLineageAccent accent : lineageAccents) {
+      if (accent == null || !accent.hasSubgroup()) {
+        continue;
+      }
+      graphics.setFill(accent.subgroupColor());
       graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
       x += GROUP_BAR_STRIDE;
     }
   }
 
-  private static double nameTextX(int groupCount, boolean whiteLead) {
-    int barCount = groupCount + (whiteLead ? 1 : 0);
-    if (barCount <= 0) {
+  private static double nameTextX(
+      List<SampleRegistry.SidebarLineageAccent> lineageAccents, boolean whiteLead) {
+    int rootCount = 0;
+    int subgroupCount = 0;
+    if (lineageAccents != null) {
+      for (SampleRegistry.SidebarLineageAccent accent : lineageAccents) {
+        if (accent == null || accent.rootColor() == null) {
+          continue;
+        }
+        rootCount++;
+        if (accent.hasSubgroup()) {
+          subgroupCount++;
+        }
+      }
+    }
+    int lead = whiteLead ? 1 : 0;
+    if (rootCount + subgroupCount + lead <= 0) {
       return NAME_PAD_X;
     }
-    return barCount * GROUP_BAR_STRIDE + NAME_PAD_X - GROUP_BAR_GAP;
+    double width = (lead + rootCount) * GROUP_BAR_STRIDE;
+    if (subgroupCount > 0) {
+      width += SUBGROUP_INDENT_GAP + subgroupCount * GROUP_BAR_STRIDE;
+    }
+    return width + NAME_PAD_X - GROUP_BAR_GAP;
   }
 
   private void drawIconGlow(String iconId, int backingTrackIndex) {
@@ -521,6 +564,13 @@ public class SampleTrackListPanel extends TrackListPanel {
     }
 
     settingsMenu.getItems().add(new CustomMenuItem(groupBox, false));
+
+    MenuItem organize = new MenuItem("Sample Groups…");
+    organize.setOnAction(event -> {
+      Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
+      SampleOrganizationWindow.show(owner);
+    });
+    settingsMenu.getItems().add(organize);
 
     MenuItem addThis = new MenuItem("Add this sample to a new group…");
     addThis.setOnAction(event -> {
