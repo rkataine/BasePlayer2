@@ -110,6 +110,10 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     masterHeaderReactiveCanvas.heightProperty().addListener((obs, o, n) -> drawMasterHeader());
 
     installMasterHeaderHandlers();
+    trackViewportRegistry.visibleWindowRevisionProperty().addListener((obs, o, n) -> {
+      syncMasterHeaderRenderState();
+      drawMasterHeader();
+    });
   }
 
   protected abstract TrackListPanel getTrackListPanel();

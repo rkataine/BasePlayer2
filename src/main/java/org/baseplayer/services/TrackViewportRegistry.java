@@ -35,6 +35,7 @@ public abstract class TrackViewportRegistry {
   private final BooleanProperty listPointerInside = new SimpleBooleanProperty(false);
   private final DoubleProperty masterBandHeightPixels =
       new SimpleDoubleProperty(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+  private final IntegerProperty visibleWindowRevision = new SimpleIntegerProperty(0);
 
   private int firstVisibleTrackSlot = -1;
   private int lastVisibleTrackSlot = -1;
@@ -79,6 +80,15 @@ public abstract class TrackViewportRegistry {
 
   public int getLastVisibleTrackSlot() {
     return lastVisibleTrackSlot;
+  }
+
+  /** Bumped when the visible first/last slot window changes (sidebar scroll, range handles). */
+  public IntegerProperty visibleWindowRevisionProperty() {
+    return visibleWindowRevision;
+  }
+
+  private void bumpVisibleWindowRevision() {
+    visibleWindowRevision.set(visibleWindowRevision.get() + 1);
   }
 
   public int getVisibleTrackSlotCount() {
@@ -154,6 +164,9 @@ public abstract class TrackViewportRegistry {
       if (rangeChanged || heightChanged) {
         onVisibleTrackRangeOrRowHeightChanged();
       }
+      if (rangeChanged) {
+        bumpVisibleWindowRevision();
+      }
       return;
     }
 
@@ -201,6 +214,9 @@ public abstract class TrackViewportRegistry {
 
     if (rangeChanged || heightChanged) {
       onVisibleTrackRangeOrRowHeightChanged();
+    }
+    if (rangeChanged) {
+      bumpVisibleWindowRevision();
     }
   }
 

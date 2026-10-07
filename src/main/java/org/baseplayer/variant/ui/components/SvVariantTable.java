@@ -5,8 +5,10 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
@@ -42,28 +44,27 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     private final Map<VcfVariantType, ObservableList<TableRow>> typeItems = new EnumMap<>(VcfVariantType.class);
     private String searchQuery = "";
 
-    private final Consumer<TableRow> onPositionClick;
-    private final Consumer<TableRow> onRowDoubleClick;
+    private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
+    private final Consumer<TableRow> onVariantDoubleClick;
 
     public SvVariantTable(
             TableView<?> allTable,
             Tab allTab,
             Map<VcfVariantType, TableView<?>> typeTableMap,
             Map<VcfVariantType, Tab> typeTabMap,
-            Consumer<TableRow> onPositionClick,
-            Consumer<TableRow> onRowDoubleClick) {
+            BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
+            Consumer<TableRow> onVariantDoubleClick) {
         super();
         this.allTab = allTab;
-        this.onPositionClick = onPositionClick != null ? onPositionClick : r -> {};
-        this.onRowDoubleClick = onRowDoubleClick != null ? onRowDoubleClick : r -> {};
+        this.onGeneDoubleClick = onGeneDoubleClick != null ? onGeneDoubleClick : (g, t) -> {};
+        this.onVariantDoubleClick = onVariantDoubleClick != null ? onVariantDoubleClick : r -> {};
 
-        // Gene double-click unused for SV; position / row double-click navigate.
         this.allPanel = mountNestedPanel(
             allTable,
             VariantDetailLayout.STRUCTURAL,
             false,
-            this.onRowDoubleClick,
-            this.onPositionClick,
+            this.onGeneDoubleClick,
+            this.onVariantDoubleClick,
             () -> this.displayFilter);
 
         for (VcfVariantType type : TYPE_ORDER) {
@@ -78,8 +79,8 @@ public class SvVariantTable extends AbstractNestedVariantTable {
                     tv,
                     VariantDetailLayout.STRUCTURAL,
                     false,
-                    this.onRowDoubleClick,
-                    this.onPositionClick,
+                    this.onGeneDoubleClick,
+                    this.onVariantDoubleClick,
                     () -> this.displayFilter);
                 if (panel != null) {
                     typePanels.put(type, panel);

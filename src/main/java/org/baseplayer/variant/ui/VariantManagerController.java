@@ -1,11 +1,9 @@
 package org.baseplayer.variant.ui;
 
 import org.baseplayer.MainApp;
-import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VariantTableExcelWriter;
 import org.baseplayer.io.VcfManager;
@@ -657,7 +655,7 @@ public class VariantManagerController implements Initializable {
             svAllTab,
             typeTables,
             typeTabs,
-            this::handlePositionClick,
+            this::handleGeneRowDoubleClick,
             this::handleSvRowDoubleClick);
         svVariantTable.initializeColumns();
     }
@@ -1147,17 +1145,14 @@ public class VariantManagerController implements Initializable {
         return variantTable;
     }
 
-    private void handleGeneRowDoubleClick(VariantTable.TableRow row) {
-        if (row == null || row.node() == null) {
-            return;
-        }
-
-        String geneName = VariantTable.rowGeneName(row);
+    private void handleGeneRowDoubleClick(String geneName, List<SampleTrack> tracks) {
         if (geneName == null || geneName.isBlank()) {
             return;
         }
-
-        navigateAndApplySampleFilterForGene(geneName);
+        navigateAndApplySampleFilter(
+            () -> NavigationCommands.navigateToGene(geneName, true),
+            tracks,
+            geneName);
     }
 
     public void handlePositionClick(VariantTable.TableRow row) {
@@ -1305,74 +1300,6 @@ public class VariantManagerController implements Initializable {
         return new ArrayList<>(uniqueTracks);
     }
 
-    private List<SampleTrack> extractSamplesWithGeneVariants(String geneName) {
-        if (geneName == null || geneName.isBlank()) {
-            return Collections.emptyList();
-        }
-
-        VariantFilter filter = resolveActiveDisplayFilter();
-        Set<SampleTrack> tracksWithGeneVariant = new LinkedHashSet<>();
-
-        // Prefer Variant Manager's currently loaded/annotated chromosome lists.
-        List<VcfManager.CachedChromosomeVariants> sources = sourceVariantLists;
-        if (sources == null || sources.isEmpty()) {
-            sources = getCachedVariantSources();
-        }
-        if (sources != null) {
-            for (VcfManager.CachedChromosomeVariants cached : sources) {
-                collectTracksForGene(cached.variants(), geneName, filter, tracksWithGeneVariant);
-            }
-        }
-
-        // Fallback: gene chromosome cache (may be unannotated if never opened).
-        if (tracksWithGeneVariant.isEmpty()) {
-            GeneLocation geneLoc = AnnotationData.getGeneLocation(geneName);
-            if (geneLoc != null) {
-                VariantList variantList = VcfManager.getInstance().getCachedVariants(geneLoc.chrom());
-                collectTracksForGene(variantList, geneName, filter, tracksWithGeneVariant);
-            }
-        }
-
-        return new ArrayList<>(tracksWithGeneVariant);
-    }
-
-    private VariantFilter resolveActiveDisplayFilter() {
-        if (vcfManager != null && vcfManager.getCurrentFilter() != null) {
-            return vcfManager.getCurrentFilter();
-        }
-        return buildFilterFromUI();
-    }
-
-    private static void collectTracksForGene(
-            VariantList variantList,
-            String geneName,
-            VariantFilter filter,
-            Set<SampleTrack> out) {
-        if (variantList == null || variantList.isEmpty() || geneName == null || out == null) {
-            return;
-        }
-        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        List<SampleTrack> allTracks = registry.getSampleTracks();
-        Set<Integer> trackIndices = variantList.getGeneSampleTracks(geneName, filter);
-        for (Integer trackIndex : trackIndices) {
-            if (trackIndex == null || trackIndex < 0 || trackIndex >= allTracks.size()) {
-                continue;
-            }
-            out.add(allTracks.get(trackIndex));
-        }
-    }
-
-    private void navigateAndApplySampleFilterForGene(String geneName) {
-        // Extract from currently loaded/annotated data BEFORE navigation, which
-        // switches chromosome and starts an async region load that would otherwise
-        // leave the cache empty or unannotated at extract time.
-        List<SampleTrack> tracks = extractSamplesWithGeneVariants(geneName);
-        navigateAndApplySampleFilter(
-            () -> NavigationCommands.navigateToGene(geneName, true),
-            tracks,
-            geneName);
-    }
-
     /**
      * Navigate to a location and apply sample filtering.
      * Accepts sample objects directly; SampleRegistry handles track index extraction.
@@ -1386,20 +1313,11 @@ public class VariantManagerController implements Initializable {
              List<SampleTrack> tracksWithFeature,
             String featureName) {
 
-        List<SampleTrack> finalTracks = tracksWithFeature;
-        if ((finalTracks == null || finalTracks.isEmpty())
-            && featureName != null
-            && !featureName.isBlank()
-            && !featureName.startsWith("Position:")) {
-            finalTracks = extractSamplesWithGeneVariants(featureName);
-        }
-
-        // Perform the navigation after extracting tracks from current caches.
         navigationAction.run();
 
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        if (finalTracks != null && !finalTracks.isEmpty()) {
-            registry.applyGeneSubset(finalTracks, featureName);
+        if (tracksWithFeature != null && !tracksWithFeature.isEmpty()) {
+            registry.applyGeneSubset(tracksWithFeature, featureName);
 
             int displayedCount = registry.getDisplayedTrackCount();
             if (displayedCount > 0) {
@@ -2097,14 +2015,13 @@ public class VariantManagerController implements Initializable {
             }
 
             try {
-                boolean lohMode = filterSnapshot.isLohMode();
-
                 for (VcfManager.CachedChromosomeVariants cached : snapshots) {
                     String sourceChromosome = cached.chromosome();
                     VariantList variants = cached.variants();
                     if (variants == null || variants.isEmpty()) {
                         continue;
                     }
+                    variants.ensureLohAaCalls(filterSnapshot);
 
                     VariantNode node = variants.getFirst();
                     VariantFilter svSlice = filterSnapshot.getSvSlice() != null
@@ -2131,9 +2048,6 @@ public class VariantManagerController implements Initializable {
                             ? variants.ensureClusterSampleIndex(filterSnapshot)
                             : null;
                     while (node != null) {
-                        if (lohMode) {
-                            filterSnapshot.addMissingLohAaCalls(node);
-                        }
                         boolean isSv = VariantTypeVisuals.isStructural(node.type);
                         if (isSv && svGeneLevel) {
                             if (!filterSnapshot.passesBaseNodeLevel(node)) {
@@ -2156,12 +2070,9 @@ public class VariantManagerController implements Initializable {
                             }
                             int passSamples = 0;
                             for (VariantNode.SampleCall call : node.getSamples()) {
-                                if (lohMode) {
-                                    if (filterSnapshot.passesSampleDisplay(node, call)) {
-                                        passSamples++;
-                                    }
-                                } else if (filterSnapshot.passesSampleThresholds(node, call)
-                                        && node.isAltCarrier(call)) {
+                                // Same rule as canvas/display cache: thresholds + roles,
+                                // including SV GT=NA / missing (not diploid het/hom-alt).
+                                if (filterSnapshot.passesSampleDisplay(node, call)) {
                                     passSamples++;
                                 }
                             }
@@ -2198,13 +2109,7 @@ public class VariantManagerController implements Initializable {
 
                         int passSamples = 0;
                         for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (lohMode) {
-                                // LOH outcomes include HomRef AA; use display rules.
-                                if (filterSnapshot.passesSampleDisplay(node, call)) {
-                                    passSamples++;
-                                }
-                            } else if (filterSnapshot.passesSampleThresholds(node, call)
-                                    && node.isAltCarrier(call)) {
+                            if (filterSnapshot.passesSampleDisplay(node, call)) {
                                 passSamples++;
                             }
                         }

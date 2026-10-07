@@ -679,6 +679,7 @@ VBox {
 .vn-pin-bar {
     -fx-background-color: #b9cddc;
     -fx-padding: 0;
+    -fx-effect: dropshadow(gaussian, rgba(26, 42, 54, 0.28), 6, 0.15, 0, 2);
 }
 
 .vn-node-pinned {

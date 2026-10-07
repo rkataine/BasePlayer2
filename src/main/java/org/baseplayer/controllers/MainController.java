@@ -296,12 +296,7 @@ public class MainController {
     if (geneFocusBanner == null) {
       geneFocusBanner = new GeneFocusBanner();
     }
-    if (!overlayPane.getChildren().contains(geneFocusBanner)) {
-      overlayPane.getChildren().add(geneFocusBanner);
-      StackPane.setAlignment(geneFocusBanner, Pos.TOP_CENTER);
-      StackPane.setMargin(geneFocusBanner, new Insets(8, 0, 0, 0));
-    }
-    geneFocusBanner.attachListeners();
+    geneFocusBanner.attachTo(overlayPane);
   }
 
   public static boolean drawCrossStackMateArc(Object owner,

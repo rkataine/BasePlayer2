@@ -2,7 +2,9 @@ package org.baseplayer.variant;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
@@ -20,6 +22,13 @@ public class VariantNode {
     public final VcfVariantType type;
 
     private List<SampleCall> samples;     // null until first sample added
+
+    /**
+     * Display-eligible calls for the current visible-chain generation
+     * ({@link VariantList#getVisibleChainGeneration()}). Null when unset.
+     */
+    private IdentityHashMap<SampleTrack, SampleCall> displayByTrack;
+    private int displayCacheGeneration = -1;
 
     public volatile VariantNode next;
     public volatile VariantNode nextVisible;
@@ -226,6 +235,36 @@ public class VariantNode {
     /** Returns all sample calls for table/annotation iteration. */
     public List<SampleCall> getSamples() {
         return samples == null ? Collections.emptyList() : Collections.unmodifiableList(samples);
+    }
+
+    public void clearDisplayCache() {
+        displayByTrack = null;
+        displayCacheGeneration = -1;
+    }
+
+    public void setDisplayCache(int generation, IdentityHashMap<SampleTrack, SampleCall> byTrack) {
+        this.displayCacheGeneration = generation;
+        this.displayByTrack = byTrack;
+    }
+
+    public boolean hasDisplayCache(int generation) {
+        return displayByTrack != null && displayCacheGeneration == generation;
+    }
+
+    /** Display-eligible call for {@code track} when cache matches {@code generation}. */
+    public SampleCall getDisplayCall(SampleTrack track, int generation) {
+        if (track == null || !hasDisplayCache(generation)) {
+            return null;
+        }
+        return displayByTrack.get(track);
+    }
+
+    /** Unmodifiable view of cached display calls, or empty if cache missing/stale. */
+    public Map<SampleTrack, SampleCall> getDisplayByTrack(int generation) {
+        if (!hasDisplayCache(generation)) {
+            return Map.of();
+        }
+        return Collections.unmodifiableMap(displayByTrack);
     }
 
     public int getSampleCount() {

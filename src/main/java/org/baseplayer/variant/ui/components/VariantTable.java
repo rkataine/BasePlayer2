@@ -1,7 +1,10 @@
 package org.baseplayer.variant.ui.components;
 
+import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.variant.VariantNode;
 
 import javafx.scene.control.Tab;
@@ -19,7 +22,7 @@ public class VariantTable extends AbstractNestedVariantTable {
             Tab codingTab,
             Tab intronicTab,
             Tab intergenicTab,
-            Consumer<TableRow> onGeneDoubleClick,
+            BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
             Consumer<TableRow> onPositionClick) {
         super(
             codingTable,

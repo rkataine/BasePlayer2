@@ -286,9 +286,10 @@ public class VariantList {
      * Invalidate the filter-visible skip chain. Next {@link #ensureVisibleChain} rebuilds it.
      */
     public void clearVisibleChain() {
-        for (VariantNode node : visibleByPosition) {
+        for (VariantNode node = head; node != null; node = node.next) {
             node.nextVisible = null;
             node.prevVisible = null;
+            node.clearDisplayCache();
         }
         visibleHead = null;
         visibleByPosition.clear();
@@ -342,6 +343,10 @@ public class VariantList {
                 if (current.svEnd > current.position) {
                     visibleSvByPosition.add(current);
                 }
+                if (filter != null) {
+                    current.setDisplayCache(
+                        visibleChainGeneration, filter.buildDisplayByTrack(current));
+                }
             } else {
                 current.nextVisible = null;
                 current.prevVisible = null;
@@ -350,6 +355,34 @@ public class VariantList {
         }
 
         visibleFilterKey = filterKeyOf(filter);
+    }
+
+    /**
+     * Display-eligible call for {@code track} on {@code node} under the current chain
+     * generation. Falls back to live {@link VariantFilter#passesSampleDisplay} if cache missing.
+     */
+    public VariantNode.SampleCall getDisplayCall(
+            VariantNode node, SampleTrack track, VariantFilter filter) {
+        if (node == null || track == null) {
+            return null;
+        }
+        if (node.hasDisplayCache(visibleChainGeneration)) {
+            return node.getDisplayCall(track, visibleChainGeneration);
+        }
+        if (filter == null) {
+            return null;
+        }
+        VariantNode.SampleCall call = null;
+        for (VariantNode.SampleCall c : node.getSamples()) {
+            if (c != null && c.getTrack() == track) {
+                call = c;
+                break;
+            }
+        }
+        if (call == null || !filter.passesSampleDisplay(node, call)) {
+            return null;
+        }
+        return call;
     }
 
     /**

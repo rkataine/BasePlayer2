@@ -18,9 +18,7 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
 
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Function;
 
 /**
@@ -108,20 +106,7 @@ public class VariantDrawer {
 
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
-
-        // Track → visible slot via identity (no indexOf / getSampleCall in the hot loop).
-        Map<SampleTrack, Integer> trackToSlot = new IdentityHashMap<>(visibleTrackIndices.length * 2);
         List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
-        for (int i = 0; i < visibleTrackIndices.length; i++) {
-            int trackIndex = visibleTrackIndices[i];
-            if (trackIndex < 0 || trackIndex >= allTracks.size()) {
-                continue;
-            }
-            SampleTrack track = allTracks.get(trackIndex);
-            if (track != null) {
-                trackToSlot.put(track, i);
-            }
-        }
 
         // Track last drawn X pixel per sample to avoid overdraw of point variants when zoomed out
         // (SV spans are exempt from this deduplication as they span multiple pixels)
@@ -145,9 +130,9 @@ public class VariantDrawer {
                 continue;
             }
             drawNodeForVisibleSamples(
-                gc, node, filter, true, drawClickableRects, chromPosToScreenPos, canvasWidth,
-                chromPosToScreenPos.apply((double) node.position),
-                trackToSlot, yPositions, sampleHeight, lastDrawnPixelX);
+                gc, variantList, node, filter, true, drawClickableRects, chromPosToScreenPos,
+                canvasWidth, chromPosToScreenPos.apply((double) node.position),
+                visibleTrackIndices, yPositions, allTracks, sampleHeight, lastDrawnPixelX);
         }
 
         // Point variants and in-window SV starts via nextVisible skip chain.
@@ -161,8 +146,9 @@ public class VariantDrawer {
             if (isVisible) {
                 if (VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
                     drawNodeForVisibleSamples(
-                        gc, node, filter, isSvSpan, drawClickableRects, chromPosToScreenPos, canvasWidth, x,
-                        trackToSlot, yPositions, sampleHeight, lastDrawnPixelX);
+                        gc, variantList, node, filter, isSvSpan, drawClickableRects,
+                        chromPosToScreenPos, canvasWidth, x,
+                        visibleTrackIndices, yPositions, allTracks, sampleHeight, lastDrawnPixelX);
                 }
             }
 
@@ -187,6 +173,7 @@ public class VariantDrawer {
 
     private void drawNodeForVisibleSamples(
             GraphicsContext gc,
+            VariantList variantList,
             VariantNode node,
             VariantFilter filter,
             boolean isSvSpan,
@@ -194,32 +181,32 @@ public class VariantDrawer {
             Function<Double, Double> chromPosToScreenPos,
             double canvasWidth,
             double x,
-            Map<SampleTrack, Integer> trackToSlot,
+            int[] visibleTrackIndices,
             double[] yPositions,
+            List<SampleTrack> allTracks,
             double sampleHeight,
             int[] lastDrawnPixelX) {
         int xPixel = (int) x;
-        boolean lohMode = filter != null && filter.isLohMode();
-        for (VariantNode.SampleCall call : node.getSamples()) {
-            if (call == null) {
+        int chainGen = variantList.getVisibleChainGeneration();
+        boolean useCache = node.hasDisplayCache(chainGen);
+
+        for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
+            int trackIndex = visibleTrackIndices[slot];
+            if (trackIndex < 0 || trackIndex >= allTracks.size()) {
                 continue;
             }
-            boolean homRef = node.isHomozygousRef(call);
-            if (homRef && !lohMode) {
-                continue;
-            }
-            SampleTrack track = call.getTrack();
+            SampleTrack track = allTracks.get(trackIndex);
             if (track == null) {
                 continue;
             }
-            if (!call.isUiVisible()) {
-                continue;
+
+            VariantNode.SampleCall call;
+            if (useCache) {
+                call = node.getDisplayCall(track, chainGen);
+            } else {
+                call = variantList.getDisplayCall(node, track, filter);
             }
-            Integer slot = trackToSlot.get(track);
-            if (slot == null) {
-                continue;
-            }
-            if (filter != null && !filter.passesSampleDisplay(node, call)) {
+            if (call == null || !call.isUiVisible()) {
                 continue;
             }
 
@@ -307,23 +294,81 @@ public class VariantDrawer {
         double opacity = callOpacity(call, 0.7, variant.isHomozygousRef(call));
 
         double endX = chromPosToScreenPos.apply((double) variant.svEnd);
+        boolean startInView = startX >= 0 && startX <= canvasWidth;
+        boolean endInView = endX >= 0 && endX <= canvasWidth;
 
-        double x1 = Math.max(0, startX);
-        double x2 = Math.min(canvasWidth, endX);
-        double width = x2 - x1;
+        if (startInView && endInView) {
+            double x1 = Math.min(startX, endX);
+            double x2 = Math.max(startX, endX);
+            double width = Math.max(1.0, x2 - x1);
+            double rectHeight = sampleHeight >= 4 ? sampleHeight - 1 : sampleHeight;
+            gc.setFill(baseColor);
+            if (opacity != 1.0) gc.setGlobalAlpha(opacity);
+            gc.fillRect(x1, y, width, rectHeight);
+            if (opacity != 1.0) gc.setGlobalAlpha(1.0);
+            if (recordHit) {
+                hitRegions.add(new VariantHit(variant, call, x1, y, x1 + width, y + rectHeight));
+            }
+            return;
+        }
 
-        if (width < 1) width = 1;
+        double x1 = Math.max(0, Math.min(startX, endX));
+        double x2 = Math.min(canvasWidth, Math.max(startX, endX));
+        if (x2 - x1 < 1) {
+            x2 = x1 + 1;
+        }
+        drawDashedSvArch(gc, variant, call, baseColor, opacity, startX, endX,
+            startInView, endInView, x1, x2, y, sampleHeight, recordHit);
+    }
 
-        gc.setFill(baseColor);
+    /**
+     * Thin dashed arch for SVs whose other (or both) breakpoints sit outside the view,
+     * so a large span does not paint a solid bar across the whole track.
+     */
+    private void drawDashedSvArch(
+            GraphicsContext gc,
+            VariantNode variant,
+            VariantNode.SampleCall call,
+            Color baseColor,
+            double opacity,
+            double startX,
+            double endX,
+            boolean startInView,
+            boolean endInView,
+            double x1,
+            double x2,
+            double y,
+            double sampleHeight,
+            boolean recordHit) {
+        double yBase = y + Math.max(1.0, sampleHeight * 0.72);
+        double span = x2 - x1;
+        double archHeight = Math.min(Math.max(3.0, sampleHeight * 0.62), Math.max(4.0, span * 0.12));
+        double ctrlY = Math.max(y + 1.0, yBase - archHeight);
+        double midX = (x1 + x2) * 0.5;
+
         if (opacity != 1.0) gc.setGlobalAlpha(opacity);
+        gc.setStroke(baseColor);
+        gc.setLineWidth(sampleHeight >= 8 ? 1.6 : 1.2);
+        gc.setLineDashes(6, 4);
+        gc.beginPath();
+        gc.moveTo(x1, yBase);
+        gc.quadraticCurveTo(midX, ctrlY, x2, yBase);
+        gc.stroke();
+        gc.setLineDashes(0);
 
-        double rectHeight = sampleHeight >= 4 ? sampleHeight - 1 : sampleHeight;
-        gc.fillRect(x1, y, width, rectHeight);
-
+        gc.setLineWidth(1.5);
+        if (startInView) {
+            gc.strokeLine(startX, y + 1, startX, y + Math.max(2.0, sampleHeight - 1));
+        }
+        if (endInView) {
+            gc.strokeLine(endX, y + 1, endX, y + Math.max(2.0, sampleHeight - 1));
+        }
         if (opacity != 1.0) gc.setGlobalAlpha(1.0);
 
         if (recordHit) {
-            hitRegions.add(new VariantHit(variant, call, x1, y, x1 + width, y + rectHeight));
+            double hitTop = Math.min(ctrlY, y);
+            double hitBottom = y + sampleHeight;
+            hitRegions.add(new VariantHit(variant, call, x1, hitTop, x2, hitBottom));
         }
     }
 

@@ -19,7 +19,6 @@ import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
-import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
@@ -335,12 +334,11 @@ public class SampleRegistry extends TrackViewportRegistry {
 
         invalidateDisplayedTrackIndicesCache();
         normalizeVisibleRangeAfterDisplayedTrackCountChange();
-
+        bumpGeneFocusRevision();
+        notifyVariantIndexDirty();
         boolean changed = (hadFocusedTracks != (focusedTracks != null))
             || (oldFeatureName == null ? focusedGeneName != null : !oldFeatureName.equals(focusedGeneName));
         if (changed) {
-            bumpGeneFocusRevision();
-            notifyVariantIndexDirty();
             org.baseplayer.project.SessionDocumentSync.writeSampleFilter(
                 activeSampleFilterQuery, focusedGeneName);
         }
@@ -351,38 +349,6 @@ public class SampleRegistry extends TrackViewportRegistry {
             return null;
         }
         return AnnotationData.getGeneLocation(featureName);
-    }
-
-    /**
-     * Drop gene focus when the viewport leaves the gene or zooms out far beyond it.
-     * No-op when there is no gene focus / locus.
-     */
-    public void maybeClearGeneFocusForView(String chromosome, double viewStart, double viewEnd) {
-        if (!hasGeneFocusBanner() || focusedGeneLocus == null) {
-            return;
-        }
-        GeneLocation locus = focusedGeneLocus;
-        if (!ChromosomeNames.equals(chromosome, locus.chrom())) {
-            clearSubsetSource(SubsetSource.GENE_FOCUS);
-            return;
-        }
-
-        long geneLen = Math.max(1L, locus.end() - locus.start());
-        double viewLen = Math.max(0, viewEnd - viewStart);
-
-        // Initial gene navigation uses ~gene + 2*pad; clear when zoomed well beyond that.
-        long navPad = Math.max(1000L, geneLen / 2);
-        long navLen = geneLen + 2 * navPad;
-        if (viewLen > navLen * 5.0 && viewLen > geneLen + 50_000) {
-            clearSubsetSource(SubsetSource.GENE_FOCUS);
-            return;
-        }
-
-        // Away from the gene: view no longer overlaps the locus (with padding).
-        long leavePad = Math.max(5_000L, geneLen / 2);
-        if (viewEnd < locus.start() - leavePad || viewStart > locus.end() + leavePad) {
-            clearSubsetSource(SubsetSource.GENE_FOCUS);
-        }
     }
 
     public boolean hasActiveSubset() {

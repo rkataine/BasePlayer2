@@ -427,7 +427,7 @@ public class MasterTrackPainter {
             continue;
           }
           accumulateDensityNode(
-              node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
+              variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
               snvBySample, indelBySample, delBySample, invBySample, dupBySample,
               insBySample, traBySample, bndBySample, spans, true);
         }
@@ -437,7 +437,7 @@ public class MasterTrackPainter {
         VariantNode node = densitySeek.seek(variants, (long) viewStart);
         while (node != null && node.position <= viewEnd) {
           accumulateDensityNode(
-              node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
+              variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
               snvBySample, indelBySample, delBySample, invBySample, dupBySample,
               insBySample, traBySample, bndBySample, spans, false);
           node = node.nextVisible;
@@ -535,6 +535,7 @@ public class MasterTrackPainter {
   }
 
   private void accumulateDensityNode(
+      VariantList variants,
       VariantNode node,
       VariantFilter activeFilter,
       Map<SampleTrack, Integer> displayedTrackToIndex,
@@ -552,25 +553,17 @@ public class MasterTrackPainter {
       List<SvSpan> spans,
       boolean treatAsSvSpan) {
     List<Integer> passingIndices = new ArrayList<>();
-    for (VariantNode.SampleCall call : node.getSamples()) {
-      if (call == null) {
+    int chainGen = variants.getVisibleChainGeneration();
+    boolean useCache = node.hasDisplayCache(chainGen);
+    for (Map.Entry<SampleTrack, Integer> entry : displayedTrackToIndex.entrySet()) {
+      SampleTrack track = entry.getKey();
+      VariantNode.SampleCall call = useCache
+          ? node.getDisplayCall(track, chainGen)
+          : variants.getDisplayCall(node, track, activeFilter);
+      if (call == null || node.isHomozygousRef(call)) {
         continue;
       }
-      if (node.isHomozygousRef(call)) {
-        continue;
-      }
-      SampleTrack track = call.getTrack();
-      if (track == null) {
-        continue;
-      }
-      Integer idx = displayedTrackToIndex.get(track);
-      if (idx == null) {
-        continue;
-      }
-      if (activeFilter != null && !activeFilter.passesSampleDisplay(node, call)) {
-        continue;
-      }
-      passingIndices.add(idx);
+      passingIndices.add(entry.getValue());
     }
     if (passingIndices.isEmpty()) {
       return;
@@ -686,22 +679,18 @@ public class MasterTrackPainter {
     record PreciseBar(double x, double w, int count, VcfVariantType type) {}
     List<PreciseBar> bars = new ArrayList<>();
 
+    int chainGen = variants.getVisibleChainGeneration();
     java.util.function.Consumer<VariantNode> collect = node -> {
       if (!VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
         return;
       }
       int count = 0;
-      for (VariantNode.SampleCall call : node.getSamples()) {
-        if (call == null || call.getTrack() == null) {
-          continue;
-        }
-        if (node.isHomozygousRef(call)) {
-          continue;
-        }
-        if (!displayedTrackToIndex.containsKey(call.getTrack())) {
-          continue;
-        }
-        if (activeFilter != null && !activeFilter.passesSampleDisplay(node, call)) {
+      boolean useCache = node.hasDisplayCache(chainGen);
+      for (SampleTrack track : displayedTrackToIndex.keySet()) {
+        VariantNode.SampleCall call = useCache
+            ? node.getDisplayCall(track, chainGen)
+            : variants.getDisplayCall(node, track, activeFilter);
+        if (call == null || node.isHomozygousRef(call)) {
           continue;
         }
         count++;

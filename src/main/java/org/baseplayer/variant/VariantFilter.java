@@ -1,5 +1,6 @@
 package org.baseplayer.variant;
 
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
 
@@ -8,6 +9,7 @@ import java.util.Set;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -72,6 +74,17 @@ public class VariantFilter {
      * group's constraints do not hide another lineage's variants.
      */
     private Map<Integer, Integer> groupLineageScope = new HashMap<>();
+
+    /** Lazy caches invalidated when group comparison inputs change. */
+    private boolean lineageCacheValid = false;
+    private Map<Integer, List<Map.Entry<Integer, GroupRole>>> cachedRolesByLineage = Map.of();
+    private Set<Integer> cachedLohLineageIds = Set.of();
+    private Set<Integer> cachedLohHomTrackIndices = Set.of();
+    private Map<Integer, Integer> cachedTrackToLineage = Map.of();
+    private Boolean cachedHasActiveGroupComparison;
+    private Boolean cachedHasActiveGenotypeComparison;
+    private Boolean cachedIsLohModeLocal;
+
     private Set<VcfVariantType> allowedTypes = EnumSet.allOf(VcfVariantType.class);
     private Set<VariantEffect> allowedEffects = EnumSet.allOf(VariantEffect.class);
     private boolean showCoding = true;
@@ -156,6 +169,7 @@ public class VariantFilter {
     public Map<Integer, GroupRole> getGroupRoles() { return groupRoles; }
     public void setGroupRoles(Map<Integer, GroupRole> groupRoles) {
         this.groupRoles = groupRoles != null ? new HashMap<>(groupRoles) : new HashMap<>();
+        invalidateLineageCache();
     }
 
     public Map<Integer, Set<Integer>> getGroupTrackIndices() { return groupTrackIndices; }
@@ -168,6 +182,7 @@ public class VariantFilter {
                     entry.getValue() != null ? new HashSet<>(entry.getValue()) : new HashSet<>());
             }
         }
+        invalidateLineageCache();
     }
 
     public Map<Integer, Integer> getGroupLineageScope() {
@@ -178,28 +193,88 @@ public class VariantFilter {
         this.groupLineageScope = groupLineageScope != null
             ? new HashMap<>(groupLineageScope)
             : new HashMap<>();
+        invalidateLineageCache();
+    }
+
+    private void invalidateLineageCache() {
+        lineageCacheValid = false;
+        cachedRolesByLineage = Map.of();
+        cachedLohLineageIds = Set.of();
+        cachedLohHomTrackIndices = Set.of();
+        cachedTrackToLineage = Map.of();
+        cachedHasActiveGroupComparison = null;
+        cachedHasActiveGenotypeComparison = null;
+        cachedIsLohModeLocal = null;
+    }
+
+    private void ensureLineageCache() {
+        if (lineageCacheValid) {
+            return;
+        }
+        Map<Integer, List<Map.Entry<Integer, GroupRole>>> byLineage = new HashMap<>();
+        Map<Integer, Integer> trackToLineage = new HashMap<>();
+        Set<Integer> lohLineages = new HashSet<>();
+        Set<Integer> lohHomTracks = new HashSet<>();
+        boolean anyActive = false;
+        boolean anyGenotype = false;
+
+        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
+            GroupRole role = entry.getValue();
+            if (role == null || role == GroupRole.IGNORE) {
+                continue;
+            }
+            anyActive = true;
+            if (role == GroupRole.HETEROZYGOUS || role == GroupRole.HOMOZYGOUS) {
+                anyGenotype = true;
+            }
+            int lineageId = lineageScopeOf(entry.getKey());
+            byLineage.computeIfAbsent(lineageId, key -> new ArrayList<>()).add(entry);
+            Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
+            if (tracks != null) {
+                for (Integer trackIndex : tracks) {
+                    if (trackIndex != null) {
+                        trackToLineage.putIfAbsent(trackIndex, lineageId);
+                    }
+                }
+            }
+        }
+
+        for (Map.Entry<Integer, List<Map.Entry<Integer, GroupRole>>> lineageEntry
+            : byLineage.entrySet()) {
+            if (isLohModeForRoles(lineageEntry.getValue())) {
+                int lineageId = lineageEntry.getKey();
+                lohLineages.add(lineageId);
+                for (Map.Entry<Integer, GroupRole> entry : lineageEntry.getValue()) {
+                    if (entry.getValue() != GroupRole.HOMOZYGOUS) {
+                        continue;
+                    }
+                    Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
+                    if (tracks != null) {
+                        lohHomTracks.addAll(tracks);
+                    }
+                }
+            }
+        }
+
+        cachedRolesByLineage = byLineage;
+        cachedTrackToLineage = trackToLineage;
+        cachedLohLineageIds = lohLineages;
+        cachedLohHomTrackIndices = lohHomTracks;
+        cachedHasActiveGroupComparison = anyActive;
+        cachedHasActiveGenotypeComparison = anyGenotype;
+        cachedIsLohModeLocal = !lohLineages.isEmpty();
+        lineageCacheValid = true;
     }
 
     public boolean hasActiveGroupComparison() {
-        for (GroupRole role : groupRoles.values()) {
-            if (role == GroupRole.PRESENT
-                || role == GroupRole.ABSENT
-                || role == GroupRole.HETEROZYGOUS
-                || role == GroupRole.HOMOZYGOUS) {
-                return true;
-            }
-        }
-        return false;
+        ensureLineageCache();
+        return Boolean.TRUE.equals(cachedHasActiveGroupComparison);
     }
 
     /** True when any group requires a genotype (het / hom), not just presence. */
     public boolean hasActiveGenotypeGroupComparison() {
-        for (GroupRole role : groupRoles.values()) {
-            if (role == GroupRole.HETEROZYGOUS || role == GroupRole.HOMOZYGOUS) {
-                return true;
-            }
-        }
-        return false;
+        ensureLineageCache();
+        return Boolean.TRUE.equals(cachedHasActiveGenotypeComparison);
     }
 
     /**
@@ -217,44 +292,14 @@ public class VariantFilter {
     }
 
     private boolean isLohModeLocal() {
-        Map<Integer, Boolean> hetByLineage = new HashMap<>();
-        Map<Integer, Boolean> homByLineage = new HashMap<>();
-        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
-            GroupRole role = entry.getValue();
-            if (role != GroupRole.HETEROZYGOUS && role != GroupRole.HOMOZYGOUS) {
-                continue;
-            }
-            int lineageId = lineageScopeOf(entry.getKey());
-            if (role == GroupRole.HETEROZYGOUS) {
-                hetByLineage.put(lineageId, true);
-            } else {
-                homByLineage.put(lineageId, true);
-            }
-        }
-        for (Integer lineageId : hetByLineage.keySet()) {
-            if (Boolean.TRUE.equals(homByLineage.get(lineageId))) {
-                return true;
-            }
-        }
-        return false;
+        ensureLineageCache();
+        return Boolean.TRUE.equals(cachedIsLohModeLocal);
     }
 
     /** LOH mode for the lineage that owns {@code groupId}, if known. */
     private boolean isLohModeForLineage(int lineageId) {
-        boolean hasHeterozygous = false;
-        boolean hasHomozygous = false;
-        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
-            if (lineageScopeOf(entry.getKey()) != lineageId) {
-                continue;
-            }
-            GroupRole role = entry.getValue();
-            if (role == GroupRole.HETEROZYGOUS) {
-                hasHeterozygous = true;
-            } else if (role == GroupRole.HOMOZYGOUS) {
-                hasHomozygous = true;
-            }
-        }
-        return hasHeterozygous && hasHomozygous;
+        ensureLineageCache();
+        return cachedLohLineageIds.contains(lineageId);
     }
 
     /**
@@ -489,6 +534,7 @@ public class VariantFilter {
             copy.groupTrackIndices.put(entry.getKey(), new HashSet<>(entry.getValue()));
         }
         copy.groupLineageScope = new HashMap<>(this.groupLineageScope);
+        copy.invalidateLineageCache();
         // EnumSet.copyOf throws on empty collections — keep noneOf for "exclude all".
         copy.allowedTypes = this.allowedTypes == null || this.allowedTypes.isEmpty()
             ? EnumSet.noneOf(VcfVariantType.class)
@@ -791,16 +837,8 @@ public class VariantFilter {
     }
 
     private Map<Integer, List<Map.Entry<Integer, GroupRole>>> rolesGroupedByLineage() {
-        Map<Integer, List<Map.Entry<Integer, GroupRole>>> byLineage = new HashMap<>();
-        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
-            GroupRole role = entry.getValue();
-            if (role == null || role == GroupRole.IGNORE) {
-                continue;
-            }
-            int lineageId = lineageScopeOf(entry.getKey());
-            byLineage.computeIfAbsent(lineageId, key -> new ArrayList<>()).add(entry);
-        }
-        return byLineage;
+        ensureLineageCache();
+        return cachedRolesByLineage;
     }
 
     private int lineageScopeOf(int groupId) {
@@ -1178,16 +1216,55 @@ public class VariantFilter {
         if (node.isHomozygousRef(call) && !isLohHomRefTrack(call.getTrackIndex())) {
             return false;
         }
-        return passesSampleGroupConstraint(node, call);
+        return passesSampleGroupConstraint(node, call, null);
+    }
+
+    /**
+     * Build track→call map of display-eligible alleles for canvas/density.
+     * Evaluates lineage failures once per node. Used when rebuilding the visible chain.
+     */
+    public IdentityHashMap<SampleTrack, VariantNode.SampleCall> buildDisplayByTrack(VariantNode node) {
+        if (node != null && hasClassSlices()) {
+            return classSlice(node.type).buildDisplayByTrack(node);
+        }
+        IdentityHashMap<SampleTrack, VariantNode.SampleCall> map = new IdentityHashMap<>();
+        if (node == null) {
+            return map;
+        }
+        Set<Integer> failedLineages =
+            hasActiveGroupComparison() ? failedLineagesForNode(node) : Set.of();
+        for (VariantNode.SampleCall call : node.getSamples()) {
+            if (call == null || call.getTrack() == null) {
+                continue;
+            }
+            if (!passesSampleThresholds(node, call)) {
+                continue;
+            }
+            if (node.isHomozygousRef(call) && !isLohHomRefTrack(call.getTrackIndex())) {
+                continue;
+            }
+            if (!passesSampleGroupConstraint(node, call, failedLineages)) {
+                continue;
+            }
+            map.put(call.getTrack(), call);
+        }
+        return map;
     }
 
     /**
      * Whether this call is consistent with active group comparison roles for its track.
      * No-op (passes) when group comparison is inactive.
+     *
+     * @param failedLineages precomputed {@link #failedLineagesForNode} or null to compute
      */
     public boolean passesSampleGroupConstraint(VariantNode node, VariantNode.SampleCall call) {
+        return passesSampleGroupConstraint(node, call, null);
+    }
+
+    private boolean passesSampleGroupConstraint(
+        VariantNode node, VariantNode.SampleCall call, Set<Integer> failedLineages) {
         if (node != null && hasClassSlices()) {
-            return classSlice(node.type).passesSampleGroupConstraint(node, call);
+            return classSlice(node.type).passesSampleGroupConstraint(node, call, failedLineages);
         }
         if (node == null || call == null) {
             return false;
@@ -1201,9 +1278,12 @@ public class VariantFilter {
             return true;
         }
 
-        // Within-group comparison failed for this track's lineage at this site —
-        // hide constrained samples; other lineages remain visible independently.
-        if (isConstrainedTrackInFailedLineage(node, trackIndex)) {
+        Set<Integer> failed = failedLineages != null
+            ? failedLineages
+            : failedLineagesForNode(node);
+        ensureLineageCache();
+        Integer lineageId = cachedTrackToLineage.get(trackIndex);
+        if (lineageId != null && failed.contains(lineageId)) {
             return false;
         }
 
@@ -1219,7 +1299,6 @@ public class VariantFilter {
             boolean lohMode = isLohModeForLineage(lineageScopeOf(entry.getKey()));
             if (role == GroupRole.HETEROZYGOUS) {
                 if (lohMode) {
-                    // Marker / het cohort is filter context only in LOH — hide from table.
                     return false;
                 }
                 if (!node.isHeterozygous(call)) {
@@ -1234,7 +1313,6 @@ public class VariantFilter {
                     return false;
                 }
             }
-            // PRESENT: thresholds already checked by caller
         }
 
         return true;
@@ -1245,26 +1323,22 @@ public class VariantFilter {
         if (trackIndex < 0) {
             return false;
         }
-        for (Map.Entry<Integer, GroupRole> entry : groupRoles.entrySet()) {
-            if (entry.getValue() != GroupRole.HOMOZYGOUS) {
-                continue;
-            }
-            if (!isLohModeForLineage(lineageScopeOf(entry.getKey()))) {
-                continue;
-            }
-            Set<Integer> cohort = groupTrackIndices.get(entry.getKey());
-            if (cohort != null && cohort.contains(trackIndex)) {
-                return true;
-            }
-        }
-        return false;
+        ensureLineageCache();
+        return cachedLohHomTrackIndices.contains(trackIndex);
     }
 
     /**
-     * True when {@code trackIndex} belongs to a constrained cohort of a lineage whose
-     * site-level comparison fails on {@code node}.
+     * Lineage ids whose site-level comparison fails on {@code node}.
+     * Computed once per node when building display caches or checking many calls.
      */
-    private boolean isConstrainedTrackInFailedLineage(VariantNode node, int trackIndex) {
+    public Set<Integer> failedLineagesForNode(VariantNode node) {
+        if (node != null && hasClassSlices()) {
+            return classSlice(node.type).failedLineagesForNode(node);
+        }
+        Set<Integer> failed = new HashSet<>();
+        if (node == null || !hasActiveGroupComparison()) {
+            return failed;
+        }
         Map<Integer, List<Map.Entry<Integer, GroupRole>>> rolesByLineage = rolesGroupedByLineage();
         for (Map.Entry<Integer, List<Map.Entry<Integer, GroupRole>>> lineageEntry
             : rolesByLineage.entrySet()) {
@@ -1272,28 +1346,14 @@ public class VariantFilter {
             if (!lineageHasSiteLevelComparison(lineageRoles)) {
                 continue;
             }
-            if (!lineageContainsTrack(lineageRoles, trackIndex)) {
-                continue;
-            }
             if (!lineageHasAnyCall(node, lineageRoles)) {
                 continue;
             }
             if (!passesLineageGroupComparison(node, lineageRoles)) {
-                return true;
+                failed.add(lineageEntry.getKey());
             }
         }
-        return false;
-    }
-
-    private boolean lineageContainsTrack(
-        List<Map.Entry<Integer, GroupRole>> lineageRoles, int trackIndex) {
-        for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
-            Set<Integer> tracks = groupTrackIndices.get(entry.getKey());
-            if (tracks != null && tracks.contains(trackIndex)) {
-                return true;
-            }
-        }
-        return false;
+        return failed;
     }
 
     /** Count calls that pass {@link #passesSampleDisplay} (table / comparison-aware). */

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -16,6 +17,7 @@ import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantNode;
@@ -205,7 +207,7 @@ public abstract class AbstractNestedVariantTable {
         Tab codingTab,
         Tab intronicTab,
         Tab intergenicTab,
-        Consumer<TableRow> onGeneDoubleClick,
+        BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
         Consumer<TableRow> onPositionClick) {
 
         this.codingTab = codingTab;
@@ -445,8 +447,8 @@ public abstract class AbstractNestedVariantTable {
                 entries,
                 expandGroups));
         }
-        // Default list order is positional; NestedPanel may re-sort on header clicks.
-        out.sort(geneComparator(GeneSort.POSITION, true));
+        // Recurrence first: position is a weak analysis order for annotated genes.
+        out.sort(geneComparator(GeneSort.VARIANT_COUNT, false));
         return out;
     }
 
@@ -457,17 +459,24 @@ public abstract class AbstractNestedVariantTable {
     }
 
     static Comparator<GeneGroup> geneComparator(GeneSort sort, boolean ascending) {
-        Comparator<GeneGroup> comparator = switch (sort != null ? sort : GeneSort.POSITION) {
-            case NAME -> Comparator.comparing(
-                (GeneGroup g) -> g.name != null ? g.name : "",
-                String.CASE_INSENSITIVE_ORDER);
-            case VARIANT_COUNT -> Comparator.comparingInt((GeneGroup g) -> g.variants.size());
-            case POSITION -> Comparator
-                .comparingInt((GeneGroup g) -> chromosomeSortKey(g.sortChromosome()))
-                .thenComparing((GeneGroup g) -> g.sortChromosome(), String.CASE_INSENSITIVE_ORDER)
-                .thenComparingLong(GeneGroup::sortStart);
+        Comparator<GeneGroup> byName = Comparator.comparing(
+            (GeneGroup g) -> g.name != null ? g.name : "",
+            String.CASE_INSENSITIVE_ORDER);
+        return switch (sort != null ? sort : GeneSort.VARIANT_COUNT) {
+            case NAME -> ascending ? byName : byName.reversed();
+            case VARIANT_COUNT -> {
+                Comparator<GeneGroup> byCount =
+                    Comparator.comparingInt((GeneGroup g) -> g.variants.size());
+                yield (ascending ? byCount : byCount.reversed()).thenComparing(byName);
+            }
+            case POSITION -> {
+                Comparator<GeneGroup> byPos = Comparator
+                    .comparingInt((GeneGroup g) -> chromosomeSortKey(g.sortChromosome()))
+                    .thenComparing((GeneGroup g) -> g.sortChromosome(), String.CASE_INSENSITIVE_ORDER)
+                    .thenComparingLong(GeneGroup::sortStart);
+                yield ascending ? byPos : byPos.reversed();
+            }
         };
-        return ascending ? comparator : comparator.reversed();
     }
 
     /** Numeric-ish chromosome order: 1..22, X, Y, MT, then others alphabetically via secondary key. */
@@ -527,7 +536,7 @@ public abstract class AbstractNestedVariantTable {
             TableView<?> table,
             VariantDetailLayout layout,
             boolean groupByChromosome,
-            Consumer<TableRow> onGeneDoubleClick,
+            BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
             Consumer<TableRow> onPositionClick,
             Supplier<VariantFilter> filterSupplier) {
         if (table == null || !(table.getParent() instanceof StackPane parent)) {
@@ -551,7 +560,7 @@ public abstract class AbstractNestedVariantTable {
         private final TableView<VariantNode> codingTable;
         private final TableView<VariantNode> intronicTable;
         private final TableView<VariantNode> intergenicTable;
-        private final Consumer<TableRow> onGeneDoubleClick;
+        private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
         private final Consumer<TableRow> onPositionClick;
         private final Supplier<VariantFilter> filterSupplier;
 
@@ -563,7 +572,7 @@ public abstract class AbstractNestedVariantTable {
                 TableView<VariantNode> codingTable,
                 TableView<VariantNode> intronicTable,
                 TableView<VariantNode> intergenicTable,
-                Consumer<TableRow> onGeneDoubleClick,
+                BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
                 Consumer<TableRow> onPositionClick,
                 Supplier<VariantFilter> filterSupplier) {
             this.codingTable = codingTable;
@@ -658,7 +667,7 @@ public abstract class AbstractNestedVariantTable {
 
         private final VariantDetailLayout layout;
         private final boolean groupByChromosome;
-        private final Consumer<TableRow> onGeneDoubleClick;
+        private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
         private final Consumer<TableRow> onPositionClick;
         private final Supplier<VariantFilter> filterSupplier;
 
@@ -676,8 +685,8 @@ public abstract class AbstractNestedVariantTable {
         private final Label sortPosArrow;
         private final Label sortVarsArrow;
 
-        private GeneSort sortMode = GeneSort.POSITION;
-        private boolean sortAscending = true;
+        private GeneSort sortMode = GeneSort.VARIANT_COUNT;
+        private boolean sortAscending = false;
         private GeneGroup pinnedGroup;
         private VirtualFlow<?> pinnedFlow;
         private boolean pinScrollBarsWired;
@@ -689,7 +698,7 @@ public abstract class AbstractNestedVariantTable {
         private NestedPanel(
                 VariantDetailLayout layout,
                 boolean groupByChromosome,
-                Consumer<TableRow> onGeneDoubleClick,
+                BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
                 Consumer<TableRow> onPositionClick,
                 Supplier<VariantFilter> filterSupplier) {
             this.layout = layout != null ? layout : VariantDetailLayout.POINT_SIMPLE;
@@ -719,9 +728,10 @@ public abstract class AbstractNestedVariantTable {
             pinBar.getStyleClass().add("vn-pin-bar");
             pinBar.setVisible(false);
             pinBar.setManaged(false);
-            pinBar.setMaxWidth(Double.MAX_VALUE);
+            pinBar.setMouseTransparent(false);
             pinBar.setMaxHeight(Region.USE_PREF_SIZE);
-            StackPane.setAlignment(pinBar, Pos.TOP_CENTER);
+            pinBar.setViewOrder(-1);
+            StackPane.setAlignment(pinBar, Pos.TOP_LEFT);
             // Keep wheel scrolling working while the pointer is over the pinned gene row.
             pinBar.addEventFilter(ScrollEvent.SCROLL, e -> {
                 list.fireEvent(e.copyFor(e.getSource(), list));
@@ -739,6 +749,7 @@ public abstract class AbstractNestedVariantTable {
             wirePinScrollTracking();
 
             listStack.getChildren().addAll(list, pinBar);
+            listStack.widthProperty().addListener((obs, o, n) -> layoutPinBar());
             VBox.setVgrow(listStack, Priority.ALWAYS);
 
             root.getStyleClass().add("variant-nested-container");
@@ -750,6 +761,32 @@ public abstract class AbstractNestedVariantTable {
             applySort();
             list.refresh();
             Platform.runLater(this::updatePinnedHeader);
+        }
+
+        private static List<SampleTrack> tracksOf(GeneGroup group) {
+            Set<SampleTrack> tracks = new LinkedHashSet<>();
+            if (group == null || group.variants == null) {
+                return List.of();
+            }
+            List<SampleTrack> allTracks =
+                ServiceRegistry.getInstance().getSampleRegistry().getSampleTracks();
+            for (VariantEntry entry : group.variants) {
+                if (entry == null || entry.calls == null) {
+                    continue;
+                }
+                for (VariantNode.SampleCall call : entry.calls) {
+                    if (call == null) {
+                        continue;
+                    }
+                    int idx = call.getTrackIndex();
+                    if (idx >= 0 && idx < allTracks.size()) {
+                        tracks.add(allTracks.get(idx));
+                    } else if (call.getTrack() != null) {
+                        tracks.add(call.getTrack());
+                    }
+                }
+            }
+            return new ArrayList<>(tracks);
         }
 
         private void setSort(GeneSort mode) {
@@ -1047,11 +1084,11 @@ public abstract class AbstractNestedVariantTable {
         private void wirePinScrollTracking() {
             list.addEventFilter(ScrollEvent.ANY, e -> {
                 requestVirtualWindowRefresh();
-                Platform.runLater(this::updatePinnedHeader);
+                updatePinnedHeader();
             });
             list.heightProperty().addListener((obs, o, n) -> {
                 requestVirtualWindowRefresh();
-                Platform.runLater(this::updatePinnedHeader);
+                updatePinnedHeader();
             });
             list.skinProperty().addListener((obs, o, n) -> Platform.runLater(this::attachVirtualFlowPinListeners));
             Platform.runLater(this::attachVirtualFlowPinListeners);
@@ -1105,19 +1142,41 @@ public abstract class AbstractNestedVariantTable {
                 clearPinnedHeader();
                 return;
             }
-            if (candidate == pinnedGroup && pinBar.isVisible()) {
-                return;
+            if (candidate != pinnedGroup || !pinBar.isVisible()) {
+                showPinnedHeader(candidate);
+            } else {
+                layoutPinBar();
             }
-            showPinnedHeader(candidate);
         }
 
+        /**
+         * Pin while the expanded gene's header has scrolled under the top and its
+         * body still covers the viewport. Stay on the same gene until it is fully
+         * visible again or we have scrolled past it — avoids flicker from layout.
+         */
         private GeneGroup findPinnedGene() {
             Bounds viewport = listViewportSceneBounds();
             if (viewport == null) {
                 return null;
             }
+            double top = viewport.getMinY();
+
+            if (pinnedGroup != null && pinnedGroup.expanded) {
+                ListCell<?> pinnedCell = cellForGroup(pinnedGroup);
+                if (pinnedCell != null && !pinnedCell.isEmpty()) {
+                    Bounds cellBounds = pinnedCell.localToScene(pinnedCell.getBoundsInLocal());
+                    Bounds geneBounds = geneRowSceneBounds(pinnedCell);
+                    double headerH = geneBounds != null ? geneBounds.getHeight() : 28;
+                    if (cellBounds.getMaxY() > top + Math.max(12, headerH * 0.5)) {
+                        if (geneBounds == null || geneBounds.getMinY() < top - 1) {
+                            return pinnedGroup;
+                        }
+                    }
+                }
+            }
+
             GeneGroup best = null;
-            double bestMinY = Double.NEGATIVE_INFINITY;
+            double bestGeneMaxY = Double.NEGATIVE_INFINITY;
             for (Node node : list.lookupAll(".list-cell")) {
                 if (!(node instanceof ListCell<?> cell) || cell.isEmpty()) {
                     continue;
@@ -1127,16 +1186,35 @@ public abstract class AbstractNestedVariantTable {
                     continue;
                 }
                 Bounds cellBounds = cell.localToScene(cell.getBoundsInLocal());
-                // Gene cell has scrolled under the top, but its body is still in view.
-                if (cellBounds.getMinY() < viewport.getMinY() - 1
-                        && cellBounds.getMaxY() > viewport.getMinY() + 24) {
-                    if (cellBounds.getMinY() > bestMinY) {
-                        bestMinY = cellBounds.getMinY();
+                Bounds geneBounds = geneRowSceneBounds(cell);
+                if (geneBounds == null) {
+                    continue;
+                }
+                if (geneBounds.getMinY() < top - 1 && cellBounds.getMaxY() > top + 16) {
+                    if (geneBounds.getMaxY() > bestGeneMaxY) {
+                        bestGeneMaxY = geneBounds.getMaxY();
                         best = group;
                     }
                 }
             }
             return best;
+        }
+
+        private ListCell<?> cellForGroup(GeneGroup group) {
+            for (Node node : list.lookupAll(".list-cell")) {
+                if (node instanceof ListCell<?> cell && cell.getItem() == group) {
+                    return cell;
+                }
+            }
+            return null;
+        }
+
+        private static Bounds geneRowSceneBounds(ListCell<?> cell) {
+            Node geneRow = findFirstWithStyleClass(cell, "vn-node-gene");
+            if (geneRow == null || geneRow.getScene() == null) {
+                return null;
+            }
+            return geneRow.localToScene(geneRow.getBoundsInLocal());
         }
 
         private Bounds listViewportSceneBounds() {
@@ -1161,10 +1239,28 @@ public abstract class AbstractNestedVariantTable {
             if (!geneRow.getStyleClass().contains("vn-node-pinned")) {
                 geneRow.getStyleClass().add("vn-node-pinned");
             }
-            // Only pin the gene row; variant column header scrolls with the variants.
+            geneRow.setMaxWidth(Double.MAX_VALUE);
+            // Overlay only — never managed, so the list viewport does not reflow.
             pinBar.getChildren().setAll(geneRow);
+            pinBar.setManaged(false);
             pinBar.setVisible(true);
-            pinBar.setManaged(true);
+            layoutPinBar();
+        }
+
+        private void layoutPinBar() {
+            if (!pinBar.isVisible()) {
+                return;
+            }
+            double w = listStack.getWidth();
+            if (w <= 0) {
+                w = list.getWidth();
+            }
+            pinBar.setMinWidth(w);
+            pinBar.setPrefWidth(w);
+            pinBar.setMaxWidth(w);
+            pinBar.autosize();
+            double h = Math.max(pinBar.prefHeight(w), pinBar.getHeight());
+            pinBar.resizeRelocate(0, 0, w, h);
         }
 
         private void clearPinnedHeader() {
@@ -1557,7 +1653,7 @@ public abstract class AbstractNestedVariantTable {
                         && onGeneDoubleClick != null
                         && !group.variants.isEmpty()) {
                     ensureDescription(group);
-                    onGeneDoubleClick.accept(group.variants.get(0).row);
+                    onGeneDoubleClick.accept(group.name, tracksOf(group));
                     return true;
                 }
                 return false;
