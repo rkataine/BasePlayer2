@@ -178,8 +178,13 @@ public class VariantBusyOverlay {
             loadingModalDelayTimer.stop();
             loadingModalDelayTimer = null;
         }
-        if (!allChromosomeAnnotationRunning) {
+        // Never tear down while ThreadRunner still has work — keeps the loading
+        // modal / filter lock coherent across multi-phase comparison rebuilds.
+        if (!allChromosomeAnnotationRunning
+                && ThreadRunner.get().getActiveTasks().isEmpty()) {
             hide();
+        } else {
+            syncBusyOverlay();
         }
     }
 

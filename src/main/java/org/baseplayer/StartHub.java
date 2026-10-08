@@ -53,6 +53,7 @@ public final class StartHub {
   private static final double PANEL_HEIGHT = 560;
 
   private static StackPane activeOverlay;
+  private static VBox activeRecentList;
 
   private StartHub() {}
 
@@ -62,7 +63,15 @@ public final class StartHub {
 
   public static void show(Stage stage) {
     if (stage == null || stage.getScene() == null) return;
-    if (isShowing()) return;
+    if (isShowing()) {
+      if (activeRecentList != null) {
+        populateRecentList(activeRecentList);
+      }
+      if (activeOverlay != null) {
+        activeOverlay.toFront();
+      }
+      return;
+    }
 
     Parent sceneRoot = stage.getScene().getRoot();
     if (!(sceneRoot instanceof AnchorPane rootPane)) {
@@ -108,20 +117,28 @@ public final class StartHub {
     Platform.runLater(panel::requestFocus);
   }
 
+  /**
+   * Remove the hub immediately so it can never stay up and block the UI.
+   * Safe to call when not showing.
+   */
   public static void dismiss() {
-    if (activeOverlay == null) return;
     StackPane overlay = activeOverlay;
     activeOverlay = null;
-
-    FadeTransition fade = new FadeTransition(Duration.millis(180), overlay);
-    fade.setToValue(0);
-    fade.setOnFinished(e -> {
-      Parent parent = overlay.getParent();
-      if (parent instanceof AnchorPane rootPane) {
-        rootPane.getChildren().remove(overlay);
+    activeRecentList = null;
+    if (overlay == null) {
+      return;
+    }
+    overlay.setMouseTransparent(true);
+    overlay.setVisible(false);
+    Parent parent = overlay.getParent();
+    if (parent instanceof AnchorPane rootPane) {
+      rootPane.getChildren().remove(overlay);
+    } else if (parent != null && parent.getChildrenUnmodifiable().contains(overlay)) {
+      // Fallback if scene root type changes.
+      if (parent instanceof javafx.scene.layout.Pane pane) {
+        pane.getChildren().remove(overlay);
       }
-    });
-    fade.play();
+    }
   }
 
   private static BorderPane buildPanel(StackPane backdrop) {
@@ -143,7 +160,21 @@ public final class StartHub {
     HBox body = new HBox(0, left, right);
     body.setFillHeight(true);
     HBox.setHgrow(right, Priority.ALWAYS);
-    panel.setCenter(body);
+
+    // Top bar with always-available close control.
+    HBox topBar = new HBox();
+    topBar.setAlignment(Pos.CENTER_RIGHT);
+    topBar.setPadding(new Insets(8, 10, 0, 10));
+    topBar.getStyleClass().add("start-hub-top-bar");
+    Button close = new Button("✕");
+    close.getStyleClass().add("start-hub-close");
+    close.setFocusTraversable(false);
+    close.setOnAction(e -> dismiss());
+    topBar.getChildren().add(close);
+
+    VBox chrome = new VBox(body);
+    panel.setTop(topBar);
+    panel.setCenter(chrome);
 
     panel.setOnKeyPressed(e -> {
       if (e.getCode() == KeyCode.ESCAPE) {
@@ -152,8 +183,10 @@ public final class StartHub {
       }
     });
 
+    // Click outside the panel dismisses (Escape / ✕ also work).
     backdrop.setOnMouseClicked(e -> {
       if (e.getTarget() == backdrop) {
+        dismiss();
         e.consume();
       }
     });
@@ -272,6 +305,7 @@ public final class StartHub {
 
     VBox recentList = new VBox(4);
     recentList.getStyleClass().add("start-hub-recent-list");
+    activeRecentList = recentList;
     populateRecentList(recentList);
 
     ScrollPane scroll = new ScrollPane(recentList);
@@ -286,7 +320,7 @@ public final class StartHub {
     actions.setAlignment(Pos.CENTER_RIGHT);
     actions.getStyleClass().add("start-hub-actions");
 
-    Button openOther = new Button("Open Project…");
+    Button openOther = new Button("Open other…");
     openOther.getStyleClass().addAll("start-hub-button", "start-hub-button-secondary");
     openOther.setOnAction(e -> {
       if (FileCommands.openSessionFromChooser()) {
@@ -360,7 +394,10 @@ public final class StartHub {
         populateRecentList(recentList);
         return;
       }
-      if (FileCommands.openSession(path)) {
+      // Dismiss before / as load starts so a failed paint or slow load never
+      // leaves the hub blocking the main window.
+      boolean started = FileCommands.openSession(path);
+      if (started) {
         dismiss();
       }
     };

@@ -290,13 +290,12 @@ public class MainController {
   }
 
   private static void ensureGeneFocusBanner(StackPane overlayPane) {
-    if (overlayPane == null) {
-      return;
-    }
     if (geneFocusBanner == null) {
       geneFocusBanner = new GeneFocusBanner();
     }
-    geneFocusBanner.attachTo(overlayPane);
+    // Prefer main-frame glass host so the card can move over the whole window.
+    StackPane host = ZoomController.getGlassHost();
+    geneFocusBanner.attachTo(host != null ? host : overlayPane);
   }
 
   public static boolean drawCrossStackMateArc(Object owner,

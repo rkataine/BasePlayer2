@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.io.VariantTableExcelWriter.SheetSource;
+import org.baseplayer.samples.SampleGroup;
+import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantNode;
@@ -29,34 +32,82 @@ public final class VariantExcelExportBuilder {
             List<TableRow> rows,
             VariantFilter filter,
             boolean groupByChromosome) {
+        return pointSheet(sheetName, rows, filter, groupByChromosome, null);
+    }
+
+    /**
+     * @param sampleFilter when non-null, only sample calls matching the predicate are exported
+     *        (used for per–sample-group sheets)
+     */
+    public static SheetSource pointSheet(
+            String sheetName,
+            List<TableRow> rows,
+            VariantFilter filter,
+            boolean groupByChromosome,
+            Predicate<VariantNode.SampleCall> sampleFilter) {
         if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+        int estimated = estimateSampleRows(rows, filter, sampleFilter);
+        if (estimated <= 0 && sampleFilter != null) {
             return null;
         }
         return new StreamingSheetSource(
             sheetName,
             pointHeaders(),
-            estimateSampleRows(rows, filter),
-            consumer -> streamPointRows(rows, filter, groupByChromosome, consumer));
+            estimated,
+            consumer -> streamPointRows(rows, filter, groupByChromosome, sampleFilter, consumer));
     }
 
     public static SheetSource structuralSheet(
             String sheetName,
             List<TableRow> rows,
             VariantFilter filter) {
+        return structuralSheet(sheetName, rows, filter, null);
+    }
+
+    /**
+     * @param sampleFilter when non-null, only sample calls matching the predicate are exported
+     */
+    public static SheetSource structuralSheet(
+            String sheetName,
+            List<TableRow> rows,
+            VariantFilter filter,
+            Predicate<VariantNode.SampleCall> sampleFilter) {
         if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+        int estimated = estimateSampleRows(rows, filter, sampleFilter);
+        if (estimated <= 0 && sampleFilter != null) {
             return null;
         }
         return new StreamingSheetSource(
             sheetName,
             structuralHeaders(),
-            estimateSampleRows(rows, filter),
-            consumer -> streamStructuralRows(rows, filter, consumer));
+            estimated,
+            consumer -> streamStructuralRows(rows, filter, sampleFilter, consumer));
+    }
+
+    /** Predicate: call's track belongs to {@code group}. */
+    public static Predicate<VariantNode.SampleCall> sampleInGroup(SampleGroup group) {
+        if (group == null) {
+            return call -> false;
+        }
+        int groupId = group.getId();
+        return call -> {
+            if (call == null) {
+                return false;
+            }
+            SampleTrack track = call.getTrack();
+            return track != null && track.isInGroup(groupId);
+        };
     }
 
     private static void streamPointRows(
             List<TableRow> rows,
             VariantFilter filter,
             boolean groupByChromosome,
+            Predicate<VariantNode.SampleCall> sampleFilter,
             Consumer<List<String>> consumer) {
         List<GeneGroup> groups = AbstractNestedVariantTable.buildGeneGroups(
             rows, groupByChromosome, filter, false);
@@ -71,6 +122,9 @@ public final class VariantExcelExportBuilder {
                     continue;
                 }
                 for (VariantNode.SampleCall call : entry.calls) {
+                    if (sampleFilter != null && !sampleFilter.test(call)) {
+                        continue;
+                    }
                     fillPointRow(reusable, group, entry.row, call, filter, description);
                     // Writer consumes synchronously before the next fill clears the buffer.
                     consumer.accept(reusable);
@@ -82,6 +136,7 @@ public final class VariantExcelExportBuilder {
     private static void streamStructuralRows(
             List<TableRow> rows,
             VariantFilter filter,
+            Predicate<VariantNode.SampleCall> sampleFilter,
             Consumer<List<String>> consumer) {
         List<GeneGroup> groups = AbstractNestedVariantTable.buildGeneGroups(
             rows, false, filter, false);
@@ -96,6 +151,9 @@ public final class VariantExcelExportBuilder {
                     continue;
                 }
                 for (VariantNode.SampleCall call : entry.calls) {
+                    if (sampleFilter != null && !sampleFilter.test(call)) {
+                        continue;
+                    }
                     fillStructuralRow(reusable, group, entry.row, call, filter, description);
                     // Writer consumes synchronously before the next fill clears the buffer.
                     consumer.accept(reusable);
@@ -108,7 +166,10 @@ public final class VariantExcelExportBuilder {
      * Cheap estimate: count display calls without allocating row strings.
      * Used only for the progress bar denominator.
      */
-    private static int estimateSampleRows(List<TableRow> rows, VariantFilter filter) {
+    private static int estimateSampleRows(
+            List<TableRow> rows,
+            VariantFilter filter,
+            Predicate<VariantNode.SampleCall> sampleFilter) {
         if (rows == null || rows.isEmpty()) {
             return 0;
         }
@@ -122,6 +183,9 @@ public final class VariantExcelExportBuilder {
                     continue;
                 }
                 if (filter != null && !filter.passesSampleDisplay(row.node(), call)) {
+                    continue;
+                }
+                if (sampleFilter != null && !sampleFilter.test(call)) {
                     continue;
                 }
                 count++;

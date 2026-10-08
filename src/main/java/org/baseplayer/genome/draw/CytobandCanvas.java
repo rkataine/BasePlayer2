@@ -12,6 +12,7 @@ import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.BaseUtils;
 
+import javafx.application.Platform;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Tooltip;
@@ -66,9 +67,15 @@ public class CytobandCanvas extends Canvas {
     
     setupInteraction();
     
-    // Redraw when update flag changes
-    GenomicCanvas.update.addListener((obs, oldVal, newVal) -> draw());
-    
+    // Redraw when update flag changes (must stay on FX thread — Canvas is not thread-safe).
+    GenomicCanvas.update.addListener((obs, oldVal, newVal) -> {
+      if (Platform.isFxApplicationThread()) {
+        draw();
+      } else {
+        Platform.runLater(this::draw);
+      }
+    });
+
     // Redraw on width change
     widthProperty().addListener((obs, oldVal, newVal) -> draw());
   }
@@ -202,6 +209,12 @@ public class CytobandCanvas extends Canvas {
   }
   
   public void draw() {
+    // Canvas GraphicsContext is not thread-safe; off-FX paint corrupts the command
+    // buffer (ClassCastException String/Font → Paint in NGCanvas).
+    if (!Platform.isFxApplicationThread()) {
+      Platform.runLater(this::draw);
+      return;
+    }
     gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, getWidth(), getHeight());
     

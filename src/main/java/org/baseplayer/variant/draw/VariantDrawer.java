@@ -115,6 +115,9 @@ public class VariantDrawer {
             lastDrawnPixelX[i] = -1;
         }
 
+        VcfManager vcfManager = VcfManager.getInstance();
+        java.util.Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
+
         // Spanning SVs that start upstream of the view (no chromosome-start scan).
         for (VariantNode node : variantList.getVisibleSvByPosition()) {
             if (node.position >= screenStart) {
@@ -126,13 +129,29 @@ public class VariantDrawer {
             if (!isSvWithSpan(node)) {
                 continue;
             }
-            if (!VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
+            if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
                 continue;
             }
             drawNodeForVisibleSamples(
                 gc, variantList, node, filter, true, drawClickableRects, chromPosToScreenPos,
                 canvasWidth, chromPosToScreenPos.apply((double) node.position),
                 visibleTrackIndices, yPositions, allTracks, sampleHeight, lastDrawnPixelX);
+        }
+
+        // Synthetic LOH AA/BB regions: arc from first→last marker (not a solid bar).
+        for (VariantNode node : variantList.getLohRegions()) {
+            if (node == null || !VariantTypeVisuals.isLohRegion(node.type)) {
+                continue;
+            }
+            if (node.svEnd < screenStart || node.position > screenEnd) {
+                continue;
+            }
+            if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
+                continue;
+            }
+            drawLohRegionForVisibleSamples(
+                gc, variantList, node, filter, drawClickableRects, chromPosToScreenPos,
+                canvasWidth, visibleTrackIndices, yPositions, allTracks, sampleHeight);
         }
 
         // Point variants and in-window SV starts via nextVisible skip chain.
@@ -144,7 +163,7 @@ public class VariantDrawer {
                 || (isSvSpan && node.svEnd >= screenStart && node.position <= screenEnd);
 
             if (isVisible) {
-                if (VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
+                if (vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
                     drawNodeForVisibleSamples(
                         gc, variantList, node, filter, isSvSpan, drawClickableRects,
                         chromPosToScreenPos, canvasWidth, x,
@@ -227,6 +246,105 @@ public class VariantDrawer {
         }
     }
 
+    /**
+     * Draw LOH region as an arc spanning first→last contributing marker on each
+     * homozygous sample track. Contributing SNP markers still paint via the visible chain.
+     */
+    private void drawLohRegionForVisibleSamples(
+            GraphicsContext gc,
+            VariantList variantList,
+            VariantNode node,
+            VariantFilter filter,
+            boolean recordHit,
+            Function<Double, Double> chromPosToScreenPos,
+            double canvasWidth,
+            int[] visibleTrackIndices,
+            double[] yPositions,
+            List<SampleTrack> allTracks,
+            double sampleHeight) {
+        int chainGen = variantList.getVisibleChainGeneration();
+        boolean useCache = node.hasDisplayCache(chainGen);
+        double startX = chromPosToScreenPos.apply((double) node.position);
+        double endPos = node.svEnd >= node.position ? node.svEnd : node.position;
+        double endX = chromPosToScreenPos.apply(endPos);
+
+        for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
+            int trackIndex = visibleTrackIndices[slot];
+            if (trackIndex < 0 || trackIndex >= allTracks.size()) {
+                continue;
+            }
+            SampleTrack track = allTracks.get(trackIndex);
+            if (track == null) {
+                continue;
+            }
+            VariantNode.SampleCall call;
+            if (useCache) {
+                call = node.getDisplayCall(track, chainGen);
+            } else {
+                call = variantList.getDisplayCall(node, track, filter);
+            }
+            if (call == null || !call.isUiVisible()) {
+                continue;
+            }
+            drawLohArc(gc, node, call, startX, endX, canvasWidth, yPositions[slot], sampleHeight,
+                recordHit);
+        }
+    }
+
+    /** Thin arc between first and last LOH marker, with endpoint ticks. */
+    private void drawLohArc(
+            GraphicsContext gc,
+            VariantNode variant,
+            VariantNode.SampleCall call,
+            double startX,
+            double endX,
+            double canvasWidth,
+            double y,
+            double sampleHeight,
+            boolean recordHit) {
+        Color baseColor = colorForCall(variant, call);
+        double opacity = callOpacity(call, 0.85, false);
+
+        boolean startInView = startX >= 0 && startX <= canvasWidth;
+        boolean endInView = endX >= 0 && endX <= canvasWidth;
+        double x1 = Math.max(0, Math.min(startX, endX));
+        double x2 = Math.min(canvasWidth, Math.max(startX, endX));
+        if (x2 - x1 < 1) {
+            x2 = x1 + 1;
+        }
+
+        double yBase = y + Math.max(1.0, sampleHeight * 0.72);
+        double span = x2 - x1;
+        double archHeight = Math.min(Math.max(3.0, sampleHeight * 0.7), Math.max(5.0, span * 0.15));
+        double ctrlY = Math.max(y + 1.0, yBase - archHeight);
+        double midX = (x1 + x2) * 0.5;
+
+        if (opacity != 1.0) gc.setGlobalAlpha(opacity);
+        gc.setStroke(baseColor);
+        gc.setLineWidth(sampleHeight >= 8 ? 2.0 : 1.4);
+        gc.setLineDashes(0);
+        gc.beginPath();
+        gc.moveTo(x1, yBase);
+        gc.quadraticCurveTo(midX, ctrlY, x2, yBase);
+        gc.stroke();
+
+        // Endpoint ticks mark the first and last contributing markers when in view.
+        gc.setLineWidth(1.8);
+        if (startInView) {
+            gc.strokeLine(startX, y + 1, startX, y + Math.max(2.0, sampleHeight - 1));
+        }
+        if (endInView) {
+            gc.strokeLine(endX, y + 1, endX, y + Math.max(2.0, sampleHeight - 1));
+        }
+        if (opacity != 1.0) gc.setGlobalAlpha(1.0);
+
+        if (recordHit) {
+            double hitTop = Math.min(ctrlY, y);
+            double hitBottom = y + sampleHeight;
+            hitRegions.add(new VariantHit(variant, call, x1, hitTop, x2, hitBottom));
+        }
+    }
+
     private void drawVariantLine(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,
                                  double x, double y, double sampleHeight) {
         Color baseColor = colorForCall(variant, call);
@@ -279,11 +397,15 @@ public class VariantDrawer {
     }
 
     private boolean isSvWithSpan(VariantNode variant) {
-        return variant.svEnd > variant.position &&
-               (variant.type == VcfVariantType.SV_DELETION ||
-                variant.type == VcfVariantType.SV_DUPLICATION ||
-                variant.type == VcfVariantType.SV_INVERSION ||
-                variant.type == VcfVariantType.SV_INSERTION);
+        if (variant == null || VariantTypeVisuals.isLohRegion(variant.type)) {
+            // LOH regions use {@link #drawLohArc}, not solid SV bars.
+            return false;
+        }
+        return variant.svEnd > variant.position
+            && (variant.type == VcfVariantType.SV_DELETION
+                || variant.type == VcfVariantType.SV_DUPLICATION
+                || variant.type == VcfVariantType.SV_INVERSION
+                || variant.type == VcfVariantType.SV_INSERTION);
     }
 
     private void drawSvSpan(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,
@@ -416,6 +538,9 @@ public class VariantDrawer {
     }
 
     private Color colorForCall(VariantNode variant, VariantNode.SampleCall call) {
+        if (variant != null && VariantTypeVisuals.isLohRegion(variant.type)) {
+            return VariantTypeVisuals.color(variant.type);
+        }
         if (variant != null && variant.isHomozygousRef(call)) {
             return VariantTypeVisuals.lohAaColor();
         }

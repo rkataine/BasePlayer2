@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
@@ -22,6 +23,8 @@ public class VariantNode {
     public final VcfVariantType type;
 
     private List<SampleCall> samples;     // null until first sample added
+    /** Lazy trackIndex → call; null when dirty. Avoids O(S) scans in LOH hot paths. */
+    private SampleCall[] byTrackIndex;
 
     /**
      * Display-eligible calls for the current visible-chain generation
@@ -195,8 +198,11 @@ public class VariantNode {
         return mate != null ? mate.pos() : -1;
     }
 
-    /** Mark a sample as present using sample-track identity. */
-    public void addSample(SampleCall call) {
+    /**
+     * Mark a sample as present using sample-track identity.
+     * Synchronized: LOH AA synthesis and filter rebuilds can run on different threads.
+     */
+    public synchronized void addSample(SampleCall call) {
         if (call == null || call.getTrack() == null) {
             return;
         }
@@ -206,6 +212,7 @@ public class VariantNode {
             for (int i = 0; i < samples.size(); i++) {
                 if (samples.get(i).getTrack() == track) {
                     samples.set(i, call);
+                    byTrackIndex = null;
                     return;
                 }
             }
@@ -213,6 +220,7 @@ public class VariantNode {
             samples = new ArrayList<>();
         }
         samples.add(call);
+        byTrackIndex = null;
     }
 
     public boolean hasSample(int trackIndex) {
@@ -220,21 +228,70 @@ public class VariantNode {
     }
 
     /** Returns the SampleCall for the live track index, or null. */
-    public SampleCall getSampleCall(int trackIndex) {
+    public synchronized SampleCall getSampleCall(int trackIndex) {
         if (samples == null || trackIndex < 0) {
             return null;
         }
-        for (SampleCall call : samples) {
-            if (call.getTrackIndex() == trackIndex) {
-                return call;
-            }
+        ensureTrackIndex();
+        if (trackIndex >= byTrackIndex.length) {
+            return null;
         }
-        return null;
+        return byTrackIndex[trackIndex];
     }
 
-    /** Returns all sample calls for table/annotation iteration. */
-    public List<SampleCall> getSamples() {
-        return samples == null ? Collections.emptyList() : Collections.unmodifiableList(samples);
+    /**
+     * Snapshot of sample calls. Safe to iterate while another thread synthesizes
+     * LOH AA calls or merges alleles into this node.
+     */
+    public synchronized List<SampleCall> getSamples() {
+        if (samples == null || samples.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(samples);
+    }
+
+    /**
+     * Iterate sample calls without allocating a copy. Prefer this on hot LOH/filter paths.
+     * {@code consumer} must not call back into mutating methods on this node.
+     */
+    public synchronized void forEachSample(Consumer<SampleCall> consumer) {
+        if (samples == null || consumer == null) {
+            return;
+        }
+        for (SampleCall call : samples) {
+            consumer.accept(call);
+        }
+    }
+
+    private void ensureTrackIndex() {
+        if (byTrackIndex != null) {
+            return;
+        }
+        if (samples == null || samples.isEmpty()) {
+            byTrackIndex = new SampleCall[0];
+            return;
+        }
+        int max = -1;
+        for (SampleCall call : samples) {
+            if (call == null) {
+                continue;
+            }
+            int idx = call.getTrackIndex();
+            if (idx > max) {
+                max = idx;
+            }
+        }
+        SampleCall[] index = new SampleCall[Math.max(0, max + 1)];
+        for (SampleCall call : samples) {
+            if (call == null) {
+                continue;
+            }
+            int idx = call.getTrackIndex();
+            if (idx >= 0) {
+                index[idx] = call;
+            }
+        }
+        byTrackIndex = index;
     }
 
     public void clearDisplayCache() {
@@ -267,12 +324,12 @@ public class VariantNode {
         return Collections.unmodifiableMap(displayByTrack);
     }
 
-    public int getSampleCount() {
+    public synchronized int getSampleCount() {
         return samples == null ? 0 : samples.size();
     }
 
     /** True if any sample call on this node is currently UI-visible. */
-    public boolean hasUiVisibleSample() {
+    public synchronized boolean hasUiVisibleSample() {
         if (samples == null || samples.isEmpty()) {
             return false;
         }
@@ -288,12 +345,13 @@ public class VariantNode {
      * Remove one sample call from this variant node.
      * @return true if the node has no more samples (should be removed from list)
      */
-    public boolean removeSample(SampleCall call) {
+    public synchronized boolean removeSample(SampleCall call) {
         if (call == null) {
             return samples == null || samples.isEmpty();
         }
         if (samples != null) {
             samples.remove(call);
+            byTrackIndex = null;
             if (samples.isEmpty()) {
                 samples = null;
             }
@@ -302,7 +360,7 @@ public class VariantNode {
     }
 
     /** Remove all sample calls that belong to a track object. */
-    public boolean removeSample(SampleTrack track) {
+    public synchronized boolean removeSample(SampleTrack track) {
         if (track == null || samples == null || samples.isEmpty()) {
             return samples == null || samples.isEmpty();
         }

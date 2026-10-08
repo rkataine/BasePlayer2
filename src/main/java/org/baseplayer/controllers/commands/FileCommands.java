@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.StartHub;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.SampleDataManager;
 import org.baseplayer.io.UserPreferences;
@@ -74,11 +75,15 @@ public class FileCommands {
     }
   }
 
+  /** Open the start hub so the user can pick a recent project or browse. */
   public static void openSession() {
-    openSessionFromChooser();
+    StartHub.show(MainApp.stage);
   }
 
   /**
+   * Show a project file chooser and open the selected file.
+   * Used by the hub "Open other…" action.
+   *
    * @return true if a session was chosen and load started
    */
   public static boolean openSessionFromChooser() {
@@ -117,6 +122,8 @@ public class FileCommands {
 
     try {
       ProjectDocument doc = ProjectSerializer.read(path);
+      // Never leave the start hub up over a loading session.
+      StartHub.dismiss();
       ProjectService.loadAsync(path, doc, null);
       UserPreferences.addRecentProject(file);
       UserPreferences.setLastDirectory("JSON", file.getParentFile());

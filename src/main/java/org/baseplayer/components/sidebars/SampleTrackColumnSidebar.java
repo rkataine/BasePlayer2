@@ -275,8 +275,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
   private void clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource source) {
     sampleRegistry.clearSubsetSource(source);
-    int trackCount = sampleRegistry.getDisplayedTrackCount();
-    applyVisibleTrackRange(0, Math.max(0, trackCount - 1));
+    sampleRegistry.showDefaultHeightWindowFromStart(estimateTrackBodyViewportHeightPixels());
+    redrawAfterVisibleTrackRangeChange();
   }
 
   private boolean hasAnySuspended() {

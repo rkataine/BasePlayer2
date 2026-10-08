@@ -21,18 +21,14 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TableView;
 
 /**
- * Structural-variant results using the same nested Gene → Variant → Sample look
- * as {@link VariantTable}.
+ * LOH region results using the same nested Gene → Variant → Sample look as
+ * {@link SvVariantTable}.
  */
-public class SvVariantTable extends AbstractNestedVariantTable {
+public class LohVariantTable extends AbstractNestedVariantTable {
 
     public static final VcfVariantType[] TYPE_ORDER = {
-        VcfVariantType.SV_DELETION,
-        VcfVariantType.SV_DUPLICATION,
-        VcfVariantType.SV_INVERSION,
-        VcfVariantType.SV_TRANSLOCATION,
-        VcfVariantType.SV_BREAKEND,
-        VcfVariantType.SV_INSERTION
+        VcfVariantType.LOH_AA,
+        VcfVariantType.LOH_BB
     };
 
     private final Tab allTab;
@@ -47,7 +43,7 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
     private final Consumer<TableRow> onVariantDoubleClick;
 
-    public SvVariantTable(
+    public LohVariantTable(
             TableView<?> allTable,
             Tab allTab,
             Map<VcfVariantType, TableView<?>> typeTableMap,
@@ -105,9 +101,7 @@ public class SvVariantTable extends AbstractNestedVariantTable {
         applySearch();
     }
 
-    /**
-     * Bind rows and prebuilt gene groups (built off the FX thread).
-     */
+    /** Bind rows and prebuilt gene groups (built off the FX thread). */
     public void setItemsWithPrebuiltGroups(
             ObservableList<TableRow> all,
             Map<VcfVariantType, ObservableList<TableRow>> byType,
@@ -146,7 +140,6 @@ public class SvVariantTable extends AbstractNestedVariantTable {
         return searchQuery;
     }
 
-    /** Post-search rows currently shown in the All SV tab. */
     public ObservableList<TableRow> getDisplayedAllRows() {
         return filter(allItems);
     }
@@ -254,16 +247,8 @@ public class SvVariantTable extends AbstractNestedVariantTable {
         if (row == null || row.node() == null) {
             return false;
         }
-        if (formatSvPosition(row).toLowerCase(Locale.ROOT).contains(q)) {
-            return true;
-        }
-        if (formatSvMate(row).toLowerCase(Locale.ROOT).contains(q)) {
-            return true;
-        }
-        if (formatSvLength(row).toLowerCase(Locale.ROOT).contains(q)) {
-            return true;
-        }
-        return VariantTypeVisuals.shortLabel(row.node().type).toLowerCase(Locale.ROOT).contains(q);
+        String label = VariantTypeVisuals.shortLabel(row.node().type);
+        return label != null && label.toLowerCase(Locale.ROOT).contains(q);
     }
 
     private static void setTitle(Tab tab, String base, int count, boolean withCount) {

@@ -21,7 +21,9 @@ import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.DrawColors;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
+import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
 import javafx.scene.control.ComboBox;
@@ -47,8 +49,12 @@ public class SampleTrackListPanel extends TrackListPanel {
   private static final double GROUP_BAR_WIDTH = 4;
   private static final double GROUP_BAR_GAP = 1;
   private static final double GROUP_BAR_STRIDE = GROUP_BAR_WIDTH + GROUP_BAR_GAP;
-  /** Extra space after root bars before indented subgroup bars. */
-  private static final double SUBGROUP_INDENT_GAP = GROUP_BAR_STRIDE;
+  private static final double TAG_SPHERE_DIAMETER = 7;
+  private static final double TAG_SPHERE_GAP = 1;
+  private static final double TAG_COLUMN_WIDTH = TAG_SPHERE_DIAMETER + 3;
+  /** Tall enough for name + tag meta line; below this, tags stay as left spheres. */
+  private static final double META_TEXT_MIN_ROW =
+      SampleTrackControls.MIN_ROW_HEIGHT_FOR_SIDEBAR;
 
   private final SampleRegistry sampleRegistry;
   private final Set<Integer> selectedTrackIndices = new LinkedHashSet<>();
@@ -62,7 +68,13 @@ public class SampleTrackListPanel extends TrackListPanel {
     super(parent, sampleRegistry);
     this.sampleRegistry = sampleRegistry;
     sampleRegistry.setTrackIconActionHandler(this::handleTrackRowIconClick);
-    sampleRegistry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) -> draw());
+    sampleRegistry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) -> {
+      if (Platform.isFxApplicationThread()) {
+        draw();
+      } else {
+        Platform.runLater(this::draw);
+      }
+    });
   }
 
   @Override
@@ -195,6 +207,9 @@ public class SampleTrackListPanel extends TrackListPanel {
         .ifPresent(outcome -> {
           if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
             sampleRegistry.createGroupForTracks(tracks, add.name(), add.color());
+            if (add.tags() != null && !add.tags().isEmpty()) {
+              sampleRegistry.setTracksTags(tracks, add.tags());
+            }
           } else if (outcome instanceof SampleGroupDialog.Outcome.Remove) {
             sampleRegistry.clearTracksFromGroups(tracks);
           }
@@ -260,13 +275,18 @@ public class SampleTrackListPanel extends TrackListPanel {
       double fillY = Math.max(rowY, 0);
       double fillH = Math.min(rowY + rowHeight, panelHeightPixels) - fillY;
       boolean isHovered = backingTrackIndex == hoverIndex;
-      List<SampleRegistry.SidebarLineageAccent> lineageAccents = sampleTrack != null
-          ? sampleRegistry.getSidebarLineageAccents(sampleTrack)
+      List<javafx.scene.paint.Color> groupColors = sampleTrack != null
+          ? sampleRegistry.getSidebarColorsForTrack(sampleTrack)
+          : List.of();
+      List<org.baseplayer.samples.SampleTag> tags = sampleTrack != null
+          ? new ArrayList<>(sampleTrack.getTags())
           : List.of();
       boolean selected = selectedTrackIndices.contains(backingTrackIndex);
       boolean showWhiteLead = selected || isHovered;
+      boolean showMetaDetail = rowHeight >= META_TEXT_MIN_ROW;
       if (fillH > 0) {
-        drawMembershipBars(gc, fillY, Math.max(fillH, 1), lineageAccents, showWhiteLead);
+        drawMembershipBars(
+            gc, fillY, Math.max(fillH, 1), rowHeight, tags, groupColors, showWhiteLead);
       }
 
       // When rows are too short for a name, only keep the color accent; hover shows the label.
@@ -277,7 +297,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       double textY = rowY + NAME_FONT.getSize() + 2;
       if (textY > 0) {
         String displayName = sampleTrack != null ? sampleTrack.getDisplayName() : "";
-        double nameX = nameTextX(lineageAccents, showWhiteLead);
+        double nameX = nameTextX(tags.size(), groupColors.size(), showWhiteLead);
         gc.save();
         gc.beginPath();
         gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
@@ -290,6 +310,9 @@ public class SampleTrackListPanel extends TrackListPanel {
           gc.setFill(trackVisible ? AppTheme.chrome().text() : AppTheme.chrome().muted());
         }
         gc.fillText(displayName, nameX, textY);
+        if (showMetaDetail && sampleTrack != null) {
+          drawMetaDetail(gc, sampleTrack, nameX, textY + 14, contentRight - nameX);
+        }
         gc.restore();
       }
 
@@ -381,15 +404,15 @@ public class SampleTrackListPanel extends TrackListPanel {
   }
 
   /**
-   * Left accent bars: optional white lead, then root-group bars, then (if any) an
-   * indent gap and subgroup bars further to the right. Subgroup membership still
-   * expands to show the parent root color first.
+   * Left accents: optional white lead, stacked tag spheres, then horizontal group bars.
    */
   private void drawMembershipBars(
       javafx.scene.canvas.GraphicsContext graphics,
       double fillY,
       double fillH,
-      List<SampleRegistry.SidebarLineageAccent> lineageAccents,
+      double rowHeight,
+      List<org.baseplayer.samples.SampleTag> tags,
+      List<Color> groupColors,
       boolean whiteLead) {
     double x = 0;
     if (whiteLead) {
@@ -397,60 +420,112 @@ public class SampleTrackListPanel extends TrackListPanel {
       graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
       x += GROUP_BAR_STRIDE;
     }
-    if (lineageAccents == null || lineageAccents.isEmpty()) {
+    if (tags != null && !tags.isEmpty()) {
+      double sphere = Math.min(TAG_SPHERE_DIAMETER, Math.max(4, rowHeight - 2));
+      double stackH = tags.size() * sphere + Math.max(0, tags.size() - 1) * TAG_SPHERE_GAP;
+      double startY = fillY + Math.max(0, (fillH - stackH) * 0.5);
+      for (int i = 0; i < tags.size(); i++) {
+        org.baseplayer.samples.SampleTag tag = tags.get(i);
+        if (tag == null) {
+          continue;
+        }
+        double sy = startY + i * (sphere + TAG_SPHERE_GAP);
+        graphics.setFill(tag.color());
+        graphics.fillOval(x, sy, sphere, sphere);
+      }
+      x += TAG_COLUMN_WIDTH;
+    }
+    if (groupColors == null || groupColors.isEmpty()) {
       return;
     }
-
-    int subgroupCount = 0;
-    for (SampleRegistry.SidebarLineageAccent accent : lineageAccents) {
-      if (accent == null || accent.rootColor() == null) {
+    for (Color color : groupColors) {
+      if (color == null) {
         continue;
       }
-      graphics.setFill(accent.rootColor());
-      graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
-      x += GROUP_BAR_STRIDE;
-      if (accent.hasSubgroup()) {
-        subgroupCount++;
-      }
-    }
-
-    if (subgroupCount == 0) {
-      return;
-    }
-    x += SUBGROUP_INDENT_GAP;
-    for (SampleRegistry.SidebarLineageAccent accent : lineageAccents) {
-      if (accent == null || !accent.hasSubgroup()) {
-        continue;
-      }
-      graphics.setFill(accent.subgroupColor());
+      graphics.setFill(color);
       graphics.fillRect(x, fillY, GROUP_BAR_WIDTH, fillH);
       x += GROUP_BAR_STRIDE;
     }
   }
 
-  private static double nameTextX(
-      List<SampleRegistry.SidebarLineageAccent> lineageAccents, boolean whiteLead) {
-    int rootCount = 0;
-    int subgroupCount = 0;
-    if (lineageAccents != null) {
-      for (SampleRegistry.SidebarLineageAccent accent : lineageAccents) {
-        if (accent == null || accent.rootColor() == null) {
+  /**
+   * Expanded-row detail under the track name: Groups / Tags sections with
+   * color bar or sphere before each label.
+   */
+  private void drawMetaDetail(
+      javafx.scene.canvas.GraphicsContext graphics,
+      SampleTrack track,
+      double x,
+      double y,
+      double maxWidth) {
+    if (maxWidth < 48) {
+      return;
+    }
+    List<SampleGroup> groups = sampleRegistry.getGroupsForTrack(track);
+    List<org.baseplayer.samples.SampleTag> tags = new ArrayList<>(track.getTags());
+    if (groups.isEmpty() && tags.isEmpty()) {
+      return;
+    }
+
+    final double lineH = 12;
+    final double markerSize = 7;
+    final double markerGap = 5;
+    double cursorY = y;
+    Font headerFont = Font.font("Segoe UI", FontWeight.BOLD, 9);
+    Font itemFont = Font.font("Segoe UI", 10);
+    Color headerColor = AppTheme.chrome().muted();
+    Color itemColor = AppTheme.chrome().text();
+    double textMax = Math.max(20, maxWidth - markerSize - markerGap);
+
+    if (!groups.isEmpty()) {
+      graphics.setFont(headerFont);
+      graphics.setFill(headerColor);
+      graphics.fillText("Groups", x, cursorY, maxWidth);
+      cursorY += lineH;
+      for (SampleGroup group : groups) {
+        if (group == null) {
           continue;
         }
-        rootCount++;
-        if (accent.hasSubgroup()) {
-          subgroupCount++;
+        Color color = group.getColor() != null ? group.getColor() : Color.web("#4db8ff");
+        graphics.setFill(color);
+        graphics.fillRect(x, cursorY - markerSize + 1, 4, markerSize);
+        graphics.setFont(itemFont);
+        graphics.setFill(itemColor);
+        graphics.fillText(group.getName(), x + markerGap + 4, cursorY, textMax);
+        cursorY += lineH;
+      }
+      cursorY += 2;
+    }
+
+    if (!tags.isEmpty()) {
+      graphics.setFont(headerFont);
+      graphics.setFill(headerColor);
+      graphics.fillText("Tags", x, cursorY, maxWidth);
+      cursorY += lineH;
+      for (org.baseplayer.samples.SampleTag tag : tags) {
+        if (tag == null) {
+          continue;
         }
+        graphics.setFill(tag.color());
+        graphics.fillOval(x, cursorY - markerSize + 1, markerSize, markerSize);
+        graphics.setFont(itemFont);
+        graphics.setFill(itemColor);
+        graphics.fillText(tag.displayName(), x + markerGap + markerSize, cursorY, textMax);
+        cursorY += lineH;
       }
     }
+  }
+
+  private static double nameTextX(int tagCount, int groupCount, boolean whiteLead) {
     int lead = whiteLead ? 1 : 0;
-    if (rootCount + subgroupCount + lead <= 0) {
+    if (tagCount + groupCount + lead <= 0) {
       return NAME_PAD_X;
     }
-    double width = (lead + rootCount) * GROUP_BAR_STRIDE;
-    if (subgroupCount > 0) {
-      width += SUBGROUP_INDENT_GAP + subgroupCount * GROUP_BAR_STRIDE;
+    double width = lead * GROUP_BAR_STRIDE;
+    if (tagCount > 0) {
+      width += TAG_COLUMN_WIDTH;
     }
+    width += groupCount * GROUP_BAR_STRIDE;
     return width + NAME_PAD_X - GROUP_BAR_GAP;
   }
 
@@ -565,6 +640,58 @@ public class SampleTrackListPanel extends TrackListPanel {
 
     settingsMenu.getItems().add(new CustomMenuItem(groupBox, false));
 
+    VBox tagBox = new VBox(4);
+    tagBox.setPadding(new Insets(4, 8, 4, 8));
+    Label tagHeader = new Label("Tags");
+    tagHeader.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex()
+        + "; -fx-font-size: 11; -fx-font-weight: bold;");
+    tagBox.getChildren().add(tagHeader);
+    HBox tagChips = new HBox(4);
+    for (org.baseplayer.samples.SampleTag tag : org.baseplayer.samples.SampleTag.values()) {
+      Button chip = new Button(tag.shortLabel());
+      boolean on = track.hasTag(tag);
+      chip.setStyle(
+          "-fx-background-color: " + (on ? tag.toCssHex() : "#333") + ";"
+              + "-fx-text-fill: " + (on ? "#111" : "#ccc") + ";"
+              + "-fx-font-size: 10; -fx-font-weight: bold; -fx-padding: 2 6 2 6;"
+              + "-fx-background-radius: 10; -fx-cursor: hand;");
+      chip.setTooltip(new javafx.scene.control.Tooltip(
+          tag.displayName() + " — " + tag.description()));
+      chip.setOnAction(e -> {
+        List<SampleTrack> targets = selectedTrackIndices.contains(sampleIndex)
+                && selectedTrackIndices.size() > 1
+            ? selectedTracks()
+            : List.of(track);
+        if (targets.size() == 1) {
+          sampleRegistry.toggleTrackTag(track, tag);
+        } else if (track.hasTag(tag)) {
+          for (SampleTrack t : targets) {
+            if (t.hasTag(tag)) {
+              sampleRegistry.toggleTrackTag(t, tag);
+            }
+          }
+        } else {
+          sampleRegistry.addTagToTracks(targets, tag);
+        }
+        draw();
+        onAfterVisibleTrackRangeChanged();
+      });
+      tagChips.getChildren().add(chip);
+    }
+    tagBox.getChildren().add(tagChips);
+    if (track.hasAnyTag()) {
+      MenuItem clearTags = new MenuItem("Clear tags");
+      clearTags.setOnAction(e -> {
+        sampleRegistry.clearTagsFromTracks(List.of(track));
+        draw();
+        onAfterVisibleTrackRangeChanged();
+      });
+      settingsMenu.getItems().add(new CustomMenuItem(tagBox, false));
+      settingsMenu.getItems().add(clearTags);
+    } else {
+      settingsMenu.getItems().add(new CustomMenuItem(tagBox, false));
+    }
+
     MenuItem organize = new MenuItem("Sample Groups…");
     organize.setOnAction(event -> {
       Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
@@ -579,6 +706,9 @@ public class SampleTrackListPanel extends TrackListPanel {
           owner, 1, sampleRegistry.suggestNextGroupName(), colorPicker.getValue()).ifPresent(outcome -> {
         if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
           sampleRegistry.createGroupForTracks(List.of(track), add.name(), add.color());
+          if (add.tags() != null && !add.tags().isEmpty()) {
+            sampleRegistry.setTracksTags(List.of(track), add.tags());
+          }
           clearSelection();
           draw();
           onAfterVisibleTrackRangeChanged();

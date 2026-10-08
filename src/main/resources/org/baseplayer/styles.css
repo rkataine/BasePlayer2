@@ -284,6 +284,26 @@ VBox {
   -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.55), 28, 0.2, 0, 10);
 }
 
+.start-hub-top-bar {
+  -fx-background-color: transparent;
+}
+
+.start-hub-close {
+  -fx-background-color: transparent;
+  -fx-text-fill: #9aa3ab;
+  -fx-font-size: 14px;
+  -fx-font-weight: bold;
+  -fx-padding: 4 10 4 10;
+  -fx-background-radius: 4;
+  -fx-cursor: hand;
+  -fx-border-color: transparent;
+}
+
+.start-hub-close:hover {
+  -fx-background-color: rgba(220, 80, 80, 0.85);
+  -fx-text-fill: #ffffff;
+}
+
 .start-hub-left {
   -fx-background-color: rgba(0, 0, 0, 0.18);
   -fx-background-radius: 10 0 0 10;

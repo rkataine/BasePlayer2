@@ -106,9 +106,15 @@ public class ProjectDocument {
     public List<String> allowedFilterValues = new ArrayList<>();
   }
 
-  /** One sample-group comparison role (ids match {@link SampleGroupSpec#id}). */
+  /**
+   * Comparison role keyed by fixed {@link org.baseplayer.samples.SampleTag} name.
+   * Legacy docs may still use {@link #groupId}; loaders map those away.
+   */
   public static class GroupRoleSpec {
-    public int groupId;
+    /** Legacy: sample-group id. Prefer {@link #tag}. */
+    public int groupId = Integer.MIN_VALUE;
+    /** Fixed tag name ({@code MOTHER}, {@code CHILD}, …). */
+    public String tag;
     public String role;
   }
 
@@ -116,9 +122,13 @@ public class ProjectDocument {
     public int id;
     public String name;
     public String color;
-    /** Parental track name/key within this lineage group; null/absent if unset. */
+    /**
+     * Legacy parental track name; ignored on write. Kept for load migration only.
+     */
     public String parentalTrackName;
-    /** Parent sample-group id; omit or {@code -1} for a top-level group. */
+    /**
+     * Legacy parent sample-group id; {@code -1} = flat. Used only to merge subgroups on load.
+     */
     public int parentGroupId = -1;
   }
 
@@ -150,6 +160,8 @@ public class ProjectDocument {
     public String displayName;
     /** Membership in {@link ProjectDocument#sampleGroups} (ordered); empty / null = ungrouped. */
     public List<Integer> groupIds = new ArrayList<>();
+    /** Fixed sample tags ({@code MOTHER}, {@code FATHER}, …). */
+    public List<String> tags = new ArrayList<>();
     public List<SampleFileSpec> samples = new ArrayList<>();
   }
 

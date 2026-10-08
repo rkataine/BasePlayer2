@@ -36,8 +36,8 @@ public final class VariantTableExcelWriter {
     /** Rows kept in memory before flush to disk. */
     private static final int ROW_WINDOW = 200;
 
-    /** Progress / UI update cadence. */
-    private static final int PROGRESS_BATCH = 256;
+    /** Progress / UI update cadence (small so ETA moves during large sheets). */
+    private static final int PROGRESS_BATCH = 64;
 
     @FunctionalInterface
     public interface ProgressListener {
@@ -170,6 +170,8 @@ public final class VariantTableExcelWriter {
                 report(progress, Math.min(done[0], fillEstimate), totalWork);
 
                 int[] rowIndex = {0};
+                // First row (or prep finishing) should move the bar immediately for ETA.
+                long[] lastReportNanos = {System.nanoTime()};
                 source.writeRows(values -> {
                     if (values == null) {
                         return;
@@ -186,7 +188,11 @@ public final class VariantTableExcelWriter {
                         cell.setCellValue(xmlSafe(values.get(c)));
                     }
                     done[0]++;
-                    if ((rowIndex[0] % PROGRESS_BATCH) == 0) {
+                    long now = System.nanoTime();
+                    if (rowIndex[0] == 1
+                            || (rowIndex[0] % PROGRESS_BATCH) == 0
+                            || (now - lastReportNanos[0]) >= 200_000_000L) {
+                        lastReportNanos[0] = now;
                         report(progress, Math.min(done[0], fillEstimate), totalWork);
                     }
                 });

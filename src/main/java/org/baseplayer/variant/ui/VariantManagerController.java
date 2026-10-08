@@ -7,12 +7,14 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VariantTableExcelWriter;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.LoadingManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.ComparisonProgress;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -24,9 +26,13 @@ import org.baseplayer.variant.ui.components.AgentPanel;
 import org.baseplayer.variant.ui.components.ControlFilesPanel;
 import org.baseplayer.variant.ui.components.IntegerRangeSlider;
 import org.baseplayer.variant.ui.components.SampleComparisonPanel;
+import org.baseplayer.variant.ui.components.LohVariantTable;
 import org.baseplayer.variant.ui.components.SvVariantTable;
 import org.baseplayer.variant.ui.components.VariantBusyOverlay;
 import org.baseplayer.variant.ui.components.VariantClassWorkspace;
+import org.baseplayer.variant.ui.components.AbstractNestedVariantTable;
+import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.GeneGroup;
+import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.TableRow;
 import org.baseplayer.variant.ui.components.VariantExcelExportBuilder;
 import org.baseplayer.variant.ui.components.VariantFiltersPanel;
 import org.baseplayer.variant.ui.components.VariantTable;
@@ -87,12 +93,16 @@ public class VariantManagerController implements Initializable {
 
     @FXML private Tab pointMutationsTab;
     @FXML private Tab structuralVariantsTab;
+    @FXML private Tab lohRegionsTab;
     @FXML private SplitPane pointMainSplitPane;
     @FXML private SplitPane svMainSplitPane;
     @FXML private VBox svFiltersHost;
     @FXML private TabPane svResultsTabPane;
+    @FXML private TabPane lohResultsTabPane;
     @FXML private Tab svAllTab, svDelTab, svDupTab, svInvTab, svTraTab, svBndTab, svInsTab;
     @FXML private TableView<?> svAllTable, svDelTable, svDupTable, svInvTable, svTraTable, svBndTable, svInsTable;
+    @FXML private Tab lohAllTab, lohAaTab, lohBbTab;
+    @FXML private TableView<?> lohAllTable, lohAaTable, lohBbTable;
 
     // Loading Modal
     @FXML private VBox loadingModal;
@@ -200,10 +210,12 @@ public class VariantManagerController implements Initializable {
     private Timeline immediateFilterApplyTimer;
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
+    private volatile ThreadRunner.RunnerTask tableRebuildTask;
     private boolean suppressFilterApplyEvents = false;
     private VariantFilter pendingReloadFilter;
     private VariantTable variantTable;
     private SvVariantTable svVariantTable;
+    private LohVariantTable lohVariantTable;
 
     // ── Initialization ────────────────────────────────────────────────────────
 
@@ -316,6 +328,7 @@ public class VariantManagerController implements Initializable {
 
         initializeVariantTable();
         initializeSvVariantTable();
+        initializeLohVariantTable();
         if (tableSearchField != null) {
             tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (variantTable != null) {
@@ -506,7 +519,7 @@ public class VariantManagerController implements Initializable {
             svWorkspace.setToolTabPane(svToolTabPane);
         }
 
-        // Outer pane should only carry mode tabs now.
+        // Outer pane should only carry mode tabs now (Point / SV).
         filterTabPane.getTabs().removeIf(t ->
             t != pointMutationsTab && t != structuralVariantsTab);
         if (pointMutationsTab != null && !filterTabPane.getTabs().contains(pointMutationsTab)) {
@@ -514,6 +527,10 @@ public class VariantManagerController implements Initializable {
         }
         if (structuralVariantsTab != null && !filterTabPane.getTabs().contains(structuralVariantsTab)) {
             filterTabPane.getTabs().add(structuralVariantsTab);
+        }
+        // LOH lives under Point results (beside Intergenic); hide until LOH mode is on.
+        if (lohRegionsTab != null && resultsTabPane != null) {
+            resultsTabPane.getTabs().remove(lohRegionsTab);
         }
     }
 
@@ -660,9 +677,76 @@ public class VariantManagerController implements Initializable {
         svVariantTable.initializeColumns();
     }
 
+    private void initializeLohVariantTable() {
+        if (lohAllTable == null) {
+            return;
+        }
+        Map<VcfVariantType, TableView<?>> typeTables = new EnumMap<>(VcfVariantType.class);
+        typeTables.put(VcfVariantType.LOH_AA, lohAaTable);
+        typeTables.put(VcfVariantType.LOH_BB, lohBbTable);
+
+        Map<VcfVariantType, Tab> typeTabs = new EnumMap<>(VcfVariantType.class);
+        typeTabs.put(VcfVariantType.LOH_AA, lohAaTab);
+        typeTabs.put(VcfVariantType.LOH_BB, lohBbTab);
+
+        lohVariantTable = new LohVariantTable(
+            lohAllTable,
+            lohAllTab,
+            typeTables,
+            typeTabs,
+            this::handleGeneRowDoubleClick,
+            this::handleLohRowDoubleClick);
+        lohVariantTable.initializeColumns();
+
+        // Reuse the point-mutation search box for LOH nested tables when that tab is selected.
+        if (tableSearchField != null) {
+            tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
+                if (lohVariantTable != null) {
+                    lohVariantTable.setSearchQuery(newVal);
+                }
+            });
+        }
+    }
+
+    /**
+     * Double-click LOH region row: zoom to the AA/BB span like a deletion.
+     */
+    public void handleLohRowDoubleClick(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+        VariantNode node = row.node();
+        String rowChromosome = row.chromosome();
+        if (rowChromosome == null || rowChromosome.isBlank()) {
+            rowChromosome = chromosome;
+        }
+        final String chrom = rowChromosome;
+        List<SampleTrack> tracks = resolveTracksFromCalls(node.getSamples());
+
+        if (VariantTypeVisuals.isLohRegion(node.type) && node.svEnd >= node.position) {
+            long end = node.svEnd > node.position ? node.svEnd : node.position + 1;
+            long[] view = paddedSvSpan(node.position, end);
+            final long navStart = view[0];
+            final long navEnd = view[1];
+            navigateAndApplySampleFilter(
+                () -> {
+                    NavigationCommands.navigateToPosition(chrom, (int) navStart, (int) navEnd);
+                    tryLoadRegionVariants(chrom, navStart, navEnd);
+                },
+                tracks,
+                "LOH:" + chrom + ":" + node.position + "-" + node.svEnd);
+            return;
+        }
+        handlePositionClick(row);
+    }
+
     /**
      * Called after FXML initialization to set up the dialog with VcfManager.
      */
+    public Stage getStage() {
+        return stage;
+    }
+
     public void setup(Stage stage, VcfManager vcfManager, Runnable onClose) {
         this.stage = stage;
         this.vcfManager = vcfManager;
@@ -999,8 +1083,12 @@ public class VariantManagerController implements Initializable {
             EnumSet<VcfVariantType> svAllowed = sv.getAllowedTypes() == null || sv.getAllowedTypes().isEmpty()
                 ? EnumSet.noneOf(VcfVariantType.class)
                 : EnumSet.copyOf(sv.getAllowedTypes());
+            EnumSet<VcfVariantType> lohTypes = EnumSet.noneOf(VcfVariantType.class);
             for (VcfVariantType type : types) {
-                if (VariantTypeVisuals.isStructural(type)) {
+                if (VariantTypeVisuals.isLohRegion(type)) {
+                    // Synthetic — not part of Point/SV load filters.
+                    lohTypes.add(type);
+                } else if (VariantTypeVisuals.isStructural(type)) {
                     svAllowed.add(type);
                 } else {
                     pointAllowed.add(type);
@@ -1012,6 +1100,11 @@ public class VariantManagerController implements Initializable {
 
             vcfManager.unionSessionAvailableFilters(types, null);
             vcfManager.ensureCanvasTypesVisible(types);
+            // LOH arcs need no VCF reload; just keep them canvas-visible.
+            if (!lohTypes.isEmpty() && lohTypes.containsAll(types)) {
+                vcfManager.refreshCanvasesForTypeVisibility();
+                return;
+            }
             vcfManager.setCurrentFilterForNextLoad(target);
 
             if (controller != null) {
@@ -1493,22 +1586,42 @@ public class VariantManagerController implements Initializable {
             : new File(chosen.getParentFile(), chosen.getName() + ".xlsx");
         UserPreferences.setLastDirectory("XLSX", target);
 
+        // Native FileChooser often leaves no focused Stage on Linux; restore focus
+        // so LoadingPopup's foreground check does not suppress the progress UI.
+        if (stage != null) {
+            stage.requestFocus();
+        } else if (MainApp.stage != null) {
+            MainApp.stage.requestFocus();
+        }
+
         final Path path = target.toPath();
         final boolean exportSv = structural;
-        ThreadRunner.get().submit(
+        // Next pulse: focus restore applied, then register the export task.
+        Platform.runLater(() -> startExcelExportTask(path, exportSv));
+    }
+
+    private void startExcelExportTask(Path path, boolean exportSv) {
+        final ThreadRunner.RunnerTask[] taskRef = new ThreadRunner.RunnerTask[1];
+        taskRef[0] = ThreadRunner.get().submit(
             "Exporting to Excel…",
             () -> {
                 try {
+                    reportExcelProgress(taskRef[0], "Preparing sheets…", 0, 100);
                     List<VariantTableExcelWriter.SheetSource> sheetsToWrite = exportSv
                         ? buildSvExcelSheets()
                         : buildPointExcelSheets();
                     if (sheetsToWrite.isEmpty()) {
                         return new IOException("No variants available to export.");
                     }
+                    reportExcelProgress(taskRef[0], "Writing rows…", 5, 100);
                     VariantTableExcelWriter.write(
                         path,
                         sheetsToWrite,
-                        (current, total) -> LoadingManager.get().setProgress(current, total));
+                        (current, total) -> {
+                            int mapped = 5 + (int) ((current * 90L) / Math.max(1, total));
+                            reportExcelProgress(taskRef[0], null, Math.min(95, mapped), 100);
+                        });
+                    reportExcelProgress(taskRef[0], "Finishing…", 100, 100);
                     return null;
                 } catch (Exception ex) {
                     return ex;
@@ -1526,6 +1639,15 @@ public class VariantManagerController implements Initializable {
                     alert.showAndWait();
                 }
             });
+    }
+
+    private static void reportExcelProgress(
+            ThreadRunner.RunnerTask task, String suffix, int current, int total) {
+        if (task != null && suffix != null) {
+            task.setProgressSuffix(suffix);
+            ThreadRunner.get().notifyDescriptionChanged();
+        }
+        LoadingManager.get().setProgress(current, total);
     }
 
     private void showExcelInfo(String message) {
@@ -1549,13 +1671,20 @@ public class VariantManagerController implements Initializable {
             return List.of();
         }
         VariantFilter filter = table.getDisplayFilter();
-        List<VariantTableExcelWriter.SheetSource> sheets = new ArrayList<>(3);
+        List<VariantTableExcelWriter.SheetSource> sheets = new ArrayList<>();
         addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
             "Coding", table.getDisplayedCodingRows(), filter, false));
         addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
             "Intronic", table.getDisplayedIntronicRows(), filter, false));
         addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
             "Intergenic", table.getDisplayedIntergenicRows(), filter, true));
+
+        // One sheet per sample group (all point categories, samples in that group only).
+        List<TableRow> allPointRows = mergeTableRows(
+            table.getDisplayedCodingRows(),
+            table.getDisplayedIntronicRows(),
+            table.getDisplayedIntergenicRows());
+        addSampleGroupSheets(sheets, allPointRows, filter, false);
         return sheets;
     }
 
@@ -1563,11 +1692,83 @@ public class VariantManagerController implements Initializable {
         if (svVariantTable == null) {
             return List.of();
         }
-        VariantTableExcelWriter.SheetSource sheet = VariantExcelExportBuilder.structuralSheet(
-            "Structural",
-            svVariantTable.getDisplayedAllRows(),
-            svVariantTable.getDisplayFilter());
-        return sheet != null ? List.of(sheet) : List.of();
+        VariantFilter filter = svVariantTable.getDisplayFilter();
+        List<TableRow> rows = svVariantTable.getDisplayedAllRows();
+        List<VariantTableExcelWriter.SheetSource> sheets = new ArrayList<>();
+        addBuiltSheet(sheets, VariantExcelExportBuilder.structuralSheet(
+            "Structural", rows, filter));
+        addSampleGroupSheets(sheets, rows, filter, true);
+        return sheets;
+    }
+
+    /**
+     * Appends one Excel sheet per {@link SampleGroup}, filtered to that group's samples.
+     * Sheet names are unique vs category tabs (Coding / Structural / …).
+     */
+    private void addSampleGroupSheets(
+            List<VariantTableExcelWriter.SheetSource> sheets,
+            List<TableRow> rows,
+            VariantFilter filter,
+            boolean structural) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        List<SampleGroup> groups = registry != null ? registry.getSampleGroups() : List.of();
+        if (groups == null || groups.isEmpty()) {
+            return;
+        }
+        java.util.HashSet<String> usedNames = new java.util.HashSet<>();
+        for (VariantTableExcelWriter.SheetSource existing : sheets) {
+            if (existing != null && existing.name() != null) {
+                usedNames.add(existing.name().toLowerCase(Locale.ROOT));
+            }
+        }
+        for (SampleGroup group : groups) {
+            if (group == null) {
+                continue;
+            }
+            String sheetName = uniqueGroupSheetName(group.getName(), usedNames);
+            usedNames.add(sheetName.toLowerCase(Locale.ROOT));
+            var sampleFilter = VariantExcelExportBuilder.sampleInGroup(group);
+            if (structural) {
+                addBuiltSheet(sheets, VariantExcelExportBuilder.structuralSheet(
+                    sheetName, rows, filter, sampleFilter));
+            } else {
+                addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
+                    sheetName, rows, filter, true, sampleFilter));
+            }
+        }
+    }
+
+    private static String uniqueGroupSheetName(String groupName, java.util.Set<String> usedLower) {
+        String base = (groupName != null && !groupName.isBlank()) ? groupName.trim() : "Group";
+        // Avoid colliding with category sheets like "Coding".
+        if (usedLower.contains(base.toLowerCase(Locale.ROOT))) {
+            base = "Group - " + base;
+        }
+        String candidate = base;
+        int n = 2;
+        while (usedLower.contains(candidate.toLowerCase(Locale.ROOT))) {
+            candidate = base + " (" + n + ")";
+            n++;
+        }
+        return candidate;
+    }
+
+    @SafeVarargs
+    private static List<TableRow> mergeTableRows(List<TableRow>... lists) {
+        List<TableRow> merged = new ArrayList<>();
+        if (lists == null) {
+            return merged;
+        }
+        for (List<TableRow> list : lists) {
+            if (list == null || list.isEmpty()) {
+                continue;
+            }
+            merged.addAll(list);
+        }
+        return merged;
     }
 
     private static void addBuiltSheet(
@@ -1628,6 +1829,10 @@ public class VariantManagerController implements Initializable {
         } else {
             ThreadRunner.get().cancelAll();
         }
+        // Cancel skips ThreadRunner onSuccess — clear rebuild flags so the next
+        // filter apply is not permanently blocked.
+        tableRebuildTask = null;
+        rebuildRunning = false;
         if (busyOverlay != null) {
             busyOverlay.setAllChromosomeAnnotationRunning(false);
             busyOverlay.setAllChromosomeAnnotationTask(null);
@@ -1642,10 +1847,18 @@ public class VariantManagerController implements Initializable {
         }
 
         VariantFilter filter = buildFilterFromUI();
+        // Het/hom (and LOH) comparison rebuilds visible chains + LOH regions over the
+        // full dataset — do that off the FX thread behind the loading modal.
+        boolean genotypeHeavy = filter != null
+            && (filter.hasActiveGenotypeGroupComparison() || filter.isLohMode());
 
         if (vcfManager != null) {
             vcfManager.setCurrentFilterForNextLoad(filter);
-            vcfManager.applyFilter(filter);
+            if (genotypeHeavy) {
+                vcfManager.applyFilterDeferVisibleRebuild(filter);
+            } else {
+                vcfManager.applyFilter(filter);
+            }
         }
 
         boolean reloadNeeded = false;
@@ -1983,14 +2196,6 @@ public class VariantManagerController implements Initializable {
     }
 
     private void rebuildTables(VariantFilter filter) {
-        if (sourceVariantLists == null || sourceVariantLists.isEmpty()) {
-            rebuildNeeded = false;
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
-            }
-            return;
-        }
-        final List<VcfManager.CachedChromosomeVariants> snapshots = new ArrayList<>(sourceVariantLists);
         final VariantFilter filterSnapshot;
         try {
             filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
@@ -2001,210 +2206,634 @@ public class VariantManagerController implements Initializable {
             }
             return;
         }
+        final boolean genotypeHeavy = filterSnapshot.hasActiveGenotypeGroupComparison()
+            || filterSnapshot.isLohMode();
+        if (sourceVariantLists == null || sourceVariantLists.isEmpty()) {
+            rebuildNeeded = false;
+            if (genotypeHeavy && vcfManager != null) {
+                String cohort = filterSnapshot.comparisonCohortSummary();
+                tableRebuildTask = ThreadRunner.get().submit(
+                    "Applying sample comparison…",
+                    () -> {
+                        ComparisonProgress progress = new ComparisonProgress(
+                            1,
+                            cohort,
+                            this::updateTableRebuildProgress,
+                            (cur, tot) -> LoadingManager.get().setProgress(cur, tot));
+                        progress.beginChrom(1, "all", 0);
+                        progress.setStage("Filtering sites");
+                        vcfManager.rebuildVisibleChainsForCache(filterSnapshot);
+                        progress.done();
+                        return Boolean.TRUE;
+                    },
+                    ok -> {
+                        tableRebuildTask = null;
+                        if (Boolean.TRUE.equals(ok) && vcfManager != null) {
+                            // Defer paint so the loading popup can dismiss cleanly.
+                            Platform.runLater(() -> {
+                                try {
+                                    vcfManager.redrawSampleCanvases();
+                                } catch (Throwable t) {
+                                    System.err.println("Canvas redraw after comparison failed: "
+                                        + t.getMessage());
+                                }
+                            });
+                        }
+                    });
+            } else if (busyOverlay != null) {
+                busyOverlay.cancelDelayedLoadingModal();
+            }
+            return;
+        }
+        final List<VcfManager.CachedChromosomeVariants> snapshots = new ArrayList<>(sourceVariantLists);
         rebuildRunning = true;
         rebuildNeeded = false;
 
+        if (genotypeHeavy) {
+            tableRebuildTask = ThreadRunner.get().submit(
+                "Applying sample comparison…",
+                () -> buildTableRebuildResult(snapshots, filterSnapshot, true),
+                this::finishTableRebuild);
+            return;
+        }
+
         Thread buildThread = new Thread(() -> {
-            List<VariantTable.TableRow> coding = new ArrayList<>();
-            List<VariantTable.TableRow> intronic = new ArrayList<>();
-            List<VariantTable.TableRow> intergenic = new ArrayList<>();
-            List<VariantTable.TableRow> svAll = new ArrayList<>();
-            Map<VcfVariantType, List<VariantTable.TableRow>> svByType = new EnumMap<>(VcfVariantType.class);
-            for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
-                svByType.put(type, new ArrayList<>());
-            }
-
-            try {
-                for (VcfManager.CachedChromosomeVariants cached : snapshots) {
-                    String sourceChromosome = cached.chromosome();
-                    VariantList variants = cached.variants();
-                    if (variants == null || variants.isEmpty()) {
-                        continue;
-                    }
-                    variants.ensureLohAaCalls(filterSnapshot);
-
-                    VariantNode node = variants.getFirst();
-                    VariantFilter svSlice = filterSnapshot.getSvSlice() != null
-                        ? filterSnapshot.getSvSlice()
-                        : filterSnapshot;
-                    VariantFilter pointSlice = filterSnapshot.getPointSlice() != null
-                        ? filterSnapshot.getPointSlice()
-                        : filterSnapshot;
-                    boolean svGeneLevel = svSlice.isGeneLevel();
-                    boolean pointGeneLevel = pointSlice.isGeneLevel();
-                    Map<String, Set<Integer>> geneTracks = null;
-                    Map<VcfVariantType, Set<String>> passingGenesByType = null;
-                    if (svGeneLevel || pointGeneLevel) {
-                        variants.ensureGeneSampleIndex(filterSnapshot);
-                    }
-                    if (svGeneLevel) {
-                        passingGenesByType = variants.computePassingGenesByType(svSlice);
-                    }
-                    if (pointGeneLevel) {
-                        geneTracks = variants.ensureGeneSampleIndex(filterSnapshot);
-                    }
-                    Map<VariantNode, Set<Integer>> clusterTracks =
-                        !svGeneLevel && !pointGeneLevel && filterSnapshot.hasComparisonWindow()
-                            ? variants.ensureClusterSampleIndex(filterSnapshot)
-                            : null;
-                    while (node != null) {
-                        boolean isSv = VariantTypeVisuals.isStructural(node.type);
-                        if (isSv && svGeneLevel) {
-                            if (!filterSnapshot.passesBaseNodeLevel(node)) {
-                                node = node.next;
-                                continue;
-                            }
-                            Set<String> passing = passingGenesByType != null
-                                ? passingGenesByType.get(node.type)
-                                : null;
-                            List<String> displayGenes =
-                                VariantList.displayGenesPassing(node, passing);
-                            if (displayGenes.isEmpty()) {
-                                node = node.next;
-                                continue;
-                            }
-                            if (svSlice.hasActiveGenotypeGroupComparison()
-                                    && !svSlice.passesGroupComparison(node)) {
-                                node = node.next;
-                                continue;
-                            }
-                            int passSamples = 0;
-                            for (VariantNode.SampleCall call : node.getSamples()) {
-                                // Same rule as canvas/display cache: thresholds + roles,
-                                // including SV GT=NA / missing (not diploid het/hom-alt).
-                                if (filterSnapshot.passesSampleDisplay(node, call)) {
-                                    passSamples++;
-                                }
-                            }
-                            if (passSamples > 0) {
-                                // One table row per overlapping gene so nested grouping
-                                // places the SV under every gene it hits (not only primary).
-                                for (String gene : displayGenes) {
-                                    if (gene == null || gene.isBlank()) {
-                                        continue;
-                                    }
-                                    VariantTable.TableRow row = new VariantTable.TableRow(
-                                        sourceChromosome, node, List.of(gene.trim()));
-                                    svAll.add(row);
-                                    List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
-                                    if (typeBucket != null) {
-                                        typeBucket.add(row);
-                                    }
-                                }
-                            }
-                            node = node.next;
-                            continue;
-                        }
-
-                        Set<Integer> aggregatedTracks = null;
-                        if (geneTracks != null) {
-                            aggregatedTracks = VariantList.aggregatedTracksForGenes(node, geneTracks);
-                        } else if (clusterTracks != null) {
-                            aggregatedTracks = clusterTracks.getOrDefault(node, Set.of());
-                        }
-                        if (!filterSnapshot.passesNodeLevel(node, aggregatedTracks)) {
-                            node = node.next;
-                            continue;
-                        }
-
-                        int passSamples = 0;
-                        for (VariantNode.SampleCall call : node.getSamples()) {
-                            if (filterSnapshot.passesSampleDisplay(node, call)) {
-                                passSamples++;
-                            }
-                        }
-                        if (passSamples > 0) {
-                            VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
-                            if (isSv) {
-                                svAll.add(row);
-                                List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
-                                if (typeBucket != null) {
-                                    typeBucket.add(row);
-                                }
-                            } else {
-                                VariantAnnotation ann = node.annotation;
-                                VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
-                                if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
-                                    coding.add(row);
-                                } else if (effect.isIntronic()) {
-                                    intronic.add(row);
-                                } else {
-                                    intergenic.add(row);
-                                }
-                            }
-                        }
-                        node = node.next;
-                    }
-                }
-            } catch (Throwable t) {
-                Platform.runLater(() -> {
-                    rebuildRunning = false;
-                    if (busyOverlay != null) {
-                        busyOverlay.cancelDelayedLoadingModal();
-                    }
-                    // Retry if new data arrived while this build was running
-                    if (rebuildNeeded) scheduleRebuild(vcfManager.getCurrentFilter());
-                });
-                return;
-            }
-
-            Platform.runLater(() -> {
-                rebuildRunning = false;
-                variantTable().setDisplayContext(filterSnapshot);
-                setTableItems(
-                    FXCollections.observableArrayList(coding),
-                    FXCollections.observableArrayList(intronic),
-                    FXCollections.observableArrayList(intergenic));
-                if (svVariantTable != null) {
-                    svVariantTable.setDisplayContext(filterSnapshot);
-                    Map<VcfVariantType, ObservableList<VariantTable.TableRow>> byType =
-                        new EnumMap<>(VcfVariantType.class);
-                    for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
-                        List<VariantTable.TableRow> bucket = svByType.get(type);
-                        byType.put(type, FXCollections.observableArrayList(
-                            bucket != null ? bucket : List.of()));
-                    }
-                    svVariantTable.setItems(FXCollections.observableArrayList(svAll), byType);
-                }
-
-                boolean pointEmpty = coding.isEmpty() && intronic.isEmpty() && intergenic.isEmpty();
-                boolean svEmpty = svAll.isEmpty();
-                setExcelExportButtonVisible(excelExportButton, !pointEmpty);
-                setExcelExportButtonVisible(svExcelExportButton, !svEmpty);
-                if (pointEmpty) {
-                    setPlaceholder("No point mutations match current filter settings");
-                } else {
-                    setTablePlaceholders(null, null, null);
-                }
-                if (svVariantTable != null) {
-                    if (svEmpty) {
-                        svVariantTable.setPlaceholders(
-                            "No structural variants match current filter settings", "");
-                    } else {
-                        svVariantTable.setPlaceholders("", "");
-                    }
-                }
-
-                if (pendingScrollToChromosome != null && !pendingScrollToChromosome.isBlank()) {
-                    final String scrollTarget = pendingScrollToChromosome;
-                    Platform.runLater(() -> {
-                        boolean scrolled = variantTable().scrollToFirstVariantForChromosome(scrollTarget);
-                        if (scrolled && Objects.equals(pendingScrollToChromosome, scrollTarget)) {
-                            pendingScrollToChromosome = null;
-                        }
-                    });
-                }
-
-                if (busyOverlay != null) {
-                    busyOverlay.cancelDelayedLoadingModal();
-                }
-                // Retry if new data arrived while this build was running
-                if (rebuildNeeded) scheduleRebuild(vcfManager.getCurrentFilter());
-            });
+            TableRebuildResult result = buildTableRebuildResult(snapshots, filterSnapshot, false);
+            Platform.runLater(() -> finishTableRebuild(result));
         }, "variant-table-build");
         buildThread.setDaemon(true);
         buildThread.start();
     }
+
+    private TableRebuildResult buildTableRebuildResult(
+        List<VcfManager.CachedChromosomeVariants> snapshots,
+        VariantFilter filterSnapshot,
+        boolean reportProgress) {
+        List<VariantTable.TableRow> coding = new ArrayList<>();
+        List<VariantTable.TableRow> intronic = new ArrayList<>();
+        List<VariantTable.TableRow> intergenic = new ArrayList<>();
+        List<VariantTable.TableRow> svAll = new ArrayList<>();
+        Map<VcfVariantType, List<VariantTable.TableRow>> svByType = new EnumMap<>(VcfVariantType.class);
+        for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
+            svByType.put(type, new ArrayList<>());
+        }
+        List<VariantTable.TableRow> lohAll = new ArrayList<>();
+        Map<VcfVariantType, List<VariantTable.TableRow>> lohByType = new EnumMap<>(VcfVariantType.class);
+        for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
+            lohByType.put(type, new ArrayList<>());
+        }
+
+        try {
+            int total = Math.max(1, snapshots.size());
+            String cohort = reportProgress ? filterSnapshot.comparisonCohortSummary() : "";
+            ComparisonProgress progress = reportProgress
+                ? new ComparisonProgress(
+                    total,
+                    cohort,
+                    this::updateTableRebuildProgress,
+                    (cur, tot) -> LoadingManager.get().setProgress(cur, tot))
+                : null;
+
+            int index = 0;
+            for (VcfManager.CachedChromosomeVariants cached : snapshots) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return null;
+                }
+                index++;
+                String sourceChromosome = cached.chromosome();
+                VariantList variants = cached.variants();
+                if (variants == null || variants.isEmpty()) {
+                    if (progress != null) {
+                        progress.beginChrom(index, sourceChromosome, 0);
+                        progress.finishChrom();
+                    }
+                    continue;
+                }
+
+                if (progress != null) {
+                    progress.beginChrom(index, sourceChromosome, variants.size());
+                }
+
+                // Fused AA + filter + LOH regions (one full walk). Light path uses ensureVisibleChain.
+                if (reportProgress) {
+                    variants.rebuildForComparison(filterSnapshot, progress);
+                } else {
+                    variants.ensureVisibleChain(filterSnapshot);
+                }
+
+                if (progress != null) {
+                    progress.setStage("Building tables", 0.98, 1.0);
+                }
+                appendLohTableRows(
+                    sourceChromosome, variants, filterSnapshot, lohAll, lohByType);
+                appendVisibleChainTableRows(
+                    sourceChromosome, variants, filterSnapshot,
+                    coding, intronic, intergenic, svAll, svByType);
+
+                if (progress != null) {
+                    progress.finishChrom();
+                }
+            }
+            if (progress != null) {
+                progress.done();
+            }
+            return new TableRebuildResult(
+                filterSnapshot,
+                coding, intronic, intergenic, svAll, svByType, lohAll, lohByType, reportProgress);
+        } catch (Throwable t) {
+            System.err.println("Variant table rebuild failed: " + t.getMessage());
+            t.printStackTrace();
+            return null;
+        }
+    }
+
+    private static void appendLohTableRows(
+            String sourceChromosome,
+            VariantList variants,
+            VariantFilter filterSnapshot,
+            List<VariantTable.TableRow> lohAll,
+            Map<VcfVariantType, List<VariantTable.TableRow>> lohByType) {
+        for (VariantNode region : variants.getLohRegions()) {
+            if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
+                continue;
+            }
+            int passSamples = 0;
+            for (VariantNode.SampleCall call : region.getSamples()) {
+                if (filterSnapshot.passesSampleDisplay(region, call)) {
+                    passSamples++;
+                }
+            }
+            if (passSamples <= 0) {
+                continue;
+            }
+            List<String> genes = List.of();
+            if (region.annotation != null
+                    && region.annotation.overlappingGenes() != null
+                    && !region.annotation.overlappingGenes().isEmpty()) {
+                genes = region.annotation.overlappingGenes();
+            } else if (region.annotation != null
+                    && region.annotation.geneName() != null
+                    && !region.annotation.geneName().isBlank()) {
+                genes = List.of(region.annotation.geneName());
+            }
+            if (genes.isEmpty()) {
+                VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, region);
+                lohAll.add(row);
+                List<VariantTable.TableRow> bucket = lohByType.get(region.type);
+                if (bucket != null) {
+                    bucket.add(row);
+                }
+            } else {
+                for (String gene : genes) {
+                    if (gene == null || gene.isBlank()) {
+                        continue;
+                    }
+                    VariantTable.TableRow row = new VariantTable.TableRow(
+                        sourceChromosome, region, List.of(gene.trim()));
+                    lohAll.add(row);
+                    List<VariantTable.TableRow> bucket = lohByType.get(region.type);
+                    if (bucket != null) {
+                        bucket.add(row);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Emit table rows from the already-built visible chain (no third full-list filter walk).
+     * Display-eligible samples come from the chain generation display cache when present.
+     */
+    private static void appendVisibleChainTableRows(
+            String sourceChromosome,
+            VariantList variants,
+            VariantFilter filterSnapshot,
+            List<VariantTable.TableRow> coding,
+            List<VariantTable.TableRow> intronic,
+            List<VariantTable.TableRow> intergenic,
+            List<VariantTable.TableRow> svAll,
+            Map<VcfVariantType, List<VariantTable.TableRow>> svByType) {
+        VariantFilter svSlice = filterSnapshot.getSvSlice() != null
+            ? filterSnapshot.getSvSlice()
+            : filterSnapshot;
+        boolean svGeneLevel = svSlice.isGeneLevel();
+        Map<VcfVariantType, Set<String>> passingGenesByType = null;
+        if (svGeneLevel) {
+            passingGenesByType = variants.computePassingGenesByType(svSlice);
+        }
+        int generation = variants.getVisibleChainGeneration();
+        for (VariantNode node = variants.getVisibleHead(); node != null; node = node.nextVisible) {
+            boolean isSv = VariantTypeVisuals.isStructural(node.type);
+            Map<SampleTrack, VariantNode.SampleCall> display =
+                node.getDisplayByTrack(generation);
+            int passSamples = display.isEmpty() ? 0 : display.size();
+            if (passSamples <= 0) {
+                // Fallback if cache missing
+                for (VariantNode.SampleCall call : node.getSamples()) {
+                    if (filterSnapshot.passesSampleDisplay(node, call)) {
+                        passSamples++;
+                    }
+                }
+            }
+            if (passSamples <= 0) {
+                continue;
+            }
+            if (isSv && svGeneLevel) {
+                Set<String> passing = passingGenesByType != null
+                    ? passingGenesByType.get(node.type)
+                    : null;
+                List<String> displayGenes = VariantList.displayGenesPassing(node, passing);
+                if (displayGenes.isEmpty()) {
+                    continue;
+                }
+                for (String gene : displayGenes) {
+                    if (gene == null || gene.isBlank()) {
+                        continue;
+                    }
+                    VariantTable.TableRow row = new VariantTable.TableRow(
+                        sourceChromosome, node, List.of(gene.trim()));
+                    svAll.add(row);
+                    List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
+                    if (typeBucket != null) {
+                        typeBucket.add(row);
+                    }
+                }
+                continue;
+            }
+            VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
+            if (isSv) {
+                svAll.add(row);
+                List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
+                if (typeBucket != null) {
+                    typeBucket.add(row);
+                }
+            } else {
+                VariantAnnotation ann = node.annotation;
+                VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
+                if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
+                    coding.add(row);
+                } else if (effect.isIntronic()) {
+                    intronic.add(row);
+                } else {
+                    intergenic.add(row);
+                }
+            }
+        }
+    }
+
+    private void finishTableRebuild(TableRebuildResult result) {
+        if (result == null) {
+            tableRebuildTask = null;
+            rebuildRunning = false;
+            if (busyOverlay != null) {
+                busyOverlay.cancelDelayedLoadingModal();
+            }
+            if (rebuildNeeded && vcfManager != null) {
+                scheduleRebuild(vcfManager.getCurrentFilter());
+            }
+            return;
+        }
+
+        // Genotype-heavy path: keep the loading modal alive with a second ThreadRunner
+        // phase that builds gene groups off the FX thread, then apply lightly on FX.
+        if (result.redrawCanvases()) {
+            finishTableRebuildHeavy(result);
+            return;
+        }
+
+        tableRebuildTask = null;
+        rebuildRunning = false;
+        try {
+            applyTableRebuildResultLight(result, null);
+        } catch (Throwable t) {
+            System.err.println("Variant table apply failed: " + t.getMessage());
+            t.printStackTrace();
+        } finally {
+            if (busyOverlay != null) {
+                busyOverlay.cancelDelayedLoadingModal();
+            }
+            if (rebuildNeeded && vcfManager != null) {
+                scheduleRebuild(vcfManager.getCurrentFilter());
+            }
+        }
+    }
+
+    /**
+     * Second loading-modal phase after comparison: prebuild {@link GeneGroup}s off FX,
+     * bind them with a light FX apply, then defer canvas redraw so the popup never freezes.
+     */
+    private void finishTableRebuildHeavy(TableRebuildResult result) {
+        final String pointSearch;
+        final String svSearch;
+        final String lohSearch;
+        try {
+            pointSearch = variantTable() != null ? variantTable().getTableSearchQuery() : "";
+            svSearch = svVariantTable != null ? svVariantTable.getSearchQuery() : "";
+            lohSearch = lohVariantTable != null ? lohVariantTable.getSearchQuery() : "";
+        } catch (Throwable t) {
+            System.err.println("Failed to read table search state: " + t.getMessage());
+            tableRebuildTask = null;
+            rebuildRunning = false;
+            try {
+                applyTableRebuildResultLight(result, null);
+            } catch (Throwable applyEx) {
+                System.err.println("Fallback table apply failed: " + applyEx.getMessage());
+            }
+            deferPostHeavyUi(result.redrawCanvases());
+            return;
+        }
+
+        // Register the next task BEFORE this onSuccess returns so the LoadingPopup
+        // never sees an empty active-task list between phases.
+        tableRebuildTask = ThreadRunner.get().submit(
+            "Updating tables…",
+            () -> buildPrebuiltTableUi(result, pointSearch, svSearch, lohSearch),
+            prebuilt -> {
+                try {
+                    if (prebuilt != null) {
+                        applyTableRebuildResultLight(result, prebuilt);
+                    } else {
+                        applyTableRebuildResultLight(result, null);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("Prebuilt table apply failed: " + t.getMessage());
+                    t.printStackTrace();
+                    try {
+                        applyTableRebuildResultLight(result, null);
+                    } catch (Throwable fallback) {
+                        System.err.println("Fallback table apply failed: " + fallback.getMessage());
+                    }
+                } finally {
+                    tableRebuildTask = null;
+                    rebuildRunning = false;
+                    deferPostHeavyUi(result.redrawCanvases());
+                }
+            });
+    }
+
+    private void deferPostHeavyUi(boolean redrawCanvases) {
+        Platform.runLater(() -> {
+            try {
+                if (redrawCanvases && vcfManager != null) {
+                    vcfManager.redrawSampleCanvases();
+                }
+            } catch (Throwable t) {
+                System.err.println("Canvas redraw after comparison failed: " + t.getMessage());
+                t.printStackTrace();
+            }
+            if (busyOverlay != null) {
+                busyOverlay.cancelDelayedLoadingModal();
+            }
+            if (rebuildNeeded && vcfManager != null) {
+                scheduleRebuild(vcfManager.getCurrentFilter());
+            }
+        });
+    }
+
+    private PrebuiltTableUi buildPrebuiltTableUi(
+            TableRebuildResult result,
+            String pointSearch,
+            String svSearch,
+            String lohSearch) {
+        VariantFilter filter = result.filter();
+        boolean pointExpand = pointSearch != null && !pointSearch.isBlank();
+        boolean svExpand = svSearch != null && !svSearch.isBlank();
+        boolean lohExpand = lohSearch != null && !lohSearch.isBlank();
+
+        // Point + SV All + SV types + LOH All + LOH types
+        int totalSteps = 3 + 1 + SvVariantTable.TYPE_ORDER.length
+            + 1 + LohVariantTable.TYPE_ORDER.length;
+        int step = 0;
+
+        try {
+            reportUiBuildProgress(++step, totalSteps, "Gene groups");
+            List<TableRow> codingRows = AbstractNestedVariantTable.rowsMatchingSearch(
+                result.coding(), pointSearch, filter);
+            List<GeneGroup> codingGroups = AbstractNestedVariantTable.buildGeneGroups(
+                codingRows, false, filter, pointExpand);
+
+            if (Thread.currentThread().isInterrupted()) {
+                return null;
+            }
+            reportUiBuildProgress(++step, totalSteps, "Intronic groups");
+            List<TableRow> intronicRows = AbstractNestedVariantTable.rowsMatchingSearch(
+                result.intronic(), pointSearch, filter);
+            List<GeneGroup> intronicGroups = AbstractNestedVariantTable.buildGeneGroups(
+                intronicRows, false, filter, pointExpand);
+
+            if (Thread.currentThread().isInterrupted()) {
+                return null;
+            }
+            reportUiBuildProgress(++step, totalSteps, "Intergenic groups");
+            List<TableRow> intergenicRows = AbstractNestedVariantTable.rowsMatchingSearch(
+                result.intergenic(), pointSearch, filter);
+            List<GeneGroup> intergenicGroups = AbstractNestedVariantTable.buildGeneGroups(
+                intergenicRows, true, filter, pointExpand);
+
+            if (Thread.currentThread().isInterrupted()) {
+                return null;
+            }
+            reportUiBuildProgress(++step, totalSteps, "SV groups");
+            List<TableRow> svAllRows = AbstractNestedVariantTable.rowsMatchingSearch(
+                result.svAll(), svSearch, filter);
+            List<GeneGroup> svAllGroups = AbstractNestedVariantTable.buildGeneGroups(
+                svAllRows, false, filter, svExpand);
+
+            Map<VcfVariantType, List<GeneGroup>> svByTypeGroups = new EnumMap<>(VcfVariantType.class);
+            for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return null;
+                }
+                reportUiBuildProgress(++step, totalSteps, "SV " + VariantTypeVisuals.shortLabel(type));
+                List<TableRow> bucket = result.svByType().get(type);
+                List<TableRow> filtered = AbstractNestedVariantTable.rowsMatchingSearch(
+                    bucket != null ? bucket : List.of(), svSearch, filter);
+                svByTypeGroups.put(type, AbstractNestedVariantTable.buildGeneGroups(
+                    filtered, false, filter, svExpand));
+            }
+
+            if (Thread.currentThread().isInterrupted()) {
+                return null;
+            }
+            reportUiBuildProgress(++step, totalSteps, "LOH groups");
+            List<TableRow> lohAllRows = AbstractNestedVariantTable.rowsMatchingSearch(
+                result.lohAll(), lohSearch, filter);
+            List<GeneGroup> lohAllGroups = AbstractNestedVariantTable.buildGeneGroups(
+                lohAllRows, false, filter, lohExpand);
+
+            Map<VcfVariantType, List<GeneGroup>> lohByTypeGroups = new EnumMap<>(VcfVariantType.class);
+            for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return null;
+                }
+                reportUiBuildProgress(++step, totalSteps, "LOH " + VariantTypeVisuals.shortLabel(type));
+                List<TableRow> bucket = result.lohByType().get(type);
+                List<TableRow> filtered = AbstractNestedVariantTable.rowsMatchingSearch(
+                    bucket != null ? bucket : List.of(), lohSearch, filter);
+                lohByTypeGroups.put(type, AbstractNestedVariantTable.buildGeneGroups(
+                    filtered, false, filter, lohExpand));
+            }
+
+            LoadingManager.get().setProgress(totalSteps, totalSteps);
+            updateTableRebuildProgress("");
+            return new PrebuiltTableUi(
+                codingGroups, intronicGroups, intergenicGroups,
+                svAllGroups, svByTypeGroups,
+                lohAllGroups, lohByTypeGroups);
+        } catch (Throwable t) {
+            System.err.println("Prebuilding table gene groups failed: " + t.getMessage());
+            t.printStackTrace();
+            return null;
+        }
+    }
+
+    private void reportUiBuildProgress(int step, int totalSteps, String label) {
+        updateTableRebuildProgress("(" + step + "/" + totalSteps + ") " + label);
+        LoadingManager.get().setProgress(step, totalSteps);
+    }
+
+    /**
+     * FX-thread bind of row lists + optional prebuilt gene groups.
+     * When {@code prebuilt} is null, falls back to {@code setItems} (builds groups on FX).
+     */
+    private void applyTableRebuildResultLight(TableRebuildResult result, PrebuiltTableUi prebuilt) {
+        VariantFilter filterSnapshot = result.filter();
+
+        variantTable().setDisplayContext(filterSnapshot);
+        ObservableList<VariantTable.TableRow> codingObs =
+            FXCollections.observableArrayList(result.coding());
+        ObservableList<VariantTable.TableRow> intronicObs =
+            FXCollections.observableArrayList(result.intronic());
+        ObservableList<VariantTable.TableRow> intergenicObs =
+            FXCollections.observableArrayList(result.intergenic());
+        if (prebuilt != null) {
+            variantTable().setItemsWithPrebuiltGroups(
+                codingObs, intronicObs, intergenicObs,
+                prebuilt.codingGroups(),
+                prebuilt.intronicGroups(),
+                prebuilt.intergenicGroups());
+        } else {
+            setTableItems(codingObs, intronicObs, intergenicObs);
+        }
+
+        if (svVariantTable != null) {
+            svVariantTable.setDisplayContext(filterSnapshot);
+            Map<VcfVariantType, ObservableList<VariantTable.TableRow>> byType =
+                new EnumMap<>(VcfVariantType.class);
+            for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
+                List<VariantTable.TableRow> bucket = result.svByType().get(type);
+                byType.put(type, FXCollections.observableArrayList(
+                    bucket != null ? bucket : List.of()));
+            }
+            ObservableList<VariantTable.TableRow> svAllObs =
+                FXCollections.observableArrayList(result.svAll());
+            if (prebuilt != null) {
+                svVariantTable.setItemsWithPrebuiltGroups(
+                    svAllObs, byType,
+                    prebuilt.svAllGroups(),
+                    prebuilt.svByTypeGroups());
+            } else {
+                svVariantTable.setItems(svAllObs, byType);
+            }
+        }
+        if (lohVariantTable != null) {
+            lohVariantTable.setDisplayContext(filterSnapshot);
+            Map<VcfVariantType, ObservableList<VariantTable.TableRow>> byType =
+                new EnumMap<>(VcfVariantType.class);
+            for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
+                List<VariantTable.TableRow> bucket = result.lohByType().get(type);
+                byType.put(type, FXCollections.observableArrayList(
+                    bucket != null ? bucket : List.of()));
+            }
+            ObservableList<VariantTable.TableRow> lohAllObs =
+                FXCollections.observableArrayList(result.lohAll());
+            if (prebuilt != null) {
+                lohVariantTable.setItemsWithPrebuiltGroups(
+                    lohAllObs, byType,
+                    prebuilt.lohAllGroups(),
+                    prebuilt.lohByTypeGroups());
+            } else {
+                lohVariantTable.setItems(lohAllObs, byType);
+            }
+        }
+
+        boolean pointEmpty = result.coding().isEmpty()
+            && result.intronic().isEmpty()
+            && result.intergenic().isEmpty();
+        boolean svEmpty = result.svAll().isEmpty();
+        boolean lohEmpty = result.lohAll().isEmpty();
+        setExcelExportButtonVisible(excelExportButton, !pointEmpty);
+        setExcelExportButtonVisible(svExcelExportButton, !svEmpty);
+        if (pointEmpty) {
+            setPlaceholder("No point mutations match current filter settings");
+        } else {
+            setTablePlaceholders(null, null, null);
+        }
+        if (svVariantTable != null) {
+            if (svEmpty) {
+                svVariantTable.setPlaceholders(
+                    "No structural variants match current filter settings", "");
+            } else {
+                svVariantTable.setPlaceholders("", "");
+            }
+        }
+        if (lohVariantTable != null) {
+            if (lohEmpty) {
+                lohVariantTable.setPlaceholders(
+                    filterSnapshot.isLohMode()
+                        ? "No LOH regions for current LOH comparison"
+                        : "Enable LOH mode (heterozygous + homozygous tags) to build regions",
+                    "");
+            } else {
+                lohVariantTable.setPlaceholders("", "");
+            }
+        }
+        updateLohTabVisibility(filterSnapshot, !lohEmpty);
+
+        if (pendingScrollToChromosome != null && !pendingScrollToChromosome.isBlank()) {
+            final String scrollTarget = pendingScrollToChromosome;
+            Platform.runLater(() -> {
+                boolean scrolled = variantTable().scrollToFirstVariantForChromosome(scrollTarget);
+                if (scrolled && Objects.equals(pendingScrollToChromosome, scrollTarget)) {
+                    pendingScrollToChromosome = null;
+                }
+            });
+        }
+    }
+
+    private record PrebuiltTableUi(
+        List<GeneGroup> codingGroups,
+        List<GeneGroup> intronicGroups,
+        List<GeneGroup> intergenicGroups,
+        List<GeneGroup> svAllGroups,
+        Map<VcfVariantType, List<GeneGroup>> svByTypeGroups,
+        List<GeneGroup> lohAllGroups,
+        Map<VcfVariantType, List<GeneGroup>> lohByTypeGroups) {}
+
+    private void updateTableRebuildProgress(String stage) {
+        ThreadRunner.RunnerTask task = tableRebuildTask;
+        if (task == null) {
+            List<ThreadRunner.RunnerTask> tasks = ThreadRunner.get().getActiveTasks();
+            if (!tasks.isEmpty()) {
+                task = tasks.get(tasks.size() - 1);
+            }
+        }
+        if (task != null) {
+            task.setProgressSuffix(stage);
+            ThreadRunner.get().notifyDescriptionChanged();
+        }
+    }
+
+    private record TableRebuildResult(
+        VariantFilter filter,
+        List<VariantTable.TableRow> coding,
+        List<VariantTable.TableRow> intronic,
+        List<VariantTable.TableRow> intergenic,
+        List<VariantTable.TableRow> svAll,
+        Map<VcfVariantType, List<VariantTable.TableRow>> svByType,
+        List<VariantTable.TableRow> lohAll,
+        Map<VcfVariantType, List<VariantTable.TableRow>> lohByType,
+        boolean redrawCanvases) {}
 
     private boolean isCurrentChromosomeStillLoading() {
         return chromosome != null && !chromosome.isBlank() && vcfManager.isLoadingChromosome(chromosome);
@@ -2299,6 +2928,15 @@ public class VariantManagerController implements Initializable {
     }
 
     public void syncBusyOverlay() {
+        // LoadingPopup Cancel uses ThreadRunner.cancelAll() directly (skips onSuccess),
+        // which would otherwise leave rebuildRunning stuck true forever.
+        if (rebuildRunning && ThreadRunner.get().getActiveTasks().isEmpty()) {
+            ThreadRunner.RunnerTask t = tableRebuildTask;
+            if (t == null || t.isCompleted() || t.isCancelled()) {
+                tableRebuildTask = null;
+                rebuildRunning = false;
+            }
+        }
         if (busyOverlay != null) {
             busyOverlay.syncBusyOverlay();
         }
@@ -2333,6 +2971,8 @@ public class VariantManagerController implements Initializable {
         boolean both = hasPoint && hasSv;
         setTabVisible(pointMutationsTab, hasPoint);
         setTabVisible(structuralVariantsTab, hasSv);
+        VariantFilter current = vcfManager != null ? vcfManager.getCurrentFilter() : null;
+        updateLohTabVisibility(current, false);
         applyModeChrome(both);
 
         // Prefer the only available mode; when both exist, leave current selection alone
@@ -2351,6 +2991,29 @@ public class VariantManagerController implements Initializable {
             } else if (structuralVariantsTab != null) {
                 filterTabPane.getSelectionModel().select(structuralVariantsTab);
             }
+        }
+    }
+
+    /**
+     * Show the LOH results sub-tab (beside Intergenic) when LOH mode is active
+     * or regions already exist.
+     */
+    private void updateLohTabVisibility(VariantFilter filter, boolean hasRegions) {
+        if (resultsTabPane == null || lohRegionsTab == null) {
+            return;
+        }
+        boolean show = hasRegions || (filter != null && filter.isLohMode());
+        if (show) {
+            if (!resultsTabPane.getTabs().contains(lohRegionsTab)) {
+                int index = resultsTabPane.getTabs().size();
+                if (intergenicTab != null && resultsTabPane.getTabs().contains(intergenicTab)) {
+                    index = resultsTabPane.getTabs().indexOf(intergenicTab) + 1;
+                }
+                resultsTabPane.getTabs().add(
+                    Math.min(index, resultsTabPane.getTabs().size()), lohRegionsTab);
+            }
+        } else {
+            resultsTabPane.getTabs().remove(lohRegionsTab);
         }
     }
 

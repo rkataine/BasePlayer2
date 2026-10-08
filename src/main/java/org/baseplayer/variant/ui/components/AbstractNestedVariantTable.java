@@ -101,7 +101,7 @@ public abstract class AbstractNestedVariantTable {
     }
 
     /** Gene/chrom group with nested variants and sample calls. */
-    static final class GeneGroup {
+    public static final class GeneGroup {
         final String name;
         final boolean cancer;
         final String tier;
@@ -248,6 +248,65 @@ public abstract class AbstractNestedVariantTable {
         applyTableSearch();
     }
 
+    /**
+     * Bind row lists and prebuilt gene groups (built off the FX thread).
+     * Skips {@link #buildGeneGroups} on the FX thread — use after heavy comparison rebuilds.
+     */
+    public void setItemsWithPrebuiltGroups(
+            ObservableList<TableRow> codingItems,
+            ObservableList<TableRow> intronicItems,
+            ObservableList<TableRow> intergenicItems,
+            List<GeneGroup> codingGroups,
+            List<GeneGroup> intronicGroups,
+            List<GeneGroup> intergenicGroups) {
+        allCodingItems = codingItems != null ? codingItems : FXCollections.observableArrayList();
+        allIntronicItems = intronicItems != null ? intronicItems : FXCollections.observableArrayList();
+        allIntergenicItems = intergenicItems != null ? intergenicItems : FXCollections.observableArrayList();
+        if (backend != null) {
+            backend.setPrebuiltGroups(codingGroups, intronicGroups, intergenicGroups);
+        }
+        setTabCounts(
+            countRowsInGroups(codingGroups),
+            countRowsInGroups(intronicGroups),
+            countRowsInGroups(intergenicGroups));
+    }
+
+    /** Row count across prebuilt gene groups (variant entries). */
+    public static int countRowsInGroups(List<GeneGroup> groups) {
+        if (groups == null || groups.isEmpty()) {
+            return 0;
+        }
+        int n = 0;
+        for (GeneGroup g : groups) {
+            if (g != null && g.variants != null) {
+                n += g.variants.size();
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Filter rows by table search query (safe off the FX thread).
+     * Returns {@code source} unchanged when the query is blank.
+     */
+    public static List<TableRow> rowsMatchingSearch(
+            List<TableRow> source, String query, VariantFilter filter) {
+        if (source == null || source.isEmpty()) {
+            return List.of();
+        }
+        if (query == null || query.isBlank()) {
+            return source;
+        }
+        String q = query.trim().toLowerCase(Locale.ROOT);
+        List<TableRow> matched = new ArrayList<>(Math.min(256, source.size()));
+        for (TableRow row : source) {
+            if (matchesSearch(row, q, filter)) {
+                matched.add(row);
+            }
+        }
+        return matched;
+    }
+
     public void setTableSearchQuery(String query) {
         tableSearchQuery = query != null ? query.trim() : "";
         applyTableSearch();
@@ -304,7 +363,7 @@ public abstract class AbstractNestedVariantTable {
         return FXCollections.observableArrayList(matched);
     }
 
-    static boolean matchesSearch(TableRow row, String queryLower, VariantFilter filter) {
+    public static boolean matchesSearch(TableRow row, String queryLower, VariantFilter filter) {
         if (row == null || row.node() == null) {
             return false;
         }
@@ -393,7 +452,7 @@ public abstract class AbstractNestedVariantTable {
 
     // ── Group model ───────────────────────────────────────────────────────────
 
-    static List<GeneGroup> buildGeneGroups(
+    public static List<GeneGroup> buildGeneGroups(
             List<TableRow> rows,
             boolean groupByChromosome,
             VariantFilter filter,
@@ -606,6 +665,18 @@ public abstract class AbstractNestedVariantTable {
                 intergenicItems != null ? intergenicItems : List.of(), true, filter, expandGroups));
         }
 
+        void setPrebuiltGroups(
+                List<GeneGroup> codingGroups,
+                List<GeneGroup> intronicGroups,
+                List<GeneGroup> intergenicGroups) {
+            if (codingPanel == null || intronicPanel == null || intergenicPanel == null) {
+                initializeColumns();
+            }
+            codingPanel.setGroups(codingGroups != null ? codingGroups : List.of());
+            intronicPanel.setGroups(intronicGroups != null ? intronicGroups : List.of());
+            intergenicPanel.setGroups(intergenicGroups != null ? intergenicGroups : List.of());
+        }
+
         void setPlaceholders(Node codingPlaceholder, Node intronicPlaceholder, Node intergenicPlaceholder) {
             if (codingPanel == null || intronicPanel == null || intergenicPanel == null) {
                 initializeColumns();
@@ -757,10 +828,23 @@ public abstract class AbstractNestedVariantTable {
         }
 
         void setGroups(List<GeneGroup> next) {
-            items.setAll(next != null ? next : List.of());
-            applySort();
-            list.refresh();
-            Platform.runLater(this::updatePinnedHeader);
+            try {
+                List<GeneGroup> safe = next != null ? next : List.of();
+                items.setAll(safe);
+                // Prebuilt groups already use the default VARIANT_COUNT desc order;
+                // still applySort so a user-changed header order is respected.
+                applySort();
+                list.refresh();
+                Platform.runLater(this::updatePinnedHeader);
+            } catch (Throwable t) {
+                System.err.println("NestedPanel.setGroups failed: " + t.getMessage());
+                t.printStackTrace();
+                try {
+                    items.clear();
+                } catch (Throwable ignored) {
+                    // keep UI alive
+                }
+            }
         }
 
         private static List<SampleTrack> tracksOf(GeneGroup group) {

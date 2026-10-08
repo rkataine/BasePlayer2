@@ -299,6 +299,36 @@ public abstract class TrackViewportRegistry {
     setVisibleTrackRange(0, Integer.MAX_VALUE, 0, 0, trackViewportHeightPixels);
   }
 
+  /**
+   * Show tracks from the top using {@link #DEFAULT_TRACK_ROW_HEIGHT_PIXELS}, only
+   * as many as fit in the current viewport. Used when leaving a sample subset so
+   * clearing a filter does not squash/expand to every track.
+   */
+  public void showDefaultHeightWindowFromStart() {
+    showDefaultHeightWindowFromStart(trackViewportHeightPixels);
+  }
+
+  public void showDefaultHeightWindowFromStart(double viewportHeightPixels) {
+    trackRowHeightLocked = false;
+    pendingDefaultRowHeightFit = false;
+    int displayed = getDisplayedTrackCount();
+    if (displayed <= 0) {
+      clearVisibleTrackRange();
+      return;
+    }
+    double viewport = viewportHeightPixels > 0 ? viewportHeightPixels : trackViewportHeightPixels;
+    int slotsFit;
+    if (viewport > 0) {
+      slotsFit = Math.max(1, (int) (viewport / DEFAULT_TRACK_ROW_HEIGHT_PIXELS));
+    } else {
+      int current = getVisibleTrackSlotCount();
+      slotsFit = current > 0 ? current : 1;
+      viewport = slotsFit * DEFAULT_TRACK_ROW_HEIGHT_PIXELS;
+    }
+    int last = Math.min(displayed, slotsFit) - 1;
+    setVisibleTrackRange(0, last, DEFAULT_TRACK_ROW_HEIGHT_PIXELS, 0, viewport);
+  }
+
   public void includeNewTracksAtEndAndResetRowHeight() {
     trackRowHeightLocked = false;
     pendingDefaultRowHeightFit = true;

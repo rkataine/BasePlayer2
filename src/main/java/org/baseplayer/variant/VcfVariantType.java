@@ -35,5 +35,14 @@ public enum VcfVariantType {
     SV_BREAKEND,
     
     /** Complex or unknown variant type */
-    COMPLEX
+    COMPLEX,
+
+    /**
+     * Synthetic LOH region — homozygous REF (AA) run.
+     * Appended after {@link #COMPLEX} so on-disk variant-cache ordinals stay stable.
+     */
+    LOH_AA,
+
+    /** Synthetic LOH region — homozygous ALT (BB) run */
+    LOH_BB
 }

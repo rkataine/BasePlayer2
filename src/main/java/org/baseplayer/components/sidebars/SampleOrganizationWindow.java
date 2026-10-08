@@ -2,45 +2,48 @@ package org.baseplayer.components.sidebars;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.samples.SampleGroup;
+import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
-import org.baseplayer.services.SampleRegistry.BulkSubgroupResult;
 import org.baseplayer.services.SampleRegistry.DirectorySegmentMode;
-import org.baseplayer.services.SampleRegistry.ParentalNameMatchMode;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.application.Platform;
 import javafx.scene.control.Button;
 import javafx.scene.control.ColorPicker;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextField;
-import javafx.scene.control.TreeCell;
-import javafx.scene.control.TreeItem;
-import javafx.scene.control.TreeView;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.Tooltip;
+import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.scene.shape.Rectangle;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
@@ -48,8 +51,8 @@ import javafx.stage.StageStyle;
 import javafx.stage.Window;
 
 /**
- * Tool window for creating named sample groups (and one-level subgroups)
- * and assigning tracks. Use Sample Comparison to assign roles afterward.
+ * Tool window for creating named sample groups, assigning tracks, and applying
+ * fixed {@link SampleTag}s. Use Sample Comparison for inheritance roles afterward.
  */
 public final class SampleOrganizationWindow {
 
@@ -57,41 +60,63 @@ public final class SampleOrganizationWindow {
 
   private final Stage stage;
   private final SampleRegistry registry;
+  private final ObservableList<SampleGroup> groupItems = FXCollections.observableArrayList();
   private final ObservableList<SampleTrack> memberItems = FXCollections.observableArrayList();
   private final ObservableList<SampleTrack> trackItems = FXCollections.observableArrayList();
-  private final TreeView<SampleGroup> groupTree = new TreeView<>();
+  private final ListView<SampleGroup> groupList = new ListView<>(groupItems);
   private final ListView<SampleTrack> memberList = new ListView<>(memberItems);
   private final ListView<SampleTrack> trackList = new ListView<>(trackItems);
+
+  {
+    // Keep selected-group styling when focus moves to Members / All tracks.
+    groupList.getStyleClass().add("sample-list");
+    memberList.getStyleClass().add("sample-list");
+    trackList.getStyleClass().add("sample-list");
+  }
   private final TextField trackFilterField = new TextField();
   private final TextField renameField = new TextField();
-  private final Button newSubgroupButton = secondaryButton("New subgroup");
+  private final ColorPicker groupColorPicker = new ColorPicker();
   private final Label statusLabel = new Label();
+  private final Map<SampleTag, ToggleButton> tagToggles = new EnumMap<>(SampleTag.class);
+  private final Label tagTargetLabel = new Label();
   private final ChangeListener<Number> revisionListener =
-      (obs, oldVal, newVal) -> refreshAll(preserveSelection());
+      (obs, oldVal, newVal) -> onSampleGroupsRevision();
 
   private Integer pendingSelectGroupId;
+  private boolean updatingGroupColorPicker;
+  private boolean updatingTagChecks;
+  private boolean syncingSelection;
+  /** Which list last received a non-empty selection for tag sync. */
+  private boolean preferMemberSelection;
 
   private SampleOrganizationWindow(Window owner) {
     registry = ServiceRegistry.getInstance().getSampleRegistry();
+    // Independent stage (no initOwner) so Linux/GTK keeps minimize & maximize.
     stage = new Stage(StageStyle.DECORATED);
     stage.initModality(Modality.NONE);
-    Window resolved = owner != null ? owner : MainApp.stage;
-    if (resolved != null) {
-      stage.initOwner(resolved);
-    }
-    stage.setTitle("Sample Groups");
+    stage.setResizable(true);
+    stage.setTitle("Sample Groups & Tags");
     stage.setMinWidth(780);
     stage.setMinHeight(480);
+
+    Window resolved = owner != null ? owner : MainApp.stage;
+    if (resolved != null) {
+      resolved.showingProperty().addListener((obs, wasShowing, isShowing) -> {
+        if (!isShowing && stage.isShowing()) {
+          stage.hide();
+        }
+      });
+    }
 
     BorderPane root = new BorderPane();
     root.setPadding(new Insets(12));
     root.getStyleClass().add("filter-panel");
 
-    Label title = new Label("Sample Groups");
+    Label title = new Label("Sample Groups & Tags");
     title.getStyleClass().add("panel-title");
     Label hint = new Label(
-        "Create named groups and subgroups, then add samples. "
-            + "Assign roles in Sample Comparison.");
+        "Create named groups and assign samples. Tag tracks as Mother, Father, Child, "
+            + "Parental, or Marker; use Sample Comparison for inheritance roles.");
     hint.getStyleClass().add("value-label");
     hint.setWrapText(true);
     VBox header = new VBox(4, title, hint);
@@ -103,20 +128,55 @@ public final class SampleOrganizationWindow {
     split.setDividerPositions(0.28, 0.58);
     BorderPane.setMargin(split, new Insets(10, 0, 8, 0));
     root.setCenter(split);
-    root.setBottom(buildFooter());
+    VBox bottom = new VBox(8, buildTagsPane(), buildFooter());
+    root.setBottom(bottom);
 
-    Scene scene = new Scene(root, 920, 560);
+    Scene scene = new Scene(root, 960, 620);
     applyTheme(scene);
     stage.setScene(scene);
 
-    groupTree.getSelectionModel().selectedItemProperty().addListener((obs, o, n) -> {
+    groupList.getSelectionModel().selectedItemProperty().addListener((obs, o, n) -> {
       refreshMembers();
-      updateSubgroupButton();
-      SampleGroup group = n != null ? n.getValue() : null;
-      if (group != null) {
-        renameField.setText(group.getName());
+      if (n != null) {
+        renameField.setText(n.getName());
+        updatingGroupColorPicker = true;
+        groupColorPicker.setValue(n.getColor());
+        updatingGroupColorPicker = false;
+        groupColorPicker.setDisable(false);
       } else {
         renameField.clear();
+        updatingGroupColorPicker = true;
+        groupColorPicker.setValue(Color.web("#4db8ff"));
+        updatingGroupColorPicker = false;
+        groupColorPicker.setDisable(true);
+      }
+      updateTagCheckStates();
+    });
+
+    trackList.getSelectionModel().getSelectedItems().addListener(
+        (ListChangeListener<SampleTrack>) c -> {
+          if (!syncingSelection) {
+            onTrackListSelectionChanged();
+          }
+        });
+    memberList.getSelectionModel().getSelectedItems().addListener(
+        (ListChangeListener<SampleTrack>) c -> {
+          if (!syncingSelection) {
+            onMemberListSelectionChanged();
+          }
+        });
+    trackList.setOnMouseClicked(e -> {
+      if (e.getButton() == MouseButton.PRIMARY) {
+        preferMemberSelection = false;
+        Platform.runLater(this::updateTagCheckStates);
+      }
+    });
+    memberList.setOnMouseClicked(e -> {
+      if (e.getButton() == MouseButton.PRIMARY) {
+        preferMemberSelection = true;
+        // Keep the active group visibly selected while working in Members.
+        ensureGroupSelectionPreserved();
+        Platform.runLater(this::updateTagCheckStates);
       }
     });
 
@@ -133,6 +193,10 @@ public final class SampleOrganizationWindow {
 
   public static void show(Window owner) {
     if (openInstance != null && openInstance.stage.isShowing()) {
+      if (openInstance.stage.isIconified()) {
+        openInstance.stage.setIconified(false);
+      }
+      openInstance.stage.toFront();
       openInstance.stage.requestFocus();
       openInstance.refreshAll(openInstance.preserveSelection());
       return;
@@ -155,8 +219,7 @@ public final class SampleOrganizationWindow {
   private VBox buildGroupsPane() {
     Label heading = sectionLabel("Groups");
 
-    groupTree.setShowRoot(false);
-    groupTree.setCellFactory(tree -> new TreeCell<>() {
+    groupList.setCellFactory(list -> new ListCell<>() {
       @Override
       protected void updateItem(SampleGroup group, boolean empty) {
         super.updateItem(group, empty);
@@ -183,27 +246,35 @@ public final class SampleOrganizationWindow {
       }
     });
 
-    Button newGroup = secondaryButton("New group");
-    newGroup.setOnAction(e -> createEmptyGroup(SampleGroup.NO_PARENT));
-    newSubgroupButton.setOnAction(e -> {
-      SampleGroup selected = selectedGroup();
-      if (selected != null && selected.isRoot()) {
-        createEmptyGroup(selected.getId());
+    groupColorPicker.setPrefWidth(120);
+    groupColorPicker.setDisable(true);
+    groupColorPicker.valueProperty().addListener((obs, o, n) -> {
+      if (updatingGroupColorPicker || n == null) {
+        return;
       }
+      SampleGroup selected = selectedGroup();
+      if (selected == null) {
+        return;
+      }
+      registry.setGroupColor(selected.getId(), n);
+      statusLabel.setText("Updated color for \"" + selected.getName() + "\".");
+      refreshAll(selected.getId());
     });
-    newSubgroupButton.setDisable(true);
 
+    Button newGroup = secondaryButton("New group");
+    newGroup.setOnAction(e -> createEmptyGroup());
     Button deleteGroup = secondaryButton("Delete");
     deleteGroup.setOnAction(e -> deleteSelectedGroup());
     Button fromFolders = secondaryButton("Create from parent folders");
     fromFolders.setOnAction(e -> createFromParentFolders());
-    Button addSubgroupAll = secondaryButton("Add subgroup to all groups…");
-    addSubgroupAll.setOnAction(e -> showAddSubgroupToAllDialog());
 
-    HBox row1 = new HBox(8, newGroup, newSubgroupButton);
-    HBox row2 = new HBox(8, deleteGroup);
-    VBox pane = new VBox(8, heading, groupTree, renameField, row1, row2, fromFolders, addSubgroupAll);
-    VBox.setVgrow(groupTree, Priority.ALWAYS);
+    HBox renameRow = new HBox(8, renameField, groupColorPicker);
+    HBox.setHgrow(renameField, Priority.ALWAYS);
+    renameRow.setAlignment(Pos.CENTER_LEFT);
+
+    HBox row1 = new HBox(8, newGroup, deleteGroup);
+    VBox pane = new VBox(8, heading, groupList, renameRow, row1, fromFolders);
+    VBox.setVgrow(groupList, Priority.ALWAYS);
     pane.setPadding(new Insets(0, 6, 0, 0));
     return pane;
   }
@@ -240,6 +311,56 @@ public final class SampleOrganizationWindow {
     return pane;
   }
 
+  private VBox buildTagsPane() {
+    Label tagsHeading = sectionLabel("Tags");
+    tagTargetLabel.getStyleClass().add("value-label");
+    tagTargetLabel.setText("Select a sample to edit tags");
+
+    HBox tagRow = new HBox(8);
+    tagRow.setAlignment(Pos.CENTER_LEFT);
+    for (SampleTag tag : SampleTag.values()) {
+      tagRow.getChildren().add(tagToggle(tag));
+    }
+    Button clearTags = secondaryButton("Clear tags");
+    clearTags.setOnAction(e -> clearSelectedTrackTags());
+    Region spacer = new Region();
+    HBox.setHgrow(spacer, Priority.ALWAYS);
+    HBox actions = new HBox(8, tagRow, spacer, clearTags);
+    actions.setAlignment(Pos.CENTER_LEFT);
+
+    VBox pane = new VBox(4, tagsHeading, tagTargetLabel, actions);
+    pane.setPadding(new Insets(4, 0, 0, 0));
+    return pane;
+  }
+
+  private ToggleButton tagToggle(SampleTag tag) {
+    ToggleButton toggle = new ToggleButton(tag.displayName());
+    toggle.setFocusTraversable(false);
+    toggle.setTooltip(new Tooltip(tag.description()));
+    styleTagToggle(toggle, tag, false);
+    tagToggles.put(tag, toggle);
+    toggle.setOnAction(e -> {
+      if (updatingTagChecks) {
+        return;
+      }
+      applyTagToSelectedTracks(tag, toggle.isSelected());
+      styleTagToggle(toggle, tag, toggle.isSelected());
+    });
+    return toggle;
+  }
+
+  private static void styleTagToggle(ToggleButton toggle, SampleTag tag, boolean on) {
+    Circle swatch = new Circle(5, tag.color());
+    toggle.setGraphic(swatch);
+    toggle.setStyle(
+        "-fx-background-color: " + (on ? tag.toCssHex() : "#2a2a2a") + ";"
+            + "-fx-text-fill: " + (on ? "#111111" : "#dddddd") + ";"
+            + "-fx-font-size: 12px; -fx-font-weight: bold;"
+            + "-fx-padding: 4 12 4 10; -fx-background-radius: 14;"
+            + "-fx-border-color: " + tag.toCssHex() + "; -fx-border-width: 2;"
+            + "-fx-border-radius: 14; -fx-cursor: hand;");
+  }
+
   private HBox buildFooter() {
     statusLabel.getStyleClass().add("value-label");
     statusLabel.setWrapText(true);
@@ -257,7 +378,8 @@ public final class SampleOrganizationWindow {
     refreshGroups();
     refreshTrackList();
     refreshMembers();
-    updateSubgroupButton();
+    updateTagCheckStates();
+    refreshTrackCells();
   }
 
   private Integer preserveSelection() {
@@ -265,14 +387,25 @@ public final class SampleOrganizationWindow {
     return selected != null ? selected.getId() : null;
   }
 
-  private SampleGroup selectedGroup() {
-    TreeItem<SampleGroup> item = groupTree.getSelectionModel().getSelectedItem();
-    return item != null ? item.getValue() : null;
+  /** Re-assert group list selection so highlight stays after focus moves to Members. */
+  private void ensureGroupSelectionPreserved() {
+    SampleGroup selected = selectedGroup();
+    if (selected == null && !groupItems.isEmpty()) {
+      groupList.getSelectionModel().select(0);
+      return;
+    }
+    if (selected != null) {
+      int index = groupItems.indexOf(selected);
+      if (index >= 0 && groupList.getSelectionModel().getSelectedIndex() != index) {
+        groupList.getSelectionModel().select(index);
+      }
+      // Nudge cell refresh so :selected style paints while unfocused.
+      groupList.refresh();
+    }
   }
 
-  private void updateSubgroupButton() {
-    SampleGroup selected = selectedGroup();
-    newSubgroupButton.setDisable(selected == null || !selected.isRoot());
+  private SampleGroup selectedGroup() {
+    return groupList.getSelectionModel().getSelectedItem();
   }
 
   private void refreshGroups() {
@@ -281,38 +414,39 @@ public final class SampleOrganizationWindow {
         : preserveSelection();
     pendingSelectGroupId = null;
 
-    TreeItem<SampleGroup> root = new TreeItem<>(null);
-    root.setExpanded(true);
-    TreeItem<SampleGroup> toSelect = null;
-    for (SampleGroup group : registry.getRootGroups()) {
-      TreeItem<SampleGroup> groupItem = new TreeItem<>(group);
-      groupItem.setExpanded(true);
-      if (keepId != null && group.getId() == keepId) {
-        toSelect = groupItem;
-      }
-      for (SampleGroup child : registry.getChildGroups(group.getId())) {
-        TreeItem<SampleGroup> childItem = new TreeItem<>(child);
-        groupItem.getChildren().add(childItem);
-        if (keepId != null && child.getId() == keepId) {
-          toSelect = childItem;
+    groupItems.setAll(registry.getSampleGroups());
+    if (keepId != null) {
+      for (int i = 0; i < groupItems.size(); i++) {
+        if (groupItems.get(i).getId() == keepId) {
+          groupList.getSelectionModel().select(i);
+          return;
         }
       }
-      root.getChildren().add(groupItem);
     }
-    groupTree.setRoot(root);
-    if (toSelect != null) {
-      groupTree.getSelectionModel().select(toSelect);
-    } else if (!root.getChildren().isEmpty()
-        && groupTree.getSelectionModel().getSelectedItem() == null) {
-      groupTree.getSelectionModel().select(root.getChildren().get(0));
+    if (!groupItems.isEmpty() && groupList.getSelectionModel().getSelectedItem() == null) {
+      groupList.getSelectionModel().select(0);
     }
   }
 
   private void refreshMembers() {
+    List<SampleTrack> keep =
+        new ArrayList<>(memberList.getSelectionModel().getSelectedItems());
     SampleGroup selected = selectedGroup();
     memberItems.clear();
     if (selected != null) {
       memberItems.addAll(registry.getTracksInGroup(selected.getId()));
+    }
+    syncingSelection = true;
+    try {
+      memberList.getSelectionModel().clearSelection();
+      for (SampleTrack track : keep) {
+        int index = memberItems.indexOf(track);
+        if (index >= 0) {
+          memberList.getSelectionModel().select(index);
+        }
+      }
+    } finally {
+      syncingSelection = false;
     }
   }
 
@@ -320,7 +454,10 @@ public final class SampleOrganizationWindow {
     String filter = trackFilterField.getText() == null
         ? ""
         : trackFilterField.getText().trim().toLowerCase(Locale.ROOT);
-    List<SampleTrack> selected = new ArrayList<>(trackList.getSelectionModel().getSelectedItems());
+    // Don't restore All-tracks selection while the user is working in Members.
+    List<SampleTrack> selected = preferMemberSelection
+        ? List.of()
+        : new ArrayList<>(trackList.getSelectionModel().getSelectedItems());
     trackItems.clear();
     for (SampleTrack track : registry.getSampleTracks()) {
       if (track == null) {
@@ -337,11 +474,189 @@ public final class SampleOrganizationWindow {
       }
       trackItems.add(track);
     }
-    for (SampleTrack track : selected) {
-      int index = trackItems.indexOf(track);
-      if (index >= 0) {
-        trackList.getSelectionModel().select(index);
+    syncingSelection = true;
+    try {
+      trackList.getSelectionModel().clearSelection();
+      for (SampleTrack track : selected) {
+        int index = trackItems.indexOf(track);
+        if (index >= 0) {
+          trackList.getSelectionModel().select(index);
+        }
       }
+    } finally {
+      syncingSelection = false;
+    }
+    updateTagCheckStates();
+  }
+
+  private void onTrackListSelectionChanged() {
+    if (!trackList.getSelectionModel().getSelectedItems().isEmpty()) {
+      preferMemberSelection = false;
+      clearOtherListSelection(memberList);
+    }
+    updateTagCheckStates();
+  }
+
+  private void onMemberListSelectionChanged() {
+    if (!memberList.getSelectionModel().getSelectedItems().isEmpty()) {
+      preferMemberSelection = true;
+      clearOtherListSelection(trackList);
+    }
+    updateTagCheckStates();
+  }
+
+  private void clearOtherListSelection(ListView<SampleTrack> other) {
+    if (syncingSelection || other.getSelectionModel().getSelectedItems().isEmpty()) {
+      return;
+    }
+    syncingSelection = true;
+    try {
+      other.getSelectionModel().clearSelection();
+    } finally {
+      syncingSelection = false;
+    }
+  }
+
+  private void updateTagCheckStates() {
+    List<SampleTrack> selected = taggingTargets();
+    boolean hasSelection = !selected.isEmpty();
+    if (!hasSelection) {
+      tagTargetLabel.setText("Select a sample to edit tags");
+    } else if (selected.size() == 1) {
+      tagTargetLabel.setText("Tags for “" + selected.get(0).getDisplayName() + "”");
+    } else {
+      tagTargetLabel.setText("Tags for " + selected.size() + " selected samples");
+    }
+
+    updatingTagChecks = true;
+    try {
+      for (Map.Entry<SampleTag, ToggleButton> entry : tagToggles.entrySet()) {
+        SampleTag tag = entry.getKey();
+        ToggleButton toggle = entry.getValue();
+        toggle.setDisable(!hasSelection);
+        if (!hasSelection) {
+          toggle.setSelected(false);
+          styleTagToggle(toggle, tag, false);
+          continue;
+        }
+        // Single sample: exact tags. Multi: on only if every selected sample has it.
+        boolean on;
+        if (selected.size() == 1) {
+          on = selected.get(0).hasTag(tag);
+        } else {
+          on = true;
+          for (SampleTrack track : selected) {
+            if (!track.hasTag(tag)) {
+              on = false;
+              break;
+            }
+          }
+        }
+        toggle.setSelected(on);
+        styleTagToggle(toggle, tag, on);
+      }
+    } finally {
+      updatingTagChecks = false;
+    }
+  }
+
+  /**
+   * Tracks to tag: the list the user last selected in (Members vs All tracks).
+   */
+  private List<SampleTrack> taggingTargets() {
+    List<SampleTrack> fromTracks = selectedTracks();
+    List<SampleTrack> fromMembers =
+        new ArrayList<>(memberList.getSelectionModel().getSelectedItems());
+    if (preferMemberSelection) {
+      return !fromMembers.isEmpty() ? fromMembers : fromTracks;
+    }
+    return !fromTracks.isEmpty() ? fromTracks : fromMembers;
+  }
+
+  private List<SampleTrack> selectedTracks() {
+    return new ArrayList<>(trackList.getSelectionModel().getSelectedItems());
+  }
+
+  private void applyTagToSelectedTracks(SampleTag tag, boolean wantOn) {
+    List<SampleTrack> tracks = taggingTargets();
+    if (tracks.isEmpty()) {
+      statusLabel.setText("Select one or more tracks in All tracks or Members to tag.");
+      updateTagCheckStates();
+      return;
+    }
+    // Keep current list selection; only refresh cell graphics / tag toggles.
+    boolean wasPreferMembers = preferMemberSelection;
+    if (wantOn) {
+      registry.addTagToTracks(tracks, tag);
+      statusLabel.setText(
+          "Added tag " + tag.displayName() + " to " + tracks.size() + " track(s).");
+    } else {
+      for (SampleTrack track : tracks) {
+        if (track.hasTag(tag)) {
+          registry.toggleTrackTag(track, tag);
+        }
+      }
+      statusLabel.setText(
+          "Removed tag " + tag.displayName() + " from " + tracks.size() + " track(s).");
+    }
+    preferMemberSelection = wasPreferMembers;
+    refreshTrackCells();
+    updateTagCheckStates();
+  }
+
+  private void clearSelectedTrackTags() {
+    List<SampleTrack> tracks = taggingTargets();
+    if (tracks.isEmpty()) {
+      statusLabel.setText("Select one or more tracks to clear tags.");
+      return;
+    }
+    boolean wasPreferMembers = preferMemberSelection;
+    registry.clearTagsFromTracks(tracks);
+    statusLabel.setText("Cleared tags from " + tracks.size() + " track(s).");
+    preferMemberSelection = wasPreferMembers;
+    refreshTrackCells();
+    updateTagCheckStates();
+  }
+
+  private void refreshTrackCells() {
+    trackList.refresh();
+    memberList.refresh();
+  }
+
+  /** Soft refresh when tags/groups change — keep the selected sample(s). */
+  private void onSampleGroupsRevision() {
+    Integer groupId = preserveSelection();
+    boolean wasPreferMembers = preferMemberSelection;
+    List<SampleTrack> memberKeep =
+        new ArrayList<>(memberList.getSelectionModel().getSelectedItems());
+    List<SampleTrack> trackKeep =
+        new ArrayList<>(trackList.getSelectionModel().getSelectedItems());
+    refreshAll(groupId);
+    preferMemberSelection = wasPreferMembers;
+    restoreListSelection(memberList, memberItems, memberKeep);
+    if (!wasPreferMembers) {
+      restoreListSelection(trackList, trackItems, trackKeep);
+    }
+    updateTagCheckStates();
+  }
+
+  private void restoreListSelection(
+      ListView<SampleTrack> list,
+      ObservableList<SampleTrack> items,
+      List<SampleTrack> keep) {
+    if (keep == null || keep.isEmpty()) {
+      return;
+    }
+    syncingSelection = true;
+    try {
+      for (SampleTrack track : keep) {
+        int index = items.indexOf(track);
+        if (index >= 0) {
+          list.getSelectionModel().select(index);
+        }
+      }
+    } finally {
+      syncingSelection = false;
     }
   }
 
@@ -361,12 +676,11 @@ public final class SampleOrganizationWindow {
     refreshAll(id);
   }
 
-  private void createEmptyGroup(int parentGroupId) {
-    boolean subgroup = parentGroupId >= 0;
+  private void createEmptyGroup() {
     Stage dialog = new Stage(StageStyle.UTILITY);
     dialog.initModality(Modality.WINDOW_MODAL);
     dialog.initOwner(stage);
-    dialog.setTitle(subgroup ? "New subgroup" : "New group");
+    dialog.setTitle("New group");
 
     TextField nameField = new TextField(registry.suggestNextGroupName());
     nameField.getStyleClass().add("filter-field");
@@ -393,9 +707,8 @@ public final class SampleOrganizationWindow {
     nameLabel.getStyleClass().add("section-header");
     Label colorLabel = new Label("Color");
     colorLabel.getStyleClass().add("section-header");
-    String heading = subgroup ? "Create subgroup" : "Create group";
     VBox root = new VBox(10,
-        new Label(heading) {{ getStyleClass().add("panel-title"); }},
+        new Label("Create group") {{ getStyleClass().add("panel-title"); }},
         new VBox(2, nameLabel, nameField),
         new VBox(2, colorLabel, colorPicker),
         buttons);
@@ -417,13 +730,8 @@ public final class SampleOrganizationWindow {
     Color color = colorPicker.getValue() != null
         ? colorPicker.getValue()
         : Color.web("#4db8ff");
-    SampleGroup group = registry.createSampleGroup(name, color, parentGroupId);
-    if (group == null) {
-      statusLabel.setText("Could not create subgroup (select a top-level group).");
-      return;
-    }
-    statusLabel.setText(
-        (subgroup ? "Created subgroup \"" : "Created group \"") + group.getName() + "\".");
+    SampleGroup group = registry.createSampleGroup(name, color);
+    statusLabel.setText("Created group \"" + group.getName() + "\".");
     refreshAll(group.getId());
   }
 
@@ -434,12 +742,8 @@ public final class SampleOrganizationWindow {
       return;
     }
     String name = selected.getName();
-    boolean hadChildren = selected.isRoot() && !registry.getChildGroups(selected.getId()).isEmpty();
     registry.removeSampleGroup(selected.getId());
-    statusLabel.setText(
-        hadChildren
-            ? "Deleted group \"" + name + "\" and its subgroups."
-            : "Deleted group \"" + name + "\".");
+    statusLabel.setText("Deleted group \"" + name + "\".");
     refreshAll(null);
   }
 
@@ -452,120 +756,13 @@ public final class SampleOrganizationWindow {
     refreshAll(preserveSelection());
   }
 
-  private void showAddSubgroupToAllDialog() {
-    if (registry.getRootGroups().isEmpty()) {
-      statusLabel.setText("Create top-level groups first (e.g. from parent folders).");
-      return;
-    }
-
-    Stage dialog = new Stage(StageStyle.UTILITY);
-    dialog.initModality(Modality.WINDOW_MODAL);
-    dialog.initOwner(stage);
-    dialog.setTitle("Add subgroup to all groups");
-
-    TextField nameField = new TextField("Parental");
-    nameField.getStyleClass().add("filter-field");
-    TextField patternField = new TextField("BG");
-    patternField.getStyleClass().add("filter-field");
-
-    ComboBox<ParentalNameMatchMode> matchModeBox = new ComboBox<>();
-    matchModeBox.getItems().setAll(ParentalNameMatchMode.values());
-    matchModeBox.setValue(ParentalNameMatchMode.CONTAINS);
-    matchModeBox.setCellFactory(list -> matchModeCell());
-    matchModeBox.setButtonCell(matchModeCell());
-
-    Label hint = new Label(
-        "Creates the subgroup under every top-level group and moves matching members into it.");
-    hint.getStyleClass().add("value-label");
-    hint.setWrapText(true);
-    hint.setMaxWidth(360);
-
-    final boolean[] applied = {false};
-    Button cancel = secondaryButton("Cancel");
-    cancel.setCancelButton(true);
-    cancel.setOnAction(e -> dialog.close());
-    Button apply = secondaryButton("Apply");
-    apply.setDefaultButton(true);
-    apply.setOnAction(e -> {
-      applied[0] = true;
-      dialog.close();
-    });
-
-    Region spacer = new Region();
-    HBox.setHgrow(spacer, Priority.ALWAYS);
-    HBox buttons = new HBox(8, spacer, cancel, apply);
-
-    Label nameLabel = new Label("Subgroup name");
-    nameLabel.getStyleClass().add("section-header");
-    Label patternLabel = new Label("Name pattern");
-    patternLabel.getStyleClass().add("section-header");
-    Label modeLabel = new Label("Match");
-    modeLabel.getStyleClass().add("section-header");
-
-    VBox root = new VBox(10,
-        new Label("Add subgroup to all groups") {{ getStyleClass().add("panel-title"); }},
-        hint,
-        new VBox(2, nameLabel, nameField),
-        new VBox(2, patternLabel, patternField),
-        new VBox(2, modeLabel, matchModeBox),
-        buttons);
-    root.setPadding(new Insets(14));
-    root.getStyleClass().add("filter-panel");
-
-    Scene scene = new Scene(root, 400, 280);
-    applyTheme(scene);
-    dialog.setScene(scene);
-    dialog.setOnShown(e -> {
-      nameField.requestFocus();
-      nameField.selectAll();
-    });
-    dialog.showAndWait();
-    if (!applied[0]) {
-      return;
-    }
-
-    BulkSubgroupResult result = registry.addSubgroupToAllRoots(
-        nameField.getText(),
-        patternField.getText(),
-        matchModeBox.getValue());
-    String subgroupLabel = nameField.getText() == null || nameField.getText().isBlank()
-        ? "Parental"
-        : nameField.getText().trim();
-    if (result.subgroupsCreated() == 0 && result.tracksMoved() == 0) {
-      statusLabel.setText("No subgroups created and no tracks moved (check pattern / groups).");
-    } else {
-      statusLabel.setText(
-          "Created " + result.subgroupsCreated() + " " + subgroupLabel
-              + " subgroup(s); moved " + result.tracksMoved() + " track(s).");
-    }
-    refreshAll(preserveSelection());
-  }
-
-  private static ListCell<ParentalNameMatchMode> matchModeCell() {
-    return new ListCell<>() {
-      @Override
-      protected void updateItem(ParentalNameMatchMode item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty || item == null) {
-          setText(null);
-          return;
-        }
-        setText(switch (item) {
-          case CONTAINS -> "Contains";
-          case STARTS_WITH -> "Starts with";
-          case REGEX -> "Regex";
-        });
-      }
-    };
-  }
-
   private void addSelectedTracks() {
     SampleGroup selected = selectedGroup();
     if (selected == null) {
       statusLabel.setText("Select a group first.");
       return;
     }
-    List<SampleTrack> tracks = new ArrayList<>(trackList.getSelectionModel().getSelectedItems());
+    List<SampleTrack> tracks = selectedTracks();
     if (tracks.isEmpty()) {
       statusLabel.setText("Select one or more tracks to add.");
       return;
@@ -612,13 +809,33 @@ public final class SampleOrganizationWindow {
         super.updateItem(track, empty);
         if (empty || track == null) {
           setText(null);
+          setGraphic(null);
           return;
         }
-        Path path = SampleRegistry.primaryPathOf(track);
-        String pathText = path != null ? path.getFileName().toString() : "";
-        setText(pathText.isBlank()
-            ? track.getDisplayName()
-            : track.getDisplayName() + "  ·  " + pathText);
+        setText(null);
+
+        HBox tags = new HBox(4);
+        tags.setAlignment(Pos.CENTER_LEFT);
+        for (SampleTag tag : track.getTags()) {
+          Label chip = new Label(tag.shortLabel());
+          chip.setMinSize(18, 18);
+          chip.setAlignment(Pos.CENTER);
+          chip.setStyle(
+              "-fx-background-color: " + tag.toCssHex() + ";"
+                  + "-fx-text-fill: #111111;"
+                  + "-fx-font-size: 10px; -fx-font-weight: bold;"
+                  + "-fx-padding: 1 5 1 5; -fx-background-radius: 9;");
+          chip.setTooltip(new Tooltip(tag.displayName()));
+          tags.getChildren().add(chip);
+        }
+
+        Label name = new Label(track.getDisplayName());
+        name.setStyle("-fx-font-size: 12px;");
+        HBox.setHgrow(name, Priority.ALWAYS);
+
+        HBox row = new HBox(8, tags, name);
+        row.setAlignment(Pos.CENTER_LEFT);
+        setGraphic(row);
       }
     };
   }

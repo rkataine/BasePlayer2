@@ -69,6 +69,7 @@ public class MenuBarController {
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
   @FXML private Button variantManagerButton;
+  @FXML private Button sampleGroupsButton;
   @FXML private Button copyPositionButton;
   @FXML private Button themeToggleButton;
   private NavigationUndoComponent navigationUndo;
@@ -78,10 +79,12 @@ public class MenuBarController {
   private FontIcon zoomOutIcon;
   private FontIcon themeToggleIcon;
   private FontIcon variantManagerIcon;
+  private FontIcon sampleGroupsIcon;
   private static final Color ZOOM_IN_ACTIVE = Color.web("#709076");  // Slight green
   private static final Color ZOOM_OUT_ACTIVE = Color.web("#b68454"); // Slight orange
   private static final Color ZOOM_DISABLED = Color.web("#555555");   // Gray
   private static final Color VARIANT_MANAGER_ICON = Color.web("#8ab4c8");
+  private static final Color SAMPLE_GROUPS_ICON = Color.web("#d0a050");
   
   private static MenuBarController instance;
   private static final DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
@@ -121,6 +124,7 @@ public class MenuBarController {
     navigationUndo = new NavigationUndoComponent(undoButton, redoButton);
     setupZoomButtons();
     setupVariantManagerButton();
+    setupSampleGroupsButton();
     setupThemeToggleButton();
     refreshRecentFilesMenu();
     
@@ -572,6 +576,41 @@ public class MenuBarController {
       boolean show = org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton();
       instance.variantManagerButton.setVisible(show);
       instance.variantManagerButton.setManaged(show);
+      updateSampleGroupsButtonVisibility();
+    };
+    if (Platform.isFxApplicationThread()) {
+      apply.run();
+    } else {
+      Platform.runLater(apply);
+    }
+  }
+
+  private void setupSampleGroupsButton() {
+    if (sampleGroupsButton == null) {
+      return;
+    }
+    sampleGroupsIcon = new FontIcon(FontAwesomeSolid.USERS);
+    sampleGroupsIcon.setIconSize(13);
+    sampleGroupsIcon.setIconColor(SAMPLE_GROUPS_ICON);
+    sampleGroupsButton.setText("Sample Groups");
+    sampleGroupsButton.setGraphic(sampleGroupsIcon);
+    sampleGroupsButton.setContentDisplay(javafx.scene.control.ContentDisplay.LEFT);
+    sampleGroupsButton.setGraphicTextGap(6);
+    sampleGroupsButton.setStyle("-fx-font-size: 12px; -fx-font-weight: bold;");
+    sampleGroupsButton.setMinWidth(Region.USE_PREF_SIZE);
+    sampleRegistry.sampleGroupsRevisionProperty().addListener(
+        (obs, o, n) -> updateSampleGroupsButtonVisibility());
+    updateSampleGroupsButtonVisibility();
+  }
+
+  public static void updateSampleGroupsButtonVisibility() {
+    if (instance == null || instance.sampleGroupsButton == null) {
+      return;
+    }
+    Runnable apply = () -> {
+      boolean show = instance.sampleRegistry != null && instance.sampleRegistry.hasGroupsOrTags();
+      instance.sampleGroupsButton.setVisible(show);
+      instance.sampleGroupsButton.setManaged(show);
     };
     if (Platform.isFxApplicationThread()) {
       apply.run();
@@ -588,6 +627,12 @@ public class MenuBarController {
       org.baseplayer.variant.ui.VariantManagerWindow.bringToFrontOrOpen();
     }
     updateVariantManagerButtonVisibility();
+  }
+
+  @FXML
+  private void openSampleGroups() {
+    Window owner = MainApp.stage;
+    org.baseplayer.components.sidebars.SampleOrganizationWindow.show(owner);
   }
 
   private void setupThemeToggleButton() {

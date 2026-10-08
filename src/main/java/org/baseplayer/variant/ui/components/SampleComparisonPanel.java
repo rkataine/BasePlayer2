@@ -1,15 +1,13 @@
 package org.baseplayer.variant.ui.components;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import org.baseplayer.samples.Sample;
-import org.baseplayer.samples.SampleGroup;
+import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -31,7 +29,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 
 /**
- * Sample Comparison tab: shared-sample range, gene/window mode, and group roles.
+ * Sample Comparison tab: shared-sample range, gene/window mode, and fixed tag roles.
  */
 public class SampleComparisonPanel {
 
@@ -52,7 +50,8 @@ public class SampleComparisonPanel {
   private BooleanSupplier isSuppressing;
 
   private ToggleGroup presentMatchModeGroup;
-  private final Map<Integer, VariantFilter.GroupRole> comparisonGroupRoles = new HashMap<>();
+  private final Map<SampleTag, VariantFilter.GroupRole> comparisonTagRoles =
+      new EnumMap<>(SampleTag.class);
 
   public void install(
       Nodes nodes,
@@ -84,15 +83,13 @@ public class SampleComparisonPanel {
         nodes.geneLevelComparisonCheckBox() != null && nodes.geneLevelComparisonCheckBox().isSelected());
     filter.setComparisonWindowBp(readComparisonWindowBp());
 
-    Map<Integer, VariantFilter.GroupRole> roles = new HashMap<>();
-    for (Map.Entry<Integer, VariantFilter.GroupRole> entry : comparisonGroupRoles.entrySet()) {
+    Map<SampleTag, VariantFilter.GroupRole> roles = new EnumMap<>(SampleTag.class);
+    for (Map.Entry<SampleTag, VariantFilter.GroupRole> entry : comparisonTagRoles.entrySet()) {
       if (entry.getValue() != null && entry.getValue() != VariantFilter.GroupRole.IGNORE) {
         roles.put(entry.getKey(), entry.getValue());
       }
     }
-    filter.setGroupRoles(roles);
-    filter.setGroupTrackIndices(resolveGroupTrackIndices(roles.keySet()));
-    filter.setGroupLineageScope(resolveGroupLineageScope(roles.keySet()));
+    filter.setTagRoles(roles);
     filter.setPresentMatchMode(selectedPresentMatchMode());
   }
 
@@ -117,8 +114,10 @@ public class SampleComparisonPanel {
       nodes.comparisonWindowField().setText(Integer.toString(Math.max(0, filter.getComparisonWindowBp())));
     }
 
-    comparisonGroupRoles.clear();
-    comparisonGroupRoles.putAll(filter.getGroupRoles());
+    comparisonTagRoles.clear();
+    if (filter.getTagRoles() != null) {
+      comparisonTagRoles.putAll(filter.getTagRoles());
+    }
     applyPresentMatchModeToRadios(filter.getPresentMatchMode());
     refreshGroups();
   }
@@ -137,7 +136,7 @@ public class SampleComparisonPanel {
     if (nodes.comparisonWindowField() != null) {
       nodes.comparisonWindowField().setText("0");
     }
-    comparisonGroupRoles.clear();
+    comparisonTagRoles.clear();
     applyPresentMatchModeToRadios(VariantFilter.PresentMatchMode.ALL);
     refreshGroups();
   }
@@ -174,44 +173,24 @@ public class SampleComparisonPanel {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
     nodes.comparisonGroupsContainer().getChildren().clear();
 
-    Set<Integer> validIds = new HashSet<>();
-    validIds.add(VariantFilter.UNGROUPED_COHORT_ID);
-    for (SampleGroup group : registry.getSampleGroups()) {
-      validIds.add(group.getId());
-    }
-    comparisonGroupRoles.keySet().removeIf(id -> !validIds.contains(id));
+    Label note = new Label(
+        "Roles apply inside each sample group (family). Tag a track in Sample Organization, then set its role here.");
+    note.getStyleClass().add("subsection-label");
+    note.setWrapText(true);
+    nodes.comparisonGroupsContainer().getChildren().add(note);
+    nodes.comparisonGroupsContainer().getChildren().add(buildPresetRow());
 
-    int ungroupedCount = 0;
-    for (SampleTrack track : registry.getSampleTracks()) {
-      if (!track.hasGroup()) {
-        ungroupedCount++;
+    boolean anyTagged = false;
+    for (SampleTag tag : SampleTag.values()) {
+      int count = countTracksWithTag(registry, tag);
+      if (count > 0) {
+        anyTagged = true;
       }
-    }
-    nodes.comparisonGroupsContainer().getChildren().add(
-        buildComparisonGroupRow(
-            VariantFilter.UNGROUPED_COHORT_ID,
-            "Ungrouped",
-            ungroupedCount,
-            Color.web("#888888")));
-
-    for (SampleGroup group : registry.getRootGroups()) {
       nodes.comparisonGroupsContainer().getChildren().add(
-          buildComparisonGroupRow(
-              group.getId(),
-              group.getName(),
-              registry.countTracksInGroup(group.getId()),
-              group.getColor()));
-      for (SampleGroup child : registry.getChildGroups(group.getId())) {
-        nodes.comparisonGroupsContainer().getChildren().add(
-            buildComparisonGroupRow(
-                child.getId(),
-                "  · " + child.getName(),
-                registry.countTracksInGroup(child.getId()),
-                child.getColor()));
-      }
+          buildComparisonTagRow(tag, count));
     }
 
-    if (registry.getSampleGroups().isEmpty() && ungroupedCount == 0) {
+    if (!anyTagged && registry.getSampleTracks().isEmpty()) {
       Label empty = new Label("No samples loaded yet.");
       empty.getStyleClass().add("subsection-label");
       nodes.comparisonGroupsContainer().getChildren().add(empty);
@@ -321,10 +300,75 @@ public class SampleComparisonPanel {
     }
   }
 
-  private HBox buildComparisonGroupRow(int groupId, String name, int memberCount, Color color) {
+  private HBox buildPresetRow() {
     HBox row = new HBox(8);
     row.setAlignment(Pos.CENTER_LEFT);
 
+    Label label = new Label("Preset");
+    label.getStyleClass().add("subsection-label");
+
+    ComboBox<String> presetBox = AppComboBox.create(
+        "—",
+        "De novo",
+        "Maternal",
+        "Paternal",
+        "LOH / markers");
+    presetBox.setValue("—");
+    presetBox.setPrefWidth(140);
+    presetBox.valueProperty().addListener((obs, oldVal, newVal) -> {
+      if (newVal == null || "—".equals(newVal) || isSuppressing()) {
+        return;
+      }
+      applyRolePreset(newVal);
+      presetBox.setValue("—");
+    });
+
+    row.getChildren().addAll(label, presetBox);
+    return row;
+  }
+
+  private void applyRolePreset(String preset) {
+    comparisonTagRoles.clear();
+    switch (preset) {
+      case "De novo" -> {
+        comparisonTagRoles.put(SampleTag.CHILD, VariantFilter.GroupRole.PRESENT);
+        comparisonTagRoles.put(SampleTag.MOTHER, VariantFilter.GroupRole.ABSENT);
+        comparisonTagRoles.put(SampleTag.FATHER, VariantFilter.GroupRole.ABSENT);
+      }
+      case "Maternal" -> {
+        comparisonTagRoles.put(SampleTag.CHILD, VariantFilter.GroupRole.PRESENT);
+        comparisonTagRoles.put(SampleTag.MOTHER, VariantFilter.GroupRole.PRESENT);
+        comparisonTagRoles.put(SampleTag.FATHER, VariantFilter.GroupRole.ABSENT);
+      }
+      case "Paternal" -> {
+        comparisonTagRoles.put(SampleTag.CHILD, VariantFilter.GroupRole.PRESENT);
+        comparisonTagRoles.put(SampleTag.FATHER, VariantFilter.GroupRole.PRESENT);
+        comparisonTagRoles.put(SampleTag.MOTHER, VariantFilter.GroupRole.ABSENT);
+      }
+      case "LOH / markers" -> {
+        // Parental het + Child hom is enough for LOH. Marker is optional and only
+        // applied when the project actually has Marker-tagged tracks — an empty
+        // Marker cohort would otherwise fail PresentMatchMode.ALL and hide all sites.
+        comparisonTagRoles.put(SampleTag.PARENTAL, VariantFilter.GroupRole.HETEROZYGOUS);
+        comparisonTagRoles.put(SampleTag.CHILD, VariantFilter.GroupRole.HOMOZYGOUS);
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        if (countTracksWithTag(registry, SampleTag.MARKER) > 0) {
+          comparisonTagRoles.put(SampleTag.MARKER, VariantFilter.GroupRole.HETEROZYGOUS);
+        }
+      }
+      default -> { /* no-op */ }
+    }
+    refreshGroups();
+    if (!isSuppressing()) {
+      fireImmediate();
+    }
+  }
+
+  private HBox buildComparisonTagRow(SampleTag tag, int memberCount) {
+    HBox row = new HBox(8);
+    row.setAlignment(Pos.CENTER_LEFT);
+
+    Color color = tag.color();
     Label swatch = new Label("  ");
     String hex = String.format("#%02x%02x%02x",
         (int) Math.round(color.getRed() * 255),
@@ -334,7 +378,7 @@ public class SampleComparisonPanel {
         "-fx-background-color: " + hex + "; -fx-background-radius: 2;"
             + "-fx-min-width: 12; -fx-min-height: 12;");
 
-    Label nameLabel = new Label(name + " (" + memberCount + ")");
+    Label nameLabel = new Label(tag.displayName() + " (" + memberCount + ")");
     nameLabel.getStyleClass().add("subsection-label");
     nameLabel.setMaxWidth(Double.MAX_VALUE);
     HBox.setHgrow(nameLabel, Priority.ALWAYS);
@@ -346,15 +390,15 @@ public class SampleComparisonPanel {
         "Must be heterozygous",
         "Must be homozygous");
     VariantFilter.GroupRole currentRole =
-        comparisonGroupRoles.getOrDefault(groupId, VariantFilter.GroupRole.IGNORE);
+        comparisonTagRoles.getOrDefault(tag, VariantFilter.GroupRole.IGNORE);
     roleBox.setValue(roleLabel(currentRole));
     roleBox.setPrefWidth(180);
     roleBox.valueProperty().addListener((obs, oldVal, newVal) -> {
       VariantFilter.GroupRole role = roleFromLabel(newVal);
       if (role == VariantFilter.GroupRole.IGNORE) {
-        comparisonGroupRoles.remove(groupId);
+        comparisonTagRoles.remove(tag);
       } else {
-        comparisonGroupRoles.put(groupId, role);
+        comparisonTagRoles.put(tag, role);
       }
       updateGroupComparisonSummaryLabel();
       if (!isSuppressing()) {
@@ -364,6 +408,16 @@ public class SampleComparisonPanel {
 
     row.getChildren().addAll(swatch, nameLabel, roleBox);
     return row;
+  }
+
+  private static int countTracksWithTag(SampleRegistry registry, SampleTag tag) {
+    int count = 0;
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track != null && track.hasTag(tag)) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private static String roleLabel(VariantFilter.GroupRole role) {
@@ -398,9 +452,8 @@ public class SampleComparisonPanel {
     List<String> absent = new ArrayList<>();
     List<String> heterozygous = new ArrayList<>();
     List<String> homozygous = new ArrayList<>();
-    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    for (Map.Entry<Integer, VariantFilter.GroupRole> entry : comparisonGroupRoles.entrySet()) {
-      String label = groupDisplayName(registry, entry.getKey());
+    for (Map.Entry<SampleTag, VariantFilter.GroupRole> entry : comparisonTagRoles.entrySet()) {
+      String label = entry.getKey().displayName();
       VariantFilter.GroupRole role = entry.getValue();
       if (role == null) {
         continue;
@@ -415,7 +468,7 @@ public class SampleComparisonPanel {
     }
     if (present.isEmpty() && absent.isEmpty()
         && heterozygous.isEmpty() && homozygous.isEmpty()) {
-      nodes.groupComparisonSummaryLabel().setText("No group constraints");
+      nodes.groupComparisonSummaryLabel().setText("No tag constraints");
       return;
     }
     boolean lohMode = !heterozygous.isEmpty() && !homozygous.isEmpty();
@@ -445,12 +498,6 @@ public class SampleComparisonPanel {
     nodes.groupComparisonSummaryLabel().setText(sb.toString());
   }
 
-  private static String groupDisplayName(SampleRegistry registry, int groupId) {
-    if (groupId == VariantFilter.UNGROUPED_COHORT_ID) return "Ungrouped";
-    SampleGroup group = registry.getSampleGroup(groupId);
-    return group != null ? group.getName() : ("Group " + groupId);
-  }
-
   private VariantFilter.PresentMatchMode selectedPresentMatchMode() {
     if (nodes.presentMatchAnyRadio() != null && nodes.presentMatchAnyRadio().isSelected()) {
       return VariantFilter.PresentMatchMode.ANY;
@@ -465,63 +512,6 @@ public class SampleComparisonPanel {
     } else {
       nodes.presentMatchAllRadio().setSelected(true);
     }
-  }
-
-  private Map<Integer, Set<Integer>> resolveGroupTrackIndices(Set<Integer> groupIds) {
-    Map<Integer, Set<Integer>> byGroup = new HashMap<>();
-    if (groupIds == null || groupIds.isEmpty()) return byGroup;
-    for (Integer id : groupIds) {
-      byGroup.put(id, new HashSet<>());
-    }
-    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    List<SampleTrack> tracks = registry.getSampleTracks();
-    for (int i = 0; i < tracks.size(); i++) {
-      SampleTrack track = tracks.get(i);
-      if (!track.hasGroup()) {
-        Set<Integer> ungrouped = byGroup.get(VariantFilter.UNGROUPED_COHORT_ID);
-        if (ungrouped != null) {
-          ungrouped.add(i);
-        }
-        continue;
-      }
-      for (int cohortId : track.getGroupIds()) {
-        Set<Integer> indices = byGroup.get(cohortId);
-        if (indices != null) {
-          indices.add(i);
-        }
-      }
-    }
-    return byGroup;
-  }
-
-  /**
-   * Map each compared group id to its lineage root (or ungrouped sentinel).
-   * Comparison constraints are evaluated per lineage.
-   */
-  private Map<Integer, Integer> resolveGroupLineageScope(Set<Integer> groupIds) {
-    Map<Integer, Integer> scopes = new HashMap<>();
-    if (groupIds == null || groupIds.isEmpty()) {
-      return scopes;
-    }
-    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    for (Integer groupId : groupIds) {
-      if (groupId == null) {
-        continue;
-      }
-      if (groupId == VariantFilter.UNGROUPED_COHORT_ID) {
-        scopes.put(groupId, VariantFilter.UNGROUPED_COHORT_ID);
-        continue;
-      }
-      SampleGroup group = registry.getSampleGroup(groupId);
-      if (group == null) {
-        scopes.put(groupId, groupId);
-      } else if (group.isRoot()) {
-        scopes.put(groupId, group.getId());
-      } else {
-        scopes.put(groupId, group.getParentGroupId());
-      }
-    }
-    return scopes;
   }
 
   private boolean isSuppressing() {
@@ -573,7 +563,7 @@ public class SampleComparisonPanel {
 
     VBox groupsContainer = new VBox(6);
     VBox.setVgrow(groupsContainer, Priority.ALWAYS);
-    Label summary = new Label("No group constraints");
+    Label summary = new Label("No tag constraints");
     summary.getStyleClass().add("value-label");
     summary.setWrapText(true);
     Button refresh = new Button("Refresh");
@@ -591,18 +581,18 @@ public class SampleComparisonPanel {
     VBox right = new VBox(12);
     right.getStyleClass().add("filter-panel");
     right.setPadding(new javafx.geometry.Insets(16));
-    Label groupsTitle = new Label("Sample Groups");
+    Label groupsTitle = new Label("Sample Tags");
     groupsTitle.getStyleClass().add("section-header");
     HBox groupsHeader = new HBox(8, groupsTitle, new javafx.scene.layout.Region(), refresh);
     HBox.setHgrow(groupsHeader.getChildren().get(1), Priority.ALWAYS);
     groupsHeader.setAlignment(Pos.CENTER_LEFT);
     Label groupsHelp = new Label(
-        "For each named group, choose whether the variant (or gene / window cluster) must be present, "
-            + "must be absent, must be heterozygous, must be homozygous ALT, or is ignored. "
-            + "Genotype roles require at least one matching call in the group (same as present).");
+        "Assign roles to fixed tags (Mother, Father, Child, Parental, Marker). "
+            + "Roles are applied inside each sample group (family). "
+            + "Use presets for common trio / LOH patterns.");
     groupsHelp.getStyleClass().add("subsection-label");
     groupsHelp.setWrapText(true);
-    Label presentTitle = new Label("When multiple groups require present / genotype");
+    Label presentTitle = new Label("When multiple tags require present / genotype");
     presentTitle.getStyleClass().add("section-header");
     HBox presentRow = new HBox(16, matchAll, matchAny);
     presentRow.setAlignment(Pos.CENTER_LEFT);

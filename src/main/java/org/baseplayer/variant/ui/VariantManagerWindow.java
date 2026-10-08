@@ -141,19 +141,8 @@ public class VariantManagerWindow {
     }
 
     public static boolean shouldShowToolbarButton() {
-        if (!VcfManager.getInstance().hasLoadedVcf()) {
-            return false;
-        }
-        if (MinimizedVariantManagerWindow.isMinimized()) {
-            return true;
-        }
-        if (currentStage == null) {
-            return true;
-        }
-        if (!currentStage.isShowing() || currentStage.isIconified()) {
-            return true;
-        }
-        return !currentStage.isFocused();
+        // Show whenever a VCF is loaded (including first open / while focused).
+        return VcfManager.getInstance().hasLoadedVcf();
     }
 
     public static void bringToFrontOrOpen() {

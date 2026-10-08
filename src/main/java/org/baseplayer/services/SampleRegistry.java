@@ -18,6 +18,7 @@ import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
+import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.utils.DrawColors;
 
@@ -256,6 +257,8 @@ public class SampleRegistry extends TrackViewportRegistry {
 
         normalizeVisibleRangeAfterDisplayedTrackCountChange();
         if (!oldQuery.equals(this.activeSampleFilterQuery)) {
+            // Same revision the subset banner listens to for gene focus.
+            bumpGeneFocusRevision();
             notifyVariantIndexDirty();
             org.baseplayer.project.SessionDocumentSync.writeSampleFilter(
                 this.activeSampleFilterQuery, focusedGeneName);
@@ -398,6 +401,24 @@ public class SampleRegistry extends TrackViewportRegistry {
     @Override
     public int getDisplayedTrackCount() {
         return getDisplayedTrackIndicesCached().size();
+    }
+
+    /** Sample tracks currently shown under text filter and/or gene focus. */
+    public List<SampleTrack> getDisplayedTracks() {
+        List<Integer> indices = getDisplayedTrackIndicesCached();
+        if (indices.isEmpty()) {
+            return List.of();
+        }
+        List<SampleTrack> tracks = new ArrayList<>(indices.size());
+        for (int index : indices) {
+            if (index >= 0 && index < sampleTracks.size()) {
+                SampleTrack track = sampleTracks.get(index);
+                if (track != null) {
+                    tracks.add(track);
+                }
+            }
+        }
+        return tracks;
     }
 
     public List<VisibleTrackSlot> getVisibleTrackSlotsForChecks() {
@@ -546,14 +567,7 @@ public class SampleRegistry extends TrackViewportRegistry {
         }
     }
 
-    // ── Sample groups (sidebar coloring; independent of text/gene subsets) ──
-
-    /** Flat cohort used by Sample Comparison after {@link #syncComparisonCohorts()}. */
-    public static final String PARENTALS_COHORT_NAME = "Parentals";
-    /** Flat cohort used by Sample Comparison after {@link #syncComparisonCohorts()}. */
-    public static final String EVOLVED_COHORT_NAME = "Evolved";
-    public static final Color PARENTALS_COHORT_COLOR = Color.web("#4db8ff");
-    public static final Color EVOLVED_COHORT_COLOR = Color.web("#f0a030");
+    // ── Sample groups + fixed tags (sidebar; independent of text/gene subsets) ──
 
     /** How directory segments map to lineage group names. */
     public enum DirectorySegmentMode {
@@ -566,21 +580,23 @@ public class SampleRegistry extends TrackViewportRegistry {
         FIRST_UNDER_BASE
     }
 
-    /** Name-match mode for marking parentals. */
-    public enum ParentalNameMatchMode {
-        CONTAINS,
-        STARTS_WITH,
-        REGEX
-    }
-
     public IntegerProperty sampleGroupsRevisionProperty() {
         return sampleGroupsRevision;
     }
 
     private void bumpSampleGroupsRevision() {
-        sampleGroupsRevision.set(sampleGroupsRevision.get() + 1);
-        if (!ProjectSessionState.get().isSuppressingDirty()) {
-            org.baseplayer.project.SessionDocumentSync.writeSampleGroupsFromRegistry();
+        // Property listeners (sidebar draw, toolbar) must run on the FX thread.
+        // Project restore bumps this from a background ThreadRunner job.
+        Runnable bump = () -> {
+            sampleGroupsRevision.set(sampleGroupsRevision.get() + 1);
+            if (!ProjectSessionState.get().isSuppressingDirty()) {
+                org.baseplayer.project.SessionDocumentSync.writeSampleGroupsFromRegistry();
+            }
+        };
+        if (Platform.isFxApplicationThread()) {
+            bump.run();
+        } else {
+            Platform.runLater(bump);
         }
     }
 
@@ -654,82 +670,159 @@ public class SampleRegistry extends TrackViewportRegistry {
         return groups;
     }
 
-    /**
-     * One sidebar accent column per root lineage. Subgroup membership expands to the
-     * parent root so the upper group still shows; subgroup color is drawn indented
-     * after a gap in the sidebar.
-     */
-    public record SidebarLineageAccent(Color rootColor, Color subgroupColor) {
-        public boolean hasSubgroup() {
-            return subgroupColor != null;
-        }
-    }
-
-    /**
-     * Lineage-aware sidebar accents: one column per root the track belongs to
-     * (directly or via a subgroup). Unrelated multi-group roots stay separate columns.
-     */
-    public List<SidebarLineageAccent> getSidebarLineageAccents(SampleTrack track) {
-        if (track == null || !track.hasGroup()) {
-            return List.of();
-        }
-        // rootId -> first subgroup color encountered (null if root-only so far)
-        LinkedHashMap<Integer, Color> subgroupByRoot = new LinkedHashMap<>();
-        for (int groupId : track.getGroupIds()) {
-            SampleGroup group = sampleGroups.get(groupId);
-            if (group == null) {
-                continue;
-            }
-            int rootId;
-            Color subgroupColor = null;
-            if (group.isSubgroup()) {
-                rootId = group.getParentGroupId();
-                subgroupColor = group.getColor();
-            } else {
-                rootId = group.getId();
-            }
-            if (!sampleGroups.containsKey(rootId)) {
-                // Orphan subgroup — treat the group itself as the column.
-                rootId = group.getId();
-                subgroupColor = null;
-            }
-            if (!subgroupByRoot.containsKey(rootId)) {
-                subgroupByRoot.put(rootId, subgroupColor);
-            } else if (subgroupByRoot.get(rootId) == null && subgroupColor != null) {
-                // Prefer showing subgroup when both root and subgroup membership exist.
-                subgroupByRoot.put(rootId, subgroupColor);
-            }
-        }
-        List<SidebarLineageAccent> accents = new ArrayList<>(subgroupByRoot.size());
-        for (Map.Entry<Integer, Color> entry : subgroupByRoot.entrySet()) {
-            SampleGroup root = sampleGroups.get(entry.getKey());
-            if (root == null || root.getColor() == null) {
-                continue;
-            }
-            accents.add(new SidebarLineageAccent(root.getColor(), entry.getValue()));
-        }
-        return accents;
-    }
-
     public Color getSidebarColorForTrack(SampleTrack track) {
         SampleGroup group = getGroupForTrack(track);
         return group != null ? group.getColor() : null;
     }
 
-    /**
-     * Flat root colors for each lineage column (one per root). Prefer
-     * {@link #getSidebarLineageAccents} when drawing compound subgroup bars.
-     */
+    /** Flat group accent colors in membership order (no subgroup nesting). */
     public List<Color> getSidebarColorsForTrack(SampleTrack track) {
-        List<SidebarLineageAccent> accents = getSidebarLineageAccents(track);
-        if (accents.isEmpty()) {
+        List<SampleGroup> groups = getGroupsForTrack(track);
+        if (groups.isEmpty()) {
             return List.of();
         }
-        List<Color> colors = new ArrayList<>(accents.size());
-        for (SidebarLineageAccent accent : accents) {
-            colors.add(accent.rootColor());
+        List<Color> colors = new ArrayList<>(groups.size());
+        for (SampleGroup group : groups) {
+            if (group != null && group.getColor() != null) {
+                colors.add(group.getColor());
+            }
         }
         return colors;
+    }
+
+    /** True when any named group exists or any track has a fixed tag. */
+    public boolean hasGroupsOrTags() {
+        if (!sampleGroups.isEmpty()) {
+            return true;
+        }
+        for (SampleTrack track : sampleTracks) {
+            if (track != null && track.hasAnyTag()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void setTrackTags(SampleTrack track, Set<SampleTag> tags) {
+        if (track == null) {
+            return;
+        }
+        Set<SampleTag> before = track.getTags();
+        track.setTags(tags);
+        boolean changed = !before.equals(track.getTags());
+        if (track.hasTag(SampleTag.PARENTAL)) {
+            changed |= tagGroupMatesAsChild(track);
+        }
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
+    }
+
+    public void toggleTrackTag(SampleTrack track, SampleTag tag) {
+        if (track == null || tag == null) {
+            return;
+        }
+        track.toggleTag(tag);
+        if (tag == SampleTag.PARENTAL && track.hasTag(SampleTag.PARENTAL)) {
+            tagGroupMatesAsChild(track);
+        }
+        ProjectSessionState.get().markDirty();
+        bumpSampleGroupsRevision();
+    }
+
+    public void setTracksTags(List<SampleTrack> tracks, Set<SampleTag> tags) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        boolean changed = false;
+        for (SampleTrack track : tracks) {
+            if (track == null) {
+                continue;
+            }
+            Set<SampleTag> before = track.getTags();
+            track.setTags(tags);
+            if (!before.equals(track.getTags())) {
+                changed = true;
+            }
+            if (track.hasTag(SampleTag.PARENTAL)) {
+                changed |= tagGroupMatesAsChild(track);
+            }
+        }
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
+    }
+
+    public void addTagToTracks(List<SampleTrack> tracks, SampleTag tag) {
+        if (tracks == null || tag == null) {
+            return;
+        }
+        boolean changed = false;
+        for (SampleTrack track : tracks) {
+            if (track != null && !track.hasTag(tag)) {
+                track.addTag(tag);
+                changed = true;
+            }
+        }
+        if (tag == SampleTag.PARENTAL) {
+            for (SampleTrack track : tracks) {
+                if (track != null && track.hasTag(SampleTag.PARENTAL)) {
+                    changed |= tagGroupMatesAsChild(track);
+                }
+            }
+        }
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
+    }
+
+    /**
+     * LOH convenience: when a track is tagged Parental, other members of its
+     * sample groups that are not Parental/Marker get Child.
+     *
+     * @return true if any tag was added
+     */
+    private boolean tagGroupMatesAsChild(SampleTrack parentalTrack) {
+        if (parentalTrack == null || !parentalTrack.hasTag(SampleTag.PARENTAL)
+            || !parentalTrack.hasGroup()) {
+            return false;
+        }
+        boolean changed = false;
+        for (int groupId : parentalTrack.getGroupIds()) {
+            for (SampleTrack other : getTracksInGroup(groupId)) {
+                if (other == null || other == parentalTrack) {
+                    continue;
+                }
+                if (other.hasTag(SampleTag.PARENTAL) || other.hasTag(SampleTag.MARKER)) {
+                    continue;
+                }
+                if (!other.hasTag(SampleTag.CHILD)) {
+                    other.addTag(SampleTag.CHILD);
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    public void clearTagsFromTracks(List<SampleTrack> tracks) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        boolean changed = false;
+        for (SampleTrack track : tracks) {
+            if (track != null && track.hasAnyTag()) {
+                track.clearTags();
+                changed = true;
+            }
+        }
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
     }
 
     public int countTracksInGroup(int groupId) {
@@ -743,29 +836,12 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     public SampleGroup createSampleGroup(String name, Color color) {
-        return createSampleGroup(name, color, SampleGroup.NO_PARENT);
-    }
-
-    /**
-     * Create a group. When {@code parentGroupId} is a root group, the new group is a
-     * one-level subgroup. Nested subgroups are rejected ({@code null} returned).
-     */
-    public SampleGroup createSampleGroup(String name, Color color, int parentGroupId) {
-        int resolvedParent = SampleGroup.NO_PARENT;
-        if (parentGroupId >= 0) {
-            SampleGroup parent = sampleGroups.get(parentGroupId);
-            if (parent == null || parent.isSubgroup()) {
-                return null;
-            }
-            resolvedParent = parentGroupId;
-        }
         int id = nextSampleGroupId++;
         Color resolved = color != null
             ? color
             : DrawColors.SAMPLE_GROUP_COLORS[(id - 1) % DrawColors.SAMPLE_GROUP_COLORS.length];
         String resolvedName = (name == null || name.isBlank()) ? ("Group " + id) : name.trim();
         SampleGroup group = new SampleGroup(id, resolvedName, resolved);
-        group.setParentGroupId(resolvedParent);
         sampleGroups.put(id, group);
         ProjectSessionState.get().markDirty();
         bumpSampleGroupsRevision();
@@ -773,32 +849,7 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     public SampleGroup createSampleGroup(String name) {
-        return createSampleGroup(name, null, SampleGroup.NO_PARENT);
-    }
-
-    /** Top-level groups only (no parent). */
-    public List<SampleGroup> getRootGroups() {
-        List<SampleGroup> roots = new ArrayList<>();
-        for (SampleGroup group : sampleGroups.values()) {
-            if (group != null && group.isRoot()) {
-                roots.add(group);
-            }
-        }
-        return roots;
-    }
-
-    /** Direct subgroups of {@code parentId}. */
-    public List<SampleGroup> getChildGroups(int parentId) {
-        if (parentId < 0) {
-            return List.of();
-        }
-        List<SampleGroup> children = new ArrayList<>();
-        for (SampleGroup group : sampleGroups.values()) {
-            if (group != null && group.getParentGroupId() == parentId) {
-                children.add(group);
-            }
-        }
-        return children;
+        return createSampleGroup(name, null);
     }
 
     /** Add tracks to a group without removing existing memberships. */
@@ -929,30 +980,22 @@ public class SampleRegistry extends TrackViewportRegistry {
         if (!sampleGroups.containsKey(groupId)) {
             return;
         }
-        // Deleting a root also deletes its subgroups.
-        List<Integer> toRemove = new ArrayList<>();
-        toRemove.add(groupId);
-        for (SampleGroup child : getChildGroups(groupId)) {
-            toRemove.add(child.getId());
-        }
-        for (int id : toRemove) {
-            for (SampleTrack track : sampleTracks) {
-                if (track.isInGroup(id)) {
-                    track.removeGroupId(id);
-                }
+        for (SampleTrack track : sampleTracks) {
+            if (track.isInGroup(groupId)) {
+                track.removeGroupId(groupId);
             }
-            sampleGroups.remove(id);
         }
+        sampleGroups.remove(groupId);
         ProjectSessionState.get().markDirty();
         bumpSampleGroupsRevision();
     }
 
-    /** Drop a group definition when it no longer has any member tracks (and no children). */
+    /** Drop a group definition when it no longer has any member tracks. */
     private void pruneEmptyGroup(int groupId) {
         if (!sampleGroups.containsKey(groupId)) {
             return;
         }
-        if (countTracksInGroup(groupId) == 0 && getChildGroups(groupId).isEmpty()) {
+        if (countTracksInGroup(groupId) == 0) {
             sampleGroups.remove(groupId);
         }
     }
@@ -1095,228 +1138,6 @@ public class SampleRegistry extends TrackViewportRegistry {
         return touched;
     }
 
-    /** Result of {@link #addSubgroupToAllRoots}. */
-    public record BulkSubgroupResult(int subgroupsCreated, int tracksMoved) {}
-
-    /**
-     * Under every root group, ensure a child subgroup named {@code subgroupName}, then
-     * move name-matching members from the root into that subgroup.
-     * Idempotent: reuses an existing child with the same name under each root.
-     */
-    public BulkSubgroupResult addSubgroupToAllRoots(
-        String subgroupName,
-        String pattern,
-        ParentalNameMatchMode matchMode) {
-        String resolvedName = (subgroupName == null || subgroupName.isBlank())
-            ? "Parental"
-            : subgroupName.trim();
-        if (pattern == null || pattern.isBlank()) {
-            return new BulkSubgroupResult(0, 0);
-        }
-        ParentalNameMatchMode mode = matchMode != null ? matchMode : ParentalNameMatchMode.CONTAINS;
-        Pattern regex = null;
-        if (mode == ParentalNameMatchMode.REGEX) {
-            try {
-                regex = Pattern.compile(pattern);
-            } catch (PatternSyntaxException ex) {
-                return new BulkSubgroupResult(0, 0);
-            }
-        }
-
-        int created = 0;
-        int moved = 0;
-        boolean changed = false;
-
-        for (SampleGroup root : getRootGroups()) {
-            if (root == null) {
-                continue;
-            }
-            SampleGroup child = findChildGroupByName(root.getId(), resolvedName);
-            if (child == null) {
-                child = createSampleGroupSilent(resolvedName, null, root.getId());
-                if (child == null) {
-                    continue;
-                }
-                created++;
-                changed = true;
-            }
-
-            List<SampleTrack> rootMembers = new ArrayList<>(getTracksInGroup(root.getId()));
-            SampleTrack firstMatch = null;
-            for (SampleTrack track : rootMembers) {
-                if (track == null || !matchesParentalName(track, pattern, mode, regex)) {
-                    continue;
-                }
-                if (firstMatch == null) {
-                    firstMatch = track;
-                }
-                boolean added = false;
-                if (!track.isInGroup(child.getId())) {
-                    track.addGroupId(child.getId());
-                    added = true;
-                }
-                if (track.isInGroup(root.getId())) {
-                    track.removeGroupId(root.getId());
-                    added = true;
-                }
-                if (added) {
-                    moved++;
-                    changed = true;
-                }
-            }
-            if (firstMatch != null) {
-                String key = firstMatch.getName() != null
-                    ? firstMatch.getName()
-                    : firstMatch.getDisplayName();
-                if (!Objects.equals(child.getParentalTrackName(), key)) {
-                    child.setParentalTrackName(key);
-                    changed = true;
-                }
-            }
-        }
-
-        if (changed) {
-            ProjectSessionState.get().markDirty();
-            bumpSampleGroupsRevision();
-        }
-        return new BulkSubgroupResult(created, moved);
-    }
-
-    private SampleGroup findChildGroupByName(int parentId, String name) {
-        if (name == null || name.isBlank() || parentId < 0) {
-            return null;
-        }
-        String key = name.trim();
-        for (SampleGroup child : getChildGroups(parentId)) {
-            if (child != null && key.equals(child.getName())) {
-                return child;
-            }
-        }
-        return null;
-    }
-
-    /** Create a group without bumping revision (for batched bulk ops). */
-    private SampleGroup createSampleGroupSilent(String name, Color color, int parentGroupId) {
-        int resolvedParent = SampleGroup.NO_PARENT;
-        if (parentGroupId >= 0) {
-            SampleGroup parent = sampleGroups.get(parentGroupId);
-            if (parent == null || parent.isSubgroup()) {
-                return null;
-            }
-            resolvedParent = parentGroupId;
-        }
-        int id = nextSampleGroupId++;
-        Color resolved = color != null
-            ? color
-            : DrawColors.SAMPLE_GROUP_COLORS[(id - 1) % DrawColors.SAMPLE_GROUP_COLORS.length];
-        String resolvedName = (name == null || name.isBlank()) ? ("Group " + id) : name.trim();
-        SampleGroup group = new SampleGroup(id, resolvedName, resolved);
-        group.setParentGroupId(resolvedParent);
-        sampleGroups.put(id, group);
-        return group;
-    }
-
-    /**
-     * For each track matching {@code pattern}, set parental on every lineage group
-     * it belongs to (skips Parentals/Evolved cohort names). Does not create a mega-group.
-     *
-     * @return number of group parental assignments updated
-     */
-    public int markParentalsByNamePattern(String pattern, ParentalNameMatchMode matchMode) {
-        if (pattern == null || pattern.isBlank()) {
-            return 0;
-        }
-        ParentalNameMatchMode mode = matchMode != null ? matchMode : ParentalNameMatchMode.CONTAINS;
-        Pattern regex = null;
-        if (mode == ParentalNameMatchMode.REGEX) {
-            try {
-                regex = Pattern.compile(pattern);
-            } catch (PatternSyntaxException ex) {
-                return 0;
-            }
-        }
-        int updated = 0;
-        boolean changed = false;
-        for (SampleTrack track : sampleTracks) {
-            if (track == null || !matchesParentalName(track, pattern, mode, regex)) {
-                continue;
-            }
-            for (int groupId : track.getGroupIds()) {
-                SampleGroup group = sampleGroups.get(groupId);
-                if (group == null || isComparisonCohortName(group.getName())) {
-                    continue;
-                }
-                String key = track.getName() != null ? track.getName() : track.getDisplayName();
-                if (!Objects.equals(group.getParentalTrackName(), key)) {
-                    group.setParentalTrackName(key);
-                    updated++;
-                    changed = true;
-                }
-            }
-        }
-        if (changed) {
-            ProjectSessionState.get().markDirty();
-            bumpSampleGroupsRevision();
-        }
-        return updated;
-    }
-
-    private static boolean matchesParentalName(
-        SampleTrack track, String pattern, ParentalNameMatchMode mode, Pattern regex) {
-        String name = track.getDisplayName();
-        String raw = track.getName();
-        return matchesOneName(name, pattern, mode, regex)
-            || (raw != null && !raw.equals(name) && matchesOneName(raw, pattern, mode, regex));
-    }
-
-    private static boolean matchesOneName(
-        String name, String pattern, ParentalNameMatchMode mode, Pattern regex) {
-        if (name == null || name.isBlank()) {
-            return false;
-        }
-        return switch (mode) {
-            case CONTAINS -> name.toLowerCase(Locale.ROOT).contains(pattern.toLowerCase(Locale.ROOT));
-            case STARTS_WITH -> name.toLowerCase(Locale.ROOT).startsWith(pattern.toLowerCase(Locale.ROOT));
-            case REGEX -> regex != null && regex.matcher(name).find();
-        };
-    }
-
-    private static boolean isComparisonCohortName(String name) {
-        return PARENTALS_COHORT_NAME.equals(name) || EVOLVED_COHORT_NAME.equals(name);
-    }
-
-    /** Set the parental track for a lineage group (by display/raw name key). */
-    public void setGroupParental(int groupId, SampleTrack track) {
-        SampleGroup group = sampleGroups.get(groupId);
-        if (group == null) {
-            return;
-        }
-        if (track == null) {
-            clearGroupParental(groupId);
-            return;
-        }
-        String key = track.getName() != null ? track.getName() : track.getDisplayName();
-        if (Objects.equals(group.getParentalTrackName(), key)) {
-            return;
-        }
-        group.setParentalTrackName(key);
-        if (!track.isInGroup(groupId)) {
-            track.addGroupId(groupId);
-        }
-        ProjectSessionState.get().markDirty();
-        bumpSampleGroupsRevision();
-    }
-
-    public void clearGroupParental(int groupId) {
-        SampleGroup group = sampleGroups.get(groupId);
-        if (group == null || group.getParentalTrackName() == null) {
-            return;
-        }
-        group.clearParentalTrackName();
-        ProjectSessionState.get().markDirty();
-        bumpSampleGroupsRevision();
-    }
-
     public void renameSampleGroup(int groupId, String name) {
         SampleGroup group = sampleGroups.get(groupId);
         if (group == null || name == null || name.isBlank()) {
@@ -1329,116 +1150,5 @@ public class SampleRegistry extends TrackViewportRegistry {
         group.setName(trimmed);
         ProjectSessionState.get().markDirty();
         bumpSampleGroupsRevision();
-    }
-
-    /**
-     * Ensure flat {@code Parentals} and {@code Evolved} cohorts from lineage parental flags.
-     * Every designated parental joins Parentals; every other member of a lineage group joins Evolved.
-     * Multi-group membership is preserved.
-     *
-     * @return summary text for the UI
-     */
-    public String syncComparisonCohorts() {
-        SampleGroup parentals = ensureCohortGroup(PARENTALS_COHORT_NAME, PARENTALS_COHORT_COLOR);
-        SampleGroup evolved = ensureCohortGroup(EVOLVED_COHORT_NAME, EVOLVED_COHORT_COLOR);
-        int parentalsId = parentals.getId();
-        int evolvedId = evolved.getId();
-
-        Set<SampleTrack> parentalTracks = new LinkedHashSet<>();
-        Set<SampleTrack> evolvedTracks = new LinkedHashSet<>();
-
-        for (SampleGroup group : sampleGroups.values()) {
-            if (group == null || isComparisonCohortName(group.getName())) {
-                continue;
-            }
-            List<SampleTrack> members = getTracksInGroup(group.getId());
-            if (members.isEmpty()) {
-                continue;
-            }
-            SampleTrack parental = resolveParentalTrack(group, members);
-            if (parental == null) {
-                // No parental designated — leave cohort membership unchanged for this lineage
-                continue;
-            }
-            for (SampleTrack track : members) {
-                if (track == null) {
-                    continue;
-                }
-                if (track == parental || group.isParental(track)) {
-                    parentalTracks.add(track);
-                } else {
-                    evolvedTracks.add(track);
-                }
-            }
-        }
-
-        // A track marked parental in any lineage should not stay only in Evolved.
-        evolvedTracks.removeAll(parentalTracks);
-
-        boolean changed = false;
-        for (SampleTrack track : sampleTracks) {
-            if (track == null) {
-                continue;
-            }
-            boolean wantParental = parentalTracks.contains(track);
-            boolean wantEvolved = evolvedTracks.contains(track);
-            if (wantParental && !track.isInGroup(parentalsId)) {
-                track.addGroupId(parentalsId);
-                changed = true;
-            } else if (!wantParental && track.isInGroup(parentalsId)) {
-                track.removeGroupId(parentalsId);
-                changed = true;
-            }
-            if (wantEvolved && !track.isInGroup(evolvedId)) {
-                track.addGroupId(evolvedId);
-                changed = true;
-            } else if (!wantEvolved && track.isInGroup(evolvedId)) {
-                track.removeGroupId(evolvedId);
-                changed = true;
-            }
-        }
-
-        pruneEmptyGroup(parentalsId);
-        pruneEmptyGroup(evolvedId);
-
-        if (changed) {
-            ProjectSessionState.get().markDirty();
-            bumpSampleGroupsRevision();
-        }
-
-        int parentalCount = countTracksInGroup(parentalsId);
-        int evolvedCount = countTracksInGroup(evolvedId);
-        return "Parentals: " + parentalCount + ", Evolved: " + evolvedCount;
-    }
-
-    private SampleGroup ensureCohortGroup(String name, Color color) {
-        SampleGroup existing = findSampleGroupByName(name);
-        if (existing != null) {
-            if (color != null && !existing.getColor().equals(color)) {
-                existing.setColor(color);
-            }
-            return existing;
-        }
-        return createSampleGroup(name, color);
-    }
-
-    private SampleTrack resolveParentalTrack(SampleGroup group, List<SampleTrack> members) {
-        if (group.getParentalTrackName() == null) {
-            return null;
-        }
-        for (SampleTrack track : members) {
-            if (group.isParental(track)) {
-                return track;
-            }
-        }
-        // Parental key set but track not in group — still try global match
-        String key = group.getParentalTrackName();
-        for (SampleTrack track : sampleTracks) {
-            if (track != null
-                && (key.equals(track.getName()) || key.equals(track.getDisplayName()))) {
-                return track;
-            }
-        }
-        return null;
     }
 }

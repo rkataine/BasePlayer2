@@ -115,11 +115,10 @@ public final class SessionDocumentSync {
       groupSpec.id = group.getId();
       groupSpec.name = group.getName();
       groupSpec.color = group.toCssHex();
-      groupSpec.parentalTrackName = group.getParentalTrackName();
-      groupSpec.parentGroupId = group.getParentGroupId();
+      groupSpec.parentGroupId = -1;
       doc.sampleGroups.add(groupSpec);
     }
-    // Membership is stored on track specs — refresh if tracks already present.
+    // Membership + tags are stored on track specs — refresh if tracks already present.
     if (doc.sampleTracks != null && !doc.sampleTracks.isEmpty()) {
       List<SampleTrack> tracks = samples.getSampleTracks();
       int n = Math.min(tracks.size(), doc.sampleTracks.size());
@@ -128,9 +127,21 @@ public final class SessionDocumentSync {
         ProjectDocument.SampleTrackSpec spec = doc.sampleTracks.get(i);
         if (track != null && spec != null) {
           spec.groupIds = new ArrayList<>(track.getGroupIds());
+          spec.tags = writeTrackTags(track);
         }
       }
     }
+  }
+
+  private static List<String> writeTrackTags(SampleTrack track) {
+    List<String> out = new ArrayList<>();
+    if (track == null) {
+      return out;
+    }
+    for (org.baseplayer.samples.SampleTag tag : track.getTags()) {
+      out.add(tag.name());
+    }
+    return out;
   }
 
   /** Persist {@link VariantFilter} into the live document filter specs. */
@@ -204,6 +215,7 @@ public final class SessionDocumentSync {
       ProjectDocument.SampleTrackSpec trackSpec = new ProjectDocument.SampleTrackSpec();
       trackSpec.displayName = track.getDisplayName();
       trackSpec.groupIds = new ArrayList<>(track.getGroupIds());
+      trackSpec.tags = writeTrackTags(track);
 
       for (Sample sample : track.getSamples()) {
         if (sample.getDataType() == Sample.DataType.VCF && sample.getPath() != null) {
@@ -380,6 +392,21 @@ public final class SessionDocumentSync {
     if (filter.getPresentMatchMode() != null) {
       spec.presentMatchMode = filter.getPresentMatchMode().name();
     }
+    if (filter.getTagRoles() != null && !filter.getTagRoles().isEmpty()) {
+      for (Map.Entry<org.baseplayer.samples.SampleTag, VariantFilter.GroupRole> entry
+          : filter.getTagRoles().entrySet()) {
+        if (entry.getKey() == null || entry.getValue() == null
+            || entry.getValue() == VariantFilter.GroupRole.IGNORE) {
+          continue;
+        }
+        ProjectDocument.GroupRoleSpec roleSpec = new ProjectDocument.GroupRoleSpec();
+        roleSpec.tag = entry.getKey().name();
+        roleSpec.role = entry.getValue().name();
+        spec.groupRoles.add(roleSpec);
+      }
+      return;
+    }
+    // Legacy expanded cohort roles (pre-tag docs).
     if (filter.getGroupRoles() == null) {
       return;
     }

@@ -10,7 +10,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiPredicate;
 
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.annotation.VariantAnnotator;
 
 /**
  * Sorted linked list of variants by genomic position.
@@ -59,8 +62,15 @@ public class VariantList {
     private final ArrayList<VariantNode> visibleByPosition = new ArrayList<>();
     /** Drawable spanning SVs in genomic order. */
     private final ArrayList<VariantNode> visibleSvByPosition = new ArrayList<>();
+    /**
+     * Synthetic LOH AA/BB region nodes for the current visible-chain filter.
+     * Not part of the VCF linked list; rebuilt with the visible chain.
+     */
+    private List<VariantNode> lohRegions = List.of();
     /** Stable key of the filter used to build the visible chain; null if unset/dirty. */
     private String visibleFilterKey;
+    /** Filter key for which missing LOH AA calls were already synthesized. */
+    private String lohAaFilterKey;
     /** Bumped on every visible-chain clear/rebuild so draw seekers can detect staleness. */
     private int visibleChainGeneration;
 
@@ -294,11 +304,22 @@ public class VariantList {
         visibleHead = null;
         visibleByPosition.clear();
         visibleSvByPosition.clear();
+        lohRegions = List.of();
         visibleFilterKey = null;
+        // Keep lohAaFilterKey — AA synthesis is idempotent and filter-keyed separately.
         visibleChainGeneration++;
         // Mutations and filter rebuilds both go through here; drop stale gene→sample unions.
         clearGeneSampleIndex();
         clearClusterSampleIndex();
+    }
+
+    /**
+     * Mark the visible chain as stale without walking nodes. Safe on the FX thread;
+     * next {@link #ensureVisibleChain} / {@link #rebuildVisibleChain} does the full clear.
+     */
+    public void invalidateVisibleFilterKey() {
+        visibleFilterKey = null;
+        lohAaFilterKey = null;
     }
 
     /**
@@ -310,7 +331,34 @@ public class VariantList {
      * visibility is evaluated so canvas/density match the table after annotate-all or reload.
      */
     public void rebuildVisibleChain(VariantFilter filter) {
-        ensureLohAaCalls(filter);
+        rebuildForComparison(filter, null);
+    }
+
+    /**
+     * Single fused pass for genotype-heavy / LOH comparison: synthesize AA, filter sites,
+     * collect LOH informative sites, merge regions, annotate. Reports optional progress.
+     */
+    public void rebuildForComparison(VariantFilter filter, ComparisonProgress progress) {
+        synchronized (this) {
+            rebuildForComparisonUnlocked(filter, progress);
+        }
+    }
+
+    private void rebuildForComparisonUnlocked(VariantFilter filter, ComparisonProgress progress) {
+        int totalNodes = size;
+        boolean loh = filter != null && filter.isLohMode();
+        if (progress != null) {
+            if (loh) {
+                progress.setStage("Synthesizing missing AA", 0.0, 0.25);
+            } else {
+                progress.setStage("Filtering sites", 0.0, 0.85);
+            }
+        }
+        ensureLohAaCallsUnlocked(filter, progress, totalNodes);
+
+        if (progress != null) {
+            progress.setStage("Filtering sites", loh ? 0.25 : 0.0, 0.85);
+        }
         clearVisibleChain();
 
         Map<String, Set<Integer>> geneTracks = null;
@@ -326,9 +374,27 @@ public class VariantList {
             clusterTracks = ensureClusterSampleIndex(filter);
         }
 
+        VariantFilter lohFilter = resolveLohFilter(filter);
+        boolean collectLoh = lohFilter != null && lohFilter.isLohMode();
+        Set<Integer> hetTracks = collectLoh ? lohFilter.getLohHeterozygousTrackIndices() : Set.of();
+        Set<Integer> homTracks = collectLoh ? lohFilter.getLohHomozygousTrackIndices() : Set.of();
+        Map<Integer, List<LohRegionBuilder.SiteHit>> lohSites =
+            collectLoh ? new HashMap<>() : null;
+
         VariantNode prevVisible = null;
         VariantNode current = head;
+        int processed = 0;
         while (current != null) {
+            processed++;
+            if (progress != null && (processed & 0x3FF) == 0) {
+                progress.reportNodes(processed);
+            }
+
+            if (lohSites != null) {
+                LohRegionBuilder.collectInformativeSite(
+                    current, lohFilter, hetTracks, homTracks, lohSites);
+            }
+
             if (isDrawableUnderFilter(
                     current, filter, geneTracks, passingGenesByType, clusterTracks)) {
                 current.nextVisible = null;
@@ -344,8 +410,12 @@ public class VariantList {
                     visibleSvByPosition.add(current);
                 }
                 if (filter != null) {
+                    Set<Integer> failed = filter.hasActiveGroupComparison()
+                        ? filter.failedLineagesForNode(current)
+                        : Set.of();
                     current.setDisplayCache(
-                        visibleChainGeneration, filter.buildDisplayByTrack(current));
+                        visibleChainGeneration,
+                        filter.buildDisplayByTrack(current, failed));
                 }
             } else {
                 current.nextVisible = null;
@@ -353,8 +423,74 @@ public class VariantList {
             }
             current = current.next;
         }
+        if (progress != null) {
+            progress.reportNodes(processed);
+        }
 
+        if (collectLoh) {
+            if (progress != null) {
+                progress.setStage("Building LOH regions", 0.85, 0.95);
+            }
+            applyLohRegionsUnlocked(
+                LohRegionBuilder.mergeCollectedSites(lohSites, lohFilter.lohRegionGapBp()),
+                lohFilter,
+                progress);
+        } else {
+            lohRegions = List.of();
+        }
         visibleFilterKey = filterKeyOf(filter);
+    }
+
+    private static VariantFilter resolveLohFilter(VariantFilter filter) {
+        if (filter == null || !filter.isLohMode()) {
+            return null;
+        }
+        if (filter.hasClassSlices()) {
+            VariantFilter point = filter.getPointSlice();
+            VariantFilter sv = filter.getSvSlice();
+            if (point != null && point.isLohMode()) {
+                return point;
+            }
+            if (sv != null && sv.isLohMode()) {
+                return sv;
+            }
+        }
+        return filter;
+    }
+
+    private void rebuildLohRegionsUnlocked(VariantFilter filter) {
+        VariantFilter lohFilter = resolveLohFilter(filter);
+        if (lohFilter == null) {
+            lohRegions = List.of();
+            return;
+        }
+        List<VariantNode> built = LohRegionBuilder.buildFromList(head, lohFilter);
+        applyLohRegionsUnlocked(built, lohFilter, null);
+    }
+
+    private void applyLohRegionsUnlocked(
+            List<VariantNode> built, VariantFilter lohFilter, ComparisonProgress progress) {
+        if (built == null || built.isEmpty()) {
+            lohRegions = List.of();
+            return;
+        }
+        for (VariantNode region : built) {
+            region.setDisplayCache(
+                visibleChainGeneration, lohFilter.buildDisplayByTrack(region));
+        }
+        lohRegions = List.copyOf(built);
+        if (annotated && !lohRegions.isEmpty()) {
+            if (progress != null) {
+                progress.setStage("Annotating LOH", 0.95, 0.98);
+            }
+            try {
+                ReferenceGenomeService ref =
+                    ServiceRegistry.getInstance().getReferenceGenomeService();
+                new VariantAnnotator(ref).annotateLohRegions(this, chromosome, progress);
+            } catch (RuntimeException ignored) {
+                // Genes may be unavailable; table still shows unannotated regions.
+            }
+        }
     }
 
     /**
@@ -390,13 +526,33 @@ public class VariantList {
      * at heterozygous-cohort marker sites. Idempotent.
      */
     public void ensureLohAaCalls(VariantFilter filter) {
+        synchronized (this) {
+            ensureLohAaCallsUnlocked(filter, null, size);
+        }
+    }
+
+    private void ensureLohAaCallsUnlocked(
+            VariantFilter filter, ComparisonProgress progress, int totalNodes) {
         if (filter == null || !filter.isLohMode() || head == null) {
             return;
         }
+        String key = filterKeyOf(filter);
+        if (key.equals(lohAaFilterKey)) {
+            return;
+        }
         int added = 0;
+        int processed = 0;
         for (VariantNode node = head; node != null; node = node.next) {
             added += filter.addMissingLohAaCalls(node);
+            processed++;
+            if (progress != null && (processed & 0x3FF) == 0) {
+                progress.reportNodes(processed);
+            }
         }
+        if (progress != null) {
+            progress.reportNodes(Math.max(processed, totalNodes));
+        }
+        lohAaFilterKey = key;
         if (added > 0) {
             invalidateSampleIndexes();
         }
@@ -784,6 +940,14 @@ public class VariantList {
         return visibleSvByPosition;
     }
 
+    /**
+     * Synthetic LOH AA/BB region spans for the current visible-chain filter.
+     * Empty when not in LOH mode. Not part of the VCF linked list.
+     */
+    public List<VariantNode> getLohRegions() {
+        return lohRegions != null ? lohRegions : List.of();
+    }
+
     public String getVisibleFilterKey() {
         return visibleFilterKey;
     }
@@ -822,12 +986,13 @@ public class VariantList {
                     && !svFilter.passesGroupComparison(node)) {
                 return false;
             }
-            for (VariantNode.SampleCall call : node.getSamples()) {
-                if (filter.passesSampleThresholds(node, call)) {
-                    return true;
+            boolean[] any = { false };
+            node.forEachSample(call -> {
+                if (!any[0] && filter.passesSampleThresholds(node, call)) {
+                    any[0] = true;
                 }
-            }
-            return false;
+            });
+            return any[0];
         }
 
         Set<Integer> aggregatedTracks = null;
@@ -839,12 +1004,13 @@ public class VariantList {
         if (!filter.passesNodeLevel(node, aggregatedTracks)) {
             return false;
         }
-        for (VariantNode.SampleCall call : node.getSamples()) {
-            if (filter.passesSampleThresholds(node, call)) {
-                return true;
+        boolean[] any = { false };
+        node.forEachSample(call -> {
+            if (!any[0] && filter.passesSampleThresholds(node, call)) {
+                any[0] = true;
             }
-        }
-        return false;
+        });
+        return any[0];
     }
     
     /**
@@ -1256,6 +1422,12 @@ public class VariantList {
                 types.add(current.type);
             }
             current = current.next;
+        }
+        // Synthetic LOH regions sit outside the VCF linked list.
+        for (VariantNode region : getLohRegions()) {
+            if (region != null && region.type != null && region.hasUiVisibleSample()) {
+                types.add(region.type);
+            }
         }
         return types;
     }

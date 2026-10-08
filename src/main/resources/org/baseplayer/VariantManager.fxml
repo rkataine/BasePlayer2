@@ -187,6 +187,26 @@
                             </TableView>
                         </StackPane>
                     </Tab>
+                    <!-- LOH regions: sibling of Coding / Intronic / Intergenic -->
+                    <Tab fx:id="lohRegionsTab" text="LOH">
+                        <TabPane fx:id="lohResultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs">
+                            <Tab fx:id="lohAllTab" text="All">
+                                <StackPane styleClass="table-container">
+                                    <TableView fx:id="lohAllTable" styleClass="variant-table"/>
+                                </StackPane>
+                            </Tab>
+                            <Tab fx:id="lohAaTab" text="LOH AA">
+                                <StackPane styleClass="table-container">
+                                    <TableView fx:id="lohAaTable" styleClass="variant-table"/>
+                                </StackPane>
+                            </Tab>
+                            <Tab fx:id="lohBbTab" text="LOH BB">
+                                <StackPane styleClass="table-container">
+                                    <TableView fx:id="lohBbTable" styleClass="variant-table"/>
+                                </StackPane>
+                            </Tab>
+                        </TabPane>
+                    </Tab>
                 </TabPane>
             </SplitPane>
         </Tab>
@@ -267,17 +287,17 @@
                         </padding>
                         <VBox spacing="8" VBox.vgrow="ALWAYS">
                             <HBox spacing="8" alignment="CENTER_LEFT">
-                                <Label text="Sample Groups" styleClass="section-header"/>
+                                <Label text="Sample Tags" styleClass="section-header"/>
                                 <Region HBox.hgrow="ALWAYS"/>
                                 <Button fx:id="refreshComparisonGroupsButton" text="Refresh" styleClass="secondary-button" onAction="#handleRefreshComparisonGroups"/>
                             </HBox>
-                            <Label text="For each named group, choose whether the variant (or gene / window cluster) must be present, must be absent, must be heterozygous, must be homozygous ALT, or is ignored. Genotype roles require at least one matching call in the group (same as present)."
+                            <Label text="Assign roles to fixed tags (Mother, Father, Child, Parental, Marker). Roles are applied inside each sample group (family). Use presets for common trio / LOH patterns."
                                    styleClass="subsection-label" wrapText="true"/>
                             <VBox fx:id="comparisonGroupsContainer" spacing="6" VBox.vgrow="ALWAYS"/>
-                            <Label fx:id="groupComparisonSummaryLabel" text="No group constraints" styleClass="value-label" wrapText="true"/>
+                            <Label fx:id="groupComparisonSummaryLabel" text="No tag constraints" styleClass="value-label" wrapText="true"/>
                         </VBox>
                         <VBox spacing="6">
-                            <Label text="When multiple groups require present / genotype" styleClass="section-header"/>
+                            <Label text="When multiple tags require present / genotype" styleClass="section-header"/>
                             <HBox spacing="16" alignment="CENTER_LEFT">
                                 <RadioButton fx:id="presentMatchAllRadio" text="All of them (AND)" selected="true" styleClass="filter-radio"/>
                                 <RadioButton fx:id="presentMatchAnyRadio" text="Any of them (OR)" styleClass="filter-radio"/>

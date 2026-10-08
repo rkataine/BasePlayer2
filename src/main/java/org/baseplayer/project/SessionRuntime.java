@@ -280,6 +280,7 @@ public final class SessionRuntime {
           continue;
         }
         applyTrackGroupMembership(track, trackSpec.groupIds, registry);
+        applyTrackTags(track, trackSpec.tags);
         registry.getSampleTracks().add(track);
         registry.getSampleList().add(track.getDisplayName());
       } catch (Exception e) {
@@ -292,14 +293,38 @@ public final class SessionRuntime {
     }
   }
 
+  /**
+   * Legacy subgroup id → parent root id. Cleared after each restore.
+   * Also stores inferred tags for members of named Parental/Marker subgroups.
+   */
+  private static Map<Integer, Integer> legacySubgroupToParent = Map.of();
+  private static Map<Integer, org.baseplayer.samples.SampleTag> legacySubgroupTag = Map.of();
+
   private static void restoreSampleGroups(ProjectDocument document, SampleRegistry registry) {
     if (registry == null) {
       return;
     }
-    List<SampleGroup> groups = new ArrayList<>();
+    List<SampleGroup> flatGroups = new ArrayList<>();
+    Map<Integer, Integer> childToParent = new LinkedHashMap<>();
+    Map<Integer, org.baseplayer.samples.SampleTag> childTag = new LinkedHashMap<>();
+    Map<Integer, ProjectDocument.SampleGroupSpec> specsById = new LinkedHashMap<>();
+
     if (document != null && document.sampleGroups != null) {
       for (ProjectDocument.SampleGroupSpec spec : document.sampleGroups) {
         if (spec == null || spec.id < 0) {
+          continue;
+        }
+        specsById.put(spec.id, spec);
+      }
+      for (ProjectDocument.SampleGroupSpec spec : specsById.values()) {
+        int parentId = spec.parentGroupId;
+        if (parentId >= 0 && specsById.containsKey(parentId) && parentId != spec.id) {
+          // Subgroup → merge into parent; infer tag from name.
+          childToParent.put(spec.id, parentId);
+          org.baseplayer.samples.SampleTag inferred = inferTagFromLegacyGroupName(spec.name);
+          if (inferred != null) {
+            childTag.put(spec.id, inferred);
+          }
           continue;
         }
         Color color = null;
@@ -310,28 +335,35 @@ public final class SessionRuntime {
             color = null;
           }
         }
-        SampleGroup group = new SampleGroup(spec.id, spec.name, color);
-        group.setParentalTrackName(spec.parentalTrackName);
-        group.setParentGroupId(spec.parentGroupId);
-        groups.add(group);
-      }
-      // One nesting level only; drop invalid parent links (missing parent or nested subgroup).
-      Map<Integer, SampleGroup> byId = new LinkedHashMap<>();
-      for (SampleGroup group : groups) {
-        byId.put(group.getId(), group);
-      }
-      for (SampleGroup group : groups) {
-        int parentId = group.getParentGroupId();
-        if (parentId < 0) {
-          continue;
-        }
-        SampleGroup parent = byId.get(parentId);
-        if (parent == null || parent.isSubgroup() || parent.getId() == group.getId()) {
-          group.setParentGroupId(SampleGroup.NO_PARENT);
-        }
+        flatGroups.add(new SampleGroup(spec.id, spec.name, color));
       }
     }
-    registry.replaceSampleGroups(groups);
+    legacySubgroupToParent = childToParent;
+    legacySubgroupTag = childTag;
+    registry.replaceSampleGroups(flatGroups);
+  }
+
+  private static org.baseplayer.samples.SampleTag inferTagFromLegacyGroupName(String name) {
+    if (name == null || name.isBlank()) {
+      return null;
+    }
+    String n = name.trim().toLowerCase(Locale.ROOT);
+    if (n.contains("marker")) {
+      return org.baseplayer.samples.SampleTag.MARKER;
+    }
+    if (n.contains("parental") || n.contains("parent")) {
+      return org.baseplayer.samples.SampleTag.PARENTAL;
+    }
+    if (n.contains("mother") || n.equals("mom") || n.equals("maternal")) {
+      return org.baseplayer.samples.SampleTag.MOTHER;
+    }
+    if (n.contains("father") || n.equals("dad") || n.equals("paternal")) {
+      return org.baseplayer.samples.SampleTag.FATHER;
+    }
+    if (n.contains("child") || n.contains("daughter") || n.contains("son") || n.contains("proband")) {
+      return org.baseplayer.samples.SampleTag.CHILD;
+    }
+    return null;
   }
 
   private static void applyTrackGroupMembership(
@@ -344,10 +376,33 @@ public final class SessionRuntime {
       return;
     }
     for (Integer groupId : groupIds) {
-      if (groupId == null || groupId < 0 || registry.getSampleGroup(groupId) == null) {
+      if (groupId == null || groupId < 0) {
         continue;
       }
-      track.addGroupId(groupId);
+      int resolved = groupId;
+      Integer parent = legacySubgroupToParent.get(groupId);
+      if (parent != null) {
+        resolved = parent;
+        org.baseplayer.samples.SampleTag tag = legacySubgroupTag.get(groupId);
+        if (tag != null) {
+          track.addTag(tag);
+        }
+      }
+      if (registry.getSampleGroup(resolved) != null) {
+        track.addGroupId(resolved);
+      }
+    }
+  }
+
+  private static void applyTrackTags(SampleTrack track, List<String> tagNames) {
+    if (track == null || tagNames == null || tagNames.isEmpty()) {
+      return;
+    }
+    for (String raw : tagNames) {
+      org.baseplayer.samples.SampleTag tag = org.baseplayer.samples.SampleTag.fromName(raw);
+      if (tag != null) {
+        track.addTag(tag);
+      }
     }
   }
 
@@ -663,7 +718,9 @@ public final class SessionRuntime {
         filter.setPresentMatchMode(VariantFilter.PresentMatchMode.ALL);
       }
     }
-    Map<Integer, VariantFilter.GroupRole> roles = new HashMap<>();
+    Map<org.baseplayer.samples.SampleTag, VariantFilter.GroupRole> tagRoles =
+        new java.util.EnumMap<>(org.baseplayer.samples.SampleTag.class);
+    Map<Integer, VariantFilter.GroupRole> legacyRoles = new HashMap<>();
     if (spec.groupRoles != null) {
       for (ProjectDocument.GroupRoleSpec roleSpec : spec.groupRoles) {
         if (roleSpec == null || roleSpec.role == null || roleSpec.role.isBlank()) {
@@ -672,15 +729,28 @@ public final class SessionRuntime {
         try {
           VariantFilter.GroupRole role =
               VariantFilter.GroupRole.valueOf(roleSpec.role.trim().toUpperCase(Locale.ROOT));
-          if (role != VariantFilter.GroupRole.IGNORE) {
-            roles.put(roleSpec.groupId, role);
+          if (role == VariantFilter.GroupRole.IGNORE) {
+            continue;
+          }
+          if (roleSpec.tag != null && !roleSpec.tag.isBlank()) {
+            org.baseplayer.samples.SampleTag tag =
+                org.baseplayer.samples.SampleTag.fromName(roleSpec.tag);
+            if (tag != null) {
+              tagRoles.put(tag, role);
+            }
+          } else if (roleSpec.groupId != Integer.MIN_VALUE) {
+            legacyRoles.put(roleSpec.groupId, role);
           }
         } catch (IllegalArgumentException ignored) {
           // skip
         }
       }
     }
-    filter.setGroupRoles(roles);
+    if (!tagRoles.isEmpty()) {
+      filter.setTagRoles(tagRoles);
+    } else {
+      filter.setGroupRoles(legacyRoles);
+    }
   }
 
   private static void resolveGroupTrackIndices(VariantFilter filter) {
@@ -697,7 +767,14 @@ public final class SessionRuntime {
   }
 
   private static void resolveGroupTrackIndicesLocal(VariantFilter filter) {
-    if (filter == null || filter.getGroupRoles() == null || filter.getGroupRoles().isEmpty()) {
+    if (filter == null) {
+      return;
+    }
+    if (filter.getTagRoles() != null && !filter.getTagRoles().isEmpty()) {
+      filter.rebuildTagCohortsFromRegistry();
+      return;
+    }
+    if (filter.getGroupRoles() == null || filter.getGroupRoles().isEmpty()) {
       return;
     }
     Map<Integer, Set<Integer>> byGroup = new HashMap<>();
@@ -726,33 +803,13 @@ public final class SessionRuntime {
       }
     }
     filter.setGroupTrackIndices(byGroup);
-    filter.setGroupLineageScope(resolveGroupLineageScope(byGroup.keySet(), registry));
-  }
-
-  private static Map<Integer, Integer> resolveGroupLineageScope(
-      Set<Integer> groupIds, SampleRegistry registry) {
     Map<Integer, Integer> scopes = new HashMap<>();
-    if (groupIds == null || groupIds.isEmpty()) {
-      return scopes;
-    }
-    for (Integer groupId : groupIds) {
-      if (groupId == null) {
-        continue;
-      }
-      if (groupId == VariantFilter.UNGROUPED_COHORT_ID) {
-        scopes.put(groupId, VariantFilter.UNGROUPED_COHORT_ID);
-        continue;
-      }
-      SampleGroup group = registry != null ? registry.getSampleGroup(groupId) : null;
-      if (group == null) {
+    for (Integer groupId : byGroup.keySet()) {
+      if (groupId != null) {
         scopes.put(groupId, groupId);
-      } else if (group.isRoot()) {
-        scopes.put(groupId, group.getId());
-      } else {
-        scopes.put(groupId, group.getParentGroupId());
       }
     }
-    return scopes;
+    filter.setGroupLineageScope(scopes);
   }
 
   private static VariantFilter restoreClassFilter(ProjectDocument.ClassFilterSpec spec) {

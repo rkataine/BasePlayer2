@@ -32,6 +32,7 @@ import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantLoader;
 import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.annotation.VariantAnnotator;
@@ -481,6 +482,9 @@ public class VcfManager {
                     // Gene-level / cohort comparison is display-only — do not prune the cache.
                     result.retainVariants(loadFilterSnapshot::passesCacheRetention);
                     result.rebuildVisibleChain(loadFilterSnapshot);
+                    if (!result.getLohRegions().isEmpty()) {
+                        annotator.annotateLohRegions(result, targetChromosome);
+                    }
 
                     return result;
                 } catch (InterruptedException e) {
@@ -1149,6 +1153,9 @@ public class VcfManager {
 
         variants.retainVariants(filter::passesCacheRetention);
         variants.rebuildVisibleChain(filter);
+        if (!variants.getLohRegions().isEmpty()) {
+            annotator.annotateLohRegions(variants, chromosome);
+        }
 
         // Mark the variants as annotated and store the filter info.
         // Use Long.MAX_VALUE so isFullChromosomeCached / RegionFetchCache agree with
@@ -1238,37 +1245,88 @@ public class VcfManager {
      * Safe to call from any thread.
      */
     public void applyFilter(VariantFilter filter, String chromosome) {
+        applyFilter(filter, chromosome, true);
+    }
+
+    /**
+     * Apply a filter. When {@code rebuildVisibleChainsOnFx} is false, only invalidate
+     * cached visible chains and skip canvas redraw — the caller rebuilds chains off the
+     * FX thread (e.g. sample-comparison / LOH) and redraws afterward.
+     */
+    public void applyFilter(VariantFilter filter, String chromosome, boolean rebuildVisibleChainsOnFx) {
         boolean changed = filterChanged(filter);
         this.currentFilter = filter;
         filterGeneration.incrementAndGet();
         if (changed) {
             ProjectSessionState.get().markDirty();
         }
+        // Seed both LOH AA/BB into session legends whenever LOH comparison is active.
+        if (filter != null && filter.isLohMode()) {
+            unionSessionAvailableFilters(VariantTypeVisuals.lohRegionTypes(), null);
+        }
         // Keep live session document filter specs in sync (SSOT).
         if (!ProjectSessionState.get().isSuppressingDirty()) {
             SessionDocumentSync.writeVariantFilterFromRuntime(this);
         }
+        if (!rebuildVisibleChainsOnFx) {
+            // Do not walk/clear chains on the FX thread (large datasets freeze before the
+            // loading modal can paint). The background comparison task rebuilds chains;
+            // cheap key invalidation makes ensureVisibleChain treat them as stale.
+            invalidateVisibleChainKeysForCache();
+            return;
+        }
         // Rebuild visible skip chains for cached lists, then redraw.
         Platform.runLater(() -> {
             rebuildVisibleChainsForCache(filter);
-            DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-            for (DrawStack stack : stackManager.getStacks()) {
-                if (stack.sampleTrackCanvas != null) stack.sampleTrackCanvas.draw();
-                if (stack.sampleAggregateCanvas != null) {
-                    stack.sampleAggregateCanvas.forceCalculateDensity();
-                }
-            }
+            redrawSampleCanvases();
         });
     }
 
+    /** Drop cached visible chains so the next ensure/rebuild uses the current filter. */
+    public void clearVisibleChainsForCache() {
+        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
+        for (VariantList list : variantCache.values()) {
+            if (list == null || seen.put(list, Boolean.TRUE) != null) {
+                continue;
+            }
+            list.clearVisibleChain();
+        }
+    }
+
+    /** Cheap stale mark without walking every variant node (FX-safe). */
+    public void invalidateVisibleChainKeysForCache() {
+        java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
+        for (VariantList list : variantCache.values()) {
+            if (list == null || seen.put(list, Boolean.TRUE) != null) {
+                continue;
+            }
+            list.invalidateVisibleFilterKey();
+        }
+    }
+
     /** Rebuild drawable skip chains on all cached chromosome lists for {@code filter}. */
-    private void rebuildVisibleChainsForCache(VariantFilter filter) {
+    public void rebuildVisibleChainsForCache(VariantFilter filter) {
         java.util.IdentityHashMap<VariantList, Boolean> seen = new java.util.IdentityHashMap<>();
         for (VariantList list : variantCache.values()) {
             if (list == null || list.isEmpty() || seen.put(list, Boolean.TRUE) != null) {
                 continue;
             }
+            // rebuildVisibleChain / rebuildForComparison already synthesizes AA, builds LOH
+            // regions, and annotates LOH when the list is annotated.
             list.rebuildVisibleChain(filter);
+        }
+    }
+
+    /** Redraw sample tracks and aggregate density for the current filter. */
+    public void redrawSampleCanvases() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack.sampleTrackCanvas != null) {
+                stack.sampleTrackCanvas.draw();
+            }
+            if (stack.sampleAggregateCanvas != null) {
+                stack.sampleAggregateCanvas.forceCalculateDensity();
+            }
         }
     }
 
@@ -1277,7 +1335,15 @@ public class VcfManager {
      * Safe to call from any thread.
      */
     public void applyFilter(VariantFilter filter) {
-        applyFilter(filter, lastLoadedChromosome);
+        applyFilter(filter, lastLoadedChromosome, true);
+    }
+
+    /**
+     * Apply filter metadata and invalidate visible chains without rebuilding on the FX thread.
+     * Use when a background task will rebuild chains (sample comparison / LOH).
+     */
+    public void applyFilterDeferVisibleRebuild(VariantFilter filter) {
+        applyFilter(filter, lastLoadedChromosome, false);
     }
 
     public void clearFilter() {
@@ -1291,6 +1357,31 @@ public class VcfManager {
     /** True unless the type was hidden via aggregate density legends. */
     public synchronized boolean isCanvasTypeVisible(VcfVariantType type) {
         return type != null && !canvasHiddenTypes.contains(type);
+    }
+
+    /**
+     * Whether {@code type} should paint on sample tracks / aggregate density.
+     * Hidden legend types are off; types outside the current legend universe are also
+     * suppressed so deselecting every legend entry cannot leave “ghost” alleles from
+     * default-visible types that never appeared as a swatch (e.g. indel bucket ORs).
+     */
+    public synchronized boolean isCanvasTypeDrawn(VcfVariantType type) {
+        return isCanvasTypeDrawn(type, getSessionAvailableTypes());
+    }
+
+    /**
+     * Same as {@link #isCanvasTypeDrawn(VcfVariantType)} with a pre-fetched legend
+     * universe (avoid rebuilding the set in per-node draw loops).
+     */
+    public synchronized boolean isCanvasTypeDrawn(
+            VcfVariantType type, Set<VcfVariantType> legendUniverse) {
+        if (!isCanvasTypeVisible(type)) {
+            return false;
+        }
+        if (legendUniverse == null || legendUniverse.isEmpty()) {
+            return true;
+        }
+        return legendUniverse.contains(type);
     }
 
     /**
@@ -1325,13 +1416,23 @@ public class VcfManager {
         }
     }
 
+    /** Redraw sample tracks + aggregate legends after canvas type visibility changes. */
+    public void refreshCanvasesForTypeVisibility() {
+        Platform.runLater(this::redrawCanvasesForTypeVisibility);
+    }
+
     /**
      * True when the type was included in the filter used to materialize the current
      * chromosome cache (so canvas toggle alone can show/hide it).
+     * Synthetic LOH AA/BB regions are never VCF-loaded — they are materialized whenever
+     * the live filter is in LOH mode (or regions already exist on a cached list).
      */
     public synchronized boolean isTypeMaterializedInCache(VcfVariantType type) {
         if (type == null) {
             return false;
+        }
+        if (VariantTypeVisuals.isLohRegion(type)) {
+            return isLohCanvasMaterialized();
         }
         VariantFilter loaded = getCurrentLoadedFilter();
         if (loaded == null) {
@@ -1340,10 +1441,26 @@ public class VcfManager {
         return loaded.getAllowedTypes() != null && loaded.getAllowedTypes().contains(type);
     }
 
+    /** LOH arcs can be toggled without a VCF reload when LOH mode (or regions) is active. */
+    public synchronized boolean isLohCanvasMaterialized() {
+        VariantFilter live = currentFilter;
+        if (live != null && live.isLohMode()) {
+            return true;
+        }
+        for (VariantList list : variantCache.values()) {
+            if (list != null && !list.getLohRegions().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Types observed in any currently open VCF (union of {@link VcfData#getObservedTypes()}).
      * Recorded while streaming, before load filters — so a DEL-only reload does not erase
      * other types that were already seen for that file.
+     * When LOH mode is active (or regions exist), both synthetic LOH AA and LOH BB are
+     * included so aggregate legends can toggle them independently of VCF streaming.
      */
     public synchronized Set<VcfVariantType> getSessionAvailableTypes() {
         EnumSet<VcfVariantType> types = EnumSet.noneOf(VcfVariantType.class);
@@ -1351,6 +1468,12 @@ public class VcfManager {
             if (vcfData != null) {
                 types.addAll(vcfData.observedTypes);
             }
+        }
+        // Drop stale LOH entries left from older caches / ordinal shifts unless LOH is live.
+        if (!isLohCanvasMaterialized()) {
+            types.removeAll(VariantTypeVisuals.lohRegionTypes());
+        } else {
+            types.addAll(VariantTypeVisuals.lohRegionTypes());
         }
         return types;
     }

@@ -3,8 +3,10 @@ package org.baseplayer.samples;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.baseplayer.samples.alignment.AlignmentFile;
 
@@ -95,6 +97,60 @@ public class SampleTrack implements Closeable {
 
   public void clearGroup() {
     groupIds.clear();
+  }
+
+  // ── Fixed tags (trio / marker roles; multi-tag allowed) ──
+
+  private final EnumSet<SampleTag> tags = EnumSet.noneOf(SampleTag.class);
+
+  public Set<SampleTag> getTags() {
+    return tags.isEmpty() ? Set.of() : EnumSet.copyOf(tags);
+  }
+
+  public boolean hasTag(SampleTag tag) {
+    return tag != null && tags.contains(tag);
+  }
+
+  public boolean hasAnyTag() {
+    return !tags.isEmpty();
+  }
+
+  public void setTags(Set<SampleTag> next) {
+    tags.clear();
+    if (next != null) {
+      for (SampleTag tag : next) {
+        if (tag != null) {
+          tags.add(tag);
+        }
+      }
+    }
+  }
+
+  public void addTag(SampleTag tag) {
+    if (tag != null) {
+      tags.add(tag);
+    }
+  }
+
+  public void removeTag(SampleTag tag) {
+    if (tag != null) {
+      tags.remove(tag);
+    }
+  }
+
+  public void toggleTag(SampleTag tag) {
+    if (tag == null) {
+      return;
+    }
+    if (tags.contains(tag)) {
+      tags.remove(tag);
+    } else {
+      tags.add(tag);
+    }
+  }
+
+  public void clearTags() {
+    tags.clear();
   }
 
   // ── Samples (data files) ──

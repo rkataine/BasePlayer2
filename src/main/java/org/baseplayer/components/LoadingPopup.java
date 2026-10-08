@@ -48,6 +48,11 @@ public class LoadingPopup {
     private volatile double lastProgress;
     private boolean sessionActive;
     private Timeline elapsedTicker;
+    /**
+     * After native dialogs (FileChooser) Linux often leaves no focused Stage.
+     * Defer hide so we do not treat that as "app backgrounded" and skip the popup.
+     */
+    private Timeline unfocusedHideDelay;
 
     private final ChangeListener<Boolean> focusListener =
             (obs, was, is) -> syncForegroundVisibility();
@@ -284,6 +289,7 @@ public class LoadingPopup {
         if (Platform.isFxApplicationThread()) {
             sessionActive = false;
             stopElapsedTicker();
+            cancelUnfocusedHide();
             ownerHint = null;
             popup.hide();
         } else {
@@ -301,18 +307,18 @@ public class LoadingPopup {
 
     public void syncForegroundVisibility() {
         if (!sessionActive) {
+            cancelUnfocusedHide();
             popup.hide();
             return;
         }
         watchWindows();
 
-        // Hide with the app when another OS window is focused — JavaFX Popup can
-        // otherwise sit above every desktop window on Linux.
-        if (!isAppInForeground()) {
-            if (popup.isShowing()) {
-                popup.hide();
-            }
-            return;
+        // Hide when the user alt-tabs away — but not on a brief empty-focus gap
+        // (common on Linux right after FileChooser), or Excel export never shows.
+        if (isAppInForeground()) {
+            cancelUnfocusedHide();
+        } else {
+            scheduleUnfocusedHide();
         }
 
         Window top = findTopFocusedStage();
@@ -340,9 +346,30 @@ public class LoadingPopup {
         watchWindow(popup);
     }
 
+    private void scheduleUnfocusedHide() {
+        if (unfocusedHideDelay != null) {
+            return;
+        }
+        unfocusedHideDelay = new Timeline(new KeyFrame(Duration.millis(750), e -> {
+            unfocusedHideDelay = null;
+            if (sessionActive && !isAppInForeground()) {
+                popup.hide();
+            }
+        }));
+        unfocusedHideDelay.play();
+    }
+
+    private void cancelUnfocusedHide() {
+        if (unfocusedHideDelay != null) {
+            unfocusedHideDelay.stop();
+            unfocusedHideDelay = null;
+        }
+    }
+
     private void cancel() {
         sessionActive = false;
         stopElapsedTicker();
+        cancelUnfocusedHide();
         ownerHint = null;
         popup.hide();
         if (onCancel != null) {

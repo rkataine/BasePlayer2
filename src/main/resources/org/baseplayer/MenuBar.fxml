@@ -43,6 +43,7 @@
         <items>
           <MenuItem text="Table Browser" />
           <MenuItem text="Settings" onAction="#openSettings" />
+          <MenuItem text="Sample Groups…" onAction="#openSampleGroups" />
           <SeparatorMenuItem />
           <MenuItem text="Sample open errors…" onAction="#openSampleOpenErrors" />
           <MenuItem text="Clean memory" onAction="#cleanMemory" />
@@ -79,6 +80,13 @@
               visible="false" managed="false">
         <tooltip>
           <Tooltip text="Open Variant Manager" />
+        </tooltip>
+      </Button>
+      <Button fx:id="sampleGroupsButton" onAction="#openSampleGroups" styleClass="zoom-button"
+              prefHeight="22.0" focusTraversable="false"
+              visible="false" managed="false">
+        <tooltip>
+          <Tooltip text="Sample groups &amp; tags" />
         </tooltip>
       </Button>
       <Region HBox.hgrow="ALWAYS" />

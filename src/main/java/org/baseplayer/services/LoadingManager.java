@@ -5,6 +5,9 @@ import java.util.List;
 import org.baseplayer.MainApp;
 import org.baseplayer.components.LoadingPopup;
 
+import javafx.application.Platform;
+import javafx.stage.Window;
+
 /**
  * Owns the single application-wide {@link LoadingPopup} and keeps it in sync
  * with {@link ThreadRunner}'s active task list.
@@ -35,8 +38,15 @@ public final class LoadingManager {
    * Safe to call from any thread.
    */
   public void setProgress(int current, int total) {
-    ensurePopup();
-    popup.setProgress(current, total);
+    if (Platform.isFxApplicationThread()) {
+      ensurePopup();
+      popup.setProgress(current, total);
+      return;
+    }
+    Platform.runLater(() -> {
+      ensurePopup();
+      popup.setProgress(current, total);
+    });
   }
 
   /**
@@ -44,8 +54,15 @@ public final class LoadingManager {
    * Safe to call from any thread.
    */
   public void setProgress(double progress) {
-    ensurePopup();
-    popup.setProgress(progress);
+    if (Platform.isFxApplicationThread()) {
+      ensurePopup();
+      popup.setProgress(progress);
+      return;
+    }
+    Platform.runLater(() -> {
+      ensurePopup();
+      popup.setProgress(progress);
+    });
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -62,7 +79,7 @@ public final class LoadingManager {
       ensurePopup();
       String message = buildMessage(tasks);
       if (!popup.isShowing()) {
-        popup.show(message, MainApp.stage, ThreadRunner.get()::cancelAll);
+        popup.show(message, resolveOwnerWindow(), ThreadRunner.get()::cancelAll);
       } else {
         popup.setMessage(message);
         popup.syncForegroundVisibility();
@@ -75,8 +92,20 @@ public final class LoadingManager {
     }
   }
 
+  private static Window resolveOwnerWindow() {
+    org.baseplayer.variant.ui.VariantManagerController controller =
+        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+    if (controller != null && controller.getStage() != null && controller.getStage().isShowing()) {
+      return controller.getStage();
+    }
+    return MainApp.stage;
+  }
+
   private void ensurePopup() {
     if (popup == null) {
+      if (!Platform.isFxApplicationThread()) {
+        throw new IllegalStateException("LoadingPopup must be created on the JavaFX thread");
+      }
       popup = new LoadingPopup();
     }
   }

@@ -9,6 +9,7 @@ import org.baseplayer.genome.gene.Transcript;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.BaseUtils;
 import org.baseplayer.utils.ChromosomeNames;
+import org.baseplayer.variant.ComparisonProgress;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
@@ -37,16 +38,69 @@ public class VariantAnnotator {
 
     /** Annotate all variants in the list, setting node.annotation on each node directly. */
     public void annotate(VariantList variants, String chromosome) {
-        if (variants == null || variants.isEmpty()) return;
+        if (variants == null) return;
 
         Map<String, List<Gene>> byChrom = AnnotationData.getGenesByChrom();
         String chromKey = ChromosomeNames.strip(chromosome);
         List<Gene> genes = byChrom.getOrDefault(chromKey, List.of());
 
-        VariantNode node = variants.getFirst();
-        while (node != null) {
-            node.annotation = annotateVariant(node, chromKey, genes, byChrom);
-            node = node.next;
+        if (!variants.isEmpty()) {
+            VariantNode node = variants.getFirst();
+            while (node != null) {
+                node.annotation = annotateVariant(node, chromKey, genes, byChrom);
+                node = node.next;
+            }
+        }
+        annotateLohRegions(variants, chromKey, genes, byChrom);
+    }
+
+    /**
+     * Annotate synthetic LOH region nodes (outside the VCF linked list).
+     * Safe to call after a visible-chain rebuild when the chromosome is already annotated.
+     */
+    public void annotateLohRegions(VariantList variants, String chromosome) {
+        annotateLohRegions(variants, chromosome, null);
+    }
+
+    public void annotateLohRegions(
+            VariantList variants, String chromosome, ComparisonProgress progress) {
+        if (variants == null) {
+            return;
+        }
+        Map<String, List<Gene>> byChrom = AnnotationData.getGenesByChrom();
+        String chromKey = ChromosomeNames.strip(chromosome);
+        List<Gene> genes = byChrom.getOrDefault(chromKey, List.of());
+        annotateLohRegions(variants, chromKey, genes, byChrom, progress);
+    }
+
+    private void annotateLohRegions(
+            VariantList variants,
+            String chromKey,
+            List<Gene> genes,
+            Map<String, List<Gene>> byChrom) {
+        annotateLohRegions(variants, chromKey, genes, byChrom, null);
+    }
+
+    private void annotateLohRegions(
+            VariantList variants,
+            String chromKey,
+            List<Gene> genes,
+            Map<String, List<Gene>> byChrom,
+            ComparisonProgress progress) {
+        List<VariantNode> regions = variants.getLohRegions();
+        if (regions == null || regions.isEmpty()) {
+            return;
+        }
+        int total = regions.size();
+        int processed = 0;
+        for (VariantNode node : regions) {
+            if (node != null) {
+                node.annotation = annotateVariant(node, chromKey, genes, byChrom);
+            }
+            processed++;
+            if (progress != null && ((processed & 0xFF) == 0 || processed == total)) {
+                progress.reportStageProgress(processed, total);
+            }
         }
     }
 
@@ -55,10 +109,45 @@ public class VariantAnnotator {
             String chromosome,
             List<Gene> genes,
             Map<String, List<Gene>> byChrom) {
+        if (VariantTypeVisuals.isLohRegion(node.type)) {
+            return annotateLohRegion(node, chromosome, genes);
+        }
         if (VariantTypeVisuals.isStructural(node.type)) {
             return annotateStructural(node, chromosome, genes, byChrom);
         }
         return annotatePoint(node, chromosome, genes);
+    }
+
+    /**
+     * LOH spans: every overlapping gene (not census-filtered), like DEL but all genes.
+     */
+    private VariantAnnotation annotateLohRegion(
+            VariantNode node,
+            String chromosome,
+            List<Gene> genes) {
+        long end = node.svEnd > node.position ? node.svEnd : node.position;
+        List<String> overlapping = overlappingGenes(genes, node.position, end);
+        String primary = overlapping.isEmpty() ? null : overlapping.get(0);
+        boolean isCancer = primary != null && CosmicGenes.isCosmicGene(primary);
+        // Prefer a census gene as primary when present among overlaps.
+        if (!overlapping.isEmpty()) {
+            for (String name : overlapping) {
+                if (CosmicGenes.isCosmicGene(name)) {
+                    primary = name;
+                    isCancer = true;
+                    break;
+                }
+            }
+        }
+        CosmicCensusEntry cosmic = primary != null && isCancer ? CosmicGenes.getEntry(primary) : null;
+        VariantEffect effect = overlapping.isEmpty()
+            ? VariantEffect.INTERGENIC
+            : VariantEffect.NONCODING_GENE;
+
+        return new VariantAnnotation(
+            chromosome, node.position, effect,
+            primary, null, null, null, 0,
+            isCancer, cosmic, overlapping);
     }
 
     private VariantAnnotation annotateStructural(
@@ -78,6 +167,11 @@ public class VariantAnnotator {
             case SV_INVERSION -> inversionNearestCensusGenes(genes, node);
             case SV_TRANSLOCATION, SV_BREAKEND -> translocationNearestCensusGenes(node, genes, byChrom);
             case SV_INSERTION -> nearestCensusAtLocus(genes, node.position);
+            case LOH_AA, LOH_BB -> {
+                // Routed via annotateLohRegion; keep switch exhaustive.
+                long end = node.svEnd > node.position ? node.svEnd : node.position;
+                yield overlappingGenes(genes, node.position, end);
+            }
             default -> List.of();
         };
 
@@ -186,7 +280,33 @@ public class VariantAnnotator {
             isCancerGene, cosmicEntry, overlapping);
     }
 
-    // ── SV census-gene helpers ────────────────────────────────────────────────
+    // ── SV / LOH gene helpers ─────────────────────────────────────────────────
+
+    /** All genes overlapping inclusive [start, end] on a start-sorted gene list. */
+    static List<String> overlappingGenes(List<Gene> genes, long start, long end) {
+        if (genes == null || genes.isEmpty()) {
+            return List.of();
+        }
+        long qStart = Math.min(start, end);
+        long qEnd = Math.max(start, end);
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (Gene gene : genes) {
+            if (gene.start() > qEnd) {
+                break;
+            }
+            if (gene.end() < qStart) {
+                continue;
+            }
+            if (gene.name() == null || gene.name().isBlank()) {
+                continue;
+            }
+            if (seen.add(gene.name())) {
+                out.add(gene.name());
+            }
+        }
+        return out;
+    }
 
     /** All CGC genes overlapping inclusive [start, end] on a start-sorted gene list. */
     static List<String> overlappingCensusGenes(List<Gene> genes, long start, long end) {

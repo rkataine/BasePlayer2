@@ -44,6 +44,8 @@ public class MasterTrackPainter {
   private volatile int[] densityIns;
   private volatile int[] densityTra;
   private volatile int[] densityBnd;
+  private volatile int[] densityLohAa;
+  private volatile int[] densityLohBb;
   private volatile int densityMax = 1;
   private volatile boolean densityBusy = false;
   private volatile double densityCachedStart = -1;
@@ -90,13 +92,14 @@ public class MasterTrackPainter {
     return variantList;
   }
 
-  /** Kept for callers after sample removal; legends read open-VCF observed types. */
+  /** Kept for callers after sample removal; legends read session + LOH types. */
   public void refreshPresentTypesFromList() {
     // no-op: legendTypeUniverse uses VcfManager.getSessionAvailableTypes()
   }
 
   /**
-   * Types for legends: observed on any currently open VCF (single source of truth).
+   * Types for legends: open-VCF observed types, plus both LOH AA/BB when LOH mode
+   * (or regions) is active — see {@link VcfManager#getSessionAvailableTypes()}.
    */
   private Set<VcfVariantType> legendTypeUniverse() {
     return VcfManager.getInstance().getSessionAvailableTypes();
@@ -111,6 +114,8 @@ public class MasterTrackPainter {
     densityIns = null;
     densityTra = null;
     densityBnd = null;
+    densityLohAa = null;
+    densityLohBb = null;
     densitySvSpans = java.util.List.of();
   }
 
@@ -147,11 +152,13 @@ public class MasterTrackPainter {
     Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(hit.displayType(), present);
     VcfManager vcfManager = VcfManager.getInstance();
 
+    // Synthetic LOH regions are not VCF-loaded — never prompt a reload for them.
+    boolean lohOnly = linked.stream().allMatch(VariantTypeVisuals::isLohRegion);
     boolean anyNotMaterialized = linked.stream().anyMatch(t -> !vcfManager.isTypeMaterializedInCache(t));
     boolean enabling = linked.stream().anyMatch(t ->
         !vcfManager.isCanvasTypeVisible(t) || !vcfManager.isTypeMaterializedInCache(t));
 
-    if (enabling && anyNotMaterialized) {
+    if (enabling && anyNotMaterialized && !lohOnly) {
       promptReloadForTypes(linked);
       return true;
     }
@@ -334,7 +341,9 @@ public class MasterTrackPainter {
     legendHits.clear();
 
     double areaH = masterTrackHeight - 4;
-    double svH = densitySvSpans.isEmpty() ? 0 : Math.min(10, areaH * 0.22);
+    boolean hasCachedSpans = !densitySvSpans.isEmpty();
+    boolean hasLiveLohSpans = hasVisibleLohRegions(variants);
+    double svH = (hasCachedSpans || hasLiveLohSpans) ? Math.min(10, areaH * 0.22) : 0;
     double densH = areaH - svH;
 
     int scaleMax = Math.max(1, densityMax);
@@ -352,16 +361,37 @@ public class MasterTrackPainter {
           || densityDup != null
           || densityIns != null
           || densityTra != null
-          || densityBnd != null;
+          || densityBnd != null
+          || densityLohAa != null
+          || densityLohBb != null;
       if (hasDensityData) {
         drawDensityBars(gc, drawStack, canvasWidth, 2, densH);
       }
     }
     if (svH >= 4) {
+      // Cached SV spans + live LOH region bars (LOH is rebuilt with the filter chain
+      // and must not wait on deferred density while zoomed in).
       drawSvSpanBars(gc, drawStack, canvasWidth, 2 + densH, svH);
+      drawLohRegionBars(gc, drawStack, canvasWidth, 2 + densH, svH, variants);
     }
 
     drawDensityChrome(gc, canvasWidth, 2, densH > 0 ? densH : areaH, scaleMax);
+  }
+
+  private static boolean hasVisibleLohRegions(VariantList variants) {
+    if (variants == null) {
+      return false;
+    }
+    VcfManager vcf = VcfManager.getInstance();
+    Set<VcfVariantType> legendTypes = vcf.getSessionAvailableTypes();
+    for (VariantNode node : variants.getLohRegions()) {
+      if (node != null
+          && VariantTypeVisuals.isLohRegion(node.type)
+          && vcf.isCanvasTypeDrawn(node.type, legendTypes)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private void triggerVariantDensityCompute(VariantList variants, DrawStack drawStack) {
@@ -412,6 +442,10 @@ public class MasterTrackPainter {
         java.util.Set<Integer>[] traBySample = new java.util.HashSet[DENSITY_BINS];
         @SuppressWarnings("unchecked")
         java.util.Set<Integer>[] bndBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] lohAaBySample = new java.util.HashSet[DENSITY_BINS];
+        @SuppressWarnings("unchecked")
+        java.util.Set<Integer>[] lohBbBySample = new java.util.HashSet[DENSITY_BINS];
 
         List<SvSpan> spans = new ArrayList<>();
         double viewLen = Math.max(1, viewEnd - viewStart);
@@ -429,7 +463,21 @@ public class MasterTrackPainter {
           accumulateDensityNode(
               variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
               snvBySample, indelBySample, delBySample, invBySample, dupBySample,
-              insBySample, traBySample, bndBySample, spans, true);
+              insBySample, traBySample, bndBySample, lohAaBySample, lohBbBySample, spans, true);
+        }
+
+        // Synthetic LOH AA/BB region spans (outside the VCF linked list).
+        for (VariantNode node : variants.getLohRegions()) {
+          if (node == null || !VariantTypeVisuals.isLohRegion(node.type)) {
+            continue;
+          }
+          if (node.svEnd < viewStart || node.position > viewEnd) {
+            continue;
+          }
+          accumulateDensityNode(
+              variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
+              snvBySample, indelBySample, delBySample, invBySample, dupBySample,
+              insBySample, traBySample, bndBySample, lohAaBySample, lohBbBySample, spans, true);
         }
 
         // Thread-local seek: density runs off the FX thread and must not share drawer state.
@@ -439,7 +487,7 @@ public class MasterTrackPainter {
           accumulateDensityNode(
               variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
               snvBySample, indelBySample, delBySample, invBySample, dupBySample,
-              insBySample, traBySample, bndBySample, spans, false);
+              insBySample, traBySample, bndBySample, lohAaBySample, lohBbBySample, spans, false);
           node = node.nextVisible;
         }
 
@@ -451,6 +499,8 @@ public class MasterTrackPainter {
         int[] ins = new int[DENSITY_BINS];
         int[] tra = new int[DENSITY_BINS];
         int[] bnd = new int[DENSITY_BINS];
+        int[] lohAa = new int[DENSITY_BINS];
+        int[] lohBb = new int[DENSITY_BINS];
 
         for (int i = 0; i < DENSITY_BINS; i++) {
           if (snvBySample[i] != null) snv[i] = snvBySample[i].size();
@@ -461,6 +511,8 @@ public class MasterTrackPainter {
           if (insBySample[i] != null) ins[i] = insBySample[i].size();
           if (traBySample[i] != null) tra[i] = traBySample[i].size();
           if (bndBySample[i] != null) bnd[i] = bndBySample[i].size();
+          if (lohAaBySample[i] != null) lohAa[i] = lohAaBySample[i].size();
+          if (lohBbBySample[i] != null) lohBb[i] = lohBbBySample[i].size();
         }
 
         int maxC = 1;
@@ -473,6 +525,8 @@ public class MasterTrackPainter {
           maxC = Math.max(maxC, ins[i]);
           maxC = Math.max(maxC, tra[i]);
           maxC = Math.max(maxC, bnd[i]);
+          maxC = Math.max(maxC, lohAa[i]);
+          maxC = Math.max(maxC, lohBb[i]);
         }
 
         final int[] fSnv = snv;
@@ -483,6 +537,8 @@ public class MasterTrackPainter {
         final int[] fIns = ins;
         final int[] fTra = tra;
         final int[] fBnd = bnd;
+        final int[] fLohAa = lohAa;
+        final int[] fLohBb = lohBb;
         final int fMax = maxC;
         final List<SvSpan> fSpans = spans;
 
@@ -498,6 +554,8 @@ public class MasterTrackPainter {
           densityIns = fIns;
           densityTra = fTra;
           densityBnd = fBnd;
+          densityLohAa = fLohAa;
+          densityLohBb = fLohBb;
           densityMax = fMax;
           densitySvSpans = fSpans;
           densityBusy = false;
@@ -550,6 +608,8 @@ public class MasterTrackPainter {
       java.util.Set<Integer>[] insBySample,
       java.util.Set<Integer>[] traBySample,
       java.util.Set<Integer>[] bndBySample,
+      java.util.Set<Integer>[] lohAaBySample,
+      java.util.Set<Integer>[] lohBbBySample,
       List<SvSpan> spans,
       boolean treatAsSvSpan) {
     List<Integer> passingIndices = new ArrayList<>();
@@ -560,7 +620,9 @@ public class MasterTrackPainter {
       VariantNode.SampleCall call = useCache
           ? node.getDisplayCall(track, chainGen)
           : variants.getDisplayCall(node, track, activeFilter);
-      if (call == null || node.isHomozygousRef(call)) {
+      // LOH AA regions are homozygous REF by definition — still count them.
+      if (call == null
+          || (node.isHomozygousRef(call) && !VariantTypeVisuals.isLohRegion(node.type))) {
         continue;
       }
       passingIndices.add(entry.getValue());
@@ -574,7 +636,8 @@ public class MasterTrackPainter {
             && (node.type == VcfVariantType.SV_DELETION
                 || node.type == VcfVariantType.SV_INSERTION
                 || node.type == VcfVariantType.SV_DUPLICATION
-                || node.type == VcfVariantType.SV_INVERSION));
+                || node.type == VcfVariantType.SV_INVERSION
+                || VariantTypeVisuals.isLohRegion(node.type)));
 
     if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
       long s = Math.max((long) viewStart, node.position);
@@ -586,6 +649,8 @@ public class MasterTrackPainter {
 
       java.util.Set<Integer>[] targetArray = switch (node.type) {
         case SV_DELETION -> delBySample;
+        case LOH_AA -> lohAaBySample;
+        case LOH_BB -> lohBbBySample;
         case SV_INVERSION -> invBySample;
         case SV_DUPLICATION -> dupBySample;
         case SV_INSERTION -> insBySample;
@@ -680,8 +745,10 @@ public class MasterTrackPainter {
     List<PreciseBar> bars = new ArrayList<>();
 
     int chainGen = variants.getVisibleChainGeneration();
+    VcfManager vcfManager = VcfManager.getInstance();
+    Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
     java.util.function.Consumer<VariantNode> collect = node -> {
-      if (!VcfManager.getInstance().isCanvasTypeVisible(node.type)) {
+      if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
         return;
       }
       int count = 0;
@@ -690,7 +757,8 @@ public class MasterTrackPainter {
         VariantNode.SampleCall call = useCache
             ? node.getDisplayCall(track, chainGen)
             : variants.getDisplayCall(node, track, activeFilter);
-        if (call == null || node.isHomozygousRef(call)) {
+        if (call == null
+            || (node.isHomozygousRef(call) && !VariantTypeVisuals.isLohRegion(node.type))) {
           continue;
         }
         count++;
@@ -705,7 +773,8 @@ public class MasterTrackPainter {
           && (node.type == VcfVariantType.SV_DELETION
               || node.type == VcfVariantType.SV_INSERTION
               || node.type == VcfVariantType.SV_DUPLICATION
-              || node.type == VcfVariantType.SV_INVERSION)) {
+              || node.type == VcfVariantType.SV_INVERSION
+              || VariantTypeVisuals.isLohRegion(node.type))) {
         g1 = node.svEnd;
       }
       if (g1 <= viewStart || g0 > viewEnd) {
@@ -731,6 +800,16 @@ public class MasterTrackPainter {
         continue;
       }
       collect.accept(node);
+    }
+
+    for (VariantNode region : variants.getLohRegions()) {
+      if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
+        continue;
+      }
+      if (region.svEnd < viewStart || region.position > viewEnd) {
+        continue;
+      }
+      collect.accept(region);
     }
 
     VariantDrawSeek seek = new VariantDrawSeek();
@@ -762,7 +841,8 @@ public class MasterTrackPainter {
     if (drawStack.getViewLength() <= 0) return;
     if (densityDel == null && densitySnv == null && densityIndel == null
         && densityInv == null && densityDup == null && densityIns == null
-        && densityTra == null && densityBnd == null) {
+        && densityTra == null && densityBnd == null
+        && densityLohAa == null && densityLohBb == null) {
       return;
     }
 
@@ -777,17 +857,22 @@ public class MasterTrackPainter {
     double translateX = (densityCachedStart - drawStack.getViewStart()) * (canvasWidth / Math.max(1, currentViewLength));
 
     VcfManager vcfManager = VcfManager.getInstance();
-    boolean showSnv = vcfManager.isCanvasTypeVisible(VcfVariantType.SNV);
-    boolean showIndel = vcfManager.isCanvasTypeVisible(VcfVariantType.INSERTION)
-        || vcfManager.isCanvasTypeVisible(VcfVariantType.DELETION)
-        || vcfManager.isCanvasTypeVisible(VcfVariantType.MNV)
-        || vcfManager.isCanvasTypeVisible(VcfVariantType.COMPLEX);
-    boolean showDel = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_DELETION);
-    boolean showInv = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_INVERSION);
-    boolean showDup = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_DUPLICATION);
-    boolean showIns = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_INSERTION);
-    boolean showTra = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_TRANSLOCATION);
-    boolean showBnd = vcfManager.isCanvasTypeVisible(VcfVariantType.SV_BREAKEND);
+    // Use isCanvasTypeDrawn (legend membership + not hidden). The indel density bin is
+    // shared across INS/DEL/MNV/COMPLEX — default-visible types not in the legend must
+    // not keep the bucket painting after every legend swatch is deselected.
+    boolean showSnv = vcfManager.isCanvasTypeDrawn(VcfVariantType.SNV);
+    boolean showIndel = vcfManager.isCanvasTypeDrawn(VcfVariantType.INSERTION)
+        || vcfManager.isCanvasTypeDrawn(VcfVariantType.DELETION)
+        || vcfManager.isCanvasTypeDrawn(VcfVariantType.MNV)
+        || vcfManager.isCanvasTypeDrawn(VcfVariantType.COMPLEX);
+    boolean showDel = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION);
+    boolean showInv = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INVERSION);
+    boolean showDup = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION);
+    boolean showIns = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INSERTION);
+    boolean showTra = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_TRANSLOCATION);
+    boolean showBnd = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_BREAKEND);
+    boolean showLohAa = vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_AA);
+    boolean showLohBb = vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_BB);
 
     for (int px = 0; px < (int) canvasWidth; px++) {
       // Map screen pixel to cached coordinate space, accounting for both scale and translation
@@ -808,6 +893,8 @@ public class MasterTrackPainter {
       int insVal = 0;
       int traVal = 0;
       int bndVal = 0;
+      int lohAaVal = 0;
+      int lohBbVal = 0;
 
       for (int b = b0; b <= b1; b++) {
         if (showSnv && densitySnv != null) snvVal = Math.max(snvVal, densitySnv[b]);
@@ -818,6 +905,8 @@ public class MasterTrackPainter {
         if (showIns && densityIns != null) insVal = Math.max(insVal, densityIns[b]);
         if (showTra && densityTra != null) traVal = Math.max(traVal, densityTra[b]);
         if (showBnd && densityBnd != null) bndVal = Math.max(bndVal, densityBnd[b]);
+        if (showLohAa && densityLohAa != null) lohAaVal = Math.max(lohAaVal, densityLohAa[b]);
+        if (showLohBb && densityLohBb != null) lohBbVal = Math.max(lohBbVal, densityLohBb[b]);
       }
 
       record BarData(int value, VcfVariantType type) {
@@ -831,6 +920,8 @@ public class MasterTrackPainter {
       if (insVal > 0) bars.add(new BarData(insVal, VcfVariantType.SV_INSERTION));
       if (traVal > 0) bars.add(new BarData(traVal, VcfVariantType.SV_TRANSLOCATION));
       if (bndVal > 0) bars.add(new BarData(bndVal, VcfVariantType.SV_BREAKEND));
+      if (lohAaVal > 0) bars.add(new BarData(lohAaVal, VcfVariantType.LOH_AA));
+      if (lohBbVal > 0) bars.add(new BarData(lohBbVal, VcfVariantType.LOH_BB));
 
       bars.sort((a, b) -> Integer.compare(b.value, a.value));
 
@@ -951,8 +1042,15 @@ public class MasterTrackPainter {
 
     double barY = top + 1;
     double barH = Math.max(2, h - 3);
+    VcfManager vcfManager = VcfManager.getInstance();
+    Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
     for (SvSpan span : spans) {
-      if (!VcfManager.getInstance().isCanvasTypeVisible(span.type())) {
+      // LOH spans are painted live via {@link #drawLohRegionBars} so legend toggles
+      // and zoomed-in views stay in sync without waiting on density recompute.
+      if (VariantTypeVisuals.isLohRegion(span.type())) {
+        continue;
+      }
+      if (!vcfManager.isCanvasTypeDrawn(span.type(), legendTypes)) {
         continue;
       }
       if (span.end() < viewStart || span.start() > viewStart + viewLen) continue;
@@ -971,6 +1069,85 @@ public class MasterTrackPainter {
         gc.setFill(Color.color(base.getRed(), base.getGreen(), base.getBlue(), alpha));
         gc.fillRect(x1, barY, x2 - x1, barH);
       }
+    }
+  }
+
+  /**
+   * Live LOH AA/BB region bars in the aggregate span strip (same row as SV spans).
+   * Reads {@link VariantList#getLohRegions()} so bars appear as soon as LOH mode
+   * builds regions and respond immediately to legend show/hide.
+   */
+  private void drawLohRegionBars(
+      GraphicsContext gc,
+      DrawStack drawStack,
+      double canvasWidth,
+      double top,
+      double h,
+      VariantList variants) {
+    if (variants == null || h < 2 || canvasWidth <= 0) {
+      return;
+    }
+    double viewStart = drawStack.getViewStart();
+    double viewLen = drawStack.getViewLength();
+    if (viewLen <= 0) {
+      return;
+    }
+
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    if (displayed.isEmpty()) {
+      return;
+    }
+    Map<SampleTrack, Integer> displayedTracks = new IdentityHashMap<>(displayed.size() * 2);
+    List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
+    for (int idx : displayed) {
+      if (idx >= 0 && idx < allTracks.size() && allTracks.get(idx) != null) {
+        displayedTracks.put(allTracks.get(idx), idx);
+      }
+    }
+
+    VcfManager vcf = VcfManager.getInstance();
+    VariantFilter filter = vcf.getCurrentFilter();
+    Set<VcfVariantType> legendTypes = vcf.getSessionAvailableTypes();
+    int chainGen = variants.getVisibleChainGeneration();
+    double barY = top + 1;
+    double barH = Math.max(2, h - 3);
+
+    for (VariantNode node : variants.getLohRegions()) {
+      if (node == null || !VariantTypeVisuals.isLohRegion(node.type)) {
+        continue;
+      }
+      if (!vcf.isCanvasTypeDrawn(node.type, legendTypes)) {
+        continue;
+      }
+      long end = node.svEnd >= node.position ? node.svEnd : node.position;
+      if (end < viewStart || node.position > viewStart + viewLen) {
+        continue;
+      }
+
+      int sampleCount = 0;
+      boolean useCache = node.hasDisplayCache(chainGen);
+      for (SampleTrack track : displayedTracks.keySet()) {
+        VariantNode.SampleCall call = useCache
+            ? node.getDisplayCall(track, chainGen)
+            : variants.getDisplayCall(node, track, filter);
+        if (call == null) {
+          continue;
+        }
+        sampleCount++;
+      }
+      if (sampleCount <= 0) {
+        continue;
+      }
+
+      double x1 = Math.max(0, (node.position - viewStart) / viewLen * canvasWidth);
+      double x2 = Math.min(canvasWidth, (end - viewStart) / viewLen * canvasWidth);
+      if (x2 - x1 < 1.5) {
+        x2 = x1 + 1.5;
+      }
+      double alpha = Math.min(0.75, 0.28 + sampleCount * 0.14);
+      Color base = VariantTypeVisuals.color(node.type);
+      gc.setFill(Color.color(base.getRed(), base.getGreen(), base.getBlue(), alpha));
+      gc.fillRect(x1, barY, x2 - x1, barH);
     }
   }
 }
