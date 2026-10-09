@@ -167,6 +167,10 @@ public class VariantAnnotator {
             case SV_INVERSION -> inversionNearestCensusGenes(genes, node);
             case SV_TRANSLOCATION, SV_BREAKEND -> translocationNearestCensusGenes(node, genes, byChrom);
             case SV_INSERTION -> nearestCensusAtLocus(genes, node.position);
+            case SV_CNV, SV_CNV_GAIN, SV_CNV_LOSS, SV_CNV_NEUTRAL -> {
+                long end = node.svEnd > node.position ? node.svEnd : node.position;
+                yield overlappingCensusGenes(genes, node.position, end);
+            }
             case LOH_AA, LOH_BB -> {
                 // Routed via annotateLohRegion; keep switch exhaustive.
                 long end = node.svEnd > node.position ? node.svEnd : node.position;

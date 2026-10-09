@@ -51,27 +51,62 @@ public class SampleRegistry extends TrackViewportRegistry {
     /** Bumps whenever sample groups are created, assigned, cleared, recolored, or removed. */
     private final IntegerProperty sampleGroupsRevision = new SimpleIntegerProperty(0);
 
+    /**
+     * When &gt; 0, list-change side effects (viewport normalize, session sync) are deferred
+     * until {@link #endBatchTrackMutation()}. Used when opening hundreds of VCFs.
+     */
+    private int batchTrackMutationDepth = 0;
+    private boolean batchTrackMutationDirty = false;
+
     public SampleRegistry() {
         sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
-            invalidateDisplayedTrackIndicesCache();
-            normalizeVisibleRangeAfterDisplayedTrackCountChange();
-            notifyVariantIndexDirty();
-            // Keep session dirty + live document sampleTracks in sync.
-            Runnable sync = () -> {
-                ProjectSessionState.get().markDirty();
-                if (ProjectSessionState.get().isSuppressingDirty()) {
-                    return;
-                }
-                org.baseplayer.project.SessionDocumentSync.writeSampleTracksFromRuntime(
-                    ProjectSessionState.get().getFile());
-                org.baseplayer.project.SessionDocumentSync.writeSampleGroupsFromRegistry();
-            };
-            if (Platform.isFxApplicationThread()) {
-                sync.run();
-            } else {
-                Platform.runLater(sync);
+            if (batchTrackMutationDepth > 0) {
+                batchTrackMutationDirty = true;
+                invalidateDisplayedTrackIndicesCache();
+                return;
             }
+            applyTrackListMutationSideEffects();
         });
+    }
+
+    /**
+     * Suppress per-add viewport resize / session rewrite while bulk-adding tracks.
+     * Pair with {@link #endBatchTrackMutation()}.
+     */
+    public void beginBatchTrackMutation() {
+        batchTrackMutationDepth++;
+    }
+
+    /** Flush deferred side effects from {@link #beginBatchTrackMutation()}. */
+    public void endBatchTrackMutation() {
+        if (batchTrackMutationDepth > 0) {
+            batchTrackMutationDepth--;
+        }
+        if (batchTrackMutationDepth == 0 && batchTrackMutationDirty) {
+            batchTrackMutationDirty = false;
+            applyTrackListMutationSideEffects();
+        }
+    }
+
+    private void applyTrackListMutationSideEffects() {
+        invalidateDisplayedTrackIndicesCache();
+        normalizeVisibleRangeAfterDisplayedTrackCountChange();
+        notifyVariantIndexDirty();
+        // Keep session dirty + live document sampleTracks in sync.
+        Runnable sync = () -> {
+            ProjectSessionState.get().markDirty();
+            if (ProjectSessionState.get().isSuppressingDirty()) {
+                return;
+            }
+            org.baseplayer.project.SessionDocumentSync.writeSampleTracksFromRuntime(
+                ProjectSessionState.get().getFile());
+            org.baseplayer.project.SessionDocumentSync.writeSampleGroupsFromRegistry();
+        };
+        if (Platform.isFxApplicationThread()) {
+            sync.run();
+        } else {
+            Platform.runLater(sync);
+        }
     }
 
     @Override

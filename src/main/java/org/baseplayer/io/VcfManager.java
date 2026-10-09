@@ -429,7 +429,8 @@ public class VcfManager {
         final long regionStart = start;
         final long regionEnd = end;
         final VariantFilter loadFilterSnapshot = loadTimeFilterSnapshot();
-        final String loadFilterKeySnapshot = loadFilterSnapshot.toStableKey();
+        final Set<VcfVariantType> knownTypesBeforeLoad = getSessionAvailableTypes();
+        final Set<VcfVariantType> autoAdmittedTypes = EnumSet.noneOf(VcfVariantType.class);
         loading = true;
         final int vcfCountBefore = loadedVcfs.size();
         final VariantList mergedList = variantList;
@@ -456,11 +457,21 @@ public class VcfManager {
                         try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
                             vcfData.loader.setVcfReader(reader);
                             vcfData.loader.setTypeObserver(vcfData::noteType);
+                            vcfData.loader.setAutoAdmitNewType(type -> {
+                                if (type == null || knownTypesBeforeLoad.contains(type)) {
+                                    return false;
+                                }
+                                synchronized (autoAdmittedTypes) {
+                                    autoAdmittedTypes.add(type);
+                                }
+                                return true;
+                            });
                             cursor = vcfData.loader.streamRegionVariantsToList(
                                 targetChromosome, regionStart, regionEnd, mergedList, cursor, null, loadFilterSnapshot);
                         } catch (IOException e) {
                         } finally {
                             vcfData.loader.setTypeObserver(null);
+                            vcfData.loader.setAutoAdmitNewType(null);
                             vcfData.loader.setVcfReader(null);
                         }
 
@@ -519,7 +530,20 @@ public class VcfManager {
                 } else {
                     result.addLoadedRegion(regionStart, regionEnd);
                 }
-                result.setLoadedFilterKey(loadFilterKeySnapshot);
+                // Persist any first-seen types admitted during this load into the
+                // session filter so later visibility rebuilds do not hide them.
+                final Set<VcfVariantType> admittedCopy;
+                synchronized (autoAdmittedTypes) {
+                    admittedCopy = autoAdmittedTypes.isEmpty()
+                        ? Set.of()
+                        : EnumSet.copyOf(autoAdmittedTypes);
+                    if (!admittedCopy.isEmpty() && currentFilter != null) {
+                        for (VcfVariantType type : admittedCopy) {
+                            currentFilter.admitType(type);
+                        }
+                    }
+                }
+                result.setLoadedFilterKey(loadFilterSnapshot.toStableKey());
                 result.setLoadedFilter(loadFilterSnapshot.copy());
                 result.setAnnotated(true);
                 result.setVcfCountWhenLoaded(loadedVcfs.size());
@@ -528,6 +552,13 @@ public class VcfManager {
                 calculateDensityOnAllCanvases();
                 variantsRevision.incrementAndGet();
                 GenomicCanvas.update.set(!GenomicCanvas.update.get());
+
+                if (!admittedCopy.isEmpty()) {
+                    VariantManagerController controller = VariantManagerWindow.getCurrentController();
+                    if (controller != null && currentFilter != null) {
+                        controller.loadFilterState(currentFilter);
+                    }
+                }
 
                 fireAndClearChromosomeReadyCallback();
                 startNextPendingChromosomeLoad();
@@ -1089,6 +1120,7 @@ public class VcfManager {
         int samplesDoneBeforeFile = 0;
         int samplesTotalInChrom = Math.max(1,
             loadedVcfs.stream().mapToInt(vcf -> Math.max(1, vcf.loader.getMappedSampleCount())).sum());
+        final Set<VcfVariantType> knownTypesBeforeLoad = getSessionAvailableTypes();
 
         for (File file : files) {
             if (Thread.currentThread().isInterrupted()) {
@@ -1111,9 +1143,13 @@ public class VcfManager {
                 if (matched != null) {
                     matched.loader.setVcfReader(reader);
                     matched.loader.setTypeObserver(matched::noteType);
+                    matched.loader.setAutoAdmitNewType(type ->
+                        type != null && !knownTypesBeforeLoad.contains(type));
                     loader = matched.loader;
                 } else {
                     loader = new VariantLoader(reader);
+                    loader.setAutoAdmitNewType(type ->
+                        type != null && !knownTypesBeforeLoad.contains(type));
                 }
                 mappedForFile = Math.max(1, loader.getMappedSampleCount());
                 final int fileBase = samplesDoneBeforeFile;
@@ -1130,6 +1166,7 @@ public class VcfManager {
             } finally {
                 if (matched != null) {
                     matched.loader.setTypeObserver(null);
+                    matched.loader.setAutoAdmitNewType(null);
                     matched.loader.setVcfReader(null);
                 }
             }

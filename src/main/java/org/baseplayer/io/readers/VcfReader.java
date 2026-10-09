@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import org.baseplayer.variant.BreakendAlt;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfSnvIndel;
 import org.baseplayer.variant.VcfStructuralVariant;
 import org.baseplayer.variant.VcfVariantType;
@@ -29,9 +30,13 @@ public class VcfReader implements AutoCloseable {
     private final AbstractFeatureReader<VariantContext, LineIterator> reader;
     private final VCFHeader header;
     private final List<String> sampleNames;
+    /** True when the VCF header has no sample columns (site-only CNV / segment files). */
+    private final boolean siteOnlySamples;
     private final boolean canTabixQuery;
     private final boolean hasTbiOrCsiIndex;
     private final String chromPrefix;
+    /** Contigs from ##contig, or peeked from records when the header omits them. */
+    private final List<String> availableChromosomes;
 
     public VcfReader(Path vcfPath) throws IOException {
         this.vcfPath = vcfPath;
@@ -42,6 +47,9 @@ public class VcfReader implements AutoCloseable {
 
         Path tabixIndex = findSiblingIndex(vcfPath, ".tbi");
         Path csiIndex = findSiblingIndex(vcfPath, ".csi");
+        // CSI counts as "indexed" for open/load gates (same as SV .csi files), but must not
+        // be passed into AbstractFeatureReader: isTabix() treats any existing index path beside
+        // a .gz as Tabix and TabixReader OOMs on CSI. Indexed queries only for real .tbi.
         this.hasTbiOrCsiIndex = tabixIndex != null || csiIndex != null;
 
         if (tabixIndex != null) {
@@ -60,8 +68,51 @@ public class VcfReader implements AutoCloseable {
         }
         
         this.header = (VCFHeader) reader.getHeader();
-        this.sampleNames = header.getSampleNamesInOrder();
-        this.chromPrefix = ChromosomeNames.detectPrefix(getAvailableChromosomes());
+        List<String> headerSamples = header.getSampleNamesInOrder();
+        if (headerSamples == null || headerSamples.isEmpty()) {
+            // FACETS-style CNV VCFs often omit FORMAT/sample columns.
+            this.sampleNames = List.of(stemSampleName(vcfPath));
+            this.siteOnlySamples = true;
+        } else {
+            this.sampleNames = headerSamples;
+            this.siteOnlySamples = false;
+        }
+
+        List<String> headerContigs = header.getContigLines().stream()
+            .map(line -> line.getID())
+            .collect(Collectors.toList());
+        // FACETS CNV VCFs often omit ##contig; peek records so chr-prefix mapping matches SV flow.
+        this.availableChromosomes = headerContigs.isEmpty()
+            ? peekContigNames(64)
+            : List.copyOf(headerContigs);
+        this.chromPrefix = ChromosomeNames.detectPrefix(this.availableChromosomes);
+    }
+
+    private List<String> peekContigNames(int limit) throws IOException {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        try (var iterator = reader.iterator()) {
+            while (iterator.hasNext() && names.size() < limit) {
+                String contig = iterator.next().getContig();
+                if (contig != null && !contig.isBlank()) {
+                    names.add(contig);
+                }
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed to peek VCF contigs: " + e.getMessage(), e);
+        }
+        return List.copyOf(names);
+    }
+
+    private static String stemSampleName(Path path) {
+        String name = path.getFileName().toString();
+        if (name.endsWith(".vcf.gz")) {
+            name = name.substring(0, name.length() - ".vcf.gz".length());
+        } else if (name.endsWith(".vcf")) {
+            name = name.substring(0, name.length() - ".vcf".length());
+        } else if (name.endsWith(".gz")) {
+            name = name.substring(0, name.length() - 3);
+        }
+        return name.isBlank() ? "CNV" : name;
     }
 
     /** Contig prefix in this VCF ({@code ""} or {@code "chr"}). */
@@ -135,7 +186,7 @@ public class VcfReader implements AutoCloseable {
             boolean reachedChromosome = false;
             while (iterator.hasNext()) {
                 VariantContext ctx = iterator.next();
-                if (!ctx.getContig().equals(chromosome)) {
+                if (!ChromosomeNames.equals(ctx.getContig(), chromosome)) {
                     if (reachedChromosome) {
                         break;
                     }
@@ -170,7 +221,7 @@ public class VcfReader implements AutoCloseable {
                 VariantContext ctx = iterator.next();
                 
                 // Check if we're on the target chromosome
-                if (ctx.getContig().equals(dataChrom)) {
+                if (ChromosomeNames.equals(ctx.getContig(), dataChrom)) {
                     foundChromosome = true;
                     
                     // Skip structural variants
@@ -221,7 +272,7 @@ public class VcfReader implements AutoCloseable {
                 VariantContext ctx = iterator.next();
                 
                 // Check if we're on the target chromosome
-                if (ctx.getContig().equals(dataChrom)) {
+                if (ChromosomeNames.equals(ctx.getContig(), dataChrom)) {
                     foundChromosome = true;
                     
                     // Only include structural variants
@@ -396,6 +447,8 @@ public class VcfReader implements AutoCloseable {
                 case "TRA": case "CTX": 
                     // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_TRANSLOCATION");
                     return VcfVariantType.SV_TRANSLOCATION;
+                case "CNV":
+                    return classifyCnvSegment(ctx);
             }
         }
         
@@ -420,6 +473,9 @@ public class VcfReader implements AutoCloseable {
                     // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION (from ALT)");
                     return VcfVariantType.SV_INVERSION;
                 }
+                if (symbolic.startsWith("CNV")) {
+                    return classifyCnvSegment(ctx);
+                }
             }
             
             // Breakend notation (fallback if not caught above)
@@ -431,6 +487,87 @@ public class VcfReader implements AutoCloseable {
         }
         
         return VcfVariantType.COMPLEX;
+    }
+
+    /** Clear loss / gain cutoffs for FACETS {@code TCN_EM} when logR is absent. */
+    private static final int CNV_LOSS_MAX_TCN = 1;
+    private static final int CNV_GAIN_MIN_TCN = 4;
+    /**
+     * Prefer FACETS log-ratio for somatic gain/loss. Absolute TCN over-calls gains in
+     * aneuploid tumors (TCN≈ploidy with near-zero logR).
+     */
+    private static final double CNV_LOGR_BUFFER = 0.2;
+
+    /**
+     * FACETS-style CNV: prefer {@code CNLR_MEDIAN} (relative to normal), else {@code TCN_EM}
+     * with a buffer (loss ≤1, gain ≥4; 2–3 stay neutral).
+     */
+    private static VcfVariantType classifyCnvSegment(VariantContext ctx) {
+        Double logr = doubleInfo(ctx, "CNLR_MEDIAN");
+        if (logr == null) {
+            logr = doubleInfo(ctx, "CNLR_MEDIAN_CLUST");
+        }
+        if (logr != null) {
+            if (logr > CNV_LOGR_BUFFER) {
+                return VcfVariantType.SV_CNV_GAIN;
+            }
+            if (logr < -CNV_LOGR_BUFFER) {
+                return VcfVariantType.SV_CNV_LOSS;
+            }
+            return VcfVariantType.SV_CNV_NEUTRAL;
+        }
+        Integer tcn = intInfo(ctx, "TCN_EM");
+        if (tcn == null) {
+            tcn = intInfo(ctx, "CN");
+        }
+        if (tcn != null) {
+            if (tcn <= CNV_LOSS_MAX_TCN) {
+                return VcfVariantType.SV_CNV_LOSS;
+            }
+            if (tcn >= CNV_GAIN_MIN_TCN) {
+                return VcfVariantType.SV_CNV_GAIN;
+            }
+            return VcfVariantType.SV_CNV_NEUTRAL;
+        }
+        return VcfVariantType.SV_CNV;
+    }
+
+    private static Integer intInfo(VariantContext ctx, String key) {
+        if (!ctx.hasAttribute(key)) {
+            return null;
+        }
+        Object value = ctx.getAttribute(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty() || ".".equals(text) || "NA".equalsIgnoreCase(text)) {
+            return null;
+        }
+        try {
+            return (int) Math.round(Double.parseDouble(text));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Double doubleInfo(VariantContext ctx, String key) {
+        if (!ctx.hasAttribute(key)) {
+            return null;
+        }
+        Object value = ctx.getAttribute(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty() || ".".equals(text) || "NA".equalsIgnoreCase(text)) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
     
     private static boolean sameChromosome(String a, String b) {
@@ -502,10 +639,20 @@ public class VcfReader implements AutoCloseable {
             }
             end = null;
         } else if (end == null && (type == VcfVariantType.SV_DELETION || type == VcfVariantType.SV_INSERTION
-                || type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INVERSION)
+                || type == VcfVariantType.SV_DUPLICATION || type == VcfVariantType.SV_INVERSION
+                || VariantTypeVisuals.isCnv(type))
                 && end2 != null) {
             long pos = ctx.getStart();
             end = end2 > pos ? end2 : pos;
+        }
+
+        if (svType == null && VariantTypeVisuals.isCnv(type)) {
+            svType = switch (type) {
+                case SV_CNV_GAIN -> "CNV_GAIN";
+                case SV_CNV_LOSS -> "CNV_LOSS";
+                case SV_CNV_NEUTRAL -> "CNV_NEUTRAL";
+                default -> "CNV";
+            };
         }
         
         return new VcfStructuralVariant(
@@ -548,7 +695,23 @@ public class VcfReader implements AutoCloseable {
      */
     private Map<String, Map<String, Object>> parseGenotypes(VariantContext ctx) {
         if (!ctx.hasGenotypes()) {
-            return Map.of();
+            if (!siteOnlySamples || sampleNames.isEmpty()) {
+                return Map.of();
+            }
+            // Attribute every site-only record to the synthetic file sample.
+            Map<String, Object> gtMap = new HashMap<>();
+            gtMap.put("GT", "NA");
+            gtMap.put("isHomRef", false);
+            gtMap.put("isHet", false);
+            gtMap.put("isHomVar", true);
+            gtMap.put("isNoCall", false);
+            if (ctx.hasAttribute("CF_EM")) {
+                try {
+                    gtMap.put("AF", Double.parseDouble(ctx.getAttributeAsString("CF_EM", "")));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return Map.of(sampleNames.get(0), gtMap);
         }
         
         Map<String, Map<String, Object>> genotypes = new HashMap<>();
@@ -638,9 +801,7 @@ public class VcfReader implements AutoCloseable {
      * Get list of chromosomes (contigs) available in the VCF file.
      */
     public List<String> getAvailableChromosomes() {
-        return header.getContigLines().stream()
-            .map(line -> line.getID())
-            .collect(Collectors.toList());
+        return availableChromosomes;
     }
     
     /**
@@ -668,17 +829,21 @@ public class VcfReader implements AutoCloseable {
      */
     private String toDataChromosome(String chromosome) throws IOException {
         String dataChrom = toDataChrom(chromosome);
-        List<String> availableChromosomes = getAvailableChromosomes();
+        if (availableChromosomes.isEmpty()) {
+            // No ##contig and peek found nothing — trust naming (linear scan uses strip-equality).
+            return dataChrom;
+        }
         if (availableChromosomes.contains(dataChrom)) {
             return dataChrom;
         }
         // Contig list may use a different casing / M vs MT — fall back to strip-equality.
         for (String available : availableChromosomes) {
-            if (ChromosomeNames.equals(available, chromosome)) {
+            if (ChromosomeNames.equals(available, chromosome)
+                    || ChromosomeNames.equals(available, dataChrom)) {
                 return available;
             }
         }
-        throw new IOException("Chromosome '" + chromosome + "' not found in VCF. " +
-            "Available chromosomes: " + availableChromosomes);
+        // Peeked / partial contig lists (e.g. FACETS) may omit later chromosomes.
+        return dataChrom;
     }
 }

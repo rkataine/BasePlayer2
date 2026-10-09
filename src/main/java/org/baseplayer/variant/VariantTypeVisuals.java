@@ -58,6 +58,10 @@ public final class VariantTypeVisuals {
       case SV_INVERSION -> "INV";
       case SV_TRANSLOCATION -> "TRA";
       case SV_BREAKEND -> "BND";
+      case SV_CNV -> "CNV";
+      case SV_CNV_GAIN -> "Gain";
+      case SV_CNV_LOSS -> "Loss";
+      case SV_CNV_NEUTRAL -> "Neutral";
       case LOH_AA -> "LOH AA";
       case LOH_BB -> "LOH BB";
       case COMPLEX -> "Complex";
@@ -80,6 +84,11 @@ public final class VariantTypeVisuals {
       case SV_INSERTION -> Color.web("#33cc66");
       case SV_TRANSLOCATION -> Color.web("#ffdd00");
       case SV_BREAKEND -> Color.web("#c0c0c0");
+      case SV_CNV -> Color.web("#A855F7");
+      // Classic CNV: gains red, losses blue, copy-neutral muted
+      case SV_CNV_GAIN -> Color.web("#DC2626");
+      case SV_CNV_LOSS -> Color.web("#2563EB");
+      case SV_CNV_NEUTRAL -> Color.web("#9CA3AF");
       // Cool AA vs warm BB for LOH region spans
       case LOH_AA -> Color.web("#3B82F6");
       case LOH_BB -> Color.web("#F97316");
@@ -143,13 +152,26 @@ public final class VariantTypeVisuals {
     return EnumSet.of(displayType);
   }
 
+  public static boolean isCnv(VcfVariantType type) {
+    return type == VcfVariantType.SV_CNV
+        || type == VcfVariantType.SV_CNV_GAIN
+        || type == VcfVariantType.SV_CNV_LOSS
+        || type == VcfVariantType.SV_CNV_NEUTRAL;
+  }
+
+  /** Somatic CNV events worth loading/drawing (excludes genome-tiling copy-neutral). */
+  public static boolean isCnvEvent(VcfVariantType type) {
+    return type == VcfVariantType.SV_CNV_GAIN || type == VcfVariantType.SV_CNV_LOSS;
+  }
+
   public static boolean isStructural(VcfVariantType type) {
     return type == VcfVariantType.SV_DELETION
         || type == VcfVariantType.SV_INSERTION
         || type == VcfVariantType.SV_DUPLICATION
         || type == VcfVariantType.SV_INVERSION
         || type == VcfVariantType.SV_TRANSLOCATION
-        || type == VcfVariantType.SV_BREAKEND;
+        || type == VcfVariantType.SV_BREAKEND
+        || isCnv(type);
   }
 
   /** Classic SV or synthetic LOH span (uses {@link VariantNode#svEnd}). */

@@ -425,7 +425,9 @@ public class SampleDataManager {
           // Commit errors first, then start variant load; popup is deferred/non-modal
           // so it cannot block FX the way showAndWait did.
           failures.commitToSessionLog();
+          final boolean addedTracks = Boolean.TRUE.equals(result);
           Platform.runLater(() -> {
+            finishVcfBatchUi(addedTracks);
             VcfManager.getInstance().loadVariantsForCurrentView();
             org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
                 MainApp.stage, VcfManager.getInstance(), null);
@@ -926,9 +928,9 @@ public class SampleDataManager {
   
   /**
    * Load one or more VCF files directly without showing a chooser.
-   * Files are loaded sequentially in a single ThreadRunner task to prevent modal flashing.
-   * Tracks appear progressively as each file is loaded.
-   * 
+   * Files are registered sequentially in a single ThreadRunner task; viewport
+   * resize / canvas redraw run once after the last file.
+   *
    * @param files List of VCF files to load
    */
   public static void addVcfFiles(List<File> files) {
@@ -953,7 +955,9 @@ public class SampleDataManager {
             // complete and be removed first. This avoids task overlap that can
             // cause popup message/progress churn. Error popup is non-modal and
             // deferred so it does not block variant loading.
+            final boolean addedTracks = Boolean.TRUE.equals(result);
             Platform.runLater(() -> {
+              finishVcfBatchUi(addedTracks);
               VcfManager.getInstance().loadVariantsForCurrentView();
               org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
                   MainApp.stage, VcfManager.getInstance(), null);
@@ -966,50 +970,66 @@ public class SampleDataManager {
         }
     );
   }
-  
-  private static Void loadVcfFilesBatchWithProgress(
-      List<File> files, int totalFiles, SampleOpenFailuresDialog failures) {
-    for (int index = 0; index < files.size(); index++) {
-      if (Thread.currentThread().isInterrupted()) {
-        return null;
-      }
 
-      File file = files.get(index);
-      if (file == null || !file.exists()) {
-        System.err.println("Skipping missing file: " + file);
-        if (failures != null) {
-          failures.add(file, "file not found");
-        }
-        continue;
-      }
-
-      if (VcfManager.getInstance().isVcfFileLoaded(file)) {
-        continue;
-      }
-      
-      final int currentIndex = index + 1;
-      org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
-      
-      try {
-        loadVcfFileSynchronously(file);
-      } catch (Exception e) {
-        if (Thread.currentThread().isInterrupted()) {
-          return null;
-        }
-        System.err.println("Failed to load VCF: " + file + " - " + e.getMessage());
-        e.printStackTrace();
-        if (failures != null) {
-          failures.add(file, e.getMessage());
-        }
-      }
-
-      // Redraw every 10 files to allow the spinner to animate between bursts
-      if (currentIndex % 10 == 0) {
-        Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
-      }
+  /** One viewport fit + redraw after a multi-file VCF open (not per file). */
+  private static void finishVcfBatchUi(boolean addedTracks) {
+    if (addedTracks) {
+      ServiceRegistry.getInstance().getSampleRegistry().includeNewTracksAtEndResetHeight();
     }
-    
-    return null;
+    ProjectSessionState.get().markDirty();
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+  
+  /**
+   * Open many VCFs without per-file canvas resize / session rewrite.
+   * @return true if any new sample tracks were created
+   */
+  private static Boolean loadVcfFilesBatchWithProgress(
+      List<File> files, int totalFiles, SampleOpenFailuresDialog failures) {
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    registry.beginBatchTrackMutation();
+    boolean addedTracks = false;
+    try {
+      for (int index = 0; index < files.size(); index++) {
+        if (Thread.currentThread().isInterrupted()) {
+          break;
+        }
+
+        File file = files.get(index);
+        if (file == null || !file.exists()) {
+          System.err.println("Skipping missing file: " + file);
+          if (failures != null) {
+            failures.add(file, "file not found");
+          }
+          continue;
+        }
+
+        if (VcfManager.getInstance().isVcfFileLoaded(file)) {
+          continue;
+        }
+
+        final int currentIndex = index + 1;
+        org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
+
+        try {
+          if (loadVcfFileSynchronously(file, true)) {
+            addedTracks = true;
+          }
+        } catch (Exception e) {
+          if (Thread.currentThread().isInterrupted()) {
+            break;
+          }
+          System.err.println("Failed to load VCF: " + file + " - " + e.getMessage());
+          e.printStackTrace();
+          if (failures != null) {
+            failures.add(file, e.getMessage());
+          }
+        }
+      }
+    } finally {
+      registry.endBatchTrackMutation();
+    }
+    return addedTracks;
   }
 
   /**
@@ -1023,62 +1043,66 @@ public class SampleDataManager {
     }
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
     boolean addedTracks = false;
-
-    for (File file : files) {
-      if (Thread.currentThread().isInterrupted()) {
-        return;
-      }
-      if (file == null || !file.exists()) {
-        if (warnings != null) {
-          warnings.add("Missing VCF: " + file);
+    registry.beginBatchTrackMutation();
+    try {
+      for (File file : files) {
+        if (Thread.currentThread().isInterrupted()) {
+          return;
         }
-        continue;
-      }
-      if (VcfManager.getInstance().isVcfFileLoaded(file)) {
-        continue;
-      }
-
-      try {
-        Path vcfPath = file.toPath();
-        VcfReader reader = new VcfReader(vcfPath);
-        VariantLoader loader = new VariantLoader(reader);
-
-        List<String> unmappedSamples = loader.getUnmappedSamples();
-        VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
-        if (vcfData == null) {
-          try { reader.close(); } catch (IOException ignored) {}
-          loader.setVcfReader(null);
+        if (file == null || !file.exists()) {
+          if (warnings != null) {
+            warnings.add("Missing VCF: " + file);
+          }
+          continue;
+        }
+        if (VcfManager.getInstance().isVcfFileLoaded(file)) {
           continue;
         }
 
-        // Tracks were restored first; only create rows for truly new sample IDs.
-        if (!unmappedSamples.isEmpty()) {
-          for (String sampleName : unmappedSamples) {
-            SampleTrack track = new SampleTrack(sampleName);
-            registry.getSampleTracks().add(track);
-            registry.getSampleList().add(sampleName);
+        try {
+          Path vcfPath = file.toPath();
+          VcfReader reader = new VcfReader(vcfPath);
+          VariantLoader loader = new VariantLoader(reader);
+
+          List<String> unmappedSamples = loader.getUnmappedSamples();
+          VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
+          if (vcfData == null) {
+            try { reader.close(); } catch (IOException ignored) {}
+            loader.setVcfReader(null);
+            continue;
           }
-          addedTracks = true;
-          loader.updateMapping();
-        } else {
-          loader.updateMapping();
-        }
 
-        attachVcfSamplesToMappedTracks(loader, vcfPath);
+          // Tracks were restored first; only create rows for truly new sample IDs.
+          if (!unmappedSamples.isEmpty()) {
+            for (String sampleName : unmappedSamples) {
+              SampleTrack track = new SampleTrack(sampleName);
+              registry.getSampleTracks().add(track);
+              registry.getSampleList().add(sampleName);
+            }
+            addedTracks = true;
+            loader.updateMapping();
+          } else {
+            loader.updateMapping();
+          }
 
-        try { reader.close(); } catch (IOException ignored) {}
-        vcfData.reader = null;
-        loader.setVcfReader(null);
+          attachVcfSamplesToMappedTracks(loader, vcfPath);
 
-        if (loader.getMappedSampleCount() == 0 && warnings != null) {
-          warnings.add("Could not map any samples from VCF: " + file.getName());
+          try { reader.close(); } catch (IOException ignored) {}
+          vcfData.reader = null;
+          loader.setVcfReader(null);
+
+          if (loader.getMappedSampleCount() == 0 && warnings != null) {
+            warnings.add("Could not map any samples from VCF: " + file.getName());
+          }
+        } catch (Exception e) {
+          if (warnings != null) {
+            warnings.add("Failed to load VCF " + file.getName() + ": " + e.getMessage());
+          }
+          System.err.println("Failed to load VCF during session restore: " + file + " - " + e.getMessage());
         }
-      } catch (Exception e) {
-        if (warnings != null) {
-          warnings.add("Failed to load VCF " + file.getName() + ": " + e.getMessage());
-        }
-        System.err.println("Failed to load VCF during session restore: " + file + " - " + e.getMessage());
       }
+    } finally {
+      registry.endBatchTrackMutation();
     }
 
     if (addedTracks) {
@@ -1086,13 +1110,18 @@ public class SampleDataManager {
     }
   }
 
-  private static void loadVcfFileSynchronously(File file) throws IOException {
+  /**
+   * @param deferUi when true (batch open), skip per-file FX resize/redraw; caller
+   *        finishes UI once via {@link #finishVcfBatchUi(boolean)}
+   * @return true if new sample tracks were created for this file
+   */
+  private static boolean loadVcfFileSynchronously(File file, boolean deferUi) throws IOException {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
     }
 
     if (VcfManager.getInstance().isVcfFileLoaded(file)) {
-      return;
+      return false;
     }
     
     Path vcfPath = file.toPath();
@@ -1109,34 +1138,38 @@ public class SampleDataManager {
     if (vcfData == null) {
       try { reader.close(); } catch (IOException ignored) {}
       loader.setVcfReader(null);
-      return;
+      return false;
     }
-    
-    // Now push UI updates to FX thread
-    Platform.runLater(() -> {
-      // Create SampleTrack objects and add to registry on FX thread
-      if (!unmappedSamples.isEmpty()) {
-        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        for (String sampleName : unmappedSamples) {
-          SampleTrack track = new SampleTrack(sampleName);
-          registry.getSampleTracks().add(track);
-          registry.getSampleList().add(sampleName);
+
+    // Create tracks on this thread (same as session restore) so mapping is ready
+    // before the batch completion callback starts variant loading.
+    final boolean addedTracks = !unmappedSamples.isEmpty();
+    if (addedTracks) {
+      SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+      for (String sampleName : unmappedSamples) {
+        SampleTrack track = new SampleTrack(sampleName);
+        registry.getSampleTracks().add(track);
+        registry.getSampleList().add(sampleName);
+      }
+      loader.updateMapping();
+    }
+
+    // Sidebar VCF entries — safe on the worker thread; no canvas resize.
+    attachVcfSamplesToMappedTracks(loader, vcfPath);
+
+    if (loader.getMappedSampleCount() == 0) {
+      System.err.println("Warning: Could not create or map any VCF samples from: " + file);
+    }
+
+    if (!deferUi) {
+      Platform.runLater(() -> {
+        if (addedTracks) {
+          ServiceRegistry.getInstance().getSampleRegistry().includeNewTracksAtEndResetHeight();
         }
-        registry.includeNewTracksAtEndResetHeight();
-        loader.updateMapping();
-      }
-
-      attachVcfSamplesToMappedTracks(loader, vcfPath);
-
-      if (loader.getMappedSampleCount() == 0) {
-        System.err.println("Warning: Could not create or map any VCF samples from: " + file);
-      }
-
-      ProjectSessionState.get().markDirty();
-      
-      // Fire canvas update to render the new track progressively
-      // (batch-level updates are fired every 10 files in loadVcfFilesBatch)
-    });
+        ProjectSessionState.get().markDirty();
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      });
+    }
     
     // Close reader on background thread to free VCFHeader and tabix index immediately
     try { reader.close(); } catch (IOException ignored) {}
@@ -1144,6 +1177,7 @@ public class SampleDataManager {
     loader.setVcfReader(null);  // Release loader's reference too
     
     UserPreferences.addRecentFile("VCF", file);
+    return addedTracks;
   }
   
   /**

@@ -220,6 +220,10 @@ public class VariantInfoPopup extends InfoPopup {
       case SV_INVERSION -> "SV inversion";
       case SV_TRANSLOCATION -> "Translocation";
       case SV_BREAKEND -> "Breakend";
+      case SV_CNV -> "CNV";
+      case SV_CNV_GAIN -> "CNV gain";
+      case SV_CNV_LOSS -> "CNV loss";
+      case SV_CNV_NEUTRAL -> "CNV copy-neutral";
       case LOH_AA -> "LOH AA";
       case LOH_BB -> "LOH BB";
     };

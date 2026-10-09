@@ -29,6 +29,9 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     public static final VcfVariantType[] TYPE_ORDER = {
         VcfVariantType.SV_DELETION,
         VcfVariantType.SV_DUPLICATION,
+        VcfVariantType.SV_CNV_GAIN,
+        VcfVariantType.SV_CNV_LOSS,
+        VcfVariantType.SV_CNV_NEUTRAL,
         VcfVariantType.SV_INVERSION,
         VcfVariantType.SV_TRANSLOCATION,
         VcfVariantType.SV_BREAKEND,

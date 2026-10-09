@@ -100,8 +100,10 @@ public class VariantManagerController implements Initializable {
     @FXML private VBox svFiltersHost;
     @FXML private TabPane svResultsTabPane;
     @FXML private TabPane lohResultsTabPane;
-    @FXML private Tab svAllTab, svDelTab, svDupTab, svInvTab, svTraTab, svBndTab, svInsTab;
-    @FXML private TableView<?> svAllTable, svDelTable, svDupTable, svInvTable, svTraTable, svBndTable, svInsTable;
+    @FXML private Tab svAllTab, svDelTab, svDupTab, svCnvGainTab, svCnvLossTab, svCnvNeutralTab,
+        svInvTab, svTraTab, svBndTab, svInsTab;
+    @FXML private TableView<?> svAllTable, svDelTable, svDupTable, svCnvGainTable, svCnvLossTable,
+        svCnvNeutralTable, svInvTable, svTraTable, svBndTable, svInsTable;
     @FXML private Tab lohAllTab, lohAaTab, lohBbTab;
     @FXML private TableView<?> lohAllTable, lohAaTable, lohBbTable;
 
@@ -657,6 +659,9 @@ public class VariantManagerController implements Initializable {
         Map<VcfVariantType, TableView<?>> typeTables = new EnumMap<>(VcfVariantType.class);
         typeTables.put(VcfVariantType.SV_DELETION, svDelTable);
         typeTables.put(VcfVariantType.SV_DUPLICATION, svDupTable);
+        typeTables.put(VcfVariantType.SV_CNV_GAIN, svCnvGainTable);
+        typeTables.put(VcfVariantType.SV_CNV_LOSS, svCnvLossTable);
+        typeTables.put(VcfVariantType.SV_CNV_NEUTRAL, svCnvNeutralTable);
         typeTables.put(VcfVariantType.SV_INVERSION, svInvTable);
         typeTables.put(VcfVariantType.SV_TRANSLOCATION, svTraTable);
         typeTables.put(VcfVariantType.SV_BREAKEND, svBndTable);
@@ -665,6 +670,9 @@ public class VariantManagerController implements Initializable {
         Map<VcfVariantType, Tab> typeTabs = new EnumMap<>(VcfVariantType.class);
         typeTabs.put(VcfVariantType.SV_DELETION, svDelTab);
         typeTabs.put(VcfVariantType.SV_DUPLICATION, svDupTab);
+        typeTabs.put(VcfVariantType.SV_CNV_GAIN, svCnvGainTab);
+        typeTabs.put(VcfVariantType.SV_CNV_LOSS, svCnvLossTab);
+        typeTabs.put(VcfVariantType.SV_CNV_NEUTRAL, svCnvNeutralTab);
         typeTabs.put(VcfVariantType.SV_INVERSION, svInvTab);
         typeTabs.put(VcfVariantType.SV_TRANSLOCATION, svTraTab);
         typeTabs.put(VcfVariantType.SV_BREAKEND, svBndTab);
@@ -1301,7 +1309,8 @@ public class VariantManagerController implements Initializable {
 
         if ((node.type == VcfVariantType.SV_DELETION
                 || node.type == VcfVariantType.SV_DUPLICATION
-                || node.type == VcfVariantType.SV_INVERSION)
+                || node.type == VcfVariantType.SV_INVERSION
+                || VariantTypeVisuals.isCnv(node.type))
                 && node.svEnd > node.position) {
             long[] view = paddedSvSpan(node.position, node.svEnd);
             final long navStart = view[0];
@@ -1452,7 +1461,7 @@ public class VariantManagerController implements Initializable {
 
     // ── Filter State Management ───────────────────────────────────────────────
 
-    private void loadFilterState(VariantFilter filter) {
+    public void loadFilterState(VariantFilter filter) {
         suppressFilterApplyEvents = true;
         try {
             VariantFilter point = filter != null && filter.getPointSlice() != null

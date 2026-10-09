@@ -226,6 +226,21 @@
                             <TableView fx:id="svDupTable" styleClass="variant-table"/>
                         </StackPane>
                     </Tab>
+                    <Tab fx:id="svCnvGainTab" text="Gain">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svCnvGainTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
+                    <Tab fx:id="svCnvLossTab" text="Loss">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svCnvLossTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
+                    <Tab fx:id="svCnvNeutralTab" text="Neutral">
+                        <StackPane styleClass="table-container">
+                            <TableView fx:id="svCnvNeutralTable" styleClass="variant-table"/>
+                        </StackPane>
+                    </Tab>
                     <Tab fx:id="svInvTab" text="INV">
                         <StackPane styleClass="table-container">
                             <TableView fx:id="svInvTable" styleClass="variant-table"/>

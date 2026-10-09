@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.samples.Sample;
@@ -23,6 +24,11 @@ public class VariantLoader {
     private String detectedNormalSample = null;
     /** Notified for every variant record type seen while streaming (before load filters). */
     private Consumer<VcfVariantType> typeObserver;
+    /**
+     * When a type fails the load filter only because it was never allowed yet, admit it
+     * if this predicate returns true (typically: not observed in the session before this load).
+     */
+    private Predicate<VcfVariantType> autoAdmitNewType;
     
     public VariantLoader(VcfReader vcfReader) {
         this.vcfReader = vcfReader;
@@ -36,6 +42,10 @@ public class VariantLoader {
         this.typeObserver = typeObserver;
     }
 
+    public void setAutoAdmitNewType(Predicate<VcfVariantType> autoAdmitNewType) {
+        this.autoAdmitNewType = autoAdmitNewType;
+    }
+
     private void observeType(VcfVariantType type) {
         if (typeObserver != null && type != null) {
             typeObserver.accept(type);
@@ -44,6 +54,25 @@ public class VariantLoader {
 
     public void setVcfReader(VcfReader reader) {
         this.vcfReader = reader;
+    }
+
+    private boolean passesLoadFilter(
+            VariantFilter loadFilter,
+            VcfVariantType type,
+            double siteQual,
+            VariantNode.SampleCall call,
+            long svLengthBp) {
+        if (loadFilter == null) {
+            return true;
+        }
+        if (!loadFilter.allowsType(type)
+                && autoAdmitNewType != null
+                && autoAdmitNewType.test(type)) {
+            loadFilter.admitType(type);
+        }
+        return svLengthBp >= 0
+            ? loadFilter.passesLoadTime(type, siteQual, call, svLengthBp)
+            : loadFilter.passesLoadTime(type, siteQual, call);
     }
     
     private void detectSomaticVcf() {
@@ -183,7 +212,7 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             snv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
-                            if (loadFilter != null && !loadFilter.passesLoadTime(snv.getType(), siteQual, call)) {
+                            if (!passesLoadFilter(loadFilter, snv.getType(), siteQual, call, -1)) {
                                 continue;
                             }
                             int trackIdx = entry.getValue();
@@ -222,6 +251,11 @@ public class VariantLoader {
                 }
             },
             sv -> {
+                // FACETS tiles the whole genome with copy-neutral segments that share
+                // SNP-bin edges across samples — skip those; keep somatic gain/loss only.
+                if (VariantTypeVisuals.isCnv(sv.getType()) && !VariantTypeVisuals.isCnvEvent(sv.getType())) {
+                    return;
+                }
                 observeType(sv.getType());
                 svProcessed[0]++;
                 
@@ -232,8 +266,7 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             sv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
-                            if (loadFilter != null && !loadFilter.passesLoadTime(
-                                    sv.getType(), siteQual, call, svLengthBp(sv))) {
+                            if (!passesLoadFilter(loadFilter, sv.getType(), siteQual, call, svLengthBp(sv))) {
                                 continue;
                             }
                             int trackIdx = entry.getValue();
@@ -354,7 +387,7 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             snv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
-                            if (loadFilter != null && !loadFilter.passesLoadTime(snv.getType(), siteQual, call)) {
+                            if (!passesLoadFilter(loadFilter, snv.getType(), siteQual, call, -1)) {
                                 continue;
                             }
                             int trackIdx = entry.getValue();
@@ -394,6 +427,9 @@ public class VariantLoader {
         List<VcfStructuralVariant> svs = (List<VcfStructuralVariant>) regionVariants.get("svs");
         if (svs != null) {
             for (VcfStructuralVariant sv : svs) {
+                if (VariantTypeVisuals.isCnv(sv.getType()) && !VariantTypeVisuals.isCnvEvent(sv.getType())) {
+                    continue;
+                }
                 observeType(sv.getType());
                 svProcessed[0]++;
                 List<String> alts = sv.getAlt();
@@ -403,8 +439,7 @@ public class VariantLoader {
                         VariantNode.SampleCall call = getSampleCallForAllele(
                             sv, entry.getKey(), entry.getValue(), alt);
                         if (call != null) {
-                            if (loadFilter != null && !loadFilter.passesLoadTime(
-                                    sv.getType(), siteQual, call, svLengthBp(sv))) {
+                            if (!passesLoadFilter(loadFilter, sv.getType(), siteQual, call, svLengthBp(sv))) {
                                 continue;
                             }
                             int trackIdx = entry.getValue();
@@ -597,6 +632,17 @@ public class VariantLoader {
      * Returns alt_count / (ref_count + alt_count), or -1 if AD not available.
      */
     private static double calculateAlleleFraction(Map<String, Object> gtMap, String altAllele) {
+        // Site-only FACETS CNVs stash cellular fraction as AF (from CF_EM).
+        Object afObj = gtMap.get("AF");
+        if (afObj instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (afObj instanceof String text) {
+            try {
+                return Double.parseDouble(text.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
         if (!gtMap.containsKey("AD")) {
             return -1.0;
         }

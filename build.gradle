@@ -104,6 +104,28 @@ tasks.register('lohBench', JavaExec) {
     }
 }
 
+// Headless VCF open/query probe (same VcfReader path as the app):
+//   ./gradlew cnvProbe -Pvcf=/path/file.vcf.gz [-Pchrom=1]
+tasks.register('cnvProbe', JavaExec) {
+    group = 'verification'
+    description = 'Probe SV/CNV VCF open + structural query via VcfReader'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.baseplayer.variant.CnvVcfProbe'
+    List<String> probeArgs = []
+    if (project.hasProperty('vcf')) {
+        probeArgs.addAll(['--vcf', project.property('vcf').toString()])
+    }
+    if (project.hasProperty('chrom')) {
+        probeArgs.addAll(['--chrom', project.property('chrom').toString()])
+    }
+    args = probeArgs
+    doFirst {
+        if (!project.hasProperty('vcf')) {
+            throw new GradleException('cnvProbe requires -Pvcf=/path/file.vcf.gz (optional: -Pchrom=1)')
+        }
+    }
+}
+
 dependencies {
     implementation(
         [group: 'com.google.code.gson', name: 'gson', version: '2.11.0'],

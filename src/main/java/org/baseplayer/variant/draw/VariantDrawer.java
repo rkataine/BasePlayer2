@@ -405,7 +405,8 @@ public class VariantDrawer {
             && (variant.type == VcfVariantType.SV_DELETION
                 || variant.type == VcfVariantType.SV_DUPLICATION
                 || variant.type == VcfVariantType.SV_INVERSION
-                || variant.type == VcfVariantType.SV_INSERTION);
+                || variant.type == VcfVariantType.SV_INSERTION
+                || VariantTypeVisuals.isCnv(variant.type));
     }
 
     private void drawSvSpan(GraphicsContext gc, VariantNode variant, VariantNode.SampleCall call,

@@ -21,7 +21,8 @@ final class VariantComparisonClusters {
       case INSERTION -> "ins";
       case DELETION -> "del";
       case SV_DELETION, SV_INSERTION, SV_DUPLICATION, SV_INVERSION,
-           SV_TRANSLOCATION, SV_BREAKEND -> "sv";
+           SV_TRANSLOCATION, SV_BREAKEND,
+           SV_CNV, SV_CNV_GAIN, SV_CNV_LOSS, SV_CNV_NEUTRAL -> "sv";
       case LOH_AA, LOH_BB -> "loh";
       case COMPLEX -> "complex";
     };

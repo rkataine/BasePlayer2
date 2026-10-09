@@ -596,6 +596,48 @@ public class VariantFilter {
         }
     }
 
+    /** Whether {@code type} is in the active class slice (or parent) allowed set. */
+    public boolean allowsType(VcfVariantType type) {
+        if (type == null) {
+            return false;
+        }
+        VariantFilter f = classSlice(type);
+        return f.allowedTypes != null && f.allowedTypes.contains(type);
+    }
+
+    /**
+     * Add a newly seen type to the matching class slice / parent allowed set.
+     * Used at load time so first-time types are not dropped when other types in the
+     * same class already drive the filter.
+     */
+    public void admitType(VcfVariantType type) {
+        if (type == null || VariantTypeVisuals.isLohRegion(type)) {
+            return;
+        }
+        if (hasClassSlices()) {
+            boolean structural = VariantTypeVisuals.isStructural(type);
+            VariantFilter slice = structural ? svSlice : pointSlice;
+            if (slice == null) {
+                return;
+            }
+            EnumSet<VcfVariantType> next = slice.allowedTypes == null || slice.allowedTypes.isEmpty()
+                ? EnumSet.noneOf(VcfVariantType.class)
+                : EnumSet.copyOf(slice.allowedTypes);
+            if (!next.add(type)) {
+                return;
+            }
+            slice.setAllowedTypes(next);
+            setClassSlices(pointSlice, svSlice);
+            return;
+        }
+        EnumSet<VcfVariantType> next = allowedTypes == null || allowedTypes.isEmpty()
+            ? EnumSet.noneOf(VcfVariantType.class)
+            : EnumSet.copyOf(allowedTypes);
+        if (next.add(type)) {
+            setAllowedTypes(next);
+        }
+    }
+
     public Set<VariantEffect> getAllowedEffects() { return allowedEffects; }
     public void setAllowedEffects(Set<VariantEffect> allowedEffects) {
         if (allowedEffects == null || allowedEffects.isEmpty()) {

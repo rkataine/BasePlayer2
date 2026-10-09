@@ -639,6 +639,7 @@ public class MasterTrackPainter {
                 || node.type == VcfVariantType.SV_INSERTION
                 || node.type == VcfVariantType.SV_DUPLICATION
                 || node.type == VcfVariantType.SV_INVERSION
+                || VariantTypeVisuals.isCnv(node.type)
                 || VariantTypeVisuals.isLohRegion(node.type)));
 
     if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
@@ -650,11 +651,11 @@ public class MasterTrackPainter {
           Math.min(DENSITY_BINS - 1, (e - viewStart) * DENSITY_BINS / viewLen));
 
       java.util.Set<Integer>[] targetArray = switch (node.type) {
-        case SV_DELETION -> delBySample;
+        case SV_DELETION, SV_CNV_LOSS -> delBySample;
         case LOH_AA -> lohAaBySample;
         case LOH_BB -> lohBbBySample;
         case SV_INVERSION -> invBySample;
-        case SV_DUPLICATION -> dupBySample;
+        case SV_DUPLICATION, SV_CNV_GAIN -> dupBySample;
         case SV_INSERTION -> insBySample;
         default -> delBySample;
       };
@@ -779,6 +780,7 @@ public class MasterTrackPainter {
               || node.type == VcfVariantType.SV_INSERTION
               || node.type == VcfVariantType.SV_DUPLICATION
               || node.type == VcfVariantType.SV_INVERSION
+              || VariantTypeVisuals.isCnv(node.type)
               || VariantTypeVisuals.isLohRegion(node.type))) {
         g1 = node.svEnd;
       }
@@ -886,14 +888,21 @@ public class MasterTrackPainter {
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.DELETION)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.MNV)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.COMPLEX);
-    boolean showDel = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION);
+    // CNV loss/gain accumulate into the DEL/DUP density bins — gate on those types too.
+    boolean showDel = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION)
+        || vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
     boolean showInv = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INVERSION);
-    boolean showDup = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION);
+    boolean showDup = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION)
+        || vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
     boolean showIns = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INSERTION);
     boolean showTra = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_TRANSLOCATION);
     boolean showBnd = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_BREAKEND);
     boolean showLohAa = vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_AA);
     boolean showLohBb = vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_BB);
+    boolean delColorIsCnv = !vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION)
+        && vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
+    boolean dupColorIsCnv = !vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION)
+        && vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
 
     for (int px = 0; px < (int) canvasWidth; px++) {
       // Map screen pixel to cached coordinate space, accounting for both scale and translation
@@ -944,9 +953,15 @@ public class MasterTrackPainter {
       List<BarData> bars = new ArrayList<>();
       if (snvVal > 0) bars.add(new BarData(snvVal, VcfVariantType.SNV));
       if (indelVal > 0) bars.add(new BarData(indelVal, VcfVariantType.DELETION));
-      if (delVal > 0) bars.add(new BarData(delVal, VcfVariantType.SV_DELETION));
+      if (delVal > 0) {
+        bars.add(new BarData(delVal,
+            delColorIsCnv ? VcfVariantType.SV_CNV_LOSS : VcfVariantType.SV_DELETION));
+      }
       if (invVal > 0) bars.add(new BarData(invVal, VcfVariantType.SV_INVERSION));
-      if (dupVal > 0) bars.add(new BarData(dupVal, VcfVariantType.SV_DUPLICATION));
+      if (dupVal > 0) {
+        bars.add(new BarData(dupVal,
+            dupColorIsCnv ? VcfVariantType.SV_CNV_GAIN : VcfVariantType.SV_DUPLICATION));
+      }
       if (insVal > 0) bars.add(new BarData(insVal, VcfVariantType.SV_INSERTION));
       if (traVal > 0) bars.add(new BarData(traVal, VcfVariantType.SV_TRANSLOCATION));
       if (bndVal > 0) bars.add(new BarData(bndVal, VcfVariantType.SV_BREAKEND));
