@@ -568,6 +568,14 @@ public abstract class AbstractNestedVariantTable {
                 continue;
             }
 
+            // Shared alleles first within the gene / chromosome group.
+            entries.sort(Comparator
+                .comparingInt(VariantEntry::sampleCount).reversed()
+                .thenComparing((VariantEntry e) -> e.row != null ? e.row.chromosome() : "",
+                    String.CASE_INSENSITIVE_ORDER)
+                .thenComparingLong(e -> e.row != null && e.row.node() != null
+                    ? e.row.node().position : Long.MAX_VALUE));
+
             boolean cancer = false;
             String tier = null;
             if (!groupByChromosome) {
@@ -584,27 +592,33 @@ public abstract class AbstractNestedVariantTable {
                 unionTracks.size(),
                 formatAfRange(afMinMax[0], afMinMax[1], afN[0])));
         }
-        // Recurrence first: position is a weak analysis order for annotated genes.
-        out.sort(geneComparator(GeneSort.VARIANT_COUNT, false));
+        // Cohort recurrence first (sample union), then gene name.
+        out.sort(geneComparator(GeneSort.SAMPLE_COUNT, false));
         return out;
     }
 
     enum GeneSort {
         POSITION,
         NAME,
-        VARIANT_COUNT
+        VARIANT_COUNT,
+        SAMPLE_COUNT
     }
 
     static Comparator<GeneGroup> geneComparator(GeneSort sort, boolean ascending) {
         Comparator<GeneGroup> byName = Comparator.comparing(
             (GeneGroup g) -> g.name != null ? g.name : "",
             String.CASE_INSENSITIVE_ORDER);
-        return switch (sort != null ? sort : GeneSort.VARIANT_COUNT) {
+        return switch (sort != null ? sort : GeneSort.SAMPLE_COUNT) {
             case NAME -> ascending ? byName : byName.reversed();
             case VARIANT_COUNT -> {
                 Comparator<GeneGroup> byCount =
                     Comparator.comparingInt((GeneGroup g) -> g.variants.size());
                 yield (ascending ? byCount : byCount.reversed()).thenComparing(byName);
+            }
+            case SAMPLE_COUNT -> {
+                Comparator<GeneGroup> bySamples =
+                    Comparator.comparingInt((GeneGroup g) -> g.sampleUnion);
+                yield (ascending ? bySamples : bySamples.reversed()).thenComparing(byName);
             }
             case POSITION -> {
                 Comparator<GeneGroup> byPos = Comparator
@@ -834,11 +848,13 @@ public abstract class AbstractNestedVariantTable {
         private final HBox sortNameHeader;
         private final HBox sortPosHeader;
         private final HBox sortVarsHeader;
+        private final HBox sortSamplesHeader;
         private final Label sortNameArrow;
         private final Label sortPosArrow;
         private final Label sortVarsArrow;
+        private final Label sortSamplesArrow;
 
-        private GeneSort sortMode = GeneSort.VARIANT_COUNT;
+        private GeneSort sortMode = GeneSort.SAMPLE_COUNT;
         private boolean sortAscending = false;
         private GeneGroup pinnedGroup;
         private VirtualFlow<?> pinnedFlow;
@@ -867,9 +883,11 @@ public abstract class AbstractNestedVariantTable {
             sortNameArrow = sortArrowLabel();
             sortPosArrow = sortArrowLabel();
             sortVarsArrow = sortArrowLabel();
+            sortSamplesArrow = sortArrowLabel();
             sortNameHeader = sortableHeader("Gene / Chrom", widths.geneName, GeneSort.NAME, sortNameArrow);
             sortPosHeader = sortableHeader("Chr", widths.chr, GeneSort.POSITION, sortPosArrow);
             sortVarsHeader = sortableHeader("Vars", widths.vars, GeneSort.VARIANT_COUNT, sortVarsArrow);
+            sortSamplesHeader = sortableHeader("Samples", widths.samples, GeneSort.SAMPLE_COUNT, sortSamplesArrow);
 
             geneHeader = buildGeneHeader();
             refreshSortHeaderLabels();
@@ -913,7 +931,7 @@ public abstract class AbstractNestedVariantTable {
             try {
                 List<GeneGroup> safe = next != null ? next : List.of();
                 items.setAll(safe);
-                // Prebuilt groups already use the default VARIANT_COUNT desc order;
+                // Prebuilt groups already use the default SAMPLE_COUNT desc order;
                 // still applySort so a user-changed header order is respected.
                 applySort();
                 list.refresh();
@@ -968,7 +986,7 @@ public abstract class AbstractNestedVariantTable {
             } else {
                 sortMode = mode;
                 // Position and name feel natural ascending; counts often start high→low.
-                sortAscending = mode != GeneSort.VARIANT_COUNT;
+                sortAscending = mode != GeneSort.VARIANT_COUNT && mode != GeneSort.SAMPLE_COUNT;
             }
             applySort();
             refreshSortHeaderLabels();
@@ -983,6 +1001,7 @@ public abstract class AbstractNestedVariantTable {
             applySortArrow(sortNameHeader, sortNameArrow, GeneSort.NAME);
             applySortArrow(sortPosHeader, sortPosArrow, GeneSort.POSITION);
             applySortArrow(sortVarsHeader, sortVarsArrow, GeneSort.VARIANT_COUNT);
+            applySortArrow(sortSamplesHeader, sortSamplesArrow, GeneSort.SAMPLE_COUNT);
         }
 
         private void applySortArrow(HBox header, Label arrow, GeneSort mode) {
@@ -1451,7 +1470,7 @@ public abstract class AbstractNestedVariantTable {
             cols.add(sortPosHeader, widths.chr);
             cols.add(sortVarsHeader, widths.vars);
             cols.add(headerLabel("Types", widths.types), widths.types);
-            cols.add(headerLabel("Samples", widths.samples), widths.samples);
+            cols.add(sortSamplesHeader, widths.samples);
             cols.add(headerLabel("AF", widths.af), widths.af);
             cols.addGrow(headerGrow("Description"));
             return header;

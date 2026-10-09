@@ -77,6 +77,7 @@ public class FileCommands {
 
   /** Open the start hub so the user can pick a recent project or browse. */
   public static void openSession() {
+    StartHub.allowShow();
     StartHub.show(MainApp.stage);
   }
 
@@ -114,6 +115,10 @@ public class FileCommands {
   }
 
   private static boolean loadSessionFile(Path path) {
+    // Always tear the hub down before any I/O / async work so a paint error or
+    // slow read cannot leave it blocking the main window.
+    StartHub.dismiss();
+
     File file = path.toFile();
     if (!file.exists() || !file.isFile()) {
       showError("Could not open project", "File not found:\n" + path);
@@ -122,13 +127,13 @@ public class FileCommands {
 
     try {
       ProjectDocument doc = ProjectSerializer.read(path);
-      // Never leave the start hub up over a loading session.
       StartHub.dismiss();
       ProjectService.loadAsync(path, doc, null);
       UserPreferences.addRecentProject(file);
       UserPreferences.setLastDirectory("JSON", file.getParentFile());
       return true;
     } catch (Exception e) {
+      StartHub.dismiss();
       showError("Could not open project", e.getMessage());
       return false;
     }
@@ -312,11 +317,18 @@ public class FileCommands {
     return Boolean.TRUE.equals(finished.get()) && !session.isDirty();
   }
 
-  /** Clear loaded samples/VCFs and detach from the current project file (untitled). */
-  public static void newProject() {
-    if (!confirmDiscardIfDirty()) return;
+  /**
+   * Clear loaded samples/VCFs and detach from the current project file (untitled).
+   *
+   * @return false if the user cancelled a dirty-project prompt
+   */
+  public static boolean newProject() {
+    if (!confirmDiscardIfDirty()) {
+      return false;
+    }
     SampleDataManager.clearAllData();
     ProjectSessionState.get().clearSession();
+    return true;
   }
 
   /** @deprecated use {@link #newProject()} */

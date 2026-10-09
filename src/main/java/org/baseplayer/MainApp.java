@@ -106,7 +106,12 @@ public class MainApp extends Application {
         stage.show();
         stage.setMaximized(true);
         splashScreen.close();
-        ft.setOnFinished(e -> StartHub.show(primaryStage));
+        ft.setOnFinished(e -> {
+            // Project open during splash sets suppressed — do not put the hub back.
+            if (!StartHub.isSuppressed()) {
+                StartHub.show(primaryStage);
+            }
+        });
         ft.play();
         
         // Auto-open Variant Manager if VCFs are already loaded
