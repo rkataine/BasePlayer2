@@ -29,22 +29,30 @@ public class IntegerRangeSlider extends VBox {
 
     private boolean adjusting;
 
+    /** Optional noun after the sample count, e.g. {@code "samples (window clusters)"}. */
+    private String summaryUnit = "samples";
+
     public IntegerRangeSlider() {
-        getStyleClass().add("integer-range-slider");
+        getStyleClass().addAll("dual-range-slider", "integer-range-slider");
         setSpacing(6);
 
         summaryLabel.getStyleClass().add("value-label");
 
-        configureSlider(lowSlider);
-        configureSlider(highSlider);
-        lowSlider.setShowTickLabels(false);
-        lowSlider.setShowTickMarks(false);
-        lowSlider.getStyleClass().add("range-slider-low");
-        highSlider.getStyleClass().add("range-slider-high");
+        DualThumbSliderSupport.configureBaseSlider(lowSlider);
+        DualThumbSliderSupport.configureBaseSlider(highSlider);
+        lowSlider.setMin(1);
+        lowSlider.setMax(1);
+        lowSlider.setValue(1);
+        highSlider.setMin(1);
+        highSlider.setMax(1);
+        highSlider.setValue(1);
+        highSlider.setMinorTickCount(0);
+        highSlider.setShowTickMarks(true);
+        highSlider.setShowTickLabels(true);
+        highSlider.setBlockIncrement(1);
+        lowSlider.setBlockIncrement(1);
 
-        StackPane track = new StackPane(highSlider, lowSlider);
-        track.getStyleClass().add("range-slider-stack");
-        HBox.setHgrow(track, Priority.ALWAYS);
+        StackPane track = DualThumbSliderSupport.buildStack(lowSlider, highSlider);
 
         lowField.getStyleClass().add("filter-field");
         highField.getStyleClass().add("filter-field");
@@ -56,6 +64,7 @@ public class IntegerRangeSlider extends VBox {
 
         HBox controls = new HBox(8, lowField, toLabel, highField, track);
         controls.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(track, Priority.ALWAYS);
 
         getChildren().addAll(summaryLabel, controls);
 
@@ -114,21 +123,6 @@ public class IntegerRangeSlider extends VBox {
         applyAbsoluteMax(1, 1);
     }
 
-    private static void configureSlider(Slider slider) {
-        slider.setMin(1);
-        slider.setMax(1);
-        slider.setValue(1);
-        // Tick marks are for display only — never snap to them (that skips integers
-        // when majorTickUnit > 1 for larger sample counts).
-        slider.setSnapToTicks(false);
-        slider.setMinorTickCount(0);
-        slider.setShowTickMarks(true);
-        slider.setShowTickLabels(true);
-        slider.setBlockIncrement(1);
-        slider.setPrefWidth(280);
-        HBox.setHgrow(slider, Priority.ALWAYS);
-    }
-
     private void applyAbsoluteMax(int previousMax, int max) {
         int capped = Math.max(1, max);
         boolean highWasPinnedToMax = highValue.get() >= Math.max(1, previousMax);
@@ -138,7 +132,6 @@ public class IntegerRangeSlider extends VBox {
         highSlider.setMax(capped);
         // Sparse labels when many samples; values still snap to every integer below.
         double labelTick = capped <= 10 ? 1 : Math.max(1, Math.ceil(capped / 5.0));
-        lowSlider.setMajorTickUnit(labelTick);
         highSlider.setMajorTickUnit(labelTick);
 
         int low = Math.min(Math.max(1, lowValue.get()), capped);
@@ -194,9 +187,6 @@ public class IntegerRangeSlider extends VBox {
             summaryLabel.setText("Variants shared by " + low + "–" + high + " of " + total + " " + unit);
         }
     }
-
-    /** Optional noun after the sample count, e.g. {@code "samples (window clusters)"}. */
-    private String summaryUnit = "samples";
 
     public void setSummaryUnit(String unit) {
         this.summaryUnit = unit == null || unit.isBlank() ? "samples" : unit;

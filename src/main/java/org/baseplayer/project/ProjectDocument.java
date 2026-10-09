@@ -73,6 +73,7 @@ public class ProjectDocument {
     public double minQuality;
     public int minDepth;
     public double minAlleleFraction;
+    public double maxAlleleFraction = 1.0;
     public boolean cancerGenesOnly;
     public int minSharedSamples = 1;
     public int maxSharedSamples = Integer.MAX_VALUE;
@@ -89,6 +90,7 @@ public class ProjectDocument {
     public double minQuality;
     public int minDepth;
     public double minAlleleFraction;
+    public double maxAlleleFraction = 1.0;
     public boolean cancerGenesOnly;
     public long minSvLengthBp;
     public long maxSvLengthBp = Long.MAX_VALUE;

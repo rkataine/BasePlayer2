@@ -16,17 +16,23 @@ import org.baseplayer.variant.VariantFilter;
 
 import javafx.beans.value.ChangeListener;
 import javafx.geometry.Pos;
+import javafx.geometry.Insets;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.util.Pair;
 
 /**
  * Sample Comparison tab: shared-sample range, gene/window mode, and fixed tag roles.
@@ -42,7 +48,8 @@ public class SampleComparisonPanel {
       Label groupComparisonSummaryLabel,
       Button refreshComparisonGroupsButton,
       RadioButton presentMatchAllRadio,
-      RadioButton presentMatchAnyRadio) {}
+      RadioButton presentMatchAnyRadio,
+      Button calculateLohButton) {}
 
   private Nodes nodes;
   private Runnable onDebouncedChange;
@@ -197,6 +204,7 @@ public class SampleComparisonPanel {
     }
 
     updateGroupComparisonSummaryLabel();
+    updateCalculateLohButton();
   }
 
   public void setControlsLocked(boolean locked) {
@@ -211,6 +219,26 @@ public class SampleComparisonPanel {
     if (nodes.presentMatchAllRadio() != null) nodes.presentMatchAllRadio().setDisable(locked);
     if (nodes.presentMatchAnyRadio() != null) nodes.presentMatchAnyRadio().setDisable(locked);
     if (nodes.comparisonGroupsContainer() != null) nodes.comparisonGroupsContainer().setDisable(locked);
+    updateCalculateLohButton(locked);
+  }
+
+  /** Enable Calculate LOH when Parental/Marker HET + Child HOM roles are set. */
+  public void updateCalculateLohButton() {
+    updateCalculateLohButton(false);
+  }
+
+  private void updateCalculateLohButton(boolean controlsLocked) {
+    if (nodes == null || nodes.calculateLohButton() == null) {
+      return;
+    }
+    VariantFilter probe = new VariantFilter();
+    writeTo(probe);
+    boolean lohReady = probe.isLohMode();
+    nodes.calculateLohButton().setDisable(controlsLocked || !lohReady);
+    nodes.calculateLohButton().setTooltip(new Tooltip(
+        lohReady
+            ? "Build LOH AA/BB region spans from parental/marker hets (on demand)"
+            : "Set Parental/Marker = heterozygous and Child = homozygous, then Calculate"));
   }
 
   private void setupBindings() {
@@ -401,6 +429,7 @@ public class SampleComparisonPanel {
         comparisonTagRoles.put(tag, role);
       }
       updateGroupComparisonSummaryLabel();
+      updateCalculateLohButton();
       if (!isSuppressing()) {
         fireImmediate();
       }
@@ -529,7 +558,7 @@ public class SampleComparisonPanel {
   /**
    * Build a Sample Comparison UI tree programmatically (for the SV mode workspace).
    */
-  public static javafx.util.Pair<javafx.scene.Node, Nodes> buildUi() {
+  public static Pair<javafx.scene.Node, Nodes> buildUi() {
     Label help = new Label(
         "Keep variants shared by at least this many samples (left) and at most this many (right). "
             + "Use this to drop private variants or those shared by everyone.");
@@ -550,13 +579,12 @@ public class SampleComparisonPanel {
 
     VBox left = new VBox(12);
     left.getStyleClass().add("filter-panel");
-    left.setPadding(new javafx.geometry.Insets(16));
+    left.setPadding(new Insets(16));
     Label commonTitle = new Label("Common Variants");
     commonTitle.getStyleClass().add("section-header");
-    HBox windowRow = new HBox(8,
-        new Label("Window size (bp)") {{ getStyleClass().add("subsection-label"); }},
-        windowField,
-        windowHint);
+    Label windowLabel = new Label("Window size (bp)");
+    windowLabel.getStyleClass().add("subsection-label");
+    HBox windowRow = new HBox(8, windowLabel, windowField, windowHint);
     windowRow.setAlignment(Pos.CENTER_LEFT);
     HBox.setHgrow(windowHint, Priority.ALWAYS);
     left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
@@ -575,28 +603,33 @@ public class SampleComparisonPanel {
     RadioButton matchAny = new RadioButton("Any of them (OR)");
     matchAny.getStyleClass().add("filter-radio");
 
+    Button calculateLoh = new Button("Calculate LOH regions");
+    calculateLoh.getStyleClass().add("secondary-button");
+    calculateLoh.setDisable(true);
     Button apply = new Button("Apply Comparison");
     apply.getStyleClass().add("primary-button");
 
     VBox right = new VBox(12);
     right.getStyleClass().add("filter-panel");
-    right.setPadding(new javafx.geometry.Insets(16));
+    right.setPadding(new Insets(16));
     Label groupsTitle = new Label("Sample Tags");
     groupsTitle.getStyleClass().add("section-header");
-    HBox groupsHeader = new HBox(8, groupsTitle, new javafx.scene.layout.Region(), refresh);
-    HBox.setHgrow(groupsHeader.getChildren().get(1), Priority.ALWAYS);
+    Region groupsSpacer = new Region();
+    HBox groupsHeader = new HBox(8, groupsTitle, groupsSpacer, refresh);
+    HBox.setHgrow(groupsSpacer, Priority.ALWAYS);
     groupsHeader.setAlignment(Pos.CENTER_LEFT);
     Label groupsHelp = new Label(
         "Assign roles to fixed tags (Mother, Father, Child, Parental, Marker). "
             + "Roles are applied inside each sample group (family). "
-            + "Use presets for common trio / LOH patterns.");
+            + "Use presets for common trio / LOH patterns. "
+            + "LOH regions are built only when you press Calculate LOH regions.");
     groupsHelp.getStyleClass().add("subsection-label");
     groupsHelp.setWrapText(true);
     Label presentTitle = new Label("When multiple tags require present / genotype");
     presentTitle.getStyleClass().add("section-header");
     HBox presentRow = new HBox(16, matchAll, matchAny);
     presentRow.setAlignment(Pos.CENTER_LEFT);
-    HBox applyRow = new HBox(apply);
+    HBox applyRow = new HBox(12, calculateLoh, apply);
     applyRow.setAlignment(Pos.CENTER_RIGHT);
     right.getChildren().addAll(
         groupsHeader,
@@ -607,19 +640,19 @@ public class SampleComparisonPanel {
         presentRow,
         applyRow);
 
-    javafx.scene.control.SplitPane split = new javafx.scene.control.SplitPane(
-        new javafx.scene.control.ScrollPane(left) {{
-          setFitToWidth(true);
-          getStyleClass().add("filter-scroll");
-          setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
-          setVbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.AS_NEEDED);
-        }},
-        new javafx.scene.control.ScrollPane(right) {{
-          setFitToWidth(true);
-          getStyleClass().add("filter-scroll");
-          setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
-          setVbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.AS_NEEDED);
-        }});
+    ScrollPane leftScroll = new ScrollPane(left);
+    leftScroll.setFitToWidth(true);
+    leftScroll.getStyleClass().add("filter-scroll");
+    leftScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    leftScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+
+    ScrollPane rightScroll = new ScrollPane(right);
+    rightScroll.setFitToWidth(true);
+    rightScroll.getStyleClass().add("filter-scroll");
+    rightScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    rightScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+
+    SplitPane split = new SplitPane(leftScroll, rightScroll);
     split.setDividerPositions(0.5);
     split.getStyleClass().add("tab-content-split");
 
@@ -632,11 +665,12 @@ public class SampleComparisonPanel {
         summary,
         refresh,
         matchAll,
-        matchAny);
+        matchAny,
+        calculateLoh);
     apply.setOnAction(e -> {
       // Wired by controller after install if needed; default no-op here.
     });
-    return new javafx.util.Pair<>(split, nodes);
+    return new Pair<>(split, nodes);
   }
 
   /** Optional: attach Apply button action after {@link #buildUi()}. */
@@ -644,16 +678,25 @@ public class SampleComparisonPanel {
     if (root == null || onApply == null) {
       return;
     }
-    findApplyButton(root).ifPresent(btn -> btn.setOnAction(e -> onApply.run()));
+    findButtonByText(root, "Apply Comparison").ifPresent(btn -> btn.setOnAction(e -> onApply.run()));
   }
 
-  private static java.util.Optional<Button> findApplyButton(javafx.scene.Node node) {
-    if (node instanceof Button button && "Apply Comparison".equals(button.getText())) {
+  /** Optional: attach Calculate LOH button action after {@link #buildUi()}. */
+  public static void wireCalculateLohButton(javafx.scene.Node root, Runnable onCalculate) {
+    if (root == null || onCalculate == null) {
+      return;
+    }
+    findButtonByText(root, "Calculate LOH regions")
+        .ifPresent(btn -> btn.setOnAction(e -> onCalculate.run()));
+  }
+
+  private static java.util.Optional<Button> findButtonByText(javafx.scene.Node node, String text) {
+    if (node instanceof Button button && text.equals(button.getText())) {
       return java.util.Optional.of(button);
     }
     if (node instanceof javafx.scene.Parent parent) {
       for (javafx.scene.Node child : parent.getChildrenUnmodifiable()) {
-        java.util.Optional<Button> found = findApplyButton(child);
+        java.util.Optional<Button> found = findButtonByText(child, text);
         if (found.isPresent()) {
           return found;
         }

@@ -531,7 +531,8 @@ VBox {
     -fx-fill: -bp-text;
 }
 
-/* Dual-thumb sample-share range (low slider sits on top with transparent track) */
+/* Dual-thumb range (low slider sits on top; track is mouse-transparent in code) */
+.dual-range-slider,
 .integer-range-slider {
     -fx-padding: 0;
 }

@@ -430,6 +430,7 @@ public final class SessionDocumentSync {
     spec.minQuality = filter.getMinQuality();
     spec.minDepth = filter.getMinDepth();
     spec.minAlleleFraction = filter.getMinAlleleFraction();
+    spec.maxAlleleFraction = filter.getMaxAlleleFraction();
     spec.cancerGenesOnly = filter.isCancerGenesOnly();
     spec.minSvLengthBp = filter.getMinSvLengthBp();
     spec.maxSvLengthBp = filter.getMaxSvLengthBp();

@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.baseplayer.samples.Sample;
@@ -29,9 +30,13 @@ public class VariantNode {
     /**
      * Display-eligible calls for the current visible-chain generation
      * ({@link VariantList#getVisibleChainGeneration()}). Null when unset.
+     * Prefer live per-track checks for canvas/density — full maps are large with big cohorts.
      */
     private IdentityHashMap<SampleTrack, SampleCall> displayByTrack;
     private int displayCacheGeneration = -1;
+    /** Failed lineage ids for the current chain generation (shared across per-track checks). */
+    private Set<Integer> displayFailedLineages;
+    private int displayFailedGeneration = -1;
 
     public volatile VariantNode next;
     public volatile VariantNode nextVisible;
@@ -297,6 +302,8 @@ public class VariantNode {
     public void clearDisplayCache() {
         displayByTrack = null;
         displayCacheGeneration = -1;
+        displayFailedLineages = null;
+        displayFailedGeneration = -1;
     }
 
     public void setDisplayCache(int generation, IdentityHashMap<SampleTrack, SampleCall> byTrack) {
@@ -306,6 +313,19 @@ public class VariantNode {
 
     public boolean hasDisplayCache(int generation) {
         return displayByTrack != null && displayCacheGeneration == generation;
+    }
+
+    public void setDisplayFailedLineages(int generation, Set<Integer> failed) {
+        displayFailedGeneration = generation;
+        displayFailedLineages = failed != null ? failed : Set.of();
+    }
+
+    public boolean hasDisplayFailedLineages(int generation) {
+        return displayFailedGeneration == generation && displayFailedLineages != null;
+    }
+
+    public Set<Integer> getDisplayFailedLineages(int generation) {
+        return hasDisplayFailedLineages(generation) ? displayFailedLineages : Set.of();
     }
 
     /** Display-eligible call for {@code track} when cache matches {@code generation}. */

@@ -178,11 +178,11 @@ public final class VariantExcelExportBuilder {
             if (row == null || row.node() == null) {
                 continue;
             }
-            for (VariantNode.SampleCall call : row.node().getSamples()) {
+            List<VariantNode.SampleCall> calls = filter != null
+                ? filter.listDisplayCalls(row.node())
+                : row.node().getSamples();
+            for (VariantNode.SampleCall call : calls) {
                 if (call == null) {
-                    continue;
-                }
-                if (filter != null && !filter.passesSampleDisplay(row.node(), call)) {
                     continue;
                 }
                 if (sampleFilter != null && !sampleFilter.test(call)) {
@@ -323,7 +323,7 @@ public final class VariantExcelExportBuilder {
             return "";
         }
         String raw = call.gt != null ? call.gt : "";
-        if (filter != null && filter.isLohMode() && node != null) {
+        if (node != null && VariantTypeVisuals.isLohRegion(node.type)) {
             String loh = node.lohAlleleClass(call);
             if (loh != null && !loh.isBlank()) {
                 return loh + " (" + (raw.isBlank() ? "." : raw) + ")";

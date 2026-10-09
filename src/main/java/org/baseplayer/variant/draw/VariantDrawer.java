@@ -223,7 +223,7 @@ public class VariantDrawer {
             if (useCache) {
                 call = node.getDisplayCall(track, chainGen);
             } else {
-                call = variantList.getDisplayCall(node, track, filter);
+                call = variantList.getDisplayCall(node, trackIndex, track, filter);
             }
             if (call == null || !call.isUiVisible()) {
                 continue;

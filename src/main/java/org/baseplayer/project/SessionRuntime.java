@@ -641,6 +641,7 @@ public final class SessionRuntime {
       point.setMinQuality(spec.minQuality);
       point.setMinDepth(spec.minDepth);
       point.setMinAlleleFraction(spec.minAlleleFraction);
+      point.setMaxAlleleFraction(spec.maxAlleleFraction);
       point.setCancerGenesOnly(spec.cancerGenesOnly);
       point.setMinSharedSamples(spec.minSharedSamples > 0 ? spec.minSharedSamples : 1);
       point.setMaxSharedSamples(spec.maxSharedSamples > 0 ? spec.maxSharedSamples : Integer.MAX_VALUE);
@@ -821,6 +822,7 @@ public final class SessionRuntime {
     filter.setMinQuality(spec.minQuality);
     filter.setMinDepth(spec.minDepth);
     filter.setMinAlleleFraction(spec.minAlleleFraction);
+    filter.setMaxAlleleFraction(spec.maxAlleleFraction);
     filter.setCancerGenesOnly(spec.cancerGenesOnly);
     filter.setMinSvLengthBp(spec.minSvLengthBp);
     filter.setMaxSvLengthBp(spec.maxSvLengthBp > 0 ? spec.maxSvLengthBp : Long.MAX_VALUE);

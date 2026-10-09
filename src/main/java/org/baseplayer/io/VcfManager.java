@@ -1251,7 +1251,11 @@ public class VcfManager {
     /**
      * Apply a filter. When {@code rebuildVisibleChainsOnFx} is false, only invalidate
      * cached visible chains and skip canvas redraw — the caller rebuilds chains off the
-     * FX thread (e.g. sample-comparison / LOH) and redraws afterward.
+     * FX thread and redraws afterward.
+     *
+     * <p>When true, invalidate all cached chroms cheaply, rebuild only the active
+     * chromosome on FX (other chroms rebuild lazily via {@link VariantList#ensureVisibleChain}),
+     * then redraw canvases. Never walks every cached chromosome on the FX thread.
      */
     public void applyFilter(VariantFilter filter, String chromosome, boolean rebuildVisibleChainsOnFx) {
         boolean changed = filterChanged(filter);
@@ -1260,26 +1264,33 @@ public class VcfManager {
         if (changed) {
             ProjectSessionState.get().markDirty();
         }
-        // Seed both LOH AA/BB into session legends whenever LOH comparison is active.
-        if (filter != null && filter.isLohMode()) {
-            unionSessionAvailableFilters(VariantTypeVisuals.lohRegionTypes(), null);
-        }
+        // LOH AA/BB legend types are seeded only after Calculate LOH (regions exist).
         // Keep live session document filter specs in sync (SSOT).
         if (!ProjectSessionState.get().isSuppressingDirty()) {
             SessionDocumentSync.writeVariantFilterFromRuntime(this);
         }
+        // Stale-mark only — do not rebuild chains here. Table rebuild and canvas draw
+        // call ensureVisibleChain; a parallel rebuild raced and cleared visibles mid-walk
+        // (empty variant table / sparse canvas).
+        invalidateVisibleChainKeysForCache();
         if (!rebuildVisibleChainsOnFx) {
-            // Do not walk/clear chains on the FX thread (large datasets freeze before the
-            // loading modal can paint). The background comparison task rebuilds chains;
-            // cheap key invalidation makes ensureVisibleChain treat them as stale.
-            invalidateVisibleChainKeysForCache();
             return;
         }
-        // Rebuild visible skip chains for cached lists, then redraw.
-        Platform.runLater(() -> {
-            rebuildVisibleChainsForCache(filter);
-            redrawSampleCanvases();
-        });
+        Platform.runLater(this::redrawSampleCanvases);
+    }
+
+    /**
+     * Rebuild the visible skip chain for one chromosome only. No-op if not cached.
+     */
+    public void rebuildVisibleChainForChromosome(String chromosome, VariantFilter filter) {
+        if (chromosome == null || chromosome.isBlank()) {
+            return;
+        }
+        VariantList list = findCachedVariantList(chromosome);
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        list.rebuildVisibleChain(filter);
     }
 
     /** Drop cached visible chains so the next ensure/rebuild uses the current filter. */
@@ -1311,8 +1322,7 @@ public class VcfManager {
             if (list == null || list.isEmpty() || seen.put(list, Boolean.TRUE) != null) {
                 continue;
             }
-            // rebuildVisibleChain / rebuildForComparison already synthesizes AA, builds LOH
-            // regions, and annotates LOH when the list is annotated.
+            // Visible-chain rebuild only; LOH regions require Calculate LOH.
             list.rebuildVisibleChain(filter);
         }
     }
@@ -1441,12 +1451,8 @@ public class VcfManager {
         return loaded.getAllowedTypes() != null && loaded.getAllowedTypes().contains(type);
     }
 
-    /** LOH arcs can be toggled without a VCF reload when LOH mode (or regions) is active. */
+    /** LOH arcs can be toggled without a VCF reload once regions have been calculated. */
     public synchronized boolean isLohCanvasMaterialized() {
-        VariantFilter live = currentFilter;
-        if (live != null && live.isLohMode()) {
-            return true;
-        }
         for (VariantList list : variantCache.values()) {
             if (list != null && !list.getLohRegions().isEmpty()) {
                 return true;

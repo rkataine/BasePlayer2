@@ -106,6 +106,10 @@ public abstract class AbstractNestedVariantTable {
         final boolean cancer;
         final String tier;
         final List<VariantEntry> variants;
+        /** Union of display-eligible sample tracks across variants (computed at build). */
+        final int sampleUnion;
+        /** Preformatted AF range for the gene row (computed at build). */
+        final String afSummary;
         boolean expanded;
         /** Null until first click/expand; then cached from in-memory annotation. */
         String description;
@@ -122,11 +126,24 @@ public abstract class AbstractNestedVariantTable {
                 String tier,
                 List<VariantEntry> variants,
                 boolean expanded) {
+            this(name, cancer, tier, variants, expanded, -1, null);
+        }
+
+        GeneGroup(
+                String name,
+                boolean cancer,
+                String tier,
+                List<VariantEntry> variants,
+                boolean expanded,
+                int sampleUnion,
+                String afSummary) {
             this.name = name;
             this.cancer = cancer;
             this.tier = tier;
             this.variants = variants;
             this.expanded = expanded;
+            this.sampleUnion = sampleUnion;
+            this.afSummary = afSummary;
             this.description = null;
             this.descriptionLoaded = false;
         }
@@ -161,13 +178,40 @@ public abstract class AbstractNestedVariantTable {
 
     static final class VariantEntry {
         final TableRow row;
-        final List<VariantNode.SampleCall> calls;
+        /** Null until {@link #ensureCalls} — collapsed gene lists skip materializing samples. */
+        List<VariantNode.SampleCall> calls;
+        final int sampleCount;
         boolean expanded;
 
         VariantEntry(TableRow row, List<VariantNode.SampleCall> calls) {
             this.row = row;
             this.calls = calls;
+            this.sampleCount = calls != null ? calls.size() : 0;
             this.expanded = false;
+        }
+
+        /** Collapsed-table entry: sample count only; calls load on expand. */
+        static VariantEntry deferred(TableRow row, int sampleCount) {
+            return new VariantEntry(row, null, Math.max(0, sampleCount));
+        }
+
+        private VariantEntry(TableRow row, List<VariantNode.SampleCall> calls, int sampleCount) {
+            this.row = row;
+            this.calls = calls;
+            this.sampleCount = sampleCount;
+            this.expanded = false;
+        }
+
+        int sampleCount() {
+            return calls != null ? calls.size() : sampleCount;
+        }
+
+        List<VariantNode.SampleCall> ensureCalls(VariantFilter filter) {
+            if (calls != null) {
+                return calls;
+            }
+            calls = displayCalls(row, filter);
+            return calls;
         }
     }
 
@@ -386,11 +430,11 @@ public abstract class AbstractNestedVariantTable {
             }
         }
 
-        for (VariantNode.SampleCall call : row.node().getSamples()) {
+        List<VariantNode.SampleCall> searchCalls = filter != null
+            ? filter.listDisplayCalls(row.node())
+            : row.node().getSamples();
+        for (VariantNode.SampleCall call : searchCalls) {
             if (call == null) {
-                continue;
-            }
-            if (filter != null && !filter.passesSampleDisplay(row.node(), call)) {
                 continue;
             }
             String sampleName = sampleDisplayName(call);
@@ -481,12 +525,44 @@ public abstract class AbstractNestedVariantTable {
                 .thenComparingLong(r -> r.node().position));
 
             List<VariantEntry> entries = new ArrayList<>();
+            Set<Integer> unionTracks = new LinkedHashSet<>();
+            double[] afMinMax = { Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY };
+            int[] afN = { 0 };
             for (TableRow row : variantRows) {
-                List<VariantNode.SampleCall> calls = displayCalls(row, filter);
-                if (calls.isEmpty()) {
+                if (row == null || row.node() == null) {
                     continue;
                 }
-                entries.add(new VariantEntry(row, calls));
+                if (expandGroups) {
+                    List<VariantNode.SampleCall> calls = displayCalls(row, filter);
+                    if (calls.isEmpty()) {
+                        continue;
+                    }
+                    for (VariantNode.SampleCall call : calls) {
+                        accumulateCallStats(call, unionTracks, afMinMax, afN);
+                    }
+                    entries.add(new VariantEntry(row, calls));
+                } else {
+                    // Collapsed: count + gene-row stats only — no per-sample lists (HET/HOM ≈ AF cost).
+                    int[] n = { 0 };
+                    if (filter != null) {
+                        filter.forEachDisplayCall(row.node(), call -> {
+                            n[0]++;
+                            accumulateCallStats(call, unionTracks, afMinMax, afN);
+                        });
+                    } else {
+                        for (VariantNode.SampleCall call : row.node().getSamples()) {
+                            if (call == null) {
+                                continue;
+                            }
+                            n[0]++;
+                            accumulateCallStats(call, unionTracks, afMinMax, afN);
+                        }
+                    }
+                    if (n[0] <= 0) {
+                        continue;
+                    }
+                    entries.add(VariantEntry.deferred(row, n[0]));
+                }
             }
             if (entries.isEmpty()) {
                 continue;
@@ -504,7 +580,9 @@ public abstract class AbstractNestedVariantTable {
                 cancer,
                 tier,
                 entries,
-                expandGroups));
+                expandGroups,
+                unionTracks.size(),
+                formatAfRange(afMinMax[0], afMinMax[1], afN[0])));
         }
         // Recurrence first: position is a weak analysis order for annotated genes.
         out.sort(geneComparator(GeneSort.VARIANT_COUNT, false));
@@ -562,15 +640,19 @@ public abstract class AbstractNestedVariantTable {
     }
 
     private static List<VariantNode.SampleCall> displayCalls(TableRow row, VariantFilter filter) {
-        List<VariantNode.SampleCall> calls = new ArrayList<>();
-        for (VariantNode.SampleCall call : row.node().getSamples()) {
-            if (call == null) {
-                continue;
+        List<VariantNode.SampleCall> calls;
+        if (filter != null && row != null && row.node() != null) {
+            // Includes implied LOH AA for homozygous tracks with no stored genotype.
+            calls = new ArrayList<>(filter.listDisplayCalls(row.node()));
+        } else {
+            calls = new ArrayList<>();
+            if (row != null && row.node() != null) {
+                for (VariantNode.SampleCall call : row.node().getSamples()) {
+                    if (call != null) {
+                        calls.add(call);
+                    }
+                }
             }
-            if (filter != null && !filter.passesSampleDisplay(row.node(), call)) {
-                continue;
-            }
-            calls.add(call);
         }
         calls.sort(Comparator.comparing(AbstractNestedVariantTable::sampleDisplayName, String.CASE_INSENSITIVE_ORDER));
         return calls;
@@ -854,11 +936,15 @@ public abstract class AbstractNestedVariantTable {
             }
             List<SampleTrack> allTracks =
                 ServiceRegistry.getInstance().getSampleRegistry().getSampleTracks();
+            VariantFilter filter = null;
             for (VariantEntry entry : group.variants) {
-                if (entry == null || entry.calls == null) {
+                if (entry == null) {
                     continue;
                 }
-                for (VariantNode.SampleCall call : entry.calls) {
+                List<VariantNode.SampleCall> calls = entry.calls != null
+                    ? entry.calls
+                    : entry.ensureCalls(filter);
+                for (VariantNode.SampleCall call : calls) {
                     if (call == null) {
                         continue;
                     }
@@ -1674,8 +1760,12 @@ public abstract class AbstractNestedVariantTable {
             Label toggle = buildToggle(group.expanded);
             toggle.setMaxHeight(Region.USE_PREF_SIZE);
 
-            int sampleUnion = countUnionSamples(group.variants, filter);
-            String af = formatGroupAlleleFractions(group.variants, filter);
+            int sampleUnion = group.sampleUnion >= 0
+                ? group.sampleUnion
+                : countUnionSamples(group.variants, filter);
+            String af = group.afSummary != null
+                ? group.afSummary
+                : formatGroupAlleleFractions(group.variants, filter);
 
             HBox nameBox = new HBox(4);
             nameBox.getStyleClass().add("vn-col");
@@ -1750,9 +1840,10 @@ public abstract class AbstractNestedVariantTable {
             if (!entry.expanded) {
                 return content;
             }
-            List<Node> children = new ArrayList<>(entry.calls.size() + 1);
+            List<VariantNode.SampleCall> calls = entry.ensureCalls(filter);
+            List<Node> children = new ArrayList<>(calls.size() + 1);
             children.add(buildSampleHeader());
-            for (VariantNode.SampleCall call : entry.calls) {
+            for (VariantNode.SampleCall call : calls) {
                 children.add(buildSampleNode(entry.row, call));
             }
             return wrapBranch(content, children, "vn-gutter-variant", () -> {
@@ -1830,7 +1921,7 @@ public abstract class AbstractNestedVariantTable {
                     cols.add(aa, widths.aa);
                 }
             }
-            Label samples = fixedCol(String.valueOf(entry.calls.size()), widths.samples, "vn-summary");
+            Label samples = fixedCol(String.valueOf(entry.sampleCount()), widths.samples, "vn-summary");
             samples.getStyleClass().add(colorClass);
             Label af = fixedCol(formatAlleleFractions(tableRow.node(), filter), widths.af, "vn-summary");
             af.getStyleClass().add(colorClass);
@@ -1873,10 +1964,10 @@ public abstract class AbstractNestedVariantTable {
             pad.setPrefWidth(GUTTER_WIDTH);
             pad.setMaxWidth(GUTTER_WIDTH);
 
-            VariantFilter activeFilter = filterSupplier != null ? filterSupplier.get() : null;
             String rawGt = call.gt != null && !call.gt.isBlank() ? call.gt : "—";
             String gt = rawGt;
-            if (activeFilter != null && activeFilter.isLohMode()) {
+            // AA/BB labels only on calculated LOH region nodes (not marker browsing).
+            if (row.node() != null && VariantTypeVisuals.isLohRegion(row.node().type)) {
                 String loh = row.node().lohAlleleClass(call);
                 if (loh != null) {
                     gt = loh;
@@ -2150,7 +2241,7 @@ public abstract class AbstractNestedVariantTable {
                 double h = EST_VARIANT_ROW;
                 if (entry != null && entry.expanded) {
                     h += BRANCH_CHILD_GAP + EST_INLINE_HEADER;
-                    int samples = entry.calls != null ? entry.calls.size() : 0;
+                    int samples = entry.sampleCount();
                     if (samples > 0) {
                         h += samples * (BRANCH_CHILD_GAP + EST_SAMPLE_ROW);
                     }
@@ -2349,10 +2440,39 @@ public abstract class AbstractNestedVariantTable {
 
     // ── Shared data helpers ───────────────────────────────────────────────────
 
+    private static void accumulateCallStats(
+            VariantNode.SampleCall call,
+            Set<Integer> unionTracks,
+            double[] afMinMax,
+            int[] afN) {
+        if (call == null) {
+            return;
+        }
+        int idx = call.getTrackIndex();
+        if (idx >= 0) {
+            unionTracks.add(idx);
+        }
+        if (call.alleleFraction >= 0) {
+            afMinMax[0] = Math.min(afMinMax[0], call.alleleFraction);
+            afMinMax[1] = Math.max(afMinMax[1], call.alleleFraction);
+            afN[0]++;
+        }
+    }
+
+    private static String formatAfRange(double min, double max, int n) {
+        if (n <= 0) {
+            return "—";
+        }
+        if (n == 1 || Math.abs(max - min) < 0.0005) {
+            return String.format(Locale.ROOT, "%.2f", max);
+        }
+        return String.format(Locale.ROOT, "%.2f–%.2f", min, max);
+    }
+
     private static int countUnionSamples(List<VariantEntry> variants, VariantFilter filter) {
         Set<Integer> tracks = new LinkedHashSet<>();
         for (VariantEntry entry : variants) {
-            for (VariantNode.SampleCall call : entry.calls) {
+            for (VariantNode.SampleCall call : entry.ensureCalls(filter)) {
                 int idx = call.getTrackIndex();
                 if (idx >= 0) {
                     tracks.add(idx);
@@ -2367,7 +2487,7 @@ public abstract class AbstractNestedVariantTable {
         double max = Double.NEGATIVE_INFINITY;
         int n = 0;
         for (VariantEntry entry : variants) {
-            for (VariantNode.SampleCall call : entry.calls) {
+            for (VariantNode.SampleCall call : entry.ensureCalls(filter)) {
                 if (call.alleleFraction < 0) {
                     continue;
                 }
@@ -2376,13 +2496,7 @@ public abstract class AbstractNestedVariantTable {
                 n++;
             }
         }
-        if (n == 0) {
-            return "—";
-        }
-        if (n == 1 || Math.abs(max - min) < 0.0005) {
-            return String.format(Locale.ROOT, "%.2f", max);
-        }
-        return String.format(Locale.ROOT, "%.2f–%.2f", min, max);
+        return formatAfRange(min, max, n);
     }
 
     static String formatAlleleFractions(VariantNode node, VariantFilter filter) {
@@ -2392,11 +2506,12 @@ public abstract class AbstractNestedVariantTable {
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
         int n = 0;
-        for (VariantNode.SampleCall call : node.getSamples()) {
+        // One lineage pass via listDisplayCalls — do not call passesSampleDisplay per sample.
+        Iterable<VariantNode.SampleCall> calls = filter != null
+            ? filter.listDisplayCalls(node)
+            : node.getSamples();
+        for (VariantNode.SampleCall call : calls) {
             if (call == null || call.alleleFraction < 0) {
-                continue;
-            }
-            if (filter != null && !filter.passesSampleDisplay(node, call)) {
                 continue;
             }
             min = Math.min(min, call.alleleFraction);

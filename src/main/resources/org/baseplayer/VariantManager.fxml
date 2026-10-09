@@ -3,6 +3,7 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
+<?import org.baseplayer.variant.ui.components.DualRangeSlider?>
 <?import org.baseplayer.variant.ui.components.IntegerRangeSlider?>
 
 <StackPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
@@ -68,17 +69,10 @@
                             </VBox>
 
                             <VBox spacing="6">
-                                <HBox spacing="8" alignment="CENTER_LEFT">
-                                    <Label text="Minimum Allele Fraction" styleClass="section-header"/>
-                                    <Label fx:id="alleleFreqValueLabel" text="0.0" styleClass="value-label"/>
-                                </HBox>
-                                <HBox spacing="8" alignment="CENTER_LEFT">
-                                    <Slider fx:id="alleleFreqSlider" min="0" max="1.0" value="0"
-                                            showTickLabels="true" showTickMarks="true"
-                                            majorTickUnit="0.25" minorTickCount="4"
-                                            blockIncrement="0.05" prefWidth="350" HBox.hgrow="ALWAYS"/>
-                                    <TextField fx:id="alleleFreqField" text="0.0" prefWidth="60" styleClass="filter-field"/>
-                                </HBox>
+                                <Label text="Allele Fraction" styleClass="section-header"/>
+                                <Label text="Keep calls whose allele fraction is between the left (min) and right (max) thumbs."
+                                       styleClass="subsection-label" wrapText="true"/>
+                                <DualRangeSlider fx:id="alleleFreqRangeSlider"/>
                             </VBox>
 
                             <VBox spacing="8">
@@ -307,6 +301,9 @@
                             <padding>
                                 <Insets top="12"/>
                             </padding>
+                            <Button fx:id="calculateLohButton" text="Calculate LOH regions"
+                                    styleClass="secondary-button" disable="true"
+                                    onAction="#handleCalculateLohRegions"/>
                             <Button text="Apply Comparison" styleClass="primary-button" onAction="#handleApplyComparison"/>
                         </HBox>
                     </VBox>

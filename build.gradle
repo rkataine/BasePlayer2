@@ -56,6 +56,54 @@ jar {
         attributes 'Main-Class': 'org.baseplayer.MainApp'
     }
 }
+// Headless LOH timing bench (no GUI):
+//   ./gradlew lohBench -Pparental=/path/p.vcf.gz -Pchild=/path/c.vcf.gz [-Pchrom=1] [-Pgap=100000] [-Prepeat=2]
+tasks.register('lohBench', JavaExec) {
+    group = 'verification'
+    description = 'Run LohFlowBench on parental + child VCFs'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.baseplayer.variant.LohFlowBench'
+    jvmArgs = [
+        '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
+        '--add-opens', 'javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
+        '--add-exports', 'javafx.base/com.sun.javafx.event=ALL-UNNAMED',
+        '-Dbaseplayer.loh.timing=true'
+    ]
+    List<String> benchArgs = []
+    if (project.hasProperty('parental')) {
+        benchArgs.addAll(['--parental', project.property('parental').toString()])
+    }
+    if (project.hasProperty('child')) {
+        benchArgs.addAll(['--child', project.property('child').toString()])
+    }
+    if (project.hasProperty('chrom')) {
+        benchArgs.addAll(['--chrom', project.property('chrom').toString()])
+    }
+    if (project.hasProperty('gap')) {
+        benchArgs.addAll(['--gap', project.property('gap').toString()])
+    }
+    if (project.hasProperty('repeat')) {
+        benchArgs.addAll(['--repeat', project.property('repeat').toString()])
+    }
+    if (project.hasProperty('parentalSample')) {
+        benchArgs.addAll(['--parental-sample', project.property('parentalSample').toString()])
+    }
+    if (project.hasProperty('childSample')) {
+        benchArgs.addAll(['--child-sample', project.property('childSample').toString()])
+    }
+    if (project.hasProperty('cold')) {
+        benchArgs.add('--cold')
+    }
+    args = benchArgs
+    doFirst {
+        if (!project.hasProperty('parental') || !project.hasProperty('child')) {
+            throw new GradleException(
+                'lohBench requires -Pparental=/path/p.vcf.gz -Pchild=/path/c.vcf.gz'
+                    + ' (optional: -Pchrom=1 -Pgap=100000 -Prepeat=2 -Pcold)')
+        }
+    }
+}
+
 dependencies {
     implementation(
         [group: 'com.google.code.gson', name: 'gson', version: '2.11.0'],

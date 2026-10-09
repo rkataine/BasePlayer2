@@ -81,9 +81,10 @@ public class VariantManagerController implements Initializable {
     @FXML private GridPane effectCategoriesContainer;  // Container for dynamic effect checkboxes
     @FXML private CheckBox selectAllTypesCheckBox;
     @FXML private CheckBox selectAllEffectsCheckBox;
-    @FXML private Slider qualitySlider, coverageSlider, alleleFreqSlider;
-    @FXML private TextField qualityField, coverageField, alleleFreqField;
-    @FXML private Label qualityValueLabel, coverageValueLabel, alleleFreqValueLabel;
+    @FXML private Slider qualitySlider, coverageSlider;
+    @FXML private TextField qualityField, coverageField;
+    @FXML private Label qualityValueLabel, coverageValueLabel;
+    @FXML private org.baseplayer.variant.ui.components.DualRangeSlider alleleFreqRangeSlider;
     @FXML private CheckBox cancerOnlyCheckBox;
     @FXML private VBox advancedFiltersContainer;
     @FXML private Button addInfoFilterButton, addFilterFieldButton;
@@ -125,6 +126,7 @@ public class VariantManagerController implements Initializable {
     @FXML private Label groupComparisonSummaryLabel;
     @FXML private Button refreshComparisonGroupsButton;
     @FXML private RadioButton presentMatchAllRadio, presentMatchAnyRadio;
+    @FXML private Button calculateLohButton;
     private AgentPanel agentPanel;
     private VariantBusyOverlay busyOverlay;
 
@@ -242,7 +244,8 @@ public class VariantManagerController implements Initializable {
                 groupComparisonSummaryLabel,
                 refreshComparisonGroupsButton,
                 presentMatchAllRadio,
-                presentMatchAnyRadio),
+                presentMatchAnyRadio,
+                calculateLohButton),
             this::scheduleFilterUpdate,
             this::scheduleImmediateFilterApply,
             () -> suppressFilterApplyEvents);
@@ -257,13 +260,11 @@ public class VariantManagerController implements Initializable {
                 effectCategoriesContainer,
                 qualitySlider,
                 coverageSlider,
-                alleleFreqSlider,
+                alleleFreqRangeSlider,
                 qualityField,
                 coverageField,
-                alleleFreqField,
                 qualityValueLabel,
                 coverageValueLabel,
-                alleleFreqValueLabel,
                 cancerOnlyCheckBox,
                 advancedFiltersContainer,
                 addInfoFilterButton,
@@ -463,6 +464,8 @@ public class VariantManagerController implements Initializable {
             this::scheduleImmediateFilterApply,
             () -> suppressFilterApplyEvents);
         SampleComparisonPanel.wireApplyButton(svComp.getKey(), this::handleApplyComparison);
+        SampleComparisonPanel.wireCalculateLohButton(
+            svComp.getKey(), this::handleCalculateLohRegions);
         if (svWorkspace != null) {
             svWorkspace.setComparison(svSampleComparisonPanel);
         }
@@ -1070,6 +1073,7 @@ public class VariantManagerController implements Initializable {
                 point.setMinQuality(target.getMinQuality());
                 point.setMinDepth(target.getMinDepth());
                 point.setMinAlleleFraction(target.getMinAlleleFraction());
+                point.setMaxAlleleFraction(target.getMaxAlleleFraction());
                 point.setAllowedEffects(target.getAllowedEffects());
                 point.setCancerGenesOnly(target.isCancerGenesOnly());
                 sv.setAllowedTypes(svTypes);
@@ -1847,18 +1851,11 @@ public class VariantManagerController implements Initializable {
         }
 
         VariantFilter filter = buildFilterFromUI();
-        // Het/hom (and LOH) comparison rebuilds visible chains + LOH regions over the
-        // full dataset — do that off the FX thread behind the loading modal.
-        boolean genotypeHeavy = filter != null
-            && (filter.hasActiveGenotypeGroupComparison() || filter.isLohMode());
-
+        // Genotype roles (het/hom/present) use the same visible-chain filter path as
+        // AF/GQ/etc. LOH region calling is only via Calculate LOH — never on Apply.
         if (vcfManager != null) {
             vcfManager.setCurrentFilterForNextLoad(filter);
-            if (genotypeHeavy) {
-                vcfManager.applyFilterDeferVisibleRebuild(filter);
-            } else {
-                vcfManager.applyFilter(filter);
-            }
+            vcfManager.applyFilter(filter);
         }
 
         boolean reloadNeeded = false;
@@ -1932,6 +1929,141 @@ public class VariantManagerController implements Initializable {
     @FXML
     private void handleApplyComparison() {
         scheduleImmediateFilterApply();
+    }
+
+    /**
+     * On-demand LOH region calling. Roles alone never build regions — only this action does.
+     */
+    @FXML
+    private void handleCalculateLohRegions() {
+        final VariantFilter filterSnapshot;
+        try {
+            filterSnapshot = buildFilterFromUI();
+        } catch (RuntimeException ex) {
+            return;
+        }
+        if (filterSnapshot == null || !filterSnapshot.isLohMode()) {
+            Alert alert = new Alert(Alert.AlertType.INFORMATION);
+            alert.setTitle("Calculate LOH");
+            alert.setHeaderText(null);
+            alert.setContentText(
+                "Set Parental/Marker = heterozygous and Child = homozygous, then try again.");
+            if (stage != null) {
+                alert.initOwner(stage);
+            }
+            alert.showAndWait();
+            return;
+        }
+        final List<VcfManager.CachedChromosomeVariants> snapshots =
+            sourceVariantLists != null ? new ArrayList<>(sourceVariantLists) : List.of();
+        if (snapshots.isEmpty()) {
+            Alert alert = new Alert(Alert.AlertType.INFORMATION);
+            alert.setTitle("Calculate LOH");
+            alert.setHeaderText(null);
+            alert.setContentText("No cached chromosome variants to calculate LOH on.");
+            if (stage != null) {
+                alert.initOwner(stage);
+            }
+            alert.showAndWait();
+            return;
+        }
+
+        tableRebuildTask = ThreadRunner.get().submit(
+            "Calculating LOH regions…",
+            () -> {
+                List<VariantTable.TableRow> lohAll = new ArrayList<>();
+                Map<VcfVariantType, List<VariantTable.TableRow>> lohByType =
+                    new EnumMap<>(VcfVariantType.class);
+                for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
+                    lohByType.put(type, new ArrayList<>());
+                }
+                int total = Math.max(1, snapshots.size());
+                ComparisonProgress progress = new ComparisonProgress(
+                    total,
+                    filterSnapshot.comparisonCohortSummary(),
+                    this::updateTableRebuildProgress,
+                    (cur, tot) -> LoadingManager.get().setProgress(cur, tot));
+                int index = 0;
+                for (VcfManager.CachedChromosomeVariants cached : snapshots) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        return null;
+                    }
+                    index++;
+                    String chrom = cached.chromosome();
+                    VariantList variants = cached.variants();
+                    if (variants == null || variants.isEmpty()) {
+                        progress.beginChrom(index, chrom, 0);
+                        progress.finishChrom();
+                        continue;
+                    }
+                    progress.beginChrom(index, chrom, variants.size());
+                    variants.calculateLohRegions(filterSnapshot, progress);
+                    appendLohTableRows(chrom, variants, filterSnapshot, lohAll, lohByType);
+                    progress.finishChrom();
+                }
+                progress.done();
+                if (vcfManager != null) {
+                    vcfManager.unionSessionAvailableFilters(
+                        VariantTypeVisuals.lohRegionTypes(), null);
+                }
+                return new LohCalculateResult(filterSnapshot, lohAll, lohByType);
+            },
+            result -> {
+                tableRebuildTask = null;
+                if (result == null) {
+                    return;
+                }
+                applyLohCalculateResult(result);
+            });
+    }
+
+    private record LohCalculateResult(
+        VariantFilter filter,
+        List<VariantTable.TableRow> lohAll,
+        Map<VcfVariantType, List<VariantTable.TableRow>> lohByType) {}
+
+    private void applyLohCalculateResult(LohCalculateResult result) {
+        if (result == null || lohVariantTable == null) {
+            return;
+        }
+        ObservableList<VariantTable.TableRow> all =
+            FXCollections.observableArrayList(result.lohAll());
+        Map<VcfVariantType, ObservableList<VariantTable.TableRow>> byType =
+            new EnumMap<>(VcfVariantType.class);
+        for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
+            List<VariantTable.TableRow> rows = result.lohByType().get(type);
+            byType.put(type, FXCollections.observableArrayList(
+                rows != null ? rows : List.of()));
+        }
+        List<GeneGroup> allGroups = AbstractNestedVariantTable.buildGeneGroups(
+            result.lohAll(), false, result.filter(), false);
+        Map<VcfVariantType, List<GeneGroup>> byTypeGroups = new EnumMap<>(VcfVariantType.class);
+        for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
+            byTypeGroups.put(type, AbstractNestedVariantTable.buildGeneGroups(
+                result.lohByType().getOrDefault(type, List.of()), false, result.filter(), false));
+        }
+        lohVariantTable.setItemsWithPrebuiltGroups(all, byType, allGroups, byTypeGroups);
+        lohVariantTable.setDisplayContext(result.filter());
+        boolean empty = result.lohAll().isEmpty();
+        if (empty) {
+            lohVariantTable.setPlaceholders("No LOH regions found for current roles", "");
+        } else {
+            lohVariantTable.setPlaceholders("", "");
+        }
+        updateLohTabVisibility(result.filter(), !empty);
+        if (lohRegionsTab != null && resultsTabPane != null
+                && resultsTabPane.getTabs().contains(lohRegionsTab)) {
+            resultsTabPane.getSelectionModel().select(lohRegionsTab);
+        }
+        if (vcfManager != null) {
+            Platform.runLater(() -> {
+                try {
+                    vcfManager.redrawSampleCanvases();
+                } catch (Throwable t) {
+                    System.err.println("Canvas redraw after LOH calculate failed: " + t.getMessage());
+                }
+            });
+        }
     }
 
     @FXML
@@ -2206,41 +2338,9 @@ public class VariantManagerController implements Initializable {
             }
             return;
         }
-        final boolean genotypeHeavy = filterSnapshot.hasActiveGenotypeGroupComparison()
-            || filterSnapshot.isLohMode();
         if (sourceVariantLists == null || sourceVariantLists.isEmpty()) {
             rebuildNeeded = false;
-            if (genotypeHeavy && vcfManager != null) {
-                String cohort = filterSnapshot.comparisonCohortSummary();
-                tableRebuildTask = ThreadRunner.get().submit(
-                    "Applying sample comparison…",
-                    () -> {
-                        ComparisonProgress progress = new ComparisonProgress(
-                            1,
-                            cohort,
-                            this::updateTableRebuildProgress,
-                            (cur, tot) -> LoadingManager.get().setProgress(cur, tot));
-                        progress.beginChrom(1, "all", 0);
-                        progress.setStage("Filtering sites");
-                        vcfManager.rebuildVisibleChainsForCache(filterSnapshot);
-                        progress.done();
-                        return Boolean.TRUE;
-                    },
-                    ok -> {
-                        tableRebuildTask = null;
-                        if (Boolean.TRUE.equals(ok) && vcfManager != null) {
-                            // Defer paint so the loading popup can dismiss cleanly.
-                            Platform.runLater(() -> {
-                                try {
-                                    vcfManager.redrawSampleCanvases();
-                                } catch (Throwable t) {
-                                    System.err.println("Canvas redraw after comparison failed: "
-                                        + t.getMessage());
-                                }
-                            });
-                        }
-                    });
-            } else if (busyOverlay != null) {
+            if (busyOverlay != null) {
                 busyOverlay.cancelDelayedLoadingModal();
             }
             return;
@@ -2249,14 +2349,7 @@ public class VariantManagerController implements Initializable {
         rebuildRunning = true;
         rebuildNeeded = false;
 
-        if (genotypeHeavy) {
-            tableRebuildTask = ThreadRunner.get().submit(
-                "Applying sample comparison…",
-                () -> buildTableRebuildResult(snapshots, filterSnapshot, true),
-                this::finishTableRebuild);
-            return;
-        }
-
+        // Same light path for genotype roles, AF, GQ, present/absent, etc.
         Thread buildThread = new Thread(() -> {
             TableRebuildResult result = buildTableRebuildResult(snapshots, filterSnapshot, false);
             Platform.runLater(() -> finishTableRebuild(result));
@@ -2314,12 +2407,11 @@ public class VariantManagerController implements Initializable {
                     progress.beginChrom(index, sourceChromosome, variants.size());
                 }
 
-                // Fused AA + filter + LOH regions (one full walk). Light path uses ensureVisibleChain.
-                if (reportProgress) {
-                    variants.rebuildForComparison(filterSnapshot, progress);
-                } else {
-                    variants.ensureVisibleChain(filterSnapshot);
+                // Basic visible-chain rebuild only. LOH regions come from Calculate LOH.
+                if (!filterSnapshot.isLohMode()) {
+                    variants.clearLohRegions();
                 }
+                variants.ensureVisibleChain(filterSnapshot);
 
                 if (progress != null) {
                     progress.setStage("Building tables", 0.98, 1.0);
@@ -2421,20 +2513,13 @@ public class VariantManagerController implements Initializable {
         if (svGeneLevel) {
             passingGenesByType = variants.computePassingGenesByType(svSlice);
         }
-        int generation = variants.getVisibleChainGeneration();
-        for (VariantNode node = variants.getVisibleHead(); node != null; node = node.nextVisible) {
-            boolean isSv = VariantTypeVisuals.isStructural(node.type);
-            Map<SampleTrack, VariantNode.SampleCall> display =
-                node.getDisplayByTrack(generation);
-            int passSamples = display.isEmpty() ? 0 : display.size();
-            if (passSamples <= 0) {
-                // Fallback if cache missing
-                for (VariantNode.SampleCall call : node.getSamples()) {
-                    if (filterSnapshot.passesSampleDisplay(node, call)) {
-                        passSamples++;
-                    }
-                }
+        // Snapshot under the list lock so a concurrent chain rebuild cannot empty the walk.
+        for (VariantNode node : variants.snapshotVisibleNodes(filterSnapshot)) {
+            if (node == null) {
+                continue;
             }
+            boolean isSv = VariantTypeVisuals.isStructural(node.type);
+            int passSamples = filterSnapshot.countDisplaySamples(node);
             if (passSamples <= 0) {
                 continue;
             }
@@ -2494,8 +2579,8 @@ public class VariantManagerController implements Initializable {
             return;
         }
 
-        // Genotype-heavy path: keep the loading modal alive with a second ThreadRunner
-        // phase that builds gene groups off the FX thread, then apply lightly on FX.
+        // Same path as AF/GQ: build collapsed gene groups on FX (sample lists deferred).
+        // Heavy/modal path kept for callers that set redrawCanvases (legacy comparison).
         if (result.redrawCanvases()) {
             finishTableRebuildHeavy(result);
             return;
@@ -2780,9 +2865,7 @@ public class VariantManagerController implements Initializable {
         if (lohVariantTable != null) {
             if (lohEmpty) {
                 lohVariantTable.setPlaceholders(
-                    filterSnapshot.isLohMode()
-                        ? "No LOH regions for current LOH comparison"
-                        : "Enable LOH mode (heterozygous + homozygous tags) to build regions",
+                    "Press Calculate LOH regions after setting Parental/Marker = het and Child = hom",
                     "");
             } else {
                 lohVariantTable.setPlaceholders("", "");
@@ -2995,14 +3078,13 @@ public class VariantManagerController implements Initializable {
     }
 
     /**
-     * Show the LOH results sub-tab (beside Intergenic) when LOH mode is active
-     * or regions already exist.
+     * Show the LOH results sub-tab only after regions have been calculated.
      */
     private void updateLohTabVisibility(VariantFilter filter, boolean hasRegions) {
         if (resultsTabPane == null || lohRegionsTab == null) {
             return;
         }
-        boolean show = hasRegions || (filter != null && filter.isLohMode());
+        boolean show = hasRegions;
         if (show) {
             if (!resultsTabPane.getTabs().contains(lohRegionsTab)) {
                 int index = resultsTabPane.getTabs().size();

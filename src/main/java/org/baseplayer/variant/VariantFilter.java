@@ -52,6 +52,8 @@ public class VariantFilter {
     private double minQuality = 0.0;
     private int minDepth = 0;
     private double minAlleleFraction = 0.0;
+    /** Inclusive upper bound on allele fraction; {@code 1.0} means no ceiling. */
+    private double maxAlleleFraction = 1.0;
     private boolean cancerGenesOnly = false;
     /** Inclusive lower bound on how many samples must share a variant (default 1 = no floor). */
     private int minSharedSamples = 1;
@@ -69,6 +71,12 @@ public class VariantFilter {
      * sample counts. Ignored when {@link #geneLevel} is on. {@code 0} = exact allele only.
      */
     private int comparisonWindowBp = 0;
+    /**
+     * Explicit LOH region merge gap in bp. When {@code > 0}, used by
+     * {@link #lohRegionGapBp()} instead of {@link #comparisonWindowBp}, so setting a
+     * LOH gap does not turn on soft-match cluster indexing.
+     */
+    private int lohRegionGapOverrideBp = 0;
     /**
      * Roles keyed by fixed {@link SampleTag}. Expanded into per-group cohorts
      * ({@link #groupRoles} / {@link #groupTrackIndices}) at apply / rebuild time
@@ -89,7 +97,6 @@ public class VariantFilter {
     /** Lazy caches invalidated when group comparison inputs change. */
     private boolean lineageCacheValid = false;
     private Map<Integer, List<Map.Entry<Integer, GroupRole>>> cachedRolesByLineage = Map.of();
-    private Set<Integer> cachedLohLineageIds = Set.of();
     private Set<Integer> cachedLohHomTrackIndices = Set.of();
     private Set<Integer> cachedLohHetTrackIndices = Set.of();
     private Map<Integer, Integer> cachedTrackToLineage = Map.of();
@@ -139,6 +146,11 @@ public class VariantFilter {
     public double getMinAlleleFraction() { return minAlleleFraction; }
     public void setMinAlleleFraction(double minAlleleFraction) { this.minAlleleFraction = minAlleleFraction; }
 
+    public double getMaxAlleleFraction() { return maxAlleleFraction; }
+    public void setMaxAlleleFraction(double maxAlleleFraction) {
+        this.maxAlleleFraction = maxAlleleFraction < 0 ? 1.0 : Math.min(1.0, maxAlleleFraction);
+    }
+
     public boolean isCancerGenesOnly() { return cancerGenesOnly; }
     public void setCancerGenesOnly(boolean cancerGenesOnly) { this.cancerGenesOnly = cancerGenesOnly; }
 
@@ -169,6 +181,15 @@ public class VariantFilter {
     public int getComparisonWindowBp() { return comparisonWindowBp; }
     public void setComparisonWindowBp(int comparisonWindowBp) {
         this.comparisonWindowBp = Math.max(0, comparisonWindowBp);
+    }
+
+    /** Explicit LOH merge gap; {@code 0} falls back to comparison window / default. */
+    public int getLohRegionGapOverrideBp() {
+        return lohRegionGapOverrideBp;
+    }
+
+    public void setLohRegionGapOverrideBp(int lohRegionGapOverrideBp) {
+        this.lohRegionGapOverrideBp = Math.max(0, lohRegionGapOverrideBp);
     }
 
     public boolean hasComparisonWindow() {
@@ -306,7 +327,6 @@ public class VariantFilter {
     private void invalidateLineageCache() {
         lineageCacheValid = false;
         cachedRolesByLineage = Map.of();
-        cachedLohLineageIds = Set.of();
         cachedLohHomTrackIndices = Set.of();
         cachedLohHetTrackIndices = Set.of();
         cachedTrackToLineage = Map.of();
@@ -373,7 +393,6 @@ public class VariantFilter {
 
         cachedRolesByLineage = byLineage;
         cachedTrackToLineage = trackToLineage;
-        cachedLohLineageIds = lohLineages;
         cachedLohHomTrackIndices = lohHomTracks;
         cachedLohHetTrackIndices = lohHetTracks;
         cachedHasActiveGroupComparison = anyActive;
@@ -403,10 +422,9 @@ public class VariantFilter {
     }
 
     /**
-     * LOH mode: one group is {@link GroupRole#HETEROZYGOUS} (markers) and another
-     * is {@link GroupRole#HOMOZYGOUS} (AA/BB). Does not change VCF loading — het
-     * filter is applied at comparison time; missing genotypes get AA via
-     * {@link #addMissingLohAaCalls}.
+     * Roles configured for on-demand Calculate LOH (Parental/Marker HET + Child HOM).
+     * Does <em>not</em> change normal filter semantics — only enables Calculate and
+     * gap settings. Region calling lives in {@link LohRegionBuilder}.
      */
     public boolean isLohMode() {
         if (hasClassSlices()) {
@@ -421,52 +439,91 @@ public class VariantFilter {
         return Boolean.TRUE.equals(cachedIsLohModeLocal);
     }
 
-    /** LOH mode for the lineage that owns {@code groupId}, if known. */
-    private boolean isLohModeForLineage(int lineageId) {
-        ensureLineageCache();
-        return cachedLohLineageIds.contains(lineageId);
+    /**
+     * Legacy no-op. Missing child genotypes are implied AA only inside
+     * {@link LohRegionBuilder} when Calculate LOH runs — never on marker nodes
+     * during normal filtering.
+     *
+     * @return always {@code 0}
+     */
+    public int addMissingLohAaCalls(VariantNode node) {
+        return 0;
     }
 
     /**
-     * In LOH mode, at heterozygous-cohort (marker) sites add a {@code 0/0} (AA)
-     * {@link VariantNode.SampleCall} for each {@link GroupRole#HOMOZYGOUS} track
-     * that has no genotype (ALT lost). Skips tracks that already have a call.
-     *
-     * @return number of AA calls added on this node
+     * Implied AA ({@code 0/0}) for a LOH region sample when Calculate finds a
+     * missing child genotype at a parental-het site. Not used in normal filtering.
      */
-    public int addMissingLohAaCalls(VariantNode node) {
-        if (node != null && hasClassSlices()) {
-            return classSlice(node.type).addMissingLohAaCalls(node);
-        }
-        if (!isLohModeLocal() || node == null) {
-            return 0;
-        }
+    public static VariantNode.SampleCall impliedLohAaCall(int trackIndex) {
+        return new VariantNode.SampleCall(trackIndex, "0/0", -1, -1, 0.0);
+    }
 
-        ensureLineageCache();
-        // Prefer precomputed LOH track sets (built once in ensureLineageCache).
-        Set<Integer> hetTracks = cachedLohHetTrackIndices;
-        Set<Integer> homTracks = cachedLohHomTrackIndices;
-        if (hetTracks.isEmpty() || homTracks.isEmpty()) {
+    /**
+     * Implied AA using the site REF when available ({@code A/A}), else {@code 0/0}.
+     */
+    public static VariantNode.SampleCall impliedLohAaCall(VariantNode node, int trackIndex) {
+        if (node != null && node.ref != null && !node.ref.isBlank()) {
+            String gt = node.ref + "/" + node.ref;
+            return new VariantNode.SampleCall(trackIndex, gt, -1, -1, 0.0);
+        }
+        return impliedLohAaCall(trackIndex);
+    }
+
+    /**
+     * Display-eligible calls for tables / export: sample calls that pass
+     * display thresholds + group roles. No implied AA — that exists only on
+     * calculated LOH region nodes. Lineage failures are evaluated once per node.
+     */
+    public List<VariantNode.SampleCall> listDisplayCalls(VariantNode node) {
+        List<VariantNode.SampleCall> out = new ArrayList<>();
+        forEachDisplayCall(node, out::add);
+        return out;
+    }
+
+    /**
+     * Visit each display-eligible call once (one lineage-failure pass).
+     *
+     * @return number of display-eligible calls
+     */
+    public int forEachDisplayCall(
+            VariantNode node, java.util.function.Consumer<VariantNode.SampleCall> consumer) {
+        if (node == null || consumer == null) {
             return 0;
         }
-        if (!hasPassingZygosityInCohort(node, hetTracks, Zygosity.HET)) {
-            return 0;
+        if (hasClassSlices() && !VariantTypeVisuals.isLohRegion(node.type)) {
+            return classSlice(node.type).forEachDisplayCall(node, consumer);
         }
-        int added = 0;
-        for (Integer trackIndex : homTracks) {
-            if (trackIndex == null || trackIndex < 0) {
-                continue;
-            }
-            if (node.getSampleCall(trackIndex) != null) {
-                continue;
-            }
-            String gt = (node.ref != null && !node.ref.isBlank())
-                ? node.ref + "/" + node.ref
-                : "0/0";
-            node.addSample(new VariantNode.SampleCall(trackIndex, gt, -1, -1, 0.0));
-            added++;
+        if (VariantTypeVisuals.isLohRegion(node.type)) {
+            int[] n = { 0 };
+            node.forEachSample(call -> {
+                if (call != null && passesSampleThresholds(node, call)) {
+                    consumer.accept(call);
+                    n[0]++;
+                }
+            });
+            return n[0];
         }
-        return added;
+        Set<Integer> failed = hasActiveGroupComparison()
+            ? failedLineagesForNode(node)
+            : Set.of();
+        int[] n = { 0 };
+        node.forEachSample(call -> {
+            if (call == null) {
+                return;
+            }
+            if (!passesSampleThresholds(node, call)) {
+                return;
+            }
+            if (node.isHomozygousRef(call)) {
+                return;
+            }
+            if (!passesSampleGroupConstraint(node, call, failed)) {
+                return;
+            }
+            consumer.accept(call);
+            n[0]++;
+        });
+        return n[0];
     }
 
     /**
@@ -528,21 +585,6 @@ public class VariantFilter {
             parts.add("absent: " + String.join(", ", absent));
         }
         return String.join(" · ", parts);
-    }
-
-    private Set<Integer> tracksForRoleInEntries(
-        List<Map.Entry<Integer, GroupRole>> roles, GroupRole wanted) {
-        Set<Integer> tracks = new HashSet<>();
-        for (Map.Entry<Integer, GroupRole> entry : roles) {
-            if (entry.getValue() != wanted) {
-                continue;
-            }
-            Set<Integer> cohort = groupTrackIndices.get(entry.getKey());
-            if (cohort != null) {
-                tracks.addAll(cohort);
-            }
-        }
-        return tracks;
     }
 
     public Set<VcfVariantType> getAllowedTypes() { return allowedTypes; }
@@ -701,12 +743,14 @@ public class VariantFilter {
         copy.minQuality = this.minQuality;
         copy.minDepth = this.minDepth;
         copy.minAlleleFraction = this.minAlleleFraction;
+        copy.maxAlleleFraction = this.maxAlleleFraction;
         copy.cancerGenesOnly = this.cancerGenesOnly;
         copy.minSharedSamples = this.minSharedSamples;
         copy.maxSharedSamples = this.maxSharedSamples;
         copy.presentMatchMode = this.presentMatchMode;
         copy.geneLevel = this.geneLevel;
         copy.comparisonWindowBp = this.comparisonWindowBp;
+        copy.lohRegionGapOverrideBp = this.lohRegionGapOverrideBp;
         copy.tagRoles = this.tagRoles.isEmpty()
             ? new EnumMap<>(SampleTag.class)
             : new EnumMap<>(this.tagRoles);
@@ -764,12 +808,16 @@ public class VariantFilter {
 
         if (call != null) {
             if (f.minDepth > 0 && call.depth >= 0 && call.depth < f.minDepth) return false;
-            // HomRef / AF=0: alt fraction is not meaningful — do not reject on min AF.
+            // HomRef / AF=0: alt fraction is not meaningful — do not reject on AF bounds.
             boolean homRefLike = call.alleleFraction == 0
                 || (call.gt != null && VariantNode.isHomRefGt(call.gt, null));
-            if (!homRefLike && f.minAlleleFraction > 0 && call.alleleFraction >= 0
-                && call.alleleFraction < f.minAlleleFraction) {
-                return false;
+            if (!homRefLike && call.alleleFraction >= 0) {
+                if (f.minAlleleFraction > 0 && call.alleleFraction < f.minAlleleFraction) {
+                    return false;
+                }
+                if (f.maxAlleleFraction < 1.0 && call.alleleFraction > f.maxAlleleFraction) {
+                    return false;
+                }
             }
         }
 
@@ -838,6 +886,7 @@ public class VariantFilter {
         return "minQ=" + minQuality
             + "|minDP=" + minDepth
             + "|minAF=" + minAlleleFraction
+            + "|maxAF=" + maxAlleleFraction
             + "|minSvLen=" + minSvLengthBp
             + "|maxSvLen=" + (maxSvLengthBp == Long.MAX_VALUE ? "inf" : maxSvLengthBp)
             + "|cancerOnly=" + cancerGenesOnly
@@ -845,6 +894,7 @@ public class VariantFilter {
             + "|maxShare=" + maxSharedSamples
             + "|geneLevel=" + geneLevel
             + "|cmpWindow=" + comparisonWindowBp
+            + "|lohGap=" + lohRegionGapOverrideBp
             + "|presentMode=" + presentMatchMode
             + "|groupRoles=" + sortedGroupRolesKey()
             + "|groupTracks=" + sortedGroupTracksKey()
@@ -976,10 +1026,10 @@ public class VariantFilter {
      * fails at the same site).
      * When every involved lineage fails, the site is kept only if an unconstrained sample
      * (ignore / outside those roles) still has a passing alt call.
-     * A solitary heterozygous/homozygous/present role does not filter sites.
+     * A solitary {@link GroupRole#PRESENT} role does not filter sites; heterozygous /
+     * homozygous roles prune sites like other filters (same as AF/GQ).
      * Within a lineage, {@link #presentMatchMode} applies; absent groups are always AND.
-     * {@link GroupRole#HOMOZYGOUS}: ALT-only unless LOH mode (HETEROZYGOUS + HOMOZYGOUS
-     * in the same lineage), then AA or BB.
+     * {@link GroupRole#HOMOZYGOUS} always means hom-alt (no LOH implied-AA on this path).
      */
     public boolean passesGroupComparison(VariantNode node) {
         if (node == null) return false;
@@ -1047,15 +1097,13 @@ public class VariantFilter {
 
     private boolean passesLineageGroupComparison(
         VariantNode node, List<Map.Entry<Integer, GroupRole>> lineageRoles) {
-        // A solitary present/genotype role is not a within-group comparison — do not
-        // drop sites for other samples. Sample-row display still enforces the role.
+        // Solitary PRESENT is not site-level; HET/HOM/ABSENT/multi-role are.
         if (!lineageHasSiteLevelComparison(lineageRoles)) {
             return true;
         }
 
         boolean anyPresentMatched = false;
         boolean anyPresentConfigured = false;
-        boolean lohMode = isLohModeForRoles(lineageRoles);
 
         for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
             GroupRole role = entry.getValue();
@@ -1074,13 +1122,11 @@ public class VariantFilter {
             }
 
             anyPresentConfigured = true;
+            // Basic genotype roles only — no LOH implied-AA / HomRef specials here.
             boolean matched = switch (role) {
                 case HETEROZYGOUS -> hasPassingZygosityInCohort(node, tracks, Zygosity.HET);
-                case HOMOZYGOUS -> lohMode
-                    ? hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ANY)
-                    : hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ALT);
-                default -> hasPassingAltCallInCohort(node, tracks)
-                    || (lohMode && hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_REF));
+                case HOMOZYGOUS -> hasPassingZygosityInCohort(node, tracks, Zygosity.HOM_ALT);
+                default -> hasPassingAltCallInCohort(node, tracks);
             };
 
             if (presentMatchMode == PresentMatchMode.ALL) {
@@ -1099,15 +1145,16 @@ public class VariantFilter {
     }
 
     /**
-     * Site-level filtering runs only when the lineage has a real comparison:
-     * an {@link GroupRole#ABSENT} constraint, or at least two present/genotype roles
-     * (e.g. parental het + offspring present/hom). A single "must be heterozygous"
-     * alone must not hide other groups' or ignored samples' variants.
+     * Site-level filtering when the lineage has a real comparison:
+     * {@link GroupRole#ABSENT}, any heterozygous/homozygous role (prunes like AF/GQ),
+     * or at least two present-type roles (e.g. parental + offspring present).
+     * A solitary {@link GroupRole#PRESENT} alone does not hide other samples' sites.
      */
     private static boolean lineageHasSiteLevelComparison(
         List<Map.Entry<Integer, GroupRole>> lineageRoles) {
         int presentTypeCount = 0;
         boolean hasAbsent = false;
+        boolean hasGenotype = false;
         for (Map.Entry<Integer, GroupRole> entry : lineageRoles) {
             GroupRole role = entry.getValue();
             if (role == null || role == GroupRole.IGNORE) {
@@ -1117,9 +1164,12 @@ public class VariantFilter {
                 hasAbsent = true;
             } else {
                 presentTypeCount++;
+                if (role == GroupRole.HETEROZYGOUS || role == GroupRole.HOMOZYGOUS) {
+                    hasGenotype = true;
+                }
             }
         }
-        return hasAbsent || presentTypeCount >= 2;
+        return hasAbsent || hasGenotype || presentTypeCount >= 2;
     }
 
     private static boolean isLohModeForRoles(List<Map.Entry<Integer, GroupRole>> roles) {
@@ -1390,12 +1440,14 @@ public class VariantFilter {
             return false;
         }
         if (f.minDepth > 0 && call.depth >= 0 && call.depth < f.minDepth) return false;
-        // HomRef AF is alt fraction (~0); do not reject AA on min AF.
-        if (!node.isHomozygousRef(call)
-            && f.minAlleleFraction > 0
-            && call.alleleFraction >= 0
-            && call.alleleFraction < f.minAlleleFraction) {
-            return false;
+        // HomRef AF is alt fraction (~0); do not reject AA on AF bounds.
+        if (!node.isHomozygousRef(call) && call.alleleFraction >= 0) {
+            if (f.minAlleleFraction > 0 && call.alleleFraction < f.minAlleleFraction) {
+                return false;
+            }
+            if (f.maxAlleleFraction < 1.0 && call.alleleFraction > f.maxAlleleFraction) {
+                return false;
+            }
         }
 
         return true;
@@ -1403,7 +1455,8 @@ public class VariantFilter {
 
     /**
      * Thresholds plus group-role genotype/presence constraints for table display.
-     * HomRef rows are shown only for homozygous-role tracks in a lineage that is in LOH mode.
+     * HomRef marker alleles are never shown in normal browsing; calculated LOH
+     * region nodes carry their own sample calls.
      */
     public boolean passesSampleDisplay(VariantNode node, VariantNode.SampleCall call) {
         if (node != null && hasClassSlices() && !VariantTypeVisuals.isLohRegion(node.type)) {
@@ -1412,12 +1465,11 @@ public class VariantFilter {
         if (!passesSampleThresholds(node, call)) {
             return false;
         }
-        // Synthetic LOH regions already encode LOH; skip site-level group re-check
-        // (region nodes only carry homozygous-cohort calls, not marker hets).
+        // Synthetic LOH regions already encode LOH; skip site-level group re-check.
         if (VariantTypeVisuals.isLohRegion(node.type)) {
             return true;
         }
-        if (node.isHomozygousRef(call) && !isLohHomRefTrack(call.getTrackIndex())) {
+        if (node.isHomozygousRef(call)) {
             return false;
         }
         return passesSampleGroupConstraint(node, call, null);
@@ -1469,7 +1521,7 @@ public class VariantFilter {
             if (!passesSampleThresholds(node, call)) {
                 return;
             }
-            if (node.isHomozygousRef(call) && !isLohHomRefTrack(call.getTrackIndex())) {
+            if (node.isHomozygousRef(call)) {
                 return;
             }
             if (!passesSampleGroupConstraint(node, call, failed)) {
@@ -1480,17 +1532,17 @@ public class VariantFilter {
         return map;
     }
 
-    /**
-     * Whether this call is consistent with active group comparison roles for its track.
-     * No-op (passes) when group comparison is inactive.
-     *
-     * @param failedLineages precomputed {@link #failedLineagesForNode} or null to compute
-     */
+    /** Whether this call matches active group roles for its track (no-op when inactive). */
     public boolean passesSampleGroupConstraint(VariantNode node, VariantNode.SampleCall call) {
         return passesSampleGroupConstraint(node, call, null);
     }
 
-    private boolean passesSampleGroupConstraint(
+    /**
+     * Whether this call matches active group roles for its track.
+     *
+     * @param failedLineages precomputed {@link #failedLineagesForNode}, or null to compute
+     */
+    public boolean passesSampleGroupConstraint(
         VariantNode node, VariantNode.SampleCall call, Set<Integer> failedLineages) {
         if (node != null && hasClassSlices()) {
             return classSlice(node.type).passesSampleGroupConstraint(node, call, failedLineages);
@@ -1525,35 +1577,19 @@ public class VariantFilter {
             if (cohort == null || !cohort.contains(trackIndex)) {
                 continue;
             }
-            boolean lohMode = isLohModeForLineage(lineageScopeOf(entry.getKey()));
             if (role == GroupRole.HETEROZYGOUS) {
-                if (lohMode) {
-                    return false;
-                }
                 if (!node.isHeterozygous(call)) {
                     return false;
                 }
             }
             if (role == GroupRole.HOMOZYGOUS) {
-                boolean ok = lohMode
-                    ? (node.isHomozygousRef(call) || node.isHomozygousAlt(call))
-                    : node.isHomozygousAlt(call);
-                if (!ok) {
+                if (!node.isHomozygousAlt(call)) {
                     return false;
                 }
             }
         }
 
         return true;
-    }
-
-    /** True when {@code trackIndex} is in a HOMOZYGOUS cohort of a lineage in LOH mode. */
-    private boolean isLohHomRefTrack(int trackIndex) {
-        if (trackIndex < 0) {
-            return false;
-        }
-        ensureLineageCache();
-        return cachedLohHomTrackIndices.contains(trackIndex);
     }
 
     /**
@@ -1606,11 +1642,18 @@ public class VariantFilter {
         if (hasClassSlices()) {
             int gap = 0;
             if (pointSlice != null && pointSlice.isLohModeLocal()) {
-                gap = pointSlice.comparisonWindowBp;
+                gap = pointSlice.lohRegionGapOverrideBp > 0
+                    ? pointSlice.lohRegionGapOverrideBp
+                    : pointSlice.comparisonWindowBp;
             } else if (svSlice != null && svSlice.isLohModeLocal()) {
-                gap = svSlice.comparisonWindowBp;
+                gap = svSlice.lohRegionGapOverrideBp > 0
+                    ? svSlice.lohRegionGapOverrideBp
+                    : svSlice.comparisonWindowBp;
             }
             return gap > 0 ? gap : LohRegionBuilder.DEFAULT_GAP_BP;
+        }
+        if (lohRegionGapOverrideBp > 0) {
+            return lohRegionGapOverrideBp;
         }
         return comparisonWindowBp > 0 ? comparisonWindowBp : LohRegionBuilder.DEFAULT_GAP_BP;
     }
@@ -1644,17 +1687,43 @@ public class VariantFilter {
         return failed;
     }
 
-    /** Count calls that pass {@link #passesSampleDisplay} (table / comparison-aware). */
+    /**
+     * Count calls that pass display rules (thresholds + group roles).
+     * Evaluates lineage failures once per node — never once per sample
+     * (that O(samples) alloc storm OOMs large cohorts).
+     */
     public int countDisplaySamples(VariantNode node) {
         if (node == null) return 0;
-        if (hasClassSlices()) {
+        if (hasClassSlices() && !VariantTypeVisuals.isLohRegion(node.type)) {
             return classSlice(node.type).countDisplaySamples(node);
         }
+        if (VariantTypeVisuals.isLohRegion(node.type)) {
+            int count = 0;
+            for (VariantNode.SampleCall call : node.getSamples()) {
+                if (call != null && passesSampleThresholds(node, call)) {
+                    count++;
+                }
+            }
+            return count;
+        }
+        Set<Integer> failed = hasActiveGroupComparison()
+            ? failedLineagesForNode(node)
+            : Set.of();
         int count = 0;
         for (VariantNode.SampleCall call : node.getSamples()) {
-            if (passesSampleDisplay(node, call)) {
-                count++;
+            if (call == null) {
+                continue;
             }
+            if (!passesSampleThresholds(node, call)) {
+                continue;
+            }
+            if (node.isHomozygousRef(call)) {
+                continue;
+            }
+            if (!passesSampleGroupConstraint(node, call, failed)) {
+                continue;
+            }
+            count++;
         }
         return count;
     }
@@ -1697,6 +1766,7 @@ public class VariantFilter {
         return minQuality == 0.0
             && minDepth == 0
             && minAlleleFraction == 0.0
+            && maxAlleleFraction >= 1.0
             && minSvLengthBp <= 0
             && maxSvLengthBp == Long.MAX_VALUE
             && !cancerGenesOnly

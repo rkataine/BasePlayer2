@@ -69,8 +69,6 @@ public class VariantList {
     private List<VariantNode> lohRegions = List.of();
     /** Stable key of the filter used to build the visible chain; null if unset/dirty. */
     private String visibleFilterKey;
-    /** Filter key for which missing LOH AA calls were already synthesized. */
-    private String lohAaFilterKey;
     /** Bumped on every visible-chain clear/rebuild so draw seekers can detect staleness. */
     private int visibleChainGeneration;
 
@@ -304,9 +302,8 @@ public class VariantList {
         visibleHead = null;
         visibleByPosition.clear();
         visibleSvByPosition.clear();
-        lohRegions = List.of();
+        // Keep lohRegions — calculated LOH spans are independent of the visible chain.
         visibleFilterKey = null;
-        // Keep lohAaFilterKey — AA synthesis is idempotent and filter-keyed separately.
         visibleChainGeneration++;
         // Mutations and filter rebuilds both go through here; drop stale gene→sample unions.
         clearGeneSampleIndex();
@@ -316,27 +313,27 @@ public class VariantList {
     /**
      * Mark the visible chain as stale without walking nodes. Safe on the FX thread;
      * next {@link #ensureVisibleChain} / {@link #rebuildVisibleChain} does the full clear.
+     * Bumps {@link #visibleChainGeneration} so existing display maps are treated as stale
+     * without freeing them here (GC after the next clear/rebuild replaces refs).
      */
     public void invalidateVisibleFilterKey() {
         visibleFilterKey = null;
-        lohAaFilterKey = null;
+        visibleChainGeneration++;
     }
 
     /**
      * Rebuild {@link VariantNode#nextVisible}/{@link VariantNode#prevVisible} and seek indexes
      * for {@code filter}. A node is visible if it passes node-level checks and has at least one
-     * sample call passing sample thresholds (same rule as drawing).
-     *
-     * <p>In LOH mode, synthesizes missing homozygous-cohort AA ({@code 0/0}) calls before
-     * visibility is evaluated so canvas/density match the table after annotate-all or reload.
+     * sample call passing sample thresholds (same rule as drawing). Same path for AF/GQ and
+     * genotype roles (het/hom/present) — LOH regions are never built here.
      */
     public void rebuildVisibleChain(VariantFilter filter) {
         rebuildForComparison(filter, null);
     }
 
     /**
-     * Single fused pass for genotype-heavy / LOH comparison: synthesize AA, filter sites,
-     * collect LOH informative sites, merge regions, annotate. Reports optional progress.
+     * Visible-chain rebuild with optional progress (bench / legacy callers). Same filter
+     * semantics as {@link #rebuildVisibleChain}; does not call LOH region builder.
      */
     public void rebuildForComparison(VariantFilter filter, ComparisonProgress progress) {
         synchronized (this) {
@@ -345,19 +342,10 @@ public class VariantList {
     }
 
     private void rebuildForComparisonUnlocked(VariantFilter filter, ComparisonProgress progress) {
-        int totalNodes = size;
-        boolean loh = filter != null && filter.isLohMode();
+        // Basic visible-chain rebuild only. LOH regions are never built here —
+        // call {@link #calculateLohRegions} explicitly (Calculate LOH button).
         if (progress != null) {
-            if (loh) {
-                progress.setStage("Synthesizing missing AA", 0.0, 0.25);
-            } else {
-                progress.setStage("Filtering sites", 0.0, 0.85);
-            }
-        }
-        ensureLohAaCallsUnlocked(filter, progress, totalNodes);
-
-        if (progress != null) {
-            progress.setStage("Filtering sites", loh ? 0.25 : 0.0, 0.85);
+            progress.setStage("Filtering sites", 0.0, 1.0);
         }
         clearVisibleChain();
 
@@ -374,13 +362,6 @@ public class VariantList {
             clusterTracks = ensureClusterSampleIndex(filter);
         }
 
-        VariantFilter lohFilter = resolveLohFilter(filter);
-        boolean collectLoh = lohFilter != null && lohFilter.isLohMode();
-        Set<Integer> hetTracks = collectLoh ? lohFilter.getLohHeterozygousTrackIndices() : Set.of();
-        Set<Integer> homTracks = collectLoh ? lohFilter.getLohHomozygousTrackIndices() : Set.of();
-        Map<Integer, List<LohRegionBuilder.SiteHit>> lohSites =
-            collectLoh ? new HashMap<>() : null;
-
         VariantNode prevVisible = null;
         VariantNode current = head;
         int processed = 0;
@@ -388,11 +369,6 @@ public class VariantList {
             processed++;
             if (progress != null && (processed & 0x3FF) == 0) {
                 progress.reportNodes(processed);
-            }
-
-            if (lohSites != null) {
-                LohRegionBuilder.collectInformativeSite(
-                    current, lohFilter, hetTracks, homTracks, lohSites);
             }
 
             if (isDrawableUnderFilter(
@@ -409,14 +385,8 @@ public class VariantList {
                 if (current.svEnd > current.position) {
                     visibleSvByPosition.add(current);
                 }
-                if (filter != null) {
-                    Set<Integer> failed = filter.hasActiveGroupComparison()
-                        ? filter.failedLineagesForNode(current)
-                        : Set.of();
-                    current.setDisplayCache(
-                        visibleChainGeneration,
-                        filter.buildDisplayByTrack(current, failed));
-                }
+                // Display maps are built lazily on first canvas/density hit for this node
+                // (viewport-sized), not for every visible site × sample during rebuild.
             } else {
                 current.nextVisible = null;
                 current.prevVisible = null;
@@ -426,19 +396,65 @@ public class VariantList {
         if (progress != null) {
             progress.reportNodes(processed);
         }
+        // Keep any previously calculated LOH regions; filter rebuild does not touch them.
+        visibleFilterKey = filterKeyOf(filter);
+    }
 
-        if (collectLoh) {
-            if (progress != null) {
-                progress.setStage("Building LOH regions", 0.85, 0.95);
-            }
-            applyLohRegionsUnlocked(
-                LohRegionBuilder.mergeCollectedSites(lohSites, lohFilter.lohRegionGapBp()),
-                lohFilter,
-                progress);
-        } else {
+    /**
+     * On-demand LOH region calling (Calculate LOH). Builds synthetic LOH_AA / LOH_BB
+     * span nodes like an SV list — does not mutate marker genotypes. No-op when the
+     * filter is not configured with heterozygous + homozygous LOH roles.
+     */
+    public void calculateLohRegions(VariantFilter filter) {
+        calculateLohRegions(filter, null);
+    }
+
+    public void calculateLohRegions(VariantFilter filter, ComparisonProgress progress) {
+        synchronized (this) {
+            calculateLohRegionsUnlocked(filter, progress);
+        }
+    }
+
+    /** Drop calculated LOH spans (e.g. roles cleared). */
+    public void clearLohRegions() {
+        synchronized (this) {
             lohRegions = List.of();
         }
-        visibleFilterKey = filterKeyOf(filter);
+    }
+
+    private void calculateLohRegionsUnlocked(VariantFilter filter, ComparisonProgress progress) {
+        VariantFilter lohFilter = resolveLohFilter(filter);
+        LohTiming timing = LohTiming.startIfEnabled(chromosome, lohFilter);
+        if (lohFilter == null) {
+            lohRegions = List.of();
+            if (timing != null) {
+                timing.count("nodes", size);
+                timing.count("regions", 0);
+                timing.finish();
+            }
+            return;
+        }
+        if (progress != null) {
+            progress.setStage("Collecting LOH sites", 0.0, 0.7);
+        }
+        if (timing != null) {
+            timing.count("nodes", size);
+            timing.begin("collect");
+        }
+        List<VariantNode> built = LohRegionBuilder.buildFromList(head, lohFilter, progress);
+        if (timing != null) {
+            timing.end("collect");
+            timing.begin("annotate");
+        }
+        if (progress != null) {
+            progress.setStage("Annotating LOH", 0.7, 1.0);
+        }
+        applyLohRegionsUnlocked(built, lohFilter, progress);
+        if (timing != null) {
+            timing.end("annotate");
+            timing.count("regions", lohRegions.size());
+            timing.finish();
+        }
     }
 
     private static VariantFilter resolveLohFilter(VariantFilter filter) {
@@ -458,16 +474,6 @@ public class VariantList {
         return filter;
     }
 
-    private void rebuildLohRegionsUnlocked(VariantFilter filter) {
-        VariantFilter lohFilter = resolveLohFilter(filter);
-        if (lohFilter == null) {
-            lohRegions = List.of();
-            return;
-        }
-        List<VariantNode> built = LohRegionBuilder.buildFromList(head, lohFilter);
-        applyLohRegionsUnlocked(built, lohFilter, null);
-    }
-
     private void applyLohRegionsUnlocked(
             List<VariantNode> built, VariantFilter lohFilter, ComparisonProgress progress) {
         if (built == null || built.isEmpty()) {
@@ -480,9 +486,6 @@ public class VariantList {
         }
         lohRegions = List.copyOf(built);
         if (annotated && !lohRegions.isEmpty()) {
-            if (progress != null) {
-                progress.setStage("Annotating LOH", 0.95, 0.98);
-            }
             try {
                 ReferenceGenomeService ref =
                     ServiceRegistry.getInstance().getReferenceGenomeService();
@@ -490,72 +493,92 @@ public class VariantList {
             } catch (RuntimeException ignored) {
                 // Genes may be unavailable; table still shows unannotated regions.
             }
+        } else if (!lohRegions.isEmpty()) {
+            // Annotate spans even when the point/SV list was not annotated yet —
+            // LOH regions are independent of marker annotation state.
+            try {
+                ReferenceGenomeService ref =
+                    ServiceRegistry.getInstance().getReferenceGenomeService();
+                new VariantAnnotator(ref).annotateLohRegions(this, chromosome, progress);
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 
     /**
      * Display-eligible call for {@code track} on {@code node} under the current chain
-     * generation. Falls back to live {@link VariantFilter#passesSampleDisplay} if cache missing.
+     * generation. Uses a full display map when present; otherwise a live per-track check
+     * with failed-lineages cached once per node (no IdentityHashMap × samples alloc).
      */
     public VariantNode.SampleCall getDisplayCall(
             VariantNode node, SampleTrack track, VariantFilter filter) {
         if (node == null || track == null) {
             return null;
         }
-        if (node.hasDisplayCache(visibleChainGeneration)) {
-            return node.getDisplayCall(track, visibleChainGeneration);
+        int gen = visibleChainGeneration;
+        if (node.hasDisplayCache(gen)) {
+            return node.getDisplayCall(track, gen);
+        }
+        int trackIndex = ServiceRegistry.getInstance().getSampleRegistry().getTrackIndex(track);
+        return getDisplayCall(node, trackIndex, track, filter);
+    }
+
+    /**
+     * Display call by live track index (drawer hot path — avoids {@code indexOf} per paint).
+     */
+    public VariantNode.SampleCall getDisplayCall(
+            VariantNode node, int trackIndex, SampleTrack track, VariantFilter filter) {
+        if (node == null) {
+            return null;
+        }
+        int gen = visibleChainGeneration;
+        if (track != null && node.hasDisplayCache(gen)) {
+            return node.getDisplayCall(track, gen);
         }
         if (filter == null) {
             return null;
         }
-        VariantNode.SampleCall call = null;
-        for (VariantNode.SampleCall c : node.getSamples()) {
-            if (c != null && c.getTrack() == track) {
-                call = c;
-                break;
+        VariantNode.SampleCall call = trackIndex >= 0 ? node.getSampleCall(trackIndex) : null;
+        if (call == null && track != null) {
+            for (VariantNode.SampleCall c : node.getSamples()) {
+                if (c != null && c.getTrack() == track) {
+                    call = c;
+                    break;
+                }
             }
         }
-        if (call == null || !filter.passesSampleDisplay(node, call)) {
+        if (call == null) {
+            return null;
+        }
+        if (!filter.passesSampleThresholds(node, call)) {
+            return null;
+        }
+        if (!VariantTypeVisuals.isLohRegion(node.type) && node.isHomozygousRef(call)) {
+            return null;
+        }
+        if (VariantTypeVisuals.isLohRegion(node.type)) {
+            return call;
+        }
+        if (!node.hasDisplayFailedLineages(gen)) {
+            Set<Integer> failed = filter.hasActiveGroupComparison()
+                ? filter.failedLineagesForNode(node)
+                : Set.of();
+            node.setDisplayFailedLineages(gen, failed);
+        }
+        if (!filter.passesSampleGroupConstraint(
+                node, call, node.getDisplayFailedLineages(gen))) {
             return null;
         }
         return call;
     }
 
     /**
-     * When {@code filter} is in LOH mode, add missing AA calls on homozygous-cohort tracks
-     * at heterozygous-cohort marker sites. Idempotent.
+     * No-op. Missing child genotypes are implied as AA in
+     * {@link LohRegionBuilder} / {@link VariantFilter#listDisplayCalls} without
+     * mutating marker nodes.
      */
     public void ensureLohAaCalls(VariantFilter filter) {
-        synchronized (this) {
-            ensureLohAaCallsUnlocked(filter, null, size);
-        }
-    }
-
-    private void ensureLohAaCallsUnlocked(
-            VariantFilter filter, ComparisonProgress progress, int totalNodes) {
-        if (filter == null || !filter.isLohMode() || head == null) {
-            return;
-        }
-        String key = filterKeyOf(filter);
-        if (key.equals(lohAaFilterKey)) {
-            return;
-        }
-        int added = 0;
-        int processed = 0;
-        for (VariantNode node = head; node != null; node = node.next) {
-            added += filter.addMissingLohAaCalls(node);
-            processed++;
-            if (progress != null && (processed & 0x3FF) == 0) {
-                progress.reportNodes(processed);
-            }
-        }
-        if (progress != null) {
-            progress.reportNodes(Math.max(processed, totalNodes));
-        }
-        lohAaFilterKey = key;
-        if (added > 0) {
-            invalidateSampleIndexes();
-        }
+        // retained for call-site compatibility
     }
 
     /**
@@ -872,6 +895,7 @@ public class VariantList {
             + filter.getMinQuality()
             + "|" + filter.getMinDepth()
             + "|" + filter.getMinAlleleFraction()
+            + "|" + filter.getMaxAlleleFraction()
             + "|" + filter.isCancerGenesOnly()
             + "|" + filter.isShowCoding()
             + "|" + filter.isShowIntronic()
@@ -1004,6 +1028,11 @@ public class VariantList {
         if (!filter.passesNodeLevel(node, aggregatedTracks)) {
             return false;
         }
+        // Genotype/presence roles: same eligibility as tables (display samples), not
+        // "any threshold-passing call" — that left sites on the chain with 0 table rows.
+        if (filter.hasActiveGroupComparison()) {
+            return filter.countDisplaySamples(node) > 0;
+        }
         boolean[] any = { false };
         node.forEachSample(call -> {
             if (!any[0] && filter.passesSampleThresholds(node, call)) {
@@ -1011,6 +1040,23 @@ public class VariantList {
             }
         });
         return any[0];
+    }
+
+    /**
+     * Ensure the visible chain matches {@code filter}, then return a stable snapshot
+     * of visible nodes (safe if another thread rebuilds afterward).
+     */
+    public List<VariantNode> snapshotVisibleNodes(VariantFilter filter) {
+        synchronized (this) {
+            String key = filterKeyOf(filter);
+            if (!key.equals(visibleFilterKey)) {
+                rebuildForComparisonUnlocked(filter, null);
+            }
+            if (visibleByPosition.isEmpty()) {
+                return List.of();
+            }
+            return List.copyOf(visibleByPosition);
+        }
     }
     
     /**

@@ -514,7 +514,7 @@ public class VariantLoader {
         Boolean isNoCall = (Boolean) gtMap.get("isNoCall");
 
         // Skip HomRef / NoCall at load. In LOH mode, missing calls at marker-het
-        // sites are added as AA (0/0) by VariantFilter.addMissingLohAaCalls.
+        // sites are treated as implied AA at compare/display time (not stored).
         if (Boolean.TRUE.equals(isNoCall) || Boolean.TRUE.equals(isHomRef)) {
             return null;
         }

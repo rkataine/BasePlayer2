@@ -12,9 +12,11 @@ import java.util.Set;
  * marker grid.
  *
  * <p>Informative sites are positions where a Parental/Marker cohort is heterozygous.
- * At each such site the Child (homozygous cohort) is scored AA / BB / AB / missing.
- * Regions grow across consecutive same-class homozygous calls and break on retained
- * het (AB), genotype flip, or a gap larger than the threshold between homozygous hits.
+ * At each such site the Child (homozygous cohort) is scored AA / BB / AB.
+ * A <em>missing</em> child genotype at an informative site is treated as implied AA
+ * (ALT lost / HomRef omitted from the VCF) — no {@code 0/0} call is written onto the
+ * marker node. Regions grow across consecutive same-class homozygous calls and break
+ * on retained het (AB), genotype flip, or a gap larger than the threshold.
  */
 public final class LohRegionBuilder {
 
@@ -25,7 +27,7 @@ public final class LohRegionBuilder {
 
     /**
      * Build LOH regions by walking the full variant linked list ({@code next}), using
-     * parental/marker hets as the backbone. Call after {@code ensureLohAaCalls}.
+     * parental/marker hets as the backbone.
      */
     public static List<VariantNode> buildFromList(VariantNode listHead, VariantFilter filter) {
         return buildFromList(listHead, filter, null);
@@ -95,9 +97,14 @@ public final class LohRegionBuilder {
             return List.of();
         }
         Map<RegionKey, VariantNode> regions = new HashMap<>();
-        for (List<SiteHit> sites : byTrack.values()) {
+        for (Map.Entry<Integer, List<SiteHit>> entry : byTrack.entrySet()) {
+            Integer trackIndex = entry.getKey();
+            List<SiteHit> sites = entry.getValue();
+            if (trackIndex == null || sites == null || sites.isEmpty()) {
+                continue;
+            }
             sites.sort(Comparator.comparingLong(s -> s.position));
-            mergeTrackSites(sites, gapBp, regions);
+            mergeTrackSites(sites, gapBp, trackIndex, regions);
         }
 
         List<VariantNode> out = new ArrayList<>(regions.values());
@@ -109,7 +116,10 @@ public final class LohRegionBuilder {
     }
 
     private static void mergeTrackSites(
-            List<SiteHit> sites, int gapBp, Map<RegionKey, VariantNode> regions) {
+            List<SiteHit> sites,
+            int gapBp,
+            int trackIndex,
+            Map<RegionKey, VariantNode> regions) {
         int i = 0;
         while (i < sites.size()) {
             SiteHit first = sites.get(i);
@@ -124,11 +134,6 @@ public final class LohRegionBuilder {
             int j = i + 1;
             while (j < sites.size()) {
                 SiteHit next = sites.get(j);
-                if (next.childClass == ChildClass.MISSING) {
-                    // Skip; gap is checked against the next scored homozygous site.
-                    j++;
-                    continue;
-                }
                 if (next.childClass == ChildClass.AB) {
                     break;
                 }
@@ -155,8 +160,13 @@ public final class LohRegionBuilder {
                 region.svEnd = end;
                 regions.put(key, region);
             }
-            if (lastCall != null) {
-                region.addSample(lastCall);
+            VariantNode.SampleCall regionCall = lastCall;
+            if (regionCall == null && alleleClass == ChildClass.AA) {
+                // Implied AA across the span — attach once on the region, not on markers.
+                regionCall = VariantFilter.impliedLohAaCall(trackIndex);
+            }
+            if (regionCall != null) {
+                region.addSample(regionCall);
             }
             if (j < sites.size() && sites.get(j).childClass == ChildClass.AB) {
                 i = j + 1;
@@ -186,9 +196,13 @@ public final class LohRegionBuilder {
         return false;
     }
 
+    /**
+     * Missing genotype at an informative (parental-het) site = implied AA.
+     * Explicit HomRef also AA; HomAlt = BB; Het = AB.
+     */
     private static ChildClass classifyChild(VariantNode node, VariantNode.SampleCall call) {
         if (call == null) {
-            return ChildClass.MISSING;
+            return ChildClass.AA;
         }
         String allele = node.lohAlleleClass(call);
         if ("AA".equals(allele)) {
@@ -200,10 +214,11 @@ public final class LohRegionBuilder {
         if ("AB".equals(allele)) {
             return ChildClass.AB;
         }
-        return ChildClass.MISSING;
+        // Unusable GT at an informative site — same LOH assumption as missing.
+        return ChildClass.AA;
     }
 
-    private enum ChildClass { AA, BB, AB, MISSING }
+    private enum ChildClass { AA, BB, AB }
 
     /** Package-visible so fused rebuild can stream sites without a second scan. */
     record SiteHit(long position, ChildClass childClass, VariantNode.SampleCall call) {}

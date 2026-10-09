@@ -617,9 +617,11 @@ public class MasterTrackPainter {
     boolean useCache = node.hasDisplayCache(chainGen);
     for (Map.Entry<SampleTrack, Integer> entry : displayedTrackToIndex.entrySet()) {
       SampleTrack track = entry.getKey();
+      Integer trackIdx = entry.getValue();
       VariantNode.SampleCall call = useCache
           ? node.getDisplayCall(track, chainGen)
-          : variants.getDisplayCall(node, track, activeFilter);
+          : variants.getDisplayCall(
+              node, trackIdx != null ? trackIdx : -1, track, activeFilter);
       // LOH AA regions are homozygous REF by definition — still count them.
       if (call == null
           || (node.isHomozygousRef(call) && !VariantTypeVisuals.isLohRegion(node.type))) {
@@ -753,10 +755,13 @@ public class MasterTrackPainter {
       }
       int count = 0;
       boolean useCache = node.hasDisplayCache(chainGen);
-      for (SampleTrack track : displayedTrackToIndex.keySet()) {
+      for (Map.Entry<SampleTrack, Integer> e : displayedTrackToIndex.entrySet()) {
+        SampleTrack track = e.getKey();
+        Integer trackIdx = e.getValue();
         VariantNode.SampleCall call = useCache
             ? node.getDisplayCall(track, chainGen)
-            : variants.getDisplayCall(node, track, activeFilter);
+            : variants.getDisplayCall(
+                node, trackIdx != null ? trackIdx : -1, track, activeFilter);
         if (call == null
             || (node.isHomozygousRef(call) && !VariantTypeVisuals.isLohRegion(node.type))) {
           continue;
@@ -852,9 +857,25 @@ public class MasterTrackPainter {
     double cachedViewLength = densityCachedEnd - densityCachedStart;
     double currentViewLength = drawStack.getViewLength();
 
-    // Apply zoom-aware scaling and translation (same as GenomicCanvas zoom preview)
-    double scaleX = cachedViewLength / Math.max(1, currentViewLength);
-    double translateX = (densityCachedStart - drawStack.getViewStart()) * (canvasWidth / Math.max(1, currentViewLength));
+    // After pan/zoom we clear cached start/end to force recompute but keep last bin
+    // arrays to avoid a blank flash. Identity-map until the new compute publishes
+    // valid coords — otherwise scaleX=0 / Inf skips almost every column.
+    boolean cacheCoordsValid =
+        densityCachedStart >= 0 && densityCachedEnd > densityCachedStart;
+    double scaleX;
+    double translateX;
+    if (cacheCoordsValid) {
+      scaleX = cachedViewLength / Math.max(1, currentViewLength);
+      translateX = (densityCachedStart - drawStack.getViewStart())
+          * (canvasWidth / Math.max(1, currentViewLength));
+      if (!(scaleX > 1e-9) || Double.isNaN(scaleX) || Double.isInfinite(scaleX)) {
+        scaleX = 1.0;
+        translateX = 0.0;
+      }
+    } else {
+      scaleX = 1.0;
+      translateX = 0.0;
+    }
 
     VcfManager vcfManager = VcfManager.getInstance();
     // Use isCanvasTypeDrawn (legend membership + not hidden). The indel density bin is
@@ -877,13 +898,22 @@ public class MasterTrackPainter {
     for (int px = 0; px < (int) canvasWidth; px++) {
       // Map screen pixel to cached coordinate space, accounting for both scale and translation
       double cachedPx = (px - translateX) / scaleX;
+      if (Double.isNaN(cachedPx) || Double.isInfinite(cachedPx)) {
+        continue;
+      }
 
-      int b0 = (int) (cachedPx * DENSITY_BINS / canvasWidth);
-      int b1 = (int) ((cachedPx + 1) * DENSITY_BINS / canvasWidth);
+      int b0 = (int) Math.floor(cachedPx * DENSITY_BINS / canvasWidth);
+      int b1 = (int) Math.floor((cachedPx + 1.0) * DENSITY_BINS / canvasWidth);
 
-      if (b0 < 0 || b1 >= DENSITY_BINS) continue;
-      b0 = Math.max(0, Math.min(DENSITY_BINS - 1, b0));
-      b1 = Math.max(0, Math.min(DENSITY_BINS - 1, b1));
+      // Fully outside the cached bin range
+      if (b1 < 0 || b0 >= DENSITY_BINS) {
+        continue;
+      }
+      b0 = Math.max(0, b0);
+      b1 = Math.min(DENSITY_BINS - 1, b1);
+      if (b1 < b0) {
+        continue;
+      }
 
       int snvVal = 0;
       int indelVal = 0;
@@ -1126,10 +1156,13 @@ public class MasterTrackPainter {
 
       int sampleCount = 0;
       boolean useCache = node.hasDisplayCache(chainGen);
-      for (SampleTrack track : displayedTracks.keySet()) {
+      for (Map.Entry<SampleTrack, Integer> e : displayedTracks.entrySet()) {
+        SampleTrack track = e.getKey();
+        Integer trackIdx = e.getValue();
         VariantNode.SampleCall call = useCache
             ? node.getDisplayCall(track, chainGen)
-            : variants.getDisplayCall(node, track, filter);
+            : variants.getDisplayCall(
+                node, trackIdx != null ? trackIdx : -1, track, filter);
         if (call == null) {
           continue;
         }

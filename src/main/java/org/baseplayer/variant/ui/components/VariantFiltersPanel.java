@@ -93,13 +93,11 @@ public class VariantFiltersPanel {
         GridPane effectCategoriesContainer,
         Slider qualitySlider,
         Slider coverageSlider,
-        Slider alleleFreqSlider,
+        DualRangeSlider alleleFreqRangeSlider,
         TextField qualityField,
         TextField coverageField,
-        TextField alleleFreqField,
         Label qualityValueLabel,
         Label coverageValueLabel,
-        Label alleleFreqValueLabel,
         CheckBox cancerOnlyCheckBox,
         VBox advancedFiltersContainer,
         Button addInfoFilterButton,
@@ -121,13 +119,11 @@ public class VariantFiltersPanel {
             GridPane effectCategoriesContainer,
             Slider qualitySlider,
             Slider coverageSlider,
-            Slider alleleFreqSlider,
+            DualRangeSlider alleleFreqRangeSlider,
             TextField qualityField,
             TextField coverageField,
-            TextField alleleFreqField,
             Label qualityValueLabel,
             Label coverageValueLabel,
-            Label alleleFreqValueLabel,
             CheckBox cancerOnlyCheckBox,
             VBox advancedFiltersContainer,
             Button addInfoFilterButton,
@@ -142,13 +138,11 @@ public class VariantFiltersPanel {
                 effectCategoriesContainer,
                 qualitySlider,
                 coverageSlider,
-                alleleFreqSlider,
+                alleleFreqRangeSlider,
                 qualityField,
                 coverageField,
-                alleleFreqField,
                 qualityValueLabel,
                 coverageValueLabel,
-                alleleFreqValueLabel,
                 cancerOnlyCheckBox,
                 advancedFiltersContainer,
                 addInfoFilterButton,
@@ -171,13 +165,11 @@ public class VariantFiltersPanel {
             GridPane effectCategoriesContainer,
             Slider qualitySlider,
             Slider coverageSlider,
-            Slider alleleFreqSlider,
+            DualRangeSlider alleleFreqRangeSlider,
             TextField qualityField,
             TextField coverageField,
-            TextField alleleFreqField,
             Label qualityValueLabel,
             Label coverageValueLabel,
-            Label alleleFreqValueLabel,
             CheckBox cancerOnlyCheckBox,
             VBox advancedFiltersContainer,
             Button addInfoFilterButton,
@@ -194,13 +186,11 @@ public class VariantFiltersPanel {
                 effectCategoriesContainer,
                 qualitySlider,
                 coverageSlider,
-                alleleFreqSlider,
+                alleleFreqRangeSlider,
                 qualityField,
                 coverageField,
-                alleleFreqField,
                 qualityValueLabel,
                 coverageValueLabel,
-                alleleFreqValueLabel,
                 cancerOnlyCheckBox,
                 advancedFiltersContainer,
                 addInfoFilterButton,
@@ -252,15 +242,9 @@ public class VariantFiltersPanel {
         coverageValue.setVisible(false);
         coverageValue.setManaged(false);
 
-        Slider alleleFreqSlider = new Slider(0, 1.0, 0);
-        alleleFreqSlider.setVisible(false);
-        alleleFreqSlider.setManaged(false);
-        TextField alleleFreqField = new TextField("0.0");
-        alleleFreqField.setVisible(false);
-        alleleFreqField.setManaged(false);
-        Label alleleFreqValue = new Label("0.0");
-        alleleFreqValue.setVisible(false);
-        alleleFreqValue.setManaged(false);
+        DualRangeSlider alleleFreqRangeSlider = new DualRangeSlider();
+        alleleFreqRangeSlider.setVisible(false);
+        alleleFreqRangeSlider.setManaged(false);
 
         CheckBox selectAllEffects = new CheckBox();
         selectAllEffects.getStyleClass().add("filter-checkbox");
@@ -354,13 +338,11 @@ public class VariantFiltersPanel {
             effectsContainer,
             qualitySlider,
             coverageSlider,
-            alleleFreqSlider,
+            alleleFreqRangeSlider,
             qualityField,
             coverageField,
-            alleleFreqField,
             qualityValue,
             coverageValue,
-            alleleFreqValue,
             cancerOnly,
             advanced,
             addInfo,
@@ -550,9 +532,14 @@ public class VariantFiltersPanel {
             LooserWhen.CURRENT_LOWER);
         registerThresholdFilter(
             "minAF",
-            () -> nodes.alleleFreqSlider().getValue(),
+            () -> nodes.alleleFreqRangeSlider().getLowValue(),
             VariantFilter::getMinAlleleFraction,
             LooserWhen.CURRENT_LOWER);
+        registerThresholdFilter(
+            "maxAF",
+            () -> nodes.alleleFreqRangeSlider().getHighValue(),
+            VariantFilter::getMaxAlleleFraction,
+            LooserWhen.CURRENT_HIGHER);
 
         registerSetFilter(
             "allowedTypes",
@@ -620,7 +607,8 @@ public class VariantFiltersPanel {
 
         nodes.qualitySlider().setValue(filter.getMinQuality());
         nodes.coverageSlider().setValue(filter.getMinDepth());
-        nodes.alleleFreqSlider().setValue(filter.getMinAlleleFraction());
+        nodes.alleleFreqRangeSlider().setRange(
+            filter.getMinAlleleFraction(), filter.getMaxAlleleFraction());
         nodes.cancerOnlyCheckBox().setSelected(filter.isCancerGenesOnly());
 
         if (nodes.minSvLengthField() != null) {
@@ -662,9 +650,8 @@ public class VariantFiltersPanel {
         try {
             filter.setMinDepth(Integer.parseInt(nodes.coverageField().getText().trim()));
         } catch (NumberFormatException ignored) {}
-        try {
-            filter.setMinAlleleFraction(Double.parseDouble(nodes.alleleFreqField().getText().trim()));
-        } catch (NumberFormatException ignored) {}
+        filter.setMinAlleleFraction(nodes.alleleFreqRangeSlider().getLowValue());
+        filter.setMaxAlleleFraction(nodes.alleleFreqRangeSlider().getHighValue());
 
         filter.setCancerGenesOnly(nodes.cancerOnlyCheckBox().isSelected());
 
@@ -921,7 +908,7 @@ public class VariantFiltersPanel {
         }
         nodes.qualitySlider().setValue(0);
         nodes.coverageSlider().setValue(0);
-        nodes.alleleFreqSlider().setValue(0);
+        nodes.alleleFreqRangeSlider().resetToFullRange();
         nodes.cancerOnlyCheckBox().setSelected(false);
         if (nodes.advancedFiltersContainer() != null) {
             nodes.advancedFiltersContainer().getChildren().clear();
@@ -1241,11 +1228,12 @@ public class VariantFiltersPanel {
             nodes.coverageField(),
             nodes.coverageValueLabel(),
             v -> String.valueOf(v.intValue()));
-        bindThresholdSlider(
-            nodes.alleleFreqSlider(),
-            nodes.alleleFreqField(),
-            nodes.alleleFreqValueLabel(),
-            v -> String.format("%.2f", v));
+        javafx.beans.value.ChangeListener<Number> afListener = (obs, oldVal, newVal) -> {
+            refreshReloadBannerFromFilters();
+            scheduleDebouncedChange();
+        };
+        nodes.alleleFreqRangeSlider().lowValueProperty().addListener(afListener);
+        nodes.alleleFreqRangeSlider().highValueProperty().addListener(afListener);
     }
 
     private void bindThresholdSlider(
