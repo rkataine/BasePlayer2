@@ -23,6 +23,7 @@ import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
@@ -32,6 +33,7 @@ import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.TextField;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -302,14 +304,14 @@ public class SampleTrackListPanel extends TrackListPanel {
         gc.beginPath();
         gc.rect(0, Math.max(rowY, 0), contentRight, rowHeight);
         gc.clip();
-        if (isHovered || selected) {
-          gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
-          gc.setFill(AppTheme.canvas().overlayInk());
-        } else {
-          gc.setFont(NAME_FONT);
-          gc.setFill(trackVisible ? AppTheme.chrome().text() : AppTheme.chrome().muted());
-        }
-        gc.fillText(displayName, nameX, textY);
+        Font nameFont = (isHovered || selected)
+            ? Font.font("Segoe UI", FontWeight.BOLD, 13)
+            : NAME_FONT;
+        Color nameColor = (isHovered || selected)
+            ? AppTheme.canvas().overlayInk()
+            : (trackVisible ? AppTheme.chrome().text() : AppTheme.chrome().muted());
+        gc.setFont(nameFont);
+        drawSampleNameWithFilterHighlight(gc, displayName, nameX, textY, nameColor);
         if (showMetaDetail && sampleTrack != null) {
           drawMetaDetail(gc, sampleTrack, nameX, textY + 14, contentRight - nameX);
         }
@@ -387,8 +389,8 @@ public class SampleTrackListPanel extends TrackListPanel {
       double labelTop = Math.max(0, lineY - 16);
       reactiveGc.setFill(Color.rgb(0, 0, 0, 0.72));
       reactiveGc.fillRoundRect(2, labelTop, Math.min(contentRight - 4, Math.max(24, textWidth)), 15, 3, 3);
-      reactiveGc.setFill(AppTheme.canvas().overlayInk());
-      reactiveGc.fillText(displayName, 6, labelTop + 12);
+      drawSampleNameWithFilterHighlight(
+          reactiveGc, displayName, 6, labelTop + 12, AppTheme.canvas().overlayInk());
       return;
     }
 
@@ -401,6 +403,73 @@ public class SampleTrackListPanel extends TrackListPanel {
     if (hoveredIcon != null) {
       drawIconGlow(hoveredIcon, hoverIndex);
     }
+  }
+
+  /**
+   * Draw a sample name, highlighting spans that match the active text filter.
+   */
+  private void drawSampleNameWithFilterHighlight(
+      javafx.scene.canvas.GraphicsContext graphics,
+      String displayName,
+      double nameX,
+      double textY,
+      Color baseColor) {
+    if (displayName == null || displayName.isEmpty()) {
+      return;
+    }
+    List<int[]> spans = sampleRegistry.findActiveFilterMatchSpans(displayName);
+    if (spans.isEmpty()) {
+      graphics.setFill(baseColor);
+      graphics.fillText(displayName, nameX, textY);
+      return;
+    }
+
+    Font font = graphics.getFont();
+    double fontSize = font.getSize();
+    Color highlightFill = AppTheme.chrome().warning();
+    Color highlightBg = Color.color(
+        highlightFill.getRed(), highlightFill.getGreen(), highlightFill.getBlue(), 0.28);
+
+    double cursorX = nameX;
+    int cursor = 0;
+    for (int[] span : spans) {
+      if (span == null || span.length < 2) {
+        continue;
+      }
+      int start = Math.max(cursor, Math.min(displayName.length(), span[0]));
+      int end = Math.max(start, Math.min(displayName.length(), span[1]));
+      if (start > cursor) {
+        String before = displayName.substring(cursor, start);
+        graphics.setFill(baseColor);
+        graphics.fillText(before, cursorX, textY);
+        cursorX += measureTextWidth(before, font);
+      }
+      if (end > start) {
+        String matched = displayName.substring(start, end);
+        double matchWidth = measureTextWidth(matched, font);
+        graphics.setFill(highlightBg);
+        graphics.fillRoundRect(
+            cursorX - 1, textY - fontSize + 1, matchWidth + 2, fontSize + 3, 3, 3);
+        graphics.setFill(highlightFill);
+        graphics.fillText(matched, cursorX, textY);
+        cursorX += matchWidth;
+      }
+      cursor = end;
+    }
+    if (cursor < displayName.length()) {
+      String after = displayName.substring(cursor);
+      graphics.setFill(baseColor);
+      graphics.fillText(after, cursorX, textY);
+    }
+  }
+
+  private static double measureTextWidth(String text, Font font) {
+    if (text == null || text.isEmpty()) {
+      return 0;
+    }
+    javafx.scene.text.Text measure = new javafx.scene.text.Text(text);
+    measure.setFont(font);
+    return measure.getLayoutBounds().getWidth();
   }
 
   /**
@@ -552,7 +621,38 @@ public class SampleTrackListPanel extends TrackListPanel {
     addMethylationSettings(settingsMenu, track);
     addHaplotypeInformation(settingsMenu, track);
     addReadRenderingSettings(settingsMenu, track);
+    addApplySettingsToAllItem(settingsMenu, track);
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  private void addApplySettingsToAllItem(ContextMenu settingsMenu, SampleTrack track) {
+    if (sampleRegistry.getSampleTracks().size() <= 1) {
+      return;
+    }
+    settingsMenu.getItems().add(new SeparatorMenuItem());
+    Button applyAll = new Button("Apply settings to all tracks");
+    styleMenuActionButton(applyAll);
+    applyAll.setMaxWidth(Double.MAX_VALUE);
+    applyAll.setOnAction(event -> {
+      SampleDataManager.applyTrackSettingsToAll(track);
+      draw();
+      onAfterVisibleTrackRangeChanged();
+      settingsMenu.hide();
+    });
+    HBox row = new HBox(applyAll);
+    row.setPadding(new Insets(4, 8, 6, 8));
+    HBox.setHgrow(applyAll, Priority.ALWAYS);
+    settingsMenu.getItems().add(new CustomMenuItem(row, false));
+  }
+
+  private static void styleMenuActionButton(Button button) {
+    button.setStyle(
+        "-fx-background-color: " + AppTheme.chrome().elevatedHex()
+            + "; -fx-text-fill: " + AppTheme.chrome().textHex()
+            + "; -fx-font-size: 11; -fx-font-weight: bold; -fx-padding: 4 10 4 10;"
+            + "-fx-border-color: " + AppTheme.chrome().strokeHex()
+            + "; -fx-border-width: 1; -fx-background-radius: 3; -fx-border-radius: 3;"
+            + "; -fx-cursor: hand;");
   }
 
   private void addOpenedFilesMenuItems(
@@ -581,80 +681,15 @@ public class SampleTrackListPanel extends TrackListPanel {
   private void addSampleGroupMenuItems(ContextMenu settingsMenu, SampleTrack track, int sampleIndex) {
     settingsMenu.getItems().add(new SeparatorMenuItem());
 
-    VBox groupBox = new VBox(6);
-    groupBox.setPadding(new Insets(4, 8, 4, 8));
+    VBox section = new VBox(6);
+    section.setPadding(new Insets(4, 8, 6, 8));
 
-    Label header = new Label("Sample groups");
-    header.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11; -fx-font-weight: bold;");
-    groupBox.getChildren().add(header);
-
-    List<SampleGroup> memberships = sampleRegistry.getGroupsForTrack(track);
-    ColorPicker colorPicker = new ColorPicker(
-        !memberships.isEmpty()
-            ? memberships.get(0).getColor()
-            : DrawColors.SAMPLE_GROUP_COLORS[
-                sampleRegistry.getSampleGroups().size() % DrawColors.SAMPLE_GROUP_COLORS.length]);
-    colorPicker.setPrefWidth(150);
-
-    if (!memberships.isEmpty()) {
-      String names = memberships.stream()
-          .map(SampleGroup::getName)
-          .collect(java.util.stream.Collectors.joining(", "));
-      Label currentLabel = new Label("In: " + names);
-      currentLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
-      currentLabel.setWrapText(true);
-      currentLabel.setMaxWidth(220);
-      groupBox.getChildren().add(currentLabel);
-
-      if (memberships.size() == 1) {
-        SampleGroup only = memberships.get(0);
-        colorPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
-          if (newColor != null) {
-            sampleRegistry.setGroupColor(only.getId(), newColor);
-            draw();
-          }
-        });
-        Label colorHint = new Label("Group color");
-        colorHint.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
-        groupBox.getChildren().addAll(colorHint, colorPicker);
-      } else {
-        for (SampleGroup group : memberships) {
-          ColorPicker perGroupPicker = new ColorPicker(group.getColor());
-          perGroupPicker.setPrefWidth(150);
-          Label colorHint = new Label(group.getName() + " color");
-          colorHint.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
-          perGroupPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
-            if (newColor != null) {
-              sampleRegistry.setGroupColor(group.getId(), newColor);
-              draw();
-            }
-          });
-          groupBox.getChildren().addAll(colorHint, perGroupPicker);
-        }
-      }
-    } else {
-      Label colorHint = new Label("Color for new group");
-      colorHint.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
-      groupBox.getChildren().addAll(colorHint, colorPicker);
-    }
-
-    settingsMenu.getItems().add(new CustomMenuItem(groupBox, false));
-
-    VBox tagBox = new VBox(4);
-    tagBox.setPadding(new Insets(4, 8, 4, 8));
-    Label tagHeader = new Label("Tags");
-    tagHeader.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex()
-        + "; -fx-font-size: 11; -fx-font-weight: bold;");
-    tagBox.getChildren().add(tagHeader);
-    HBox tagChips = new HBox(4);
+    HBox tagRow = new HBox(4);
+    tagRow.setAlignment(Pos.CENTER_LEFT);
     for (org.baseplayer.samples.SampleTag tag : org.baseplayer.samples.SampleTag.values()) {
       Button chip = new Button(tag.shortLabel());
       boolean on = track.hasTag(tag);
-      chip.setStyle(
-          "-fx-background-color: " + (on ? tag.toCssHex() : "#333") + ";"
-              + "-fx-text-fill: " + (on ? "#111" : "#ccc") + ";"
-              + "-fx-font-size: 10; -fx-font-weight: bold; -fx-padding: 2 6 2 6;"
-              + "-fx-background-radius: 10; -fx-cursor: hand;");
+      styleTagChipButton(chip, tag, on);
       chip.setTooltip(new javafx.scene.control.Tooltip(
           tag.displayName() + " — " + tag.description()));
       chip.setOnAction(e -> {
@@ -673,108 +708,105 @@ public class SampleTrackListPanel extends TrackListPanel {
         } else {
           sampleRegistry.addTagToTracks(targets, tag);
         }
+        styleTagChipButton(chip, tag, track.hasTag(tag));
         draw();
         onAfterVisibleTrackRangeChanged();
       });
-      tagChips.getChildren().add(chip);
+      tagRow.getChildren().add(chip);
     }
-    tagBox.getChildren().add(tagChips);
     if (track.hasAnyTag()) {
-      MenuItem clearTags = new MenuItem("Clear tags");
+      Button clearTags = new Button("Clear");
+      styleMenuActionButton(clearTags);
       clearTags.setOnAction(e -> {
         sampleRegistry.clearTagsFromTracks(List.of(track));
         draw();
         onAfterVisibleTrackRangeChanged();
+        settingsMenu.hide();
       });
-      settingsMenu.getItems().add(new CustomMenuItem(tagBox, false));
-      settingsMenu.getItems().add(clearTags);
-    } else {
-      settingsMenu.getItems().add(new CustomMenuItem(tagBox, false));
+      tagRow.getChildren().add(clearTags);
     }
+    section.getChildren().add(tagRow);
 
-    MenuItem organize = new MenuItem("Sample Groups…");
-    organize.setOnAction(event -> {
-      Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
-      SampleOrganizationWindow.show(owner);
-    });
-    settingsMenu.getItems().add(organize);
+    List<SampleGroup> memberships = sampleRegistry.getGroupsForTrack(track);
+    if (!memberships.isEmpty()) {
+      SampleGroup primary = memberships.get(0);
+      HBox groupRow = new HBox(6);
+      groupRow.setAlignment(Pos.CENTER_LEFT);
 
-    MenuItem addThis = new MenuItem("Add this sample to a new group…");
-    addThis.setOnAction(event -> {
-      Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
-      SampleGroupDialog.show(
-          owner, 1, sampleRegistry.suggestNextGroupName(), colorPicker.getValue()).ifPresent(outcome -> {
-        if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
-          sampleRegistry.createGroupForTracks(List.of(track), add.name(), add.color());
-          if (add.tags() != null && !add.tags().isEmpty()) {
-            sampleRegistry.setTracksTags(List.of(track), add.tags());
-          }
-          clearSelection();
+      ColorPicker colorPicker = new ColorPicker(primary.getColor());
+      colorPicker.setPrefWidth(42);
+      colorPicker.setMaxWidth(42);
+      colorPicker.setStyle("-fx-color-label-visible: false;");
+      colorPicker.valueProperty().addListener((obs, oldColor, newColor) -> {
+        if (newColor != null) {
+          sampleRegistry.setGroupColor(primary.getId(), newColor);
           draw();
-          onAfterVisibleTrackRangeChanged();
         }
       });
-    });
-    settingsMenu.getItems().add(addThis);
 
-    if (selectedTrackIndices.size() >= 2 && selectedTrackIndices.contains(sampleIndex)) {
-      MenuItem addSelected = new MenuItem(
-          "Add " + selectedTrackIndices.size() + " selected samples to a group…");
-      addSelected.setOnAction(event -> promptGroupSelectedTracks(0, 0));
-      settingsMenu.getItems().add(addSelected);
-    }
-
-    int groupedSelectedCount = countGroupedSelectedTracks();
-    if (groupedSelectedCount >= 2 && selectedTrackIndices.contains(sampleIndex)) {
-      MenuItem removeSelected = new MenuItem(
-          "Remove " + groupedSelectedCount + " selected from all groups");
-      removeSelected.setOnAction(event -> {
-        sampleRegistry.clearTracksFromGroups(selectedTracks());
-        clearSelection();
-        draw();
-        onAfterVisibleTrackRangeChanged();
+      TextField nameField = new TextField(primary.getName());
+      nameField.setPrefWidth(120);
+      nameField.setStyle(
+          "-fx-background-color: " + AppTheme.chrome().elevatedHex()
+              + "; -fx-text-fill: " + AppTheme.chrome().textHex()
+              + "; -fx-border-color: " + AppTheme.chrome().strokeHex()
+              + "; -fx-font-size: 11; -fx-padding: 3 6 3 6;");
+      Runnable commitName = () -> {
+        String next = nameField.getText();
+        if (next != null && !next.isBlank()) {
+          sampleRegistry.renameSampleGroup(primary.getId(), next.trim());
+          draw();
+        } else {
+          nameField.setText(primary.getName());
+        }
+      };
+      nameField.setOnAction(e -> commitName.run());
+      nameField.focusedProperty().addListener((obs, was, is) -> {
+        if (was && !is) {
+          commitName.run();
+        }
       });
-      settingsMenu.getItems().add(removeSelected);
-    }
+      HBox.setHgrow(nameField, Priority.ALWAYS);
 
-    for (SampleGroup group : sampleRegistry.getSampleGroups()) {
-      if (track.isInGroup(group.getId())) {
-        continue;
+      groupRow.getChildren().addAll(colorPicker, nameField);
+      if (memberships.size() > 1) {
+        Label more = new Label("+" + (memberships.size() - 1));
+        more.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
+        more.setTooltip(new javafx.scene.control.Tooltip(
+            memberships.stream()
+                .skip(1)
+                .map(SampleGroup::getName)
+                .collect(java.util.stream.Collectors.joining(", "))));
+        groupRow.getChildren().add(more);
       }
-      MenuItem assign = new MenuItem("Add to " + group.getName());
-      assign.setOnAction(event -> {
-        List<SampleTrack> targets = selectedTrackIndices.contains(sampleIndex)
-                && selectedTrackIndices.size() > 1
-            ? selectedTracks()
-            : List.of(track);
-        sampleRegistry.assignTracksToGroup(targets, group.getId());
-        clearSelection();
-        draw();
-        onAfterVisibleTrackRangeChanged();
-      });
-      settingsMenu.getItems().add(assign);
+      section.getChildren().add(groupRow);
     }
 
-    for (SampleGroup group : memberships) {
-      MenuItem removeOne = new MenuItem("Remove from " + group.getName());
-      removeOne.setOnAction(event -> {
-        sampleRegistry.removeTrackFromGroup(track, group.getId());
-        draw();
-        onAfterVisibleTrackRangeChanged();
-      });
-      settingsMenu.getItems().add(removeOne);
-    }
+    Button organize = new Button("Sample Groups…");
+    styleMenuActionButton(organize);
+    organize.setMaxWidth(Double.MAX_VALUE);
+    organize.setOnAction(event -> {
+      Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
+      settingsMenu.hide();
+      SampleOrganizationWindow.show(owner);
+    });
+    section.getChildren().add(organize);
 
-    if (!memberships.isEmpty()) {
-      MenuItem clear = new MenuItem(
-          memberships.size() == 1 ? "Remove from group" : "Remove from all groups");
-      clear.setOnAction(event -> {
-        sampleRegistry.clearTrackGroup(track);
-        draw();
-        onAfterVisibleTrackRangeChanged();
-      });
-      settingsMenu.getItems().add(clear);
-    }
+    settingsMenu.getItems().add(new CustomMenuItem(section, false));
+  }
+
+  private static void styleTagChipButton(
+      Button button, org.baseplayer.samples.SampleTag tag, boolean on) {
+    button.setStyle(
+        "-fx-background-color: "
+            + (on ? tag.toCssHex() : AppTheme.chrome().elevatedHex()) + ";"
+            + "-fx-text-fill: "
+            + (on ? "#111111" : AppTheme.chrome().textHex()) + ";"
+            + "-fx-font-size: 10; -fx-font-weight: bold; -fx-padding: 3 8 3 8;"
+            + "-fx-background-radius: 3; -fx-border-radius: 3;"
+            + "-fx-border-color: "
+            + (on ? tag.toCssHex() : AppTheme.chrome().strokeHex()) + ";"
+            + "-fx-border-width: 1; -fx-cursor: hand;");
   }
 
   private int countGroupedSelectedTracks() {
@@ -915,7 +947,9 @@ public class SampleTrackListPanel extends TrackListPanel {
     bamItem.setOnAction(event -> SampleDataManager.addBamToTrack(sampleIndex));
     MenuItem bedItem = new MenuItem("Add BED");
     bedItem.setOnAction(event -> SampleDataManager.addBedToTrack(sampleIndex));
-    addMenu.getItems().addAll(bamItem, bedItem);
+    MenuItem vcfItem = new MenuItem("Add VCF");
+    vcfItem.setOnAction(event -> SampleDataManager.addVcfToTrack(sampleIndex));
+    addMenu.getItems().addAll(bamItem, bedItem, vcfItem);
     addMenu.show(canvas, screenX, screenY);
   }
 
@@ -959,10 +993,10 @@ public class SampleTrackListPanel extends TrackListPanel {
     transparentCheckBox.getStyleClass().add("dark-checkbox");
     transparentCheckBox.setStyle("-fx-font-size: 10;");
     transparentCheckBox.selectedProperty().addListener((observable, oldValue, newValue) -> {
-      file.overlay = newValue;
       if (file.getDataType() == Sample.DataType.VCF) {
-        SampleDataManager.refreshVariantPresentation();
+        SampleDataManager.applyVcfSampleOverlay(file, newValue);
       } else {
+        file.overlay = newValue;
         onAfterVisibleTrackRangeChanged();
       }
     });
@@ -982,17 +1016,19 @@ public class SampleTrackListPanel extends TrackListPanel {
     Label removeButton = new Label("✕");
     removeButton.setStyle(
         "-fx-text-fill: #cc6666; -fx-cursor: hand; -fx-font-size: 11; -fx-padding: 0 2 0 4;");
+    CustomMenuItem menuItem = new CustomMenuItem(row, false);
     removeButton.setOnMouseClicked(event -> {
-      if (track.getSampleCount() <= 1) {
-        SampleDataManager.removeSample(sampleIndex);
-      } else {
-        track.removeSample(fileIndex);
-        draw();
-        onAfterVisibleTrackRangeChanged();
+      event.consume();
+      ContextMenu owner = menuItem.getParentPopup();
+      if (owner != null) {
+        owner.hide();
       }
+      SampleDataManager.removeFileFromTrack(sampleIndex, file);
+      draw();
+      onAfterVisibleTrackRangeChanged();
     });
     row.getChildren().addAll(
         visibilityCheckBox, typeLabel, nameLabel, transparentCheckBox, removeButton);
-    return new CustomMenuItem(row, false);
+    return menuItem;
   }
 }

@@ -48,6 +48,13 @@ public class VariantDrawer {
 
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;
+    /** |CNLR_MEDIAN| that maps to full half-height. */
+    private static final double CNV_LOGR_FULL_SCALE = 1.0;
+    /** |TCN−2| that maps to full half-height when logR is absent. */
+    private static final double CNV_TCN_FULL_SCALE = 4.0;
+    private static final double CNV_SCALE_W = 28;
+    /** Soft gray for CNV midlines / left-scale ticks (less stark than pure white). */
+    private static final Color CNV_SCALE_INK = Color.rgb(186, 186, 186);
 
     public VariantDrawer() {
         this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
@@ -117,6 +124,11 @@ public class VariantDrawer {
 
         VcfManager vcfManager = VcfManager.getInstance();
         java.util.Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
+
+        // Mid-line + left scale for CNV tracks (gains up / losses down).
+        if (sessionHasCanvasCnv(vcfManager, legendTypes)) {
+            drawCnvSampleGuides(gc, visibleTrackIndices.length, yPositions, sampleHeight);
+        }
 
         // Spanning SVs that start upstream of the view (no chromosome-start scan).
         for (VariantNode node : variantList.getVisibleSvByPosition()) {
@@ -413,6 +425,12 @@ public class VariantDrawer {
                            Function<Double, Double> chromPosToScreenPos, double canvasWidth,
                            double startX, double y, double sampleHeight,
                            boolean recordHit) {
+        if (VariantTypeVisuals.isCnv(variant.type)) {
+            drawCnvSpan(gc, variant, call, chromPosToScreenPos, canvasWidth, startX, y, sampleHeight,
+                recordHit);
+            return;
+        }
+
         Color baseColor = colorForCall(variant, call);
         double opacity = callOpacity(call, 0.7, variant.isHomozygousRef(call));
 
@@ -442,6 +460,230 @@ public class VariantDrawer {
         }
         drawDashedSvArch(gc, variant, call, baseColor, opacity, startX, endX,
             startInView, endInView, x1, x2, y, sampleHeight, recordHit);
+    }
+
+    /**
+     * CNV segments: midline through the sample row; gains paint upward and losses downward
+     * with height proportional to |CNLR_MEDIAN| (else |TCN−2|).
+     */
+    private void drawCnvSpan(
+            GraphicsContext gc,
+            VariantNode variant,
+            VariantNode.SampleCall call,
+            Function<Double, Double> chromPosToScreenPos,
+            double canvasWidth,
+            double startX,
+            double y,
+            double sampleHeight,
+            boolean recordHit) {
+        Color baseColor = colorForCall(variant, call);
+        double opacity = callOpacity(call, 0.78, variant.isHomozygousRef(call));
+
+        double endX = chromPosToScreenPos.apply((double) variant.svEnd);
+        double x1 = Math.max(0, Math.min(startX, endX));
+        double x2 = Math.min(canvasWidth, Math.max(startX, endX));
+        if (x2 - x1 < 1) {
+            x2 = x1 + 1;
+        }
+        double width = x2 - x1;
+
+        double midY = y + sampleHeight * 0.5;
+        double halfH = Math.max(2.0, sampleHeight * 0.5 - 1.5);
+        double signed = cnvSignedMagnitude(variant);
+        double unit = cnvDisplayUnit(variant);
+        double amp = Math.min(1.0, Math.abs(signed) / unit);
+        // Keep a visible stub even for near-neutral called gain/loss.
+        if (amp < 0.08 && variant.type != VcfVariantType.SV_CNV_NEUTRAL && signed != 0) {
+            amp = 0.08;
+        }
+        double barH = Math.max(1.0, halfH * amp);
+
+        boolean gainSide = signed > 0
+            || (signed == 0 && variant.type == VcfVariantType.SV_CNV_GAIN);
+        boolean lossSide = signed < 0
+            || (signed == 0 && variant.type == VcfVariantType.SV_CNV_LOSS);
+
+        if (opacity != 1.0) {
+            gc.setGlobalAlpha(opacity);
+        }
+        gc.setFill(baseColor);
+        double hitTop = midY - 1;
+        double hitBottom = midY + 1;
+        if (gainSide) {
+            double top = midY - barH;
+            gc.fillRect(x1, top, width, barH);
+            hitTop = top;
+            hitBottom = midY;
+        } else if (lossSide) {
+            gc.fillRect(x1, midY, width, barH);
+            hitTop = midY;
+            hitBottom = midY + barH;
+        } else {
+            // Copy-neutral: thin band on the midline.
+            gc.fillRect(x1, midY - 1.5, width, 3);
+            hitTop = midY - 2;
+            hitBottom = midY + 2;
+        }
+
+        if (opacity != 1.0) {
+            gc.setGlobalAlpha(1.0);
+        }
+
+        if (recordHit) {
+            hitRegions.add(new VariantHit(variant, call, x1, hitTop, x2, hitBottom));
+        }
+    }
+
+    /** Signed amplitude: logR when present, else TCN relative to diploid (2). */
+    private static double cnvSignedMagnitude(VariantNode node) {
+        if (node == null) {
+            return 0;
+        }
+        Double logr = parseInfoDouble(node, "CNLR_MEDIAN");
+        if (logr == null) {
+            logr = parseInfoDouble(node, "CNLR_MEDIAN_CLUST");
+        }
+        if (logr != null) {
+            return logr;
+        }
+        Double tcn = parseInfoDouble(node, "TCN_EM");
+        if (tcn == null) {
+            tcn = parseInfoDouble(node, "TCN");
+        }
+        if (tcn == null) {
+            tcn = parseInfoDouble(node, "CN");
+        }
+        if (tcn != null) {
+            return tcn - 2.0;
+        }
+        if (node.type == VcfVariantType.SV_CNV_GAIN) {
+            return 1.0;
+        }
+        if (node.type == VcfVariantType.SV_CNV_LOSS) {
+            return -1.0;
+        }
+        return 0;
+    }
+
+    /** Full half-height maps to this |magnitude| (logR ±1 or |TCN−2| = 4). */
+    private static double cnvDisplayUnit(VariantNode node) {
+        if (node != null
+            && (node.getInfoValue("CNLR_MEDIAN") != null
+                || node.getInfoValue("CNLR_MEDIAN_CLUST") != null)) {
+            return CNV_LOGR_FULL_SCALE;
+        }
+        return CNV_TCN_FULL_SCALE;
+    }
+
+    private static Double parseInfoDouble(VariantNode node, String key) {
+        if (node == null || key == null) {
+            return null;
+        }
+        String raw = node.getInfoValue(key);
+        if (raw == null || raw.isBlank() || ".".equals(raw) || "NA".equalsIgnoreCase(raw)) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static boolean sessionHasCanvasCnv(
+            VcfManager vcfManager,
+            java.util.Set<VcfVariantType> legendTypes) {
+        for (VcfVariantType type : legendTypes) {
+            if (VariantTypeVisuals.isCnv(type) && vcfManager.isCanvasTypeDrawn(type, legendTypes)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Per-sample CNV guide: faint white midline across the row and a left scale
+     * (+unit / 0 / −unit) matching the aggregate density chrome layout.
+     */
+    private void drawCnvSampleGuides(
+            GraphicsContext gc,
+            int sampleCount,
+            double[] yPositions,
+            double sampleHeight) {
+        if (sampleCount <= 0 || yPositions == null || sampleHeight < 10) {
+            return;
+        }
+        boolean useLogr = sessionPrefersLogrScale();
+        String topLabel = useLogr ? "+1" : "+4";
+        String botLabel = useLogr ? "−1" : "−4";
+
+        for (int i = 0; i < sampleCount; i++) {
+            double y = yPositions[i];
+            double midY = y + sampleHeight * 0.5;
+            drawCnvLeftScale(gc, y, sampleHeight, midY, topLabel, botLabel);
+        }
+    }
+
+    private static boolean sessionPrefersLogrScale() {
+        for (var field : VcfManager.getInstance().getSessionInfoHeaderFields()) {
+            if (field != null
+                && ("CNLR_MEDIAN".equals(field.id())
+                    || "CNLR_MEDIAN_CLUST".equals(field.id()))) {
+                return true;
+            }
+        }
+        // No TCN-only header → still treat as logR-style ±1 scale by default.
+        for (var field : VcfManager.getInstance().getSessionInfoHeaderFields()) {
+            if (field != null
+                && ("TCN_EM".equals(field.id())
+                    || "TCN".equals(field.id()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void drawCnvLeftScale(
+            GraphicsContext gc,
+            double y,
+            double sampleHeight,
+            double midY,
+            String topLabel,
+            String botLabel) {
+        double scaleX = 3;
+        double scaleW = CNV_SCALE_W;
+        var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
+        Color scaleBg = Color.color(
+            chrome.elevated().getRed(),
+            chrome.elevated().getGreen(),
+            chrome.elevated().getBlue(),
+            org.baseplayer.ui.theme.AppTheme.isDark() ? 0.62 : 0.92);
+        gc.setFill(scaleBg);
+        gc.fillRoundRect(scaleX - 1, y + 1, scaleW + 2, sampleHeight - 2, 4, 4);
+
+        gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
+        gc.setFill(CNV_SCALE_INK);
+        gc.setTextBaseline(javafx.geometry.VPos.TOP);
+        gc.fillText(topLabel, scaleX + 2, y + 2);
+        gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+        gc.fillText("0", scaleX + 2, midY);
+        gc.setTextBaseline(javafx.geometry.VPos.BOTTOM);
+        gc.fillText(botLabel, scaleX + 2, y + sampleHeight - 2);
+
+        double axisX = scaleX + scaleW - 4;
+        gc.setStroke(CNV_SCALE_INK);
+        gc.setGlobalAlpha(0.9);
+        gc.setLineWidth(1.4);
+        gc.strokeLine(axisX, y + 3, axisX, y + sampleHeight - 3);
+        gc.setLineWidth(1.2);
+        for (int t = 0; t <= 4; t++) {
+            double ty = y + 3 + t * (sampleHeight - 6) / 4.0;
+            gc.strokeLine(axisX - 5, ty, axisX, ty);
+        }
+        // Explicit mid tick slightly longer.
+        gc.setLineWidth(1.5);
+        gc.strokeLine(axisX - 7, midY + 0.5, axisX, midY + 0.5);
+        gc.setGlobalAlpha(1.0);
     }
 
     /**

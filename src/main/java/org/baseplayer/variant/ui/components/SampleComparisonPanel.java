@@ -1,6 +1,7 @@
 package org.baseplayer.variant.ui.components;
 
 import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -159,8 +160,12 @@ public class SampleComparisonPanel {
    */
   private static int countTracksWithVisibleVcf() {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<SampleTrack> tracks = snapshotTracks(registry);
     int count = 0;
-    for (SampleTrack track : registry.getSampleTracks()) {
+    for (SampleTrack track : tracks) {
+      if (track == null) {
+        continue;
+      }
       for (Sample sample : track.getSamples()) {
         if (sample.getDataType() == Sample.DataType.VCF && sample.visible) {
           count++;
@@ -170,7 +175,7 @@ public class SampleComparisonPanel {
     }
     // Fallback when no VCF file entries exist yet (legacy / mid-load).
     if (count == 0) {
-      count = registry.getSampleTracks().size();
+      count = tracks.size();
     }
     return Math.max(1, count);
   }
@@ -441,12 +446,21 @@ public class SampleComparisonPanel {
 
   private static int countTracksWithTag(SampleRegistry registry, SampleTag tag) {
     int count = 0;
-    for (SampleTrack track : registry.getSampleTracks()) {
+    for (SampleTrack track : snapshotTracks(registry)) {
       if (track != null && track.hasTag(tag)) {
         count++;
       }
     }
     return count;
+  }
+
+  /** Copy away from the live ObservableList so New Project clears cannot CME mid-refresh. */
+  private static List<SampleTrack> snapshotTracks(SampleRegistry registry) {
+    try {
+      return new ArrayList<>(registry.getSampleTracks());
+    } catch (ConcurrentModificationException e) {
+      return new ArrayList<>(registry.getSampleTracks());
+    }
   }
 
   private static String roleLabel(VariantFilter.GroupRole role) {

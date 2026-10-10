@@ -3,6 +3,7 @@ package org.baseplayer.components.sidebars;
 import org.baseplayer.ui.theme.AppTheme;
 
 import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +33,9 @@ import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VcfVariantType;
 
 import javafx.application.Platform;
+import javafx.collections.ListChangeListener;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -43,8 +46,10 @@ import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
@@ -62,11 +67,258 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   /** Resolved lazily from stackManager via {@link #syncDrawStack()}. */
   private DrawStack masterTrackDrawStack;
 
+  private final TextField sampleSearchField = new TextField();
+  private final TextField sampleReplaceField = new TextField();
+  private final Button sampleReplaceButton = new Button("Replace");
+  private final Button sampleReplaceToggleButton = new Button("▾");
+  private final Label sampleSearchStatus = new Label();
+  private VBox sampleSearchBar;
+  private HBox sampleReplaceRow;
+  private boolean sampleReplaceExpanded;
+  private boolean suppressSearchFieldSync;
+
   public SampleTrackColumnSidebar(StackPane parent) {
     super(parent, ServiceRegistry.getInstance().getSampleRegistry());
     sampleList = new SampleTrackListPanel(contentPane);
     loadRegionButton = new LoadRegionButton();
     Platform.runLater(loadRegionButton::attachRegionListener);
+    installSampleSearchBar();
+  }
+
+  /** Persistent filter strip under the master header; replace expands on demand. */
+  private void installSampleSearchBar() {
+    sampleSearchBar = buildSampleSearchBar();
+    int contentIndex = rootLayout.getChildren().indexOf(contentPane);
+    if (contentIndex >= 0) {
+      rootLayout.getChildren().add(contentIndex, sampleSearchBar);
+    } else {
+      rootLayout.getChildren().add(sampleSearchBar);
+    }
+
+    sampleRegistry.geneFocusRevisionProperty().addListener((obs, o, n) ->
+        Platform.runLater(this::syncSearchFieldFromRegistry));
+    sampleRegistry.getSampleTracks().addListener(
+        (ListChangeListener<SampleTrack>) change ->
+            Platform.runLater(this::updateSampleSearchBarVisibility));
+    sampleSearchBar.heightProperty().addListener((obs, o, n) -> syncFilterStripHeightToRegistry());
+    syncSearchFieldFromRegistry();
+    updateReplaceUiVisibility();
+    updateSampleSearchBarVisibility();
+  }
+
+  /** Hide the filter strip when there are no samples; keep canvas/sidebar rows aligned. */
+  private void updateSampleSearchBarVisibility() {
+    if (sampleSearchBar == null) {
+      return;
+    }
+    boolean show = !sampleRegistry.getSampleTracks().isEmpty();
+    sampleSearchBar.setVisible(show);
+    sampleSearchBar.setManaged(show);
+    if (!show) {
+      setSampleReplaceExpanded(false);
+    }
+    syncFilterStripHeightToRegistry();
+  }
+
+  private void syncFilterStripHeightToRegistry() {
+    if (sampleSearchBar == null || !sampleSearchBar.isManaged() || !sampleSearchBar.isVisible()) {
+      sampleRegistry.setSampleFilterStripHeightPixels(0);
+      return;
+    }
+    sampleRegistry.setSampleFilterStripHeightPixels(sampleSearchBar.getHeight());
+  }
+
+  private VBox buildSampleSearchBar() {
+    sampleSearchField.setPromptText("Filter samples…");
+    sampleSearchField.getStyleClass().add("filter-field");
+    sampleSearchField.setTooltip(new Tooltip(
+        "Filter tracks by name. Use * as a wildcard (e.g. prefix_*). Expand ▾ to replace."));
+    HBox.setHgrow(sampleSearchField, Priority.ALWAYS);
+
+    sampleReplaceToggleButton.setTooltip(new Tooltip("Show replace"));
+    styleCompactButton(sampleReplaceToggleButton);
+    sampleReplaceToggleButton.setMinWidth(26);
+    sampleReplaceToggleButton.setPrefWidth(26);
+    sampleReplaceToggleButton.setOnAction(event -> setSampleReplaceExpanded(!sampleReplaceExpanded));
+
+    Button clearButton = new Button("×");
+    clearButton.setTooltip(new Tooltip("Clear filter"));
+    styleCompactButton(clearButton);
+    clearButton.setOnAction(event -> {
+      sampleSearchField.clear();
+      applySampleSearchFilter();
+    });
+
+    sampleReplaceField.setPromptText("Replace with…");
+    sampleReplaceField.getStyleClass().add("filter-field");
+    HBox.setHgrow(sampleReplaceField, Priority.ALWAYS);
+    sampleReplaceField.setTooltip(new Tooltip(
+        "Replacement for the search match (empty = remove). With *, use $1, $2 for each wildcard."));
+
+    sampleReplaceButton.setTooltip(new Tooltip(
+        "Replace the search match in currently listed sample names"));
+    styleCompactButton(sampleReplaceButton);
+    sampleReplaceButton.setOnAction(event -> applySampleNameReplace());
+    sampleReplaceField.setOnAction(event -> applySampleNameReplace());
+
+    sampleSearchStatus.setStyle(
+        "-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
+
+    sampleSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
+      if (suppressSearchFieldSync) {
+        return;
+      }
+      applySampleSearchFilter();
+      updateReplaceUiVisibility();
+    });
+    sampleSearchField.setOnAction(event -> applySampleSearchFilter());
+
+    HBox filterRow = new HBox(4, sampleSearchField, sampleReplaceToggleButton, clearButton);
+    filterRow.setAlignment(Pos.CENTER_LEFT);
+
+    sampleReplaceRow = new HBox(4, sampleReplaceField, sampleReplaceButton, sampleSearchStatus);
+    sampleReplaceRow.setAlignment(Pos.CENTER_LEFT);
+    sampleReplaceRow.setManaged(false);
+    sampleReplaceRow.setVisible(false);
+
+    VBox bar = new VBox(3, filterRow, sampleReplaceRow);
+    bar.setPadding(new Insets(4, 6, 6, 6));
+    bar.setStyle("-fx-background-color: " + AppTheme.chrome().panelHex()
+        + "; -fx-border-color: " + AppTheme.chrome().borderHex()
+        + "; -fx-border-width: 0 0 1 0;");
+    bar.getStyleClass().add("sample-search-bar");
+    return bar;
+  }
+
+  private static void styleCompactButton(Button button) {
+    button.setStyle(
+        "-fx-background-color: " + AppTheme.chrome().elevatedHex()
+            + "; -fx-text-fill: " + AppTheme.chrome().textHex()
+            + "; -fx-font-size: 11; -fx-padding: 2 8 2 8; -fx-border-color: "
+            + AppTheme.chrome().strokeHex() + "; -fx-cursor: hand;");
+  }
+
+  private boolean hasSearchText() {
+    String text = sampleSearchField.getText();
+    return text != null && !text.trim().isEmpty();
+  }
+
+  private void setSampleReplaceExpanded(boolean expanded) {
+    sampleReplaceExpanded = expanded && hasSearchText();
+    updateReplaceUiVisibility();
+    if (sampleReplaceExpanded) {
+      Platform.runLater(sampleReplaceField::requestFocus);
+    }
+  }
+
+  private void updateReplaceUiVisibility() {
+    boolean hasQuery = hasSearchText();
+    sampleReplaceToggleButton.setVisible(hasQuery);
+    sampleReplaceToggleButton.setManaged(hasQuery);
+    if (!hasQuery) {
+      sampleReplaceExpanded = false;
+    }
+
+    sampleReplaceToggleButton.setText(sampleReplaceExpanded ? "▴" : "▾");
+    sampleReplaceToggleButton.setTooltip(new Tooltip(
+        sampleReplaceExpanded ? "Hide replace" : "Show replace"));
+
+    if (sampleReplaceRow != null) {
+      sampleReplaceRow.setVisible(sampleReplaceExpanded);
+      sampleReplaceRow.setManaged(sampleReplaceExpanded);
+    }
+  }
+
+  private void syncSearchFieldFromRegistry() {
+    String query = sampleRegistry.getActiveSampleFilterQuery();
+    if (query == null) {
+      query = "";
+    }
+    if (!query.equals(sampleSearchField.getText())) {
+      suppressSearchFieldSync = true;
+      try {
+        sampleSearchField.setText(query);
+      } finally {
+        suppressSearchFieldSync = false;
+      }
+    }
+    updateReplaceUiVisibility();
+    updateSearchStatusLabel();
+  }
+
+  private void applySampleSearchFilter() {
+    String query = sampleSearchField.getText() == null ? "" : sampleSearchField.getText().trim();
+    if (!query.isEmpty()) {
+      sampleRegistry.applyTextSubsetQuery(query);
+      // Keep readable row height — only show as many matches as fit, scroll for the rest.
+      sampleRegistry.showDefaultHeightWindowFromStart(estimateTrackBodyViewportHeightPixels());
+      redrawAfterVisibleTrackRangeChange();
+    } else if (sampleRegistry.hasActiveSampleFilterQuery()) {
+      clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.TEXT_FILTER);
+    }
+    updateSearchStatusLabel();
+  }
+
+  private void applySampleNameReplace() {
+    String find = sampleSearchField.getText() == null ? "" : sampleSearchField.getText().trim();
+    if (find.isEmpty()) {
+      sampleSearchStatus.setText("Enter text to find");
+      return;
+    }
+    String replacement =
+        sampleReplaceField.getText() == null ? "" : sampleReplaceField.getText();
+    // Scope to the current filtered/gene subset when one is active.
+    boolean scopedToFilter = sampleRegistry.hasActiveSubset();
+    int renamed = sampleRegistry.replaceInSampleDisplayNames(find, replacement, scopedToFilter);
+    if (renamed > 0) {
+      boolean wildcardFind = find.indexOf('*') >= 0;
+      boolean replacementIsGroupRef = replacement.indexOf('$') >= 0;
+      if (wildcardFind || replacementIsGroupRef || replacement.isBlank()) {
+        // Wildcard / $1 rewrites don't map cleanly back to a contains-filter.
+        suppressSearchFieldSync = true;
+        try {
+          sampleSearchField.clear();
+        } finally {
+          suppressSearchFieldSync = false;
+        }
+        if (sampleRegistry.hasActiveSampleFilterQuery()) {
+          clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.TEXT_FILTER);
+        } else {
+          redrawAfterVisibleTrackRangeChange();
+        }
+      } else {
+        suppressSearchFieldSync = true;
+        try {
+          sampleSearchField.setText(replacement.trim());
+        } finally {
+          suppressSearchFieldSync = false;
+        }
+        sampleRegistry.applyTextSubsetQuery(replacement.trim());
+        sampleRegistry.showDefaultHeightWindowFromStart(estimateTrackBodyViewportHeightPixels());
+        redrawAfterVisibleTrackRangeChange();
+      }
+      sampleSearchStatus.setText(renamed + " renamed");
+    } else {
+      sampleSearchStatus.setText("No matches");
+    }
+    updateReplaceUiVisibility();
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  private void updateSearchStatusLabel() {
+    if (!sampleReplaceExpanded) {
+      return;
+    }
+    if (sampleRegistry.hasActiveSampleFilterQuery()) {
+      int shown = sampleRegistry.getDisplayedTrackCount();
+      int total = sampleRegistry.getSampleTracks().size();
+      sampleSearchStatus.setText(shown + "/" + total);
+    } else if (sampleSearchStatus.getText() != null
+        && sampleSearchStatus.getText().endsWith("renamed")) {
+      // keep brief rename feedback until the next filter edit
+    } else {
+      sampleSearchStatus.setText("");
+    }
   }
 
   public void initializeLoadRegionButton() {
@@ -193,47 +445,6 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   @Override
-  protected void appendRangeInputPopupExtras(VBox panel) {
-    HBox filterRow = new HBox(6);
-    filterRow.setPadding(new Insets(0, 6, 6, 6));
-
-    Label filterLabel = new Label("Filter");
-    filterLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
-
-    TextField filterField = new TextField(sampleRegistry.getActiveSampleFilterQuery());
-    filterField.setPromptText("sample name contains...");
-    filterField.setPrefWidth(170);
-    filterField.setStyle(
-        "-fx-background-color: " + AppTheme.chrome().elevatedHex() + "; -fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-font-size: 11;");
-
-    Button clearButton = new Button("Clear");
-    clearButton.setStyle(
-        "-fx-background-color: #3c3c3c; -fx-text-fill: #bbbbbb; -fx-font-size: 11;"
-            + "-fx-padding: 2 8 2 8; -fx-border-color: #666; -fx-cursor: hand;");
-
-    Runnable applyFilter = () -> {
-      String query = filterField.getText() == null ? "" : filterField.getText().trim();
-      if (!query.isEmpty()) {
-        sampleRegistry.applyTextSubsetQuery(query);
-        int trackCount = sampleRegistry.getDisplayedTrackCount();
-        applyVisibleTrackRange(0, Math.max(0, trackCount - 1));
-      } else {
-        clearSubsetSourceAndRefresh(SampleRegistry.SubsetSource.TEXT_FILTER);
-      }
-    };
-
-    filterField.textProperty().addListener((observable, oldValue, newValue) -> applyFilter.run());
-    filterField.setOnAction(event -> applyFilter.run());
-    clearButton.setOnAction(event -> {
-      filterField.clear();
-      rangeControlsPopup.hide();
-    });
-    filterRow.getChildren().addAll(filterLabel, filterField, clearButton);
-    panel.getChildren().add(filterRow);
-    Platform.runLater(filterField::requestFocus);
-  }
-
-  @Override
   protected void handleMasterHeaderScroll(ScrollEvent event) {
     syncDrawStack();
     if (masterTrackDrawStack == null) {
@@ -280,18 +491,28 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   private boolean hasAnySuspended() {
-    // Snapshot: sampleTracks / samples may be mutated while the FX thread redraws.
-    List<SampleTrack> tracks = List.copyOf(sampleRegistry.getSampleTracks());
-    for (SampleTrack sampleTrack : tracks) {
-      if (sampleTrack == null) {
-        continue;
-      }
-      List<Sample> samples = List.copyOf(sampleTrack.getSamples());
-      for (Sample sample : samples) {
-        if (sample != null && sample.isSuspended()) {
-          return true;
+    // Best-effort UI probe: sampleTracks / per-track samples can be mutated on a
+    // loader thread while EventCoordinator redraws the master header on FX.
+    try {
+      SampleTrack[] tracks = sampleRegistry.getSampleTracks().toArray(SampleTrack[]::new);
+      for (SampleTrack sampleTrack : tracks) {
+        if (sampleTrack == null) {
+          continue;
+        }
+        Sample[] samples;
+        try {
+          samples = sampleTrack.getSamples().toArray(Sample[]::new);
+        } catch (ConcurrentModificationException ignored) {
+          continue;
+        }
+        for (Sample sample : samples) {
+          if (sample != null && sample.isSuspended()) {
+            return true;
+          }
         }
       }
+    } catch (ConcurrentModificationException ignored) {
+      return false;
     }
     return false;
   }

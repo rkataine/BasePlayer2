@@ -16,6 +16,7 @@ import java.util.function.Supplier;
 import java.util.function.ToDoubleFunction;
 
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.variant.VcfHeaderFieldDef;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -24,15 +25,22 @@ import org.baseplayer.variant.annotation.VariantEffect;
 
 import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
+import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
 import javafx.scene.control.Slider;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.ColumnConstraints;
@@ -42,6 +50,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.util.Pair;
+import javafx.util.StringConverter;
 
 /**
  * Variant Filters tab UI: type/effect checkboxes, quality/depth/AF sliders,
@@ -476,6 +485,30 @@ public class VariantFiltersPanel {
         if (nodes.addFilterFieldButton() != null) {
             nodes.addFilterFieldButton().setOnAction(e -> showFilterFieldDialog());
         }
+        ensureBrowseHeaderFieldsButton();
+    }
+
+    /**
+     * Inject a "Header fields…" button next to Add INFO / Add FILTER so users can
+     * inspect ##INFO / ##FILTER / ##FORMAT definitions captured from open VCFs.
+     */
+    private void ensureBrowseHeaderFieldsButton() {
+        Button addInfo = nodes != null ? nodes.addInfoFilterButton() : null;
+        if (addInfo == null || !(addInfo.getParent() instanceof HBox row)) {
+            return;
+        }
+        for (javafx.scene.Node child : row.getChildren()) {
+            if ("browseHeaderFieldsButton".equals(child.getId())) {
+                return;
+            }
+        }
+        Button browse = new Button("Header fields…");
+        browse.setId("browseHeaderFieldsButton");
+        browse.getStyleClass().add("secondary-button");
+        browse.setTooltip(new Tooltip(
+            "Browse INFO / FILTER / FORMAT definitions from open VCF headers"));
+        browse.setOnAction(e -> showHeaderFieldsDialog());
+        row.getChildren().add(browse);
     }
 
     public VariantTypeVisuals.VariantClass getVariantClass() {
@@ -1089,36 +1122,84 @@ public class VariantFiltersPanel {
     }
 
     public void showInfoFilterDialog() {
+        showInfoFilterDialog(null);
+    }
+
+    public void showInfoFilterDialog(String prefillFieldId) {
         Dialog<Pair<String, String>> dialog = new Dialog<>();
         dialog.setTitle("Add INFO Field Filter");
         dialog.setHeaderText(
-            "Specify an INFO field and expected value\n\n"
-                + "Note: INFO/FILTER filtering will be applied once VariantNode stores these fields.");
+            "Choose an INFO field from the VCF header (or type a custom ID)\n"
+                + "and the value that variants must match.");
 
         ButtonType addButtonType = new ButtonType("Add", ButtonBar.ButtonData.OK_DONE);
         dialog.getDialogPane().getButtonTypes().addAll(addButtonType, ButtonType.CANCEL);
 
+        List<VcfHeaderFieldDef> infoDefs = VcfManager.getInstance().getSessionInfoHeaderFields();
+        ComboBox<String> fieldName = new ComboBox<>();
+        fieldName.setEditable(true);
+        fieldName.setPrefWidth(280);
+        fieldName.setPromptText("e.g., TCN_EM");
+        Map<String, VcfHeaderFieldDef> byId = new LinkedHashMap<>();
+        for (VcfHeaderFieldDef def : infoDefs) {
+            byId.put(def.id(), def);
+            fieldName.getItems().add(def.id());
+        }
+        if (prefillFieldId != null && !prefillFieldId.isBlank()) {
+            fieldName.setValue(prefillFieldId);
+        }
+
+        Label description = new Label("Hover a field ID for its header Description.");
+        description.setWrapText(true);
+        description.setStyle("-fx-font-size: 11px; -fx-text-fill: gray;");
+        description.setMaxWidth(360);
+
+        Runnable refreshDescription = () -> {
+            String id = comboText(fieldName);
+            VcfHeaderFieldDef def = byId.get(id);
+            if (def != null) {
+                description.setText(def.tooltipText());
+                Tooltip.install(fieldName, new Tooltip(def.tooltipText()));
+            } else if (id.isEmpty()) {
+                description.setText(infoDefs.isEmpty()
+                    ? "No ##INFO lines found in open VCF headers yet."
+                    : "Pick a field from the list or type a custom INFO ID.");
+                Tooltip.uninstall(fieldName, fieldName.getTooltip());
+            } else {
+                description.setText("Custom INFO ID (not in header): " + id);
+            }
+        };
+        fieldName.valueProperty().addListener((obs, o, n) -> refreshDescription.run());
+        fieldName.getEditor().textProperty().addListener((obs, o, n) -> refreshDescription.run());
+        installHeaderFieldCellFactory(fieldName, byId);
+        refreshDescription.run();
+
+        TextField fieldValue = new TextField();
+        fieldValue.setPromptText("e.g., 2");
+
         GridPane grid = new GridPane();
         grid.setHgap(10);
         grid.setVgap(10);
-        grid.setPadding(new Insets(20, 150, 10, 10));
-
-        TextField fieldName = new TextField();
-        fieldName.setPromptText("e.g., SVTYPE");
-        TextField fieldValue = new TextField();
-        fieldValue.setPromptText("e.g., DEL");
-
-        grid.add(new Label("INFO Field Name:"), 0, 0);
+        grid.setPadding(new Insets(20, 20, 10, 10));
+        grid.add(new Label("INFO Field:"), 0, 0);
         grid.add(fieldName, 1, 0);
-        grid.add(new Label("Expected Value:"), 0, 1);
-        grid.add(fieldValue, 1, 1);
+        grid.add(description, 1, 1);
+        grid.add(new Label("Expected Value:"), 0, 2);
+        grid.add(fieldValue, 1, 2);
 
         dialog.getDialogPane().setContent(grid);
-        Platform.runLater(fieldName::requestFocus);
+        dialog.getDialogPane().setPrefWidth(480);
+        Platform.runLater(() -> {
+            if (fieldName.getValue() == null || fieldName.getValue().isBlank()) {
+                fieldName.requestFocus();
+            } else {
+                fieldValue.requestFocus();
+            }
+        });
 
         dialog.setResultConverter(dialogButton -> {
             if (dialogButton == addButtonType) {
-                return new Pair<>(fieldName.getText().trim(), fieldValue.getText().trim());
+                return new Pair<>(comboText(fieldName), fieldValue.getText().trim());
             }
             return null;
         });
@@ -1132,31 +1213,69 @@ public class VariantFiltersPanel {
     }
 
     public void showFilterFieldDialog() {
+        showFilterFieldDialog(null);
+    }
+
+    public void showFilterFieldDialog(String prefillFilterId) {
         Dialog<String> dialog = new Dialog<>();
         dialog.setTitle("Add FILTER Field Value");
         dialog.setHeaderText(
-            "Specify allowed FILTER values (e.g., PASS, LowQual)\n\n"
-                + "Note: INFO/FILTER filtering will be applied once VariantNode stores these fields.");
+            "Allow variants with this FILTER value (from the VCF header or custom).");
 
         ButtonType addButtonType = new ButtonType("Add", ButtonBar.ButtonData.OK_DONE);
         dialog.getDialogPane().getButtonTypes().addAll(addButtonType, ButtonType.CANCEL);
 
-        VBox vbox = new VBox(10);
-        vbox.setPadding(new Insets(20, 150, 10, 10));
-
-        TextField filterValue = new TextField();
+        List<VcfHeaderFieldDef> filterDefs = VcfManager.getInstance().getSessionFilterHeaderFields();
+        ComboBox<String> filterValue = new ComboBox<>();
+        filterValue.setEditable(true);
+        filterValue.setPrefWidth(280);
         filterValue.setPromptText("e.g., PASS");
+        Map<String, VcfHeaderFieldDef> byId = new LinkedHashMap<>();
+        for (VcfHeaderFieldDef def : filterDefs) {
+            byId.put(def.id(), def);
+            filterValue.getItems().add(def.id());
+        }
+        if (prefillFilterId != null && !prefillFilterId.isBlank()) {
+            filterValue.setValue(prefillFilterId);
+        } else if (byId.containsKey("PASS")) {
+            filterValue.setValue("PASS");
+        }
+
+        Label description = new Label(
+            filterDefs.isEmpty()
+                ? "No ##FILTER lines found in open VCF headers yet."
+                : "Hover a FILTER ID for its header Description.");
+        description.setWrapText(true);
+        description.setStyle("-fx-font-size: 11px; -fx-text-fill: gray;");
+        description.setMaxWidth(360);
+
+        Runnable refreshDescription = () -> {
+            String id = comboText(filterValue);
+            VcfHeaderFieldDef def = byId.get(id);
+            if (def != null) {
+                description.setText(def.tooltipText());
+                Tooltip.install(filterValue, new Tooltip(def.tooltipText()));
+            }
+        };
+        filterValue.valueProperty().addListener((obs, o, n) -> refreshDescription.run());
+        filterValue.getEditor().textProperty().addListener((obs, o, n) -> refreshDescription.run());
+        installHeaderFieldCellFactory(filterValue, byId);
+        refreshDescription.run();
+
         Label hint = new Label("Only variants with this FILTER value will be shown.");
         hint.setStyle("-fx-font-size: 10px; -fx-text-fill: gray;");
 
-        vbox.getChildren().addAll(new Label("FILTER Value:"), filterValue, hint);
+        VBox vbox = new VBox(10);
+        vbox.setPadding(new Insets(20, 20, 10, 10));
+        vbox.getChildren().addAll(new Label("FILTER Value:"), filterValue, description, hint);
 
         dialog.getDialogPane().setContent(vbox);
+        dialog.getDialogPane().setPrefWidth(480);
         Platform.runLater(filterValue::requestFocus);
 
         dialog.setResultConverter(dialogButton -> {
             if (dialogButton == addButtonType) {
-                return filterValue.getText().trim();
+                return comboText(filterValue);
             }
             return null;
         });
@@ -1169,6 +1288,178 @@ public class VariantFiltersPanel {
         });
     }
 
+    /** Browse captured ##INFO / ##FILTER / ##FORMAT definitions; optionally start a filter rule. */
+    public void showHeaderFieldsDialog() {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("VCF header fields");
+        dialog.setHeaderText(
+            "Definitions from open VCF headers. Hover a row for the full Description — "
+                + "INFO/FILTER can be added as advanced filter rules.");
+
+        ButtonType closeType = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
+        ButtonType useInfoType = new ButtonType("Use as INFO filter…", ButtonBar.ButtonData.LEFT);
+        ButtonType useFilterType = new ButtonType("Use as FILTER…", ButtonBar.ButtonData.LEFT);
+        dialog.getDialogPane().getButtonTypes().addAll(useInfoType, useFilterType, closeType);
+
+        TabPane tabs = new TabPane();
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        ListView<VcfHeaderFieldDef> infoList =
+            headerFieldListView(VcfManager.getInstance().getSessionInfoHeaderFields());
+        ListView<VcfHeaderFieldDef> filterList =
+            headerFieldListView(VcfManager.getInstance().getSessionFilterHeaderFields());
+        ListView<VcfHeaderFieldDef> formatList =
+            headerFieldListView(VcfManager.getInstance().getSessionFormatHeaderFields());
+
+        TextArea detail = new TextArea();
+        detail.setEditable(false);
+        detail.setWrapText(true);
+        detail.setPrefRowCount(5);
+        detail.setPromptText("Select a field to see Type / Number / Description.");
+
+        ChangeListener<VcfHeaderFieldDef> detailListener = (obs, oldVal, newVal) -> {
+            if (newVal == null) {
+                detail.clear();
+            } else {
+                detail.setText(newVal.tooltipText());
+            }
+        };
+        infoList.getSelectionModel().selectedItemProperty().addListener(detailListener);
+        filterList.getSelectionModel().selectedItemProperty().addListener(detailListener);
+        formatList.getSelectionModel().selectedItemProperty().addListener(detailListener);
+
+        tabs.getTabs().addAll(
+            new Tab("INFO (" + infoList.getItems().size() + ")", infoList),
+            new Tab("FILTER (" + filterList.getItems().size() + ")", filterList),
+            new Tab("FORMAT (" + formatList.getItems().size() + ")", formatList));
+
+        VBox content = new VBox(10, tabs, detail);
+        content.setPadding(new Insets(10));
+        VBox.setVgrow(tabs, Priority.ALWAYS);
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().setPrefSize(560, 480);
+
+        // Prevent default close on LEFT buttons so we can open the add dialogs.
+        Button useInfoBtn = (Button) dialog.getDialogPane().lookupButton(useInfoType);
+        Button useFilterBtn = (Button) dialog.getDialogPane().lookupButton(useFilterType);
+        useInfoBtn.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+            e.consume();
+            VcfHeaderFieldDef selected = selectedHeaderField(tabs, infoList, filterList, formatList);
+            if (selected != null && selected.kind() == VcfHeaderFieldDef.Kind.INFO) {
+                dialog.close();
+                showInfoFilterDialog(selected.id());
+            } else if (tabs.getSelectionModel().getSelectedIndex() == 0
+                && infoList.getSelectionModel().getSelectedItem() != null) {
+                dialog.close();
+                showInfoFilterDialog(infoList.getSelectionModel().getSelectedItem().id());
+            }
+        });
+        useFilterBtn.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+            e.consume();
+            VcfHeaderFieldDef selected = selectedHeaderField(tabs, infoList, filterList, formatList);
+            if (selected != null && selected.kind() == VcfHeaderFieldDef.Kind.FILTER) {
+                dialog.close();
+                showFilterFieldDialog(selected.id());
+            } else if (tabs.getSelectionModel().getSelectedIndex() == 1
+                && filterList.getSelectionModel().getSelectedItem() != null) {
+                dialog.close();
+                showFilterFieldDialog(filterList.getSelectionModel().getSelectedItem().id());
+            }
+        });
+
+        dialog.showAndWait();
+    }
+
+    private static VcfHeaderFieldDef selectedHeaderField(
+        TabPane tabs,
+        ListView<VcfHeaderFieldDef> infoList,
+        ListView<VcfHeaderFieldDef> filterList,
+        ListView<VcfHeaderFieldDef> formatList) {
+        return switch (tabs.getSelectionModel().getSelectedIndex()) {
+            case 0 -> infoList.getSelectionModel().getSelectedItem();
+            case 1 -> filterList.getSelectionModel().getSelectedItem();
+            case 2 -> formatList.getSelectionModel().getSelectedItem();
+            default -> null;
+        };
+    }
+
+    private static ListView<VcfHeaderFieldDef> headerFieldListView(List<VcfHeaderFieldDef> fields) {
+        ListView<VcfHeaderFieldDef> list = new ListView<>(FXCollections.observableArrayList(fields));
+        list.setCellFactory(view -> new ListCell<>() {
+            private final Tooltip tip = new Tooltip();
+            {
+                tip.setWrapText(true);
+                tip.setMaxWidth(420);
+            }
+            @Override
+            protected void updateItem(VcfHeaderFieldDef item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setTooltip(null);
+                } else {
+                    setText(item.displayLabel());
+                    tip.setText(item.tooltipText());
+                    setTooltip(tip);
+                }
+            }
+        });
+        if (fields.isEmpty()) {
+            list.setPlaceholder(new Label("No definitions in open VCF headers."));
+        }
+        return list;
+    }
+
+    private static void installHeaderFieldCellFactory(
+        ComboBox<String> combo,
+        Map<String, VcfHeaderFieldDef> byId) {
+        combo.setCellFactory(view -> new ListCell<>() {
+            private final Tooltip tip = new Tooltip();
+            {
+                tip.setWrapText(true);
+                tip.setMaxWidth(420);
+            }
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setTooltip(null);
+                } else {
+                    VcfHeaderFieldDef def = byId.get(item);
+                    setText(def != null ? def.displayLabel() : item);
+                    if (def != null) {
+                        tip.setText(def.tooltipText());
+                        setTooltip(tip);
+                    } else {
+                        setTooltip(null);
+                    }
+                }
+            }
+        });
+        combo.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(String object) {
+                return object != null ? object : "";
+            }
+            @Override
+            public String fromString(String string) {
+                return string != null ? string.trim() : "";
+            }
+        });
+    }
+
+    private static String comboText(ComboBox<String> combo) {
+        if (combo == null) {
+            return "";
+        }
+        String value = combo.getValue();
+        if (value == null || value.isBlank()) {
+            value = combo.getEditor() != null ? combo.getEditor().getText() : "";
+        }
+        return value != null ? value.trim() : "";
+    }
+
     public void addInfoFilterRule(String fieldName, String fieldValue) {
         if (nodes == null || nodes.advancedFiltersContainer() == null) {
             return;
@@ -1178,6 +1469,7 @@ public class VariantFiltersPanel {
 
         Label ruleLabel = new Label("INFO." + fieldName + " = " + fieldValue);
         ruleLabel.setStyle("-fx-text-fill: white; -fx-font-size: 11px;");
+        attachHeaderTooltip(ruleLabel, VcfHeaderFieldDef.Kind.INFO, fieldName);
 
         Button removeBtn = new Button("×");
         removeBtn.setStyle("-fx-font-size: 14px; -fx-padding: 0 5 0 5;");
@@ -1200,6 +1492,7 @@ public class VariantFiltersPanel {
 
         Label ruleLabel = new Label("FILTER = " + filterValue);
         ruleLabel.setStyle("-fx-text-fill: white; -fx-font-size: 11px;");
+        attachHeaderTooltip(ruleLabel, VcfHeaderFieldDef.Kind.FILTER, filterValue);
 
         Button removeBtn = new Button("×");
         removeBtn.setStyle("-fx-font-size: 14px; -fx-padding: 0 5 0 5;");
@@ -1211,6 +1504,26 @@ public class VariantFiltersPanel {
 
         ruleBox.getChildren().addAll(ruleLabel, removeBtn);
         nodes.advancedFiltersContainer().getChildren().add(ruleBox);
+    }
+
+    private static void attachHeaderTooltip(Label label, VcfHeaderFieldDef.Kind kind, String id) {
+        if (label == null || id == null || id.isBlank()) {
+            return;
+        }
+        List<VcfHeaderFieldDef> fields = switch (kind) {
+            case INFO -> VcfManager.getInstance().getSessionInfoHeaderFields();
+            case FILTER -> VcfManager.getInstance().getSessionFilterHeaderFields();
+            case FORMAT -> VcfManager.getInstance().getSessionFormatHeaderFields();
+        };
+        for (VcfHeaderFieldDef def : fields) {
+            if (id.equalsIgnoreCase(def.id())) {
+                Tooltip tip = new Tooltip(def.tooltipText());
+                tip.setWrapText(true);
+                tip.setMaxWidth(420);
+                label.setTooltip(tip);
+                return;
+            }
+        }
     }
 
     public static String getVariantTypeLabel(VcfVariantType type) {

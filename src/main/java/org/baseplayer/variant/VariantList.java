@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.function.BiPredicate;
 
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.variant.annotation.VariantAnnotator;
@@ -538,38 +539,47 @@ public class VariantList {
         if (filter == null) {
             return null;
         }
-        VariantNode.SampleCall call = trackIndex >= 0 ? node.getSampleCall(trackIndex) : null;
-        if (call == null && track != null) {
-            for (VariantNode.SampleCall c : node.getSamples()) {
-                if (c != null && c.getTrack() == track) {
-                    call = c;
-                    break;
-                }
-            }
-        }
-        if (call == null) {
-            return null;
-        }
-        if (!filter.passesSampleThresholds(node, call)) {
-            return null;
-        }
-        if (!VariantTypeVisuals.isLohRegion(node.type) && node.isHomozygousRef(call)) {
-            return null;
-        }
-        if (VariantTypeVisuals.isLohRegion(node.type)) {
-            return call;
-        }
         if (!node.hasDisplayFailedLineages(gen)) {
             Set<Integer> failed = filter.hasActiveGroupComparison()
                 ? filter.failedLineagesForNode(node)
                 : Set.of();
             node.setDisplayFailedLineages(gen, failed);
         }
-        if (!filter.passesSampleGroupConstraint(
-                node, call, node.getDisplayFailedLineages(gen))) {
-            return null;
+        Set<Integer> failedLineages = node.getDisplayFailedLineages(gen);
+
+        // Prefer a solid (non-overlay) visible call when several VCFs share a track.
+        VariantNode.SampleCall overlayFallback = null;
+        for (VariantNode.SampleCall candidate : node.getSamples()) {
+            if (candidate == null) {
+                continue;
+            }
+            if (track != null) {
+                if (candidate.getTrack() != track) {
+                    continue;
+                }
+            } else if (trackIndex >= 0 && candidate.getTrackIndex() != trackIndex) {
+                continue;
+            }
+            if (!filter.passesSampleThresholds(node, candidate)) {
+                continue;
+            }
+            if (!VariantTypeVisuals.isLohRegion(node.type) && node.isHomozygousRef(candidate)) {
+                continue;
+            }
+            if (VariantTypeVisuals.isLohRegion(node.type)) {
+                return candidate;
+            }
+            if (!filter.passesSampleGroupConstraint(node, candidate, failedLineages)) {
+                continue;
+            }
+            if (!candidate.isUiOverlay()) {
+                return candidate;
+            }
+            if (overlayFallback == null) {
+                overlayFallback = candidate;
+            }
         }
-        return call;
+        return overlayFallback;
     }
 
     /**
@@ -1132,6 +1142,47 @@ public class VariantList {
     }
 
     /**
+     * Remove all sample calls bound to one data file. Nodes left with no samples
+     * are removed from the list.
+     * @return The number of variant nodes removed
+     */
+    public int removeSampleFile(Sample sample) {
+        if (head == null || sample == null) return 0;
+
+        int nodesRemoved = 0;
+        VariantNode prev = null;
+        VariantNode current = head;
+
+        while (current != null) {
+            VariantNode next = current.next;
+            boolean isEmpty = current.removeSampleFile(sample);
+
+            if (isEmpty) {
+                if (prev == null) {
+                    head = next;
+                } else {
+                    prev.next = next;
+                }
+
+                if (current == tail) {
+                    tail = prev;
+                }
+
+                size--;
+                nodesRemoved++;
+            } else {
+                prev = current;
+            }
+
+            current = next;
+        }
+
+        clearVisibleChain();
+        invalidateSampleIndexes();
+        return nodesRemoved;
+    }
+
+    /**
      * Retain only sample calls that satisfy {@code keepPredicate}. Variant nodes with no
      * remaining samples are removed from the list.
      */
@@ -1255,6 +1306,32 @@ public class VariantList {
     public void clear() {
         clearVisibleChain();
         clearGeneSampleIndex();
+        clearClusterSampleIndex();
+        // Unlink every node so a stray TableRow/UI ref to one VariantNode cannot
+        // keep the whole chromosome's SV graph alive after New Project.
+        for (VariantNode node = head; node != null; ) {
+            VariantNode next = node.next;
+            node.next = null;
+            node.nextVisible = null;
+            node.prevVisible = null;
+            node.annotation = null;
+            node.clearDisplayCache();
+            node.clearSamplesForDispose();
+            node.clearInfoForDispose();
+            node = next;
+        }
+        for (VariantNode node : lohRegions) {
+            if (node == null) {
+                continue;
+            }
+            node.next = null;
+            node.nextVisible = null;
+            node.prevVisible = null;
+            node.annotation = null;
+            node.clearDisplayCache();
+            node.clearSamplesForDispose();
+            node.clearInfoForDispose();
+        }
         head = null;
         tail = null;
         size = 0;
@@ -1265,6 +1342,7 @@ public class VariantList {
         loadedFilter = null;
         annotated = false;
         vcfCountWhenLoaded = 0;
+        lohRegions = List.of();
     }
     
     /**

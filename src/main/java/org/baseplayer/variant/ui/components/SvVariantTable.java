@@ -2,12 +2,15 @@ package org.baseplayer.variant.ui.components;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
@@ -126,17 +129,17 @@ public class SvVariantTable extends AbstractNestedVariantTable {
         }
         setTitle(allTab, "All", countRowsInGroups(allGroups), true);
         TabPane pane = allTab != null ? allTab.getTabPane() : null;
+        Set<VcfVariantType> available = sessionAvailableTypes();
         for (VcfVariantType type : TYPE_ORDER) {
             NestedPanel panel = typePanels.get(type);
             List<GeneGroup> groups = byTypeGroups != null ? byTypeGroups.get(type) : null;
             if (panel != null) {
                 panel.setGroups(groups != null ? groups : List.of());
             }
-            Tab tab = typeTabs.get(type);
-            setTitle(tab, VariantTypeVisuals.shortLabel(type), countRowsInGroups(groups), true);
-            if (tab != null && pane != null && !pane.getTabs().contains(tab)) {
-                pane.getTabs().add(insertIndexForType(pane, type), tab);
-            }
+            int count = Math.max(
+                countRowsInGroups(groups),
+                countUniqueNodes(typeItems.get(type)));
+            syncTypeTab(pane, type, count, available);
         }
     }
 
@@ -167,15 +170,10 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     public void setBaseTabTitles() {
         setTitle(allTab, "All", 0, false);
         TabPane pane = allTab != null ? allTab.getTabPane() : null;
+        Set<VcfVariantType> available = sessionAvailableTypes();
         for (VcfVariantType type : TYPE_ORDER) {
-            Tab tab = typeTabs.get(type);
-            setTitle(tab, VariantTypeVisuals.shortLabel(type), 0, false);
-            if (tab != null) {
-                tab.setDisable(false);
-                if (pane != null && !pane.getTabs().contains(tab)) {
-                    pane.getTabs().add(insertIndexForType(pane, type), tab);
-                }
-            }
+            // Empty / cleared table: only keep tabs for types actually seen in open VCFs.
+            syncTypeTab(pane, type, 0, available);
         }
     }
 
@@ -188,17 +186,51 @@ public class SvVariantTable extends AbstractNestedVariantTable {
         setTitle(allTab, "All", countUniqueNodes(all), true);
 
         TabPane pane = allTab != null ? allTab.getTabPane() : null;
+        Set<VcfVariantType> available = sessionAvailableTypes();
         for (VcfVariantType type : TYPE_ORDER) {
             ObservableList<TableRow> filtered = filter(typeItems.get(type));
             NestedPanel panel = typePanels.get(type);
             if (panel != null) {
                 panel.setGroups(buildGeneGroups(filtered, false, displayFilter, expand));
             }
-            Tab tab = typeTabs.get(type);
-            setTitle(tab, VariantTypeVisuals.shortLabel(type), countUniqueNodes(filtered), true);
-            if (tab != null && pane != null && !pane.getTabs().contains(tab)) {
+            syncTypeTab(pane, type, countUniqueNodes(filtered), available);
+        }
+    }
+
+    /**
+     * Show a per-type tab only when it has rows or the type was observed in an open VCF
+     * (so CNV-only sessions do not keep DEL/DUP/INV/… tabs around).
+     */
+    private void syncTypeTab(
+            TabPane pane,
+            VcfVariantType type,
+            int count,
+            Set<VcfVariantType> available) {
+        Tab tab = typeTabs.get(type);
+        if (tab == null) {
+            return;
+        }
+        boolean show = count > 0 || (available != null && available.contains(type));
+        setTitle(tab, VariantTypeVisuals.shortLabel(type), count, true);
+        tab.setDisable(false);
+        if (pane == null) {
+            return;
+        }
+        if (show) {
+            if (!pane.getTabs().contains(tab)) {
                 pane.getTabs().add(insertIndexForType(pane, type), tab);
             }
+        } else {
+            pane.getTabs().remove(tab);
+        }
+    }
+
+    private static Set<VcfVariantType> sessionAvailableTypes() {
+        try {
+            Set<VcfVariantType> types = VcfManager.getInstance().getSessionAvailableTypes();
+            return types != null ? types : EnumSet.noneOf(VcfVariantType.class);
+        } catch (Exception ignored) {
+            return EnumSet.noneOf(VcfVariantType.class);
         }
     }
 

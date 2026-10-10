@@ -1569,7 +1569,12 @@ public class VariantFilter {
             if (!passesSampleGroupConstraint(node, call, failed)) {
                 return;
             }
-            map.put(call.getTrack(), call);
+            SampleTrack track = call.getTrack();
+            VariantNode.SampleCall existing = map.get(track);
+            // Prefer solid over transparent when several VCFs share a track.
+            if (existing == null || (existing.isUiOverlay() && !call.isUiOverlay())) {
+                map.put(track, call);
+            }
         });
         return map;
     }

@@ -3,6 +3,7 @@ package org.baseplayer.variant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -50,6 +51,15 @@ public class VariantNode {
     public volatile long svEnd2 = -1;
     /** Record-level VCF QUAL value; -1 when missing/unknown. */
     public volatile double siteQuality = -1.0;
+    /** VCF ID column; null when missing / {@code .}. */
+    public volatile String vcfId;
+    /** VCF FILTER column (joined with {@code ;}); null when missing. */
+    public volatile String vcfFilter;
+    /**
+     * Site-level INFO key→string values from the VCF record (immutable when set).
+     * Null until the first load copies INFO onto this node.
+     */
+    private volatile Map<String, String> infoFields;
     /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
     public VariantAnnotation annotation;
 
@@ -66,18 +76,23 @@ public class VariantNode {
         public final int depth;
         public final double alleleFraction;
         public final boolean isPhased;
+        /**
+         * Extra FORMAT fields beyond GT/GQ/DP/AF (immutable; empty when none).
+         * Used by the click details popup for CNV / caller-specific values.
+         */
+        public final Map<String, String> formatFields;
 
         public SampleCall(Sample sample, String gt, double quality, int depth, double alleleFraction) {
-            this(sample != null ? sample.getTrack() : null, sample, gt, quality, depth, alleleFraction);
+            this(sample != null ? sample.getTrack() : null, sample, gt, quality, depth, alleleFraction, null);
         }
 
         public SampleCall(SampleTrack track, String gt, double quality, int depth, double alleleFraction) {
-            this(track, null, gt, quality, depth, alleleFraction);
+            this(track, null, gt, quality, depth, alleleFraction, null);
         }
 
         /** Resolves {@code trackIndex} to a track at construction time and stores that track. */
         public SampleCall(int trackIndex, String gt, double quality, int depth, double alleleFraction) {
-            this(resolveTrackByIndex(trackIndex), null, gt, quality, depth, alleleFraction);
+            this(resolveTrackByIndex(trackIndex), null, gt, quality, depth, alleleFraction, null);
         }
 
         public SampleCall(int trackIndex, Sample sample, String gt, double quality, int depth, double alleleFraction) {
@@ -89,10 +104,42 @@ public class VariantNode {
                 gt,
                 quality,
                 depth,
-                alleleFraction);
+                alleleFraction,
+                null);
+        }
+
+        public SampleCall(
+            int trackIndex,
+            Sample sample,
+            String gt,
+            double quality,
+            int depth,
+            double alleleFraction,
+            Map<String, String> formatFields) {
+            this(
+                sample != null && sample.getTrack() != null
+                    ? sample.getTrack()
+                    : resolveTrackByIndex(trackIndex),
+                sample,
+                gt,
+                quality,
+                depth,
+                alleleFraction,
+                formatFields);
         }
 
         public SampleCall(SampleTrack track, Sample sample, String gt, double quality, int depth, double alleleFraction) {
+            this(track, sample, gt, quality, depth, alleleFraction, null);
+        }
+
+        public SampleCall(
+            SampleTrack track,
+            Sample sample,
+            String gt,
+            double quality,
+            int depth,
+            double alleleFraction,
+            Map<String, String> formatFields) {
             this.track = track;
             this.sample = sample;
             this.gt = gt;
@@ -100,6 +147,9 @@ public class VariantNode {
             this.depth = depth;
             this.alleleFraction = alleleFraction;
             this.isPhased = gt != null && gt.contains("|");
+            this.formatFields = formatFields == null || formatFields.isEmpty()
+                ? Map.of()
+                : Map.copyOf(formatFields);
         }
 
         /** Current index in {@link SampleRegistry#getSampleTracks()}, or -1 if the track is gone. */
@@ -180,6 +230,41 @@ public class VariantNode {
         this.type = type;
     }
 
+    /** Immutable INFO map; empty when the VCF record had none / not yet copied. */
+    public Map<String, String> getInfoFields() {
+        Map<String, String> fields = infoFields;
+        return fields != null ? fields : Map.of();
+    }
+
+    /** INFO value for {@code key}, or null. */
+    public String getInfoValue(String key) {
+        if (key == null) {
+            return null;
+        }
+        Map<String, String> fields = infoFields;
+        return fields != null ? fields.get(key) : null;
+    }
+
+    /**
+     * Copy INFO onto this node once. Later sample merges for the same allele keep the first map.
+     */
+    public void setInfoFieldsIfAbsent(Map<String, String> fields) {
+        if (infoFields != null || fields == null || fields.isEmpty()) {
+            return;
+        }
+        // Preserve VCF key order when the source is a LinkedHashMap.
+        infoFields = fields instanceof LinkedHashMap
+            ? Collections.unmodifiableMap(new LinkedHashMap<>(fields))
+            : Map.copyOf(fields);
+    }
+
+    /** Drop INFO payload when the owning list is disposed. */
+    public void clearInfoForDispose() {
+        infoFields = null;
+        vcfId = null;
+        vcfFilter = null;
+    }
+
     /**
      * Mate chromosome for TRA/BND, from {@link #svChr2} or breakend ALT notation.
      */
@@ -204,7 +289,9 @@ public class VariantNode {
     }
 
     /**
-     * Mark a sample as present using sample-track identity.
+     * Mark a sample as present. When {@link SampleCall#sample} is set, identity is per
+     * VCF/BAM file so multiple VCFs on one track keep separate calls; otherwise falls
+     * back to track identity (legacy / LOH).
      * Synchronized: LOH AA synthesis and filter rebuilds can run on different threads.
      */
     public synchronized void addSample(SampleCall call) {
@@ -213,9 +300,20 @@ public class VariantNode {
         }
 
         SampleTrack track = call.getTrack();
+        Sample boundSample = call.sample;
         if (samples != null) {
             for (int i = 0; i < samples.size(); i++) {
-                if (samples.get(i).getTrack() == track) {
+                SampleCall existing = samples.get(i);
+                if (existing == null) {
+                    continue;
+                }
+                if (boundSample != null) {
+                    if (existing.sample == boundSample) {
+                        samples.set(i, call);
+                        byTrackIndex = null;
+                        return;
+                    }
+                } else if (existing.sample == null && existing.getTrack() == track) {
                     samples.set(i, call);
                     byTrackIndex = null;
                     return;
@@ -306,6 +404,13 @@ public class VariantNode {
         displayFailedGeneration = -1;
     }
 
+    /** Drop sample-call payload when the owning {@link VariantList} is disposed. */
+    public synchronized void clearSamplesForDispose() {
+        samples = null;
+        byTrackIndex = null;
+        clearDisplayCache();
+    }
+
     public void setDisplayCache(int generation, IdentityHashMap<SampleTrack, SampleCall> byTrack) {
         this.displayCacheGeneration = generation;
         this.displayByTrack = byTrack;
@@ -388,6 +493,24 @@ public class VariantNode {
         List<SampleCall> removeCalls = new ArrayList<>();
         for (SampleCall call : samples) {
             if (call.getTrack() == track) {
+                removeCalls.add(call);
+            }
+        }
+        for (SampleCall call : removeCalls) {
+            removeSample(call);
+        }
+        return samples == null || samples.isEmpty();
+    }
+
+    /** Remove all sample calls bound to a specific data file ({@link Sample}). */
+    public synchronized boolean removeSampleFile(Sample sample) {
+        if (sample == null || samples == null || samples.isEmpty()) {
+            return samples == null || samples.isEmpty();
+        }
+
+        List<SampleCall> removeCalls = new ArrayList<>();
+        for (SampleCall call : samples) {
+            if (call != null && call.sample == sample) {
                 removeCalls.add(call);
             }
         }

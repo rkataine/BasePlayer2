@@ -447,6 +447,11 @@ public class AlignmentFile implements Closeable {
     this.suppressMethylMismatches = value;
   }
 
+  /** User override for methylation mismatch suppression; {@code null} means auto-detect. */
+  public Boolean getSuppressMethylMismatches() {
+    return suppressMethylMismatches;
+  }
+
   /**
    * Request chromosome-level sampled coverage for the given region.
    * Delegates to CoverageCalculator.

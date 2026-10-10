@@ -41,7 +41,7 @@ import com.google.gson.GsonBuilder;
  */
 public final class VariantCacheStore {
 
-  public static final int SCHEMA_VERSION = 3;
+  public static final int SCHEMA_VERSION = 4;
   private static final int MAGIC = 0x42505631; // "BPV1"
   private static final String META_FILE = "meta.json";
   private static final String CHROM_SUFFIX = ".bpv.zst";
@@ -440,6 +440,9 @@ public final class VariantCacheStore {
     writeNullableString(out, node.svChr2);
     out.writeLong(node.svEnd2);
     out.writeDouble(node.siteQuality);
+    writeNullableString(out, node.vcfId);
+    writeNullableString(out, node.vcfFilter);
+    writeStringMap(out, node.getInfoFields());
 
     List<VariantNode.SampleCall> calls = node.getSamples();
     out.writeInt(calls.size());
@@ -449,6 +452,7 @@ public final class VariantCacheStore {
       out.writeDouble(call.quality);
       out.writeInt(call.depth);
       out.writeDouble(call.alleleFraction);
+      writeStringMap(out, call.formatFields);
     }
 
     VariantAnnotation ann = node.annotation;
@@ -485,12 +489,18 @@ public final class VariantCacheStore {
     String svChr2 = readNullableString(in);
     long svEnd2 = in.readLong();
     double siteQuality = in.readDouble();
+    String vcfId = readNullableString(in);
+    String vcfFilter = readNullableString(in);
+    Map<String, String> infoFields = readStringMap(in);
 
     VariantNode node = new VariantNode(position, ref, alt, type);
     node.svEnd = svEnd;
     node.svChr2 = svChr2;
     node.svEnd2 = svEnd2;
     node.siteQuality = siteQuality;
+    node.vcfId = vcfId;
+    node.vcfFilter = vcfFilter;
+    node.setInfoFieldsIfAbsent(infoFields);
 
     int callCount = in.readInt();
     for (int i = 0; i < callCount; i++) {
@@ -499,6 +509,7 @@ public final class VariantCacheStore {
       double quality = in.readDouble();
       int depth = in.readInt();
       double af = in.readDouble();
+      Map<String, String> formatFields = readStringMap(in);
 
       int liveIndex = -1;
       if (savedTrackIndex >= 0 && savedTrackIndex < savedNames.length) {
@@ -506,7 +517,7 @@ public final class VariantCacheStore {
         if (mapped != null) liveIndex = mapped;
       }
       if (liveIndex >= 0) {
-        node.addSample(new VariantNode.SampleCall(liveIndex, gt, quality, depth, af));
+        node.addSample(new VariantNode.SampleCall(liveIndex, null, gt, quality, depth, af, formatFields));
       }
     }
 
@@ -551,6 +562,37 @@ public final class VariantCacheStore {
   private static String safeChromFileName(String chrom) {
     if (chrom == null || chrom.isBlank()) return "unknown";
     return chrom.replaceAll("[^A-Za-z0-9._-]", "_");
+  }
+
+  private static void writeStringMap(DataOutputStream out, Map<String, String> map) throws IOException {
+    if (map == null || map.isEmpty()) {
+      out.writeInt(0);
+      return;
+    }
+    out.writeInt(map.size());
+    for (Map.Entry<String, String> entry : map.entrySet()) {
+      writeString(out, entry.getKey() != null ? entry.getKey() : "");
+      writeNullableString(out, entry.getValue());
+    }
+  }
+
+  private static Map<String, String> readStringMap(DataInputStream in) throws IOException {
+    int count = in.readInt();
+    if (count <= 0) {
+      return Map.of();
+    }
+    if (count > 100_000) {
+      throw new IOException("Invalid string-map size: " + count);
+    }
+    Map<String, String> map = new LinkedHashMap<>(Math.max(16, count * 2));
+    for (int i = 0; i < count; i++) {
+      String key = readString(in);
+      String value = readNullableString(in);
+      if (key != null && !key.isBlank()) {
+        map.put(key, value != null ? value : "");
+      }
+    }
+    return map.isEmpty() ? Map.of() : map;
   }
 
   private static void writeString(DataOutputStream out, String value) throws IOException {

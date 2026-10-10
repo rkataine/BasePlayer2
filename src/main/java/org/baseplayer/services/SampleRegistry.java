@@ -8,6 +8,9 @@ import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.draw.DrawStack;
@@ -22,6 +25,7 @@ import org.baseplayer.utils.DrawColors;
 import javafx.application.Platform;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
@@ -50,6 +54,11 @@ public class SampleRegistry extends TrackViewportRegistry {
     private int nextSampleGroupId = 1;
     /** Bumps whenever sample groups are created, assigned, cleared, recolored, or removed. */
     private final IntegerProperty sampleGroupsRevision = new SimpleIntegerProperty(0);
+    /**
+     * Height of the sample-filter strip under the master header. Draw stacks mirror this
+     * as a spacer so TrackBodyCanvas stays row-aligned with the sidebar list.
+     */
+    private final DoubleProperty sampleFilterStripHeightPixels = new SimpleDoubleProperty(0);
 
     /**
      * When &gt; 0, list-change side effects (viewport normalize, session sync) are deferred
@@ -129,6 +138,108 @@ public class SampleRegistry extends TrackViewportRegistry {
             return -1;
         }
         return sampleTracks.indexOf(track);
+    }
+
+    /**
+     * Find an existing track that matches {@code candidateName} by equality or
+     * mutual substring (either name contains the other), case-insensitive.
+     * Prefers exact matches, then the longest overlapping track/sample name so
+     * short accidental hits lose to more specific ones.
+     *
+     * @return track index, or {@code -1} if none
+     */
+    public int findTrackIndexMatchingName(String candidateName) {
+        String needle = normalizeNameKey(candidateName);
+        if (needle.isEmpty()) {
+            return -1;
+        }
+        String needleLower = needle.toLowerCase(Locale.ROOT);
+
+        int bestIndex = -1;
+        int bestScore = -1; // exact=Integer.MAX_VALUE/2 + len, else match length
+        for (int i = 0; i < sampleTracks.size(); i++) {
+            SampleTrack track = sampleTracks.get(i);
+            if (track == null) {
+                continue;
+            }
+            int score = scoreNameMatch(needleLower, normalizeNameKey(track.getDisplayName()));
+            score = Math.max(score, scoreNameMatch(needleLower, normalizeNameKey(track.getName())));
+            for (Sample sample : track.getSamples()) {
+                if (sample == null) {
+                    continue;
+                }
+                score = Math.max(score, scoreNameMatch(needleLower, normalizeNameKey(sample.getName())));
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
+    }
+
+    public SampleTrack findTrackMatchingName(String candidateName) {
+        int index = findTrackIndexMatchingName(candidateName);
+        if (index < 0 || index >= sampleTracks.size()) {
+            return null;
+        }
+        return sampleTracks.get(index);
+    }
+
+    /**
+     * Strip path and common genomic extensions so {@code Sample.bam} matches track
+     * {@code Sample}.
+     */
+    public static String normalizeNameKey(String name) {
+        if (name == null) {
+            return "";
+        }
+        String key = name.trim();
+        if (key.isEmpty()) {
+            return "";
+        }
+        int slash = Math.max(key.lastIndexOf('/'), key.lastIndexOf('\\'));
+        if (slash >= 0 && slash + 1 < key.length()) {
+            key = key.substring(slash + 1);
+        }
+        String lower = key.toLowerCase(Locale.ROOT);
+        String[] extensions = {
+            ".bam", ".cram", ".vcf.gz", ".vcf", ".bed.gz", ".bed", ".bw", ".bigwig"
+        };
+        for (String ext : extensions) {
+            if (lower.endsWith(ext)) {
+                key = key.substring(0, key.length() - ext.length());
+                break;
+            }
+        }
+        return key.trim();
+    }
+
+    /**
+     * @return match quality, or {@code -1} if no match. Exact matches outrank
+     *         substring matches; longer overlaps outrank shorter ones. Substring
+     *         hits require the shorter token to be at least 3 characters.
+     */
+    private static int scoreNameMatch(String needleLower, String candidateRaw) {
+        if (needleLower == null || needleLower.isEmpty() || candidateRaw == null) {
+            return -1;
+        }
+        String candidate = candidateRaw.toLowerCase(Locale.ROOT);
+        if (candidate.isEmpty()) {
+            return -1;
+        }
+        if (needleLower.equals(candidate)) {
+            return 1_000_000 + candidate.length();
+        }
+        String shorter = needleLower.length() <= candidate.length() ? needleLower : candidate;
+        String longer = needleLower.length() <= candidate.length() ? candidate : needleLower;
+        if (shorter.length() < 3) {
+            return -1;
+        }
+        if (longer.contains(shorter)) {
+            return shorter.length();
+        }
+        return -1;
     }
 
     public void addSampleTrack(SampleTrack track) {
@@ -295,6 +406,187 @@ public class SampleRegistry extends TrackViewportRegistry {
             org.baseplayer.project.SessionDocumentSync.writeSampleFilter(
                 this.activeSampleFilterQuery, focusedGeneName);
         }
+    }
+
+    /**
+     * Replace a literal substring in sample track display names.
+     * When {@code displayedOnly} is true, only tracks in the current filter/gene
+     * subset are renamed (typical after searching for a shared prefix).
+     *
+     * @return number of tracks renamed
+     */
+    public int replaceInSampleDisplayNames(String find, String replacement, boolean displayedOnly) {
+        if (find == null || find.isEmpty()) {
+            return 0;
+        }
+        String repl = replacement == null ? "" : replacement;
+        int renamed = 0;
+        if (displayedOnly && hasActiveSubset()) {
+            for (int trackIndex : getDisplayedTrackIndices()) {
+                if (trackIndex < 0 || trackIndex >= sampleTracks.size()) {
+                    continue;
+                }
+                if (renameTrackDisplaySubstring(sampleTracks.get(trackIndex), find, repl)) {
+                    renamed++;
+                }
+            }
+        } else {
+            for (SampleTrack track : sampleTracks) {
+                if (renameTrackDisplaySubstring(track, find, repl)) {
+                    renamed++;
+                }
+            }
+        }
+        if (renamed > 0) {
+            invalidateDisplayedTrackIndicesCache();
+            bumpGeneFocusRevision();
+            org.baseplayer.project.ProjectSessionState.get().markDirty();
+        }
+        return renamed;
+    }
+
+    private static boolean renameTrackDisplaySubstring(
+        SampleTrack track, String find, String replacement) {
+        if (track == null || find == null || find.isEmpty()) {
+            return false;
+        }
+        String name = track.getDisplayName();
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        String next;
+        if (find.indexOf('*') >= 0) {
+            Pattern pattern = compileSampleGlobPattern(find, true);
+            if (pattern == null) {
+                return false;
+            }
+            Matcher matcher = pattern.matcher(name);
+            if (!matcher.find()) {
+                return false;
+            }
+            // Replacement may reference $1, $2… for each '*' capture.
+            StringBuffer rewritten = new StringBuffer(name.length());
+            try {
+                do {
+                    matcher.appendReplacement(rewritten, replacement);
+                } while (matcher.find());
+                matcher.appendTail(rewritten);
+            } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
+                return false;
+            }
+            next = rewritten.toString().trim();
+        } else {
+            // Case-insensitive literal substring replace (same as the text filter).
+            String lowerName = name.toLowerCase(Locale.ROOT);
+            String lowerFind = find.toLowerCase(Locale.ROOT);
+            int idx = lowerName.indexOf(lowerFind);
+            if (idx < 0) {
+                return false;
+            }
+            StringBuilder rewritten = new StringBuilder(name.length());
+            int from = 0;
+            int findLen = find.length();
+            while (idx >= 0) {
+                rewritten.append(name, from, idx);
+                rewritten.append(replacement);
+                from = idx + findLen;
+                idx = lowerName.indexOf(lowerFind, from);
+            }
+            rewritten.append(name, from, name.length());
+            next = rewritten.toString().trim();
+        }
+        if (next.isEmpty() || next.equals(name)) {
+            return false;
+        }
+        track.setCustomName(next);
+        return true;
+    }
+
+    /**
+     * Convert a sample-search glob to a regex. {@code *} matches any character
+     * sequence. When {@code capturing} is true, each {@code *} becomes
+     * {@code (.*)} so replace can use {@code $1}, {@code $2}, …
+     */
+    private static Pattern compileSampleGlobPattern(String glob, boolean capturing) {
+        if (glob == null || glob.isEmpty()) {
+            return null;
+        }
+        StringBuilder regex = new StringBuilder(glob.length() * 2);
+        for (int i = 0; i < glob.length(); i++) {
+            char c = glob.charAt(i);
+            if (c == '*') {
+                regex.append(capturing ? "(.*)" : ".*");
+            } else if ("\\.[]{}()+-^$|?".indexOf(c) >= 0) {
+                regex.append('\\').append(c);
+            } else {
+                regex.append(c);
+            }
+        }
+        try {
+            return Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        } catch (PatternSyntaxException e) {
+            return null;
+        }
+    }
+
+    private static boolean textMatchesSampleFilter(String text, String needleLower, Pattern globPattern) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        if (globPattern != null) {
+            return globPattern.matcher(text).find();
+        }
+        return text.toLowerCase(Locale.ROOT).contains(needleLower);
+    }
+
+    /**
+     * Inclusive-exclusive {@code [start, end)} spans in {@code text} that match the
+     * active sample filter query (literal contains or {@code *} glob). Empty when
+     * there is no query or no match.
+     */
+    public List<int[]> findActiveFilterMatchSpans(String text) {
+        return findFilterMatchSpans(text, activeSampleFilterQuery);
+    }
+
+    /**
+     * Inclusive-exclusive {@code [start, end)} spans in {@code text} matching
+     * {@code query}. Literal queries highlight every case-insensitive occurrence;
+     * globs with {@code *} highlight each regex match.
+     */
+    public static List<int[]> findFilterMatchSpans(String text, String query) {
+        if (text == null || text.isEmpty() || query == null) {
+            return List.of();
+        }
+        String trimmed = query.trim();
+        if (trimmed.isEmpty()) {
+            return List.of();
+        }
+        List<int[]> spans = new ArrayList<>();
+        if (trimmed.indexOf('*') >= 0) {
+            Pattern pattern = compileSampleGlobPattern(trimmed, false);
+            if (pattern == null) {
+                return List.of();
+            }
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                if (matcher.end() > matcher.start()) {
+                    spans.add(new int[] { matcher.start(), matcher.end() });
+                }
+            }
+            return spans;
+        }
+        String lowerText = text.toLowerCase(Locale.ROOT);
+        String needle = trimmed.toLowerCase(Locale.ROOT);
+        int from = 0;
+        while (from < lowerText.length()) {
+            int idx = lowerText.indexOf(needle, from);
+            if (idx < 0) {
+                break;
+            }
+            spans.add(new int[] { idx, idx + needle.length() });
+            from = idx + Math.max(1, needle.length());
+        }
+        return spans;
     }
 
     public boolean hasFocusedTracks() {
@@ -516,8 +808,11 @@ public class SampleRegistry extends TrackViewportRegistry {
             }
         } else {
             String needle = query.toLowerCase(Locale.ROOT);
+            Pattern globPattern = query.indexOf('*') >= 0
+                ? compileSampleGlobPattern(query, false)
+                : null;
             for (int i = 0; i < sampleTracks.size(); i++) {
-                if (matchesSampleFilter(sampleTracks.get(i), needle)) {
+                if (matchesSampleFilter(sampleTracks.get(i), needle, globPattern)) {
                     cachedDisplayedTrackIndices.add(i);
                 }
             }
@@ -535,20 +830,15 @@ public class SampleRegistry extends TrackViewportRegistry {
         displayedTrackIndicesDirty = true;
     }
 
-    private boolean matchesSampleFilter(SampleTrack track, String needle) {
-        String displayName = track.getDisplayName();
-        if (displayName != null && displayName.toLowerCase(Locale.ROOT).contains(needle)) {
+    private boolean matchesSampleFilter(SampleTrack track, String needle, Pattern globPattern) {
+        if (textMatchesSampleFilter(track.getDisplayName(), needle, globPattern)) {
             return true;
         }
-
-        String trackName = track.getName();
-        if (trackName != null && trackName.toLowerCase(Locale.ROOT).contains(needle)) {
+        if (textMatchesSampleFilter(track.getName(), needle, globPattern)) {
             return true;
         }
-
         for (Sample sample : track.getSamples()) {
-            String sampleName = sample.getName();
-            if (sampleName != null && sampleName.toLowerCase(Locale.ROOT).contains(needle)) {
+            if (textMatchesSampleFilter(sample.getName(), needle, globPattern)) {
                 return true;
             }
         }
@@ -565,6 +855,18 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     public void setMasterTrackHeight(double height) {
         setMasterBandHeightPixels(height);
+    }
+
+    public double getSampleFilterStripHeightPixels() {
+        return sampleFilterStripHeightPixels.get();
+    }
+
+    public DoubleProperty sampleFilterStripHeightProperty() {
+        return sampleFilterStripHeightPixels;
+    }
+
+    public void setSampleFilterStripHeightPixels(double heightPixels) {
+        sampleFilterStripHeightPixels.set(Math.max(0, heightPixels));
     }
 
     private void invalidateSampleTrackVariantIndexes() {

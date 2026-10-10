@@ -203,6 +203,9 @@ public class VariantManagerController implements Initializable {
     private List<VcfManager.CachedChromosomeVariants> sourceVariantLists = List.of();
     private String chromosome;
     private ChangeListener<Boolean> updateListener;
+    private javafx.collections.ListChangeListener<SampleTrack> sampleTracksListener;
+    private ChangeListener<? super Number> sampleGroupsRevisionListener;
+    private volatile boolean disposed;
     private volatile boolean annotationRunning;
     private volatile Thread annotationThread;
     private long lastSeenVariantsRevision = -1;
@@ -686,6 +689,8 @@ public class VariantManagerController implements Initializable {
             this::handleGeneRowDoubleClick,
             this::handleSvRowDoubleClick);
         svVariantTable.initializeColumns();
+        // FXML lists every SV type tab; prune to types observed in open VCFs.
+        svVariantTable.setBaseTabTitles();
     }
 
     private void initializeLohVariantTable() {
@@ -798,19 +803,25 @@ public class VariantManagerController implements Initializable {
 
         syncSharedSampleRangeBounds();
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        registry.getSampleTracks().addListener((javafx.collections.ListChangeListener<SampleTrack>) c ->
-            Platform.runLater(() -> {
-                syncSharedSampleRangeBounds();
-                for (VariantClassWorkspace ws : workspaces()) {
-                    ws.refreshComparisonGroups();
-                }
-            }));
-        registry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) ->
-            Platform.runLater(() -> {
-                for (VariantClassWorkspace ws : workspaces()) {
-                    ws.refreshComparisonGroups();
-                }
-            }));
+        sampleTracksListener = c -> Platform.runLater(() -> {
+            if (disposed) {
+                return;
+            }
+            syncSharedSampleRangeBounds();
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.refreshComparisonGroups();
+            }
+        });
+        registry.getSampleTracks().addListener(sampleTracksListener);
+        sampleGroupsRevisionListener = (obs, oldVal, newVal) -> Platform.runLater(() -> {
+            if (disposed) {
+                return;
+            }
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.refreshComparisonGroups();
+            }
+        });
+        registry.sampleGroupsRevisionProperty().addListener(sampleGroupsRevisionListener);
 
         if (filterTabPane != null) {
             filterTabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
@@ -868,6 +879,7 @@ public class VariantManagerController implements Initializable {
     }
 
     public void cleanup() {
+        disposed = true;
         if (annotationThread != null && annotationThread.isAlive()) {
             annotationThread.interrupt();
         }
@@ -879,13 +891,26 @@ public class VariantManagerController implements Initializable {
         }
         if (updateListener != null) {
             GenomicCanvas.update.removeListener(updateListener);
+            updateListener = null;
+        }
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        if (sampleTracksListener != null) {
+            registry.getSampleTracks().removeListener(sampleTracksListener);
+            sampleTracksListener = null;
+        }
+        if (sampleGroupsRevisionListener != null) {
+            registry.sampleGroupsRevisionProperty().removeListener(sampleGroupsRevisionListener);
+            sampleGroupsRevisionListener = null;
         }
         if (busyOverlay != null) {
             busyOverlay.cancelDelayedLoadingModal();
         }
+        // Release table rows / source VariantLists so New Project can GC SV graphs
+        // even if the disposed Stage is still briefly reachable.
+        clearBatchAnnotationResults();
         vcfManager.clearFilter();
         vcfManager.setOnVcfAdded(null);
-        ServiceRegistry.getInstance().getSampleRegistry().clearSubsetSource(SampleRegistry.SubsetSource.GENE_FOCUS);
+        registry.clearSubsetSource(SampleRegistry.SubsetSource.GENE_FOCUS);
 				MinimizedVariantManagerWindow.handleCleanup();
     }
 
@@ -2858,8 +2883,14 @@ public class VariantManagerController implements Initializable {
         boolean lohEmpty = result.lohAll().isEmpty();
         setExcelExportButtonVisible(excelExportButton, !pointEmpty);
         setExcelExportButtonVisible(svExcelExportButton, !svEmpty);
+        // Point-only empty must NOT call setPlaceholder() — that resets SV tab titles to (0).
         if (pointEmpty) {
-            setPlaceholder("No point mutations match current filter settings");
+            Label emptyPoint = new Label("No point mutations match current filter settings");
+            emptyPoint.setStyle("-fx-text-fill: " + TEXT + ";");
+            setTablePlaceholders(emptyPoint, new Label(""), new Label(""));
+            if (variantTable != null) {
+                variantTable.setBaseTabTitles();
+            }
         } else {
             setTablePlaceholders(null, null, null);
         }

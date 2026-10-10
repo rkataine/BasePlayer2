@@ -33,6 +33,7 @@ import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantLoader;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
+import org.baseplayer.variant.VcfHeaderFieldDef;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.annotation.VariantAnnotator;
@@ -247,15 +248,22 @@ public class VcfManager {
                 List<String> unmappedSamples = vcfData.loader.getUnmappedSamples();
                 if (!unmappedSamples.isEmpty()) {
                     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+                    boolean addedTracks = false;
                     for (String sampleName : unmappedSamples) {
+                        if (registry.findTrackMatchingName(sampleName) != null) {
+                            continue;
+                        }
                         SampleTrack track = new SampleTrack(sampleName);
                         registry.getSampleTracks().add(track);
                         registry.getSampleList().add(sampleName);
+                        addedTracks = true;
                     }
-                    registry.includeNewTracksAtEndResetHeight();
                     vcfData.loader.updateMapping();
-                    if (!suppressUiUpdates) {
-                        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+                    if (addedTracks) {
+                        registry.includeNewTracksAtEndResetHeight();
+                        if (!suppressUiUpdates) {
+                            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+                        }
                     }
                 }
 
@@ -669,6 +677,11 @@ public class VcfManager {
         if (list == null) {
             return;
         }
+        // After New Project / closeCurrentVcf, reject annotate-all or load races that
+        // would re-anchor large SV graphs in the singleton cache with no open VCF.
+        if (loadedVcfs.isEmpty()) {
+            return;
+        }
         String canonical = canonicalChromosomeKey(requestedChromosome, list);
         // Drop any stale alias keys that still point at this instance.
         variantCache.entrySet().removeIf(entry -> entry.getValue() == list);
@@ -815,9 +828,10 @@ public class VcfManager {
     }
 
     public void closeCurrentVcf() {
-        if (activeChromosomeLoadTask != null && !activeChromosomeLoadTask.isCompleted()) {
-            activeChromosomeLoadTask.cancel();
-        }
+        // Invalidate in-flight region loads and annotate-all puts before dropping VCFs,
+        // otherwise a racing putVariantList can repopulate the cache after clear.
+        cancelActiveLoadsForCacheClear();
+
         for (VcfData vcfData : loadedVcfs) {
             try {
                 if (vcfData.reader != null) vcfData.reader.close();
@@ -826,12 +840,16 @@ public class VcfManager {
             }
         }
         loadedVcfs.clear();
+
+        // Break node chains while lists may still be held by density threads / disposed UI.
+        for (VariantList list : variantCache.values()) {
+            if (list != null) {
+                list.clear();
+            }
+        }
         variantCache.clear();
         lastLoadedChromosome = null;
-        loading = false;
-        loadingChromosome = null;
-        pendingChromosomeLoads.clear();
-        activeChromosomeLoadTask = null;
+        variantsRevision.incrementAndGet();
         // New Project / Clear All: return to pass-all so the next VCF is not hidden by
         // the previous project's type/effect/comparison thresholds.
         currentFilter = new VariantFilter();
@@ -840,16 +858,8 @@ public class VcfManager {
         onChromosomeVariantsReady = null;
         TranscriptCdsCache.getInstance().clearMemory();
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
-        
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.sampleTrackCanvas != null) {
-                stack.sampleTrackCanvas.clearVariantList();
-            }
-            if (stack.sampleAggregateCanvas != null) {
-                stack.sampleAggregateCanvas.clearVariantList();
-            }
-        }
+
+        clearVariantListsFromCanvases();
         org.baseplayer.controllers.MenuBarController.updateVariantManagerButtonVisibility();
     }
     
@@ -1532,6 +1542,47 @@ public class VcfManager {
         return effects;
     }
 
+    /** Union of ##INFO header definitions across open VCFs (first description wins per ID). */
+    public synchronized List<VcfHeaderFieldDef> getSessionInfoHeaderFields() {
+        return unionHeaderFields(VcfHeaderFieldDef.Kind.INFO);
+    }
+
+    /** Union of ##FILTER header definitions across open VCFs. */
+    public synchronized List<VcfHeaderFieldDef> getSessionFilterHeaderFields() {
+        return unionHeaderFields(VcfHeaderFieldDef.Kind.FILTER);
+    }
+
+    /** Union of ##FORMAT header definitions across open VCFs. */
+    public synchronized List<VcfHeaderFieldDef> getSessionFormatHeaderFields() {
+        return unionHeaderFields(VcfHeaderFieldDef.Kind.FORMAT);
+    }
+
+    private List<VcfHeaderFieldDef> unionHeaderFields(VcfHeaderFieldDef.Kind kind) {
+        LinkedHashMap<String, VcfHeaderFieldDef> byId = new LinkedHashMap<>();
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null) {
+                continue;
+            }
+            List<VcfHeaderFieldDef> fields = switch (kind) {
+                case INFO -> vcfData.infoHeaderFields;
+                case FILTER -> vcfData.filterHeaderFields;
+                case FORMAT -> vcfData.formatHeaderFields;
+            };
+            if (fields == null) {
+                continue;
+            }
+            for (VcfHeaderFieldDef field : fields) {
+                if (field == null || !field.hasId()) {
+                    continue;
+                }
+                byId.putIfAbsent(field.id(), field);
+            }
+        }
+        List<VcfHeaderFieldDef> out = new ArrayList<>(byId.values());
+        out.sort(Comparator.comparing(VcfHeaderFieldDef::id, String.CASE_INSENSITIVE_ORDER));
+        return List.copyOf(out);
+    }
+
     /**
      * Seed observed types/effects onto every open VCF (e.g. after cache install).
      * Callers must pass types actually seen in data — never filter allowedTypes defaults.
@@ -1807,6 +1858,11 @@ public class VcfManager {
      */
     public synchronized void clearAllVariantCaches() {
         cancelActiveLoadsForCacheClear();
+        for (VariantList list : variantCache.values()) {
+            if (list != null) {
+                list.clear();
+            }
+        }
         variantCache.clear();
         lastLoadedChromosome = null;
         clearVariantListsFromCanvases();
@@ -2103,6 +2159,12 @@ public class VcfManager {
         final File file;
         /** Contig prefix in this VCF ({@code ""} or {@code "chr"}). */
         public final String chromPrefix;
+        /** ##INFO definitions captured at open (before the reader is closed). */
+        final List<VcfHeaderFieldDef> infoHeaderFields;
+        /** ##FILTER definitions captured at open. */
+        final List<VcfHeaderFieldDef> filterHeaderFields;
+        /** ##FORMAT definitions captured at open. */
+        final List<VcfHeaderFieldDef> formatHeaderFields;
         /**
          * Variant types seen while streaming this file (before load filters).
          * Cleared only when this VCF is unloaded.
@@ -2116,6 +2178,21 @@ public class VcfManager {
             this.loader = loader;
             this.file = file;
             this.chromPrefix = reader != null ? reader.getChromPrefix() : org.baseplayer.utils.ChromosomeNames.NONE;
+            this.infoHeaderFields = reader != null ? reader.getInfoHeaderDefs() : List.of();
+            this.filterHeaderFields = reader != null ? reader.getFilterHeaderDefs() : List.of();
+            this.formatHeaderFields = reader != null ? reader.getFormatHeaderDefs() : List.of();
+        }
+
+        public List<VcfHeaderFieldDef> getInfoHeaderFields() {
+            return infoHeaderFields;
+        }
+
+        public List<VcfHeaderFieldDef> getFilterHeaderFields() {
+            return filterHeaderFields;
+        }
+
+        public List<VcfHeaderFieldDef> getFormatHeaderFields() {
+            return formatHeaderFields;
         }
 
         void noteType(VcfVariantType type) {

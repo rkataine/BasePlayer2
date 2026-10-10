@@ -28,6 +28,7 @@ import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -336,41 +337,135 @@ public class SampleDataManager {
       List<SampleTrack> tracks = out.computeIfAbsent(entry.getKey(), key -> new ArrayList<>());
       if (separateTracks) {
         for (Sample sample : entry.getValue()) {
-          SampleTrack track = new SampleTrack(sample);
-          registry.getSampleTracks().add(track);
-          registry.getSampleList().add(sample.getName());
-          tracks.add(track);
+          SampleTrack track = addOrMergeSampleReturningTrack(registry, sample);
+          if (track != null && !tracks.contains(track)) {
+            tracks.add(track);
+          }
         }
       } else if (!entry.getValue().isEmpty()) {
         Sample first = entry.getValue().get(0);
-        SampleTrack track = new SampleTrack(first);
+        SampleTrack track = addOrMergeSampleReturningTrack(registry, first);
         for (int i = 1; i < entry.getValue().size(); i++) {
-          track.addSample(entry.getValue().get(i));
+          Sample next = entry.getValue().get(i);
+          SampleTrack existing = registry.findTrackMatchingName(next.getName());
+          if (existing != null) {
+            existing.addSample(next);
+            preferShorterTrackName(existing, next.getName());
+            if (!tracks.contains(existing)) {
+              tracks.add(existing);
+            }
+          } else if (track != null) {
+            track.addSample(next);
+            preferShorterTrackName(track, next.getName());
+          }
         }
-        registry.getSampleTracks().add(track);
-        registry.getSampleList().add(track.getName());
-        tracks.add(track);
+        if (track != null && !tracks.contains(track)) {
+          tracks.add(track);
+        }
       }
     }
     for (Map.Entry<File, List<Sample>> entry : bedSamplesByDir.entrySet()) {
       List<SampleTrack> tracks = out.computeIfAbsent(entry.getKey(), key -> new ArrayList<>());
       if (separateTracks) {
         for (Sample sample : entry.getValue()) {
-          SampleTrack track = new SampleTrack(sample);
-          registry.getSampleTracks().add(track);
-          registry.getSampleList().add(sample.getName());
-          tracks.add(track);
+          SampleTrack track = addOrMergeSampleReturningTrack(registry, sample);
+          if (track != null && !tracks.contains(track)) {
+            tracks.add(track);
+          }
         }
       } else if (!entry.getValue().isEmpty()) {
         Sample first = entry.getValue().get(0);
-        SampleTrack track = new SampleTrack(first);
+        SampleTrack track = addOrMergeSampleReturningTrack(registry, first);
         for (int i = 1; i < entry.getValue().size(); i++) {
-          track.addSample(entry.getValue().get(i));
+          Sample next = entry.getValue().get(i);
+          SampleTrack existing = registry.findTrackMatchingName(next.getName());
+          if (existing != null) {
+            existing.addSample(next);
+            preferShorterTrackName(existing, next.getName());
+            if (!tracks.contains(existing)) {
+              tracks.add(existing);
+            }
+          } else if (track != null) {
+            track.addSample(next);
+            preferShorterTrackName(track, next.getName());
+          }
         }
-        registry.getSampleTracks().add(track);
-        registry.getSampleList().add(track.getName());
-        tracks.add(track);
+        if (track != null && !tracks.contains(track)) {
+          tracks.add(track);
+        }
       }
+    }
+  }
+
+  /**
+   * Attach {@code sample} to an existing track when names match by equality or
+   * mutual substring; otherwise create a new track. When merging onto a longer
+   * prefixed name, the shorter sample name becomes the track display name.
+   *
+   * @return true if a <em>new</em> track was created
+   */
+  private static boolean addSampleMergingByName(SampleRegistry registry, Sample sample) {
+    if (registry == null || sample == null) {
+      return false;
+    }
+    SampleTrack existing = registry.findTrackMatchingName(sample.getName());
+    if (existing != null) {
+      existing.addSample(sample);
+      preferShorterTrackName(existing, sample.getName());
+      return false;
+    }
+    SampleTrack track = new SampleTrack(sample);
+    registry.getSampleTracks().add(track);
+    registry.getSampleList().add(sample.getName());
+    return true;
+  }
+
+  /** Like {@link #addSampleMergingByName} but returns the track the sample landed on. */
+  private static SampleTrack addOrMergeSampleReturningTrack(SampleRegistry registry, Sample sample) {
+    if (registry == null || sample == null) {
+      return null;
+    }
+    SampleTrack existing = registry.findTrackMatchingName(sample.getName());
+    if (existing != null) {
+      existing.addSample(sample);
+      preferShorterTrackName(existing, sample.getName());
+      return existing;
+    }
+    SampleTrack track = new SampleTrack(sample);
+    registry.getSampleTracks().add(track);
+    registry.getSampleList().add(sample.getName());
+    return track;
+  }
+
+  /**
+   * If {@code candidateName} is a shorter mutual-substring match of the track's
+   * current display name, rename the track to that shorter name (keeps sidebar
+   * labels clean when a prefixed file was opened first).
+   */
+  static void preferShorterTrackName(SampleTrack track, String candidateName) {
+    if (track == null || candidateName == null) {
+      return;
+    }
+    String candidate = SampleRegistry.normalizeNameKey(candidateName);
+    String current = SampleRegistry.normalizeNameKey(track.getDisplayName());
+    if (candidate.isEmpty() || current.isEmpty()) {
+      return;
+    }
+    if (candidate.length() >= current.length()) {
+      return;
+    }
+    String candidateLower = candidate.toLowerCase(java.util.Locale.ROOT);
+    String currentLower = current.toLowerCase(java.util.Locale.ROOT);
+    if (!currentLower.contains(candidateLower) && !candidateLower.contains(currentLower)) {
+      return;
+    }
+    // Prefer the shorter token as the canonical individual name.
+    track.setName(candidate);
+    track.setCustomName(null);
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    int trackIndex = registry.getTrackIndex(track);
+    if (trackIndex >= 0 && trackIndex < registry.getSampleList().size()) {
+      registry.getSampleList().set(trackIndex, candidate);
     }
   }
 
@@ -542,17 +637,22 @@ public class SampleDataManager {
             return loaded;
         },
         loaded -> {
+            boolean addedTracks = false;
             if (loaded != null) {
               for (Sample sample : loaded) {
-                SampleTrack track = new SampleTrack(sample);
-                sampleRegistry.getSampleTracks().add(track);
-                sampleRegistry.getSampleList().add(sample.getName());
+                if (addSampleMergingByName(sampleRegistry, sample)) {
+                  addedTracks = true;
+                }
               }
             }
             // All BAM files loaded; update visible range and redraw
             int trackCount = sampleRegistry.getDisplayedTrackCount();
             if (trackCount > 0) {
-              sampleRegistry.showAllTracksResetHeight();
+              if (addedTracks) {
+                sampleRegistry.showAllTracksResetHeight();
+              } else {
+                sampleRegistry.includeNewTracksAtEndResetHeight();
+              }
             }
             ProjectSessionState.get().markDirty();
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -698,6 +798,176 @@ public class SampleDataManager {
   }
 
   /**
+   * Add a VCF onto an existing track (track "+" menu), even when other VCFs are
+   * already open. Maps every eligible sample column onto this track and attaches
+   * a sidebar VCF file entry under it.
+   */
+  public static void addVcfToTrack(int sampleIndex) {
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (sampleIndex < 0 || sampleIndex >= sampleRegistry.getSampleTracks().size()) {
+      return;
+    }
+
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Add VCF to " + track.getDisplayName());
+    File lastDir = UserPreferences.getLastDirectory("VCF");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+      new ExtensionFilter("VCF files", "*.vcf.gz"),
+      new ExtensionFilter("All files", "*.*")
+    );
+
+    File file = fileChooser.showOpenDialog(MainApp.stage);
+    if (file == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("VCF", file.getParentFile());
+
+    final int trackIndex = sampleIndex;
+    SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
+    ThreadRunner.get().submit(
+        "Opening VCF: " + file.getName() + "\u2026",
+        () -> {
+          try {
+            if (VcfManager.getInstance().isVcfFileLoaded(file)) {
+              // Already open — still attach a sidebar entry on this track if missing.
+              return file.toPath();
+            }
+            Path vcfPath = file.toPath();
+            VcfReader reader = new VcfReader(vcfPath);
+            if (!reader.hasTbiOrCsiIndex()) {
+              try {
+                reader.close();
+              } catch (IOException ignored) {
+              }
+              throw new IOException("Tabix/CSI index (.tbi/.csi) not found for: " + vcfPath);
+            }
+            VariantLoader loader = new VariantLoader(reader);
+            loader.mapAllEligibleToTrack(trackIndex);
+            VcfManager.VcfData vcfData =
+                VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
+            if (vcfData == null) {
+              try {
+                reader.close();
+              } catch (IOException ignored) {
+              }
+              loader.setVcfReader(null);
+              return vcfPath;
+            }
+            try {
+              reader.close();
+            } catch (IOException ignored) {
+            }
+            vcfData.reader = null;
+            loader.setVcfReader(null);
+            UserPreferences.addRecentFile("VCF", file);
+            return vcfPath;
+          } catch (Exception e) {
+            System.err.println("Failed to open VCF: " + file + " - " + e.getMessage());
+            e.printStackTrace();
+            failures.add(file, e.getMessage());
+            return null;
+          }
+        },
+        vcfPath -> {
+          failures.commitToSessionLog();
+          if (vcfPath != null
+              && sampleIndex >= 0
+              && sampleIndex < sampleRegistry.getSampleTracks().size()
+              && sampleRegistry.getSampleTracks().get(sampleIndex) == track) {
+            addVcfSampleIfMissing(track, vcfPath);
+          }
+          Platform.runLater(() -> {
+            ProjectSessionState.get().markDirty();
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+            VcfManager.getInstance().loadVariantsForCurrentView();
+            org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+                MainApp.stage, VcfManager.getInstance(), null);
+            org.baseplayer.controllers.MainController.initializeLoadRegionButton();
+            org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
+            SampleOpenFailuresDialog.showPendingNonModal();
+          });
+        });
+  }
+
+  /**
+   * Remove one data file from a track. When it is the only file, removes the whole
+   * track. For VCF files, purges bound sample calls and unloads orphaned VCFs.
+   */
+  public static void removeFileFromTrack(int sampleIndex, Sample file) {
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (file == null || sampleIndex < 0 || sampleIndex >= sampleRegistry.getSampleTracks().size()) {
+      return;
+    }
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
+    if (track == null) {
+      return;
+    }
+    int fileIndex = track.getSamples().indexOf(file);
+    if (fileIndex < 0) {
+      return;
+    }
+    if (track.getSampleCount() <= 1) {
+      removeSample(sampleIndex);
+      return;
+    }
+
+    boolean isVcf = file.getDataType() == Sample.DataType.VCF;
+    if (isVcf) {
+      java.util.IdentityHashMap<org.baseplayer.variant.VariantList, Boolean> seen =
+          new java.util.IdentityHashMap<>();
+      java.util.function.Consumer<org.baseplayer.variant.VariantList> purge = variantList -> {
+        if (variantList == null || seen.put(variantList, Boolean.TRUE) != null) {
+          return;
+        }
+        variantList.removeSampleFile(file);
+      };
+      DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+      for (DrawStack stack : stackManager.getStacks()) {
+        if (stack.sampleTrackCanvas != null) {
+          purge.accept(stack.sampleTrackCanvas.getVariantList());
+        }
+        if (stack.sampleAggregateCanvas != null) {
+          purge.accept(stack.sampleAggregateCanvas.getVariantList());
+        }
+      }
+      for (org.baseplayer.variant.VariantList cached :
+          VcfManager.getInstance().snapshotVariantCache().values()) {
+        purge.accept(cached);
+      }
+    }
+
+    track.removeSample(fileIndex);
+
+    if (isVcf) {
+      VcfManager.getInstance().unloadVcfsWithNoOpenSamples();
+      DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+      for (DrawStack stack : stackManager.getStacks()) {
+        if (stack.sampleTrackCanvas != null) {
+          stack.sampleTrackCanvas.invalidateVariantIndex();
+        }
+        if (stack.sampleAggregateCanvas != null) {
+          stack.sampleAggregateCanvas.refreshPresentTypesFromList();
+          stack.sampleAggregateCanvas.forceCalculateDensity();
+        }
+      }
+      VcfManager.getInstance().bumpVariantsRevision();
+      org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
+      refreshVariantPresentation();
+    } else {
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    }
+    ProjectSessionState.get().markDirty();
+  }
+
+  /**
    * Add a BED file to an existing individual's track.
    * Opens a file chooser and adds the BED data under the same individual.
    */
@@ -790,10 +1060,10 @@ public class SampleDataManager {
         },
         newSample -> {
           if (newSample == null) return;
-          SampleTrack track = new SampleTrack(newSample);
-          sampleRegistry.getSampleTracks().add(track);
-          sampleRegistry.getSampleList().add(newSample.getName());
-          sampleRegistry.includeNewTracksAtEndResetHeight();
+          boolean created = addSampleMergingByName(sampleRegistry, newSample);
+          if (created) {
+            sampleRegistry.includeNewTracksAtEndResetHeight();
+          }
           UserPreferences.addRecentFile("BED", file);
           ProjectSessionState.get().markDirty();
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -1075,15 +1345,16 @@ public class SampleDataManager {
           // Tracks were restored first; only create rows for truly new sample IDs.
           if (!unmappedSamples.isEmpty()) {
             for (String sampleName : unmappedSamples) {
+              if (registry.findTrackMatchingName(sampleName) != null) {
+                continue;
+              }
               SampleTrack track = new SampleTrack(sampleName);
               registry.getSampleTracks().add(track);
               registry.getSampleList().add(sampleName);
+              addedTracks = true;
             }
-            addedTracks = true;
-            loader.updateMapping();
-          } else {
-            loader.updateMapping();
           }
+          loader.updateMapping();
 
           attachVcfSamplesToMappedTracks(loader, vcfPath);
 
@@ -1143,13 +1414,17 @@ public class SampleDataManager {
 
     // Create tracks on this thread (same as session restore) so mapping is ready
     // before the batch completion callback starts variant loading.
-    final boolean addedTracks = !unmappedSamples.isEmpty();
-    if (addedTracks) {
+    boolean addedTracks = false;
+    if (!unmappedSamples.isEmpty()) {
       SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
       for (String sampleName : unmappedSamples) {
+        if (registry.findTrackMatchingName(sampleName) != null) {
+          continue;
+        }
         SampleTrack track = new SampleTrack(sampleName);
         registry.getSampleTracks().add(track);
         registry.getSampleList().add(sampleName);
+        addedTracks = true;
       }
       loader.updateMapping();
     }
@@ -1161,9 +1436,10 @@ public class SampleDataManager {
       System.err.println("Warning: Could not create or map any VCF samples from: " + file);
     }
 
+    final boolean createdTracks = addedTracks;
     if (!deferUi) {
       Platform.runLater(() -> {
-        if (addedTracks) {
+        if (createdTracks) {
           ServiceRegistry.getInstance().getSampleRegistry().includeNewTracksAtEndResetHeight();
         }
         ProjectSessionState.get().markDirty();
@@ -1177,25 +1453,29 @@ public class SampleDataManager {
     loader.setVcfReader(null);  // Release loader's reference too
     
     UserPreferences.addRecentFile("VCF", file);
-    return addedTracks;
+    return createdTracks;
   }
   
   /**
    * Attach a VCF file entry under every sample track this loader maps to,
    * so the sidebar can list {@code VCF: filename} when there is room.
-   * Track display names stay as VCF header sample IDs (or existing BAM names).
+   * When a mapped VCF sample ID is a shorter substring of the track name,
+   * the track is renamed to that shorter ID.
    */
   public static void attachVcfSamplesToMappedTracks(VariantLoader loader, Path vcfPath) {
     if (loader == null || vcfPath == null) {
       return;
     }
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    for (Integer trackIndex : new java.util.LinkedHashSet<>(loader.getTrackIndices())) {
+    for (Map.Entry<String, Integer> entry : loader.getSampleMapping().entrySet()) {
+      Integer trackIndex = entry.getValue();
       if (trackIndex == null || trackIndex < 0
           || trackIndex >= registry.getSampleTracks().size()) {
         continue;
       }
-      addVcfSampleIfMissing(registry.getSampleTracks().get(trackIndex), vcfPath);
+      SampleTrack track = registry.getSampleTracks().get(trackIndex);
+      addVcfSampleIfMissing(track, vcfPath);
+      preferShorterTrackName(track, entry.getKey());
     }
   }
 
@@ -1223,11 +1503,30 @@ public class SampleDataManager {
       return;
     }
     vcfSample.visible = visible;
-    refreshVariantPresentation();
+    refreshVariantPresentation(true);
   }
 
-  /** Rebuild visible chains / density after sample visibility or overlay changes. */
+  /**
+   * Toggle VCF transparent/overlay drawing. Overlay is read live while painting,
+   * so only a canvas redraw is needed — not an aggregate density rebuild.
+   */
+  public static void applyVcfSampleOverlay(Sample vcfSample, boolean overlay) {
+    if (vcfSample == null || vcfSample.getDataType() != Sample.DataType.VCF) {
+      return;
+    }
+    vcfSample.overlay = overlay;
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  /** Rebuild visible chains and aggregate density after visibility / sample-set changes. */
   public static void refreshVariantPresentation() {
+    refreshVariantPresentation(true);
+  }
+
+  /**
+   * @param recalculateDensity when false, skip aggregate density (e.g. overlay-only tweaks)
+   */
+  public static void refreshVariantPresentation(boolean recalculateDensity) {
     java.util.IdentityHashMap<org.baseplayer.variant.VariantList, Boolean> seen =
         new java.util.IdentityHashMap<>();
     java.util.function.Consumer<org.baseplayer.variant.VariantList> invalidate = variantList -> {
@@ -1244,7 +1543,7 @@ public class SampleDataManager {
           stack.sampleTrackCanvas.getVariantDrawer().markIndexDirty();
         }
       }
-      if (stack.sampleAggregateCanvas != null) {
+      if (recalculateDensity && stack.sampleAggregateCanvas != null) {
         stack.sampleAggregateCanvas.refreshPresentTypesFromList();
         stack.sampleAggregateCanvas.forceCalculateDensity();
       }
@@ -1255,6 +1554,81 @@ public class SampleDataManager {
     VcfManager.getInstance().bumpVariantsRevision();
     org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  /**
+   * Copy rendering + per-file visibility/transparent flags from {@code source}
+   * onto every other sample track. Flags are applied by ordinal within each
+   * data type (1st VCF→1st VCF, 2nd→2nd, …) so mixed transparent patterns
+   * are preserved rather than broadcasting one file's setting to all.
+   */
+  public static void applyTrackSettingsToAll(SampleTrack source) {
+    if (source == null) {
+      return;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<Sample> sourceBams = samplesOfType(source, Sample.DataType.BAM);
+    List<Sample> sourceBeds = samplesOfType(source, Sample.DataType.BED);
+    List<Sample> sourceVcfs = samplesOfType(source, Sample.DataType.VCF);
+
+    boolean touchedVcfVisibility = false;
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null || track == source) {
+        continue;
+      }
+      List<Sample> targetBams = samplesOfType(track, Sample.DataType.BAM);
+      List<Sample> targetBeds = samplesOfType(track, Sample.DataType.BED);
+      List<Sample> targetVcfs = samplesOfType(track, Sample.DataType.VCF);
+
+      for (int i = 0; i < targetBams.size() && i < sourceBams.size(); i++) {
+        Sample from = sourceBams.get(i);
+        Sample to = targetBams.get(i);
+        to.visible = from.visible;
+        to.overlay = from.overlay;
+        AlignmentFile fromBam = from.getBamFile();
+        AlignmentFile toBam = to.getBamFile();
+        if (fromBam != null && toBam != null) {
+          toBam.setReadColorMode(fromBam.getReadColorMode());
+          toBam.setReadStackingMode(fromBam.getReadStackingMode());
+          toBam.setSuppressMethylMismatches(fromBam.getSuppressMethylMismatches());
+        }
+      }
+      for (int i = 0; i < targetBeds.size() && i < sourceBeds.size(); i++) {
+        Sample from = sourceBeds.get(i);
+        Sample to = targetBeds.get(i);
+        to.visible = from.visible;
+        to.overlay = from.overlay;
+      }
+      for (int i = 0; i < targetVcfs.size() && i < sourceVcfs.size(); i++) {
+        Sample from = sourceVcfs.get(i);
+        Sample to = targetVcfs.get(i);
+        if (to.visible != from.visible) {
+          to.visible = from.visible;
+          touchedVcfVisibility = true;
+        }
+        to.overlay = from.overlay;
+      }
+    }
+
+    ProjectSessionState.get().markDirty();
+    if (touchedVcfVisibility) {
+      refreshVariantPresentation(true);
+    } else {
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    }
+  }
+
+  private static List<Sample> samplesOfType(SampleTrack track, Sample.DataType type) {
+    List<Sample> out = new ArrayList<>();
+    if (track == null || type == null) {
+      return out;
+    }
+    for (Sample sample : track.getSamples()) {
+      if (sample != null && sample.getDataType() == type) {
+        out.add(sample);
+      }
+    }
+    return out;
   }
 
   /**
@@ -1271,6 +1645,10 @@ public class SampleDataManager {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
 
     ThreadRunner.get().cancelAll();
+
+    // Detach Variant Manager listeners before mutating sampleTracks, otherwise a
+    // queued refreshGroups can CME while this method clears the live list.
+    org.baseplayer.variant.ui.VariantManagerWindow.closeAndDispose();
 
     for (var track : new ArrayList<>(registry.getSampleTracks())) {
       try { track.close(); } catch (IOException e) {
@@ -1300,10 +1678,6 @@ public class SampleDataManager {
         }
       }
     }
-
-    // Dispose Variant Manager so Open Project / next VCF gets a fresh FXML UI
-    // (partial reset left SV tabs/filters from the previous project).
-    org.baseplayer.variant.ui.VariantManagerWindow.closeAndDispose();
 
     ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());

@@ -1,13 +1,18 @@
 package org.baseplayer.variant;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.samples.Sample;
@@ -18,6 +23,9 @@ import org.baseplayer.services.ServiceRegistry;
 public class VariantLoader {
     
     private VcfReader vcfReader; // non-final: released after header parse, set again for variant loading
+    /** Absolute path of the VCF this loader streams (kept after the reader is closed). */
+    private final Path vcfPath;
+    private final List<String> vcfSampleNames;
     private final Map<String, Integer> vcfSampleToTrackIndex;
     private final List<String> unmappedSamples;
     private final int totalVcfSampleCount; // cached so reader can be released after construction
@@ -32,10 +40,36 @@ public class VariantLoader {
     
     public VariantLoader(VcfReader vcfReader) {
         this.vcfReader = vcfReader;
+        this.vcfPath = vcfReader != null ? vcfReader.getVcfPath() : null;
+        this.vcfSampleNames = vcfReader != null
+            ? List.copyOf(vcfReader.getSampleNames())
+            : List.of();
         this.unmappedSamples = new ArrayList<>();
         detectSomaticVcf();
         this.vcfSampleToTrackIndex = buildSampleMapping();
-        this.totalVcfSampleCount = vcfReader.getSampleNames().size();
+        this.totalVcfSampleCount = this.vcfSampleNames.size();
+    }
+
+    public Path getVcfPath() {
+        return vcfPath;
+    }
+
+    /**
+     * Bind every eligible VCF sample column to {@code trackIndex} (skips detected normals).
+     * Used when the user adds a VCF onto a specific track via the track "+" menu.
+     */
+    public void mapAllEligibleToTrack(int trackIndex) {
+        vcfSampleToTrackIndex.clear();
+        unmappedSamples.clear();
+        if (trackIndex < 0) {
+            return;
+        }
+        for (String vcfSample : vcfSampleNames) {
+            if (detectedNormalSample != null && detectedNormalSample.equals(vcfSample)) {
+                continue;
+            }
+            vcfSampleToTrackIndex.put(vcfSample, trackIndex);
+        }
     }
 
     public void setTypeObserver(Consumer<VcfVariantType> typeObserver) {
@@ -76,7 +110,7 @@ public class VariantLoader {
     }
     
     private void detectSomaticVcf() {
-        List<String> vcfSamples = vcfReader.getSampleNames();
+        List<String> vcfSamples = vcfSampleNames;
         // Only check if we have exactly 2 samples (typical for somatic calling)
         if (vcfSamples.size() != 2) {
             return;
@@ -117,40 +151,14 @@ public class VariantLoader {
     private Map<String, Integer> buildSampleMapping() {
         Map<String, Integer> mapping = new HashMap<>();
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        List<String> vcfSamples = vcfReader.getSampleNames();
+        List<String> vcfSamples = vcfSampleNames;
         
         for (String vcfSample : vcfSamples) {
             // Skip normal sample in somatic VCF
             if (detectedNormalSample != null && vcfSample.equals(detectedNormalSample)) {
                 continue;
             }
-						// TODO why track index?
-            int trackIndex = -1;
-
-            // Try to find matching sample track
-            for (int i = 0; i < registry.getSampleTracks().size(); i++) {
-                SampleTrack track = registry.getSampleTracks().get(i);
-                String trackName = track.getDisplayName();
-
-                if (trackName != null && (trackName.equals(vcfSample) || trackName.contains(vcfSample))) {
-                    trackIndex = i;
-                    break;
-                }
-
-                // Also check individual sample names within the track
-                for (Sample sample : track.getSamples()) {
-                    String sampleName = sample.getName();
-                    if (sampleName != null && (sampleName.equals(vcfSample) || sampleName.contains(vcfSample))) {
-                        trackIndex = i;
-                        break;
-                    }
-                }
-
-                if (trackIndex >= 0) {
-                    break;
-                }
-            }
-
+            int trackIndex = registry.findTrackIndexMatchingName(vcfSample);
             if (trackIndex >= 0) {
                 mapping.put(vcfSample, trackIndex);
             } else {
@@ -218,6 +226,7 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
                                 snv.getRef(), alt, snv.getType(), call);
+                            applyRecordMeta(cursor[0], snv.getId(), snv.getFilters(), snv.getInfo());
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -393,6 +402,7 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
                                 snv.getRef(), alt, snv.getType(), call);
+                            applyRecordMeta(cursor[0], snv.getId(), snv.getFilters(), snv.getInfo());
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -481,11 +491,12 @@ public class VariantLoader {
         return cursor[0];
     }
 
-    /** Copy SV span and translocation mate coordinates onto the just-inserted node. */
+    /** Copy SV span, mate coordinates, and site INFO onto the just-inserted node. */
     private static void applySvFields(VariantNode node, VcfStructuralVariant sv, String alt) {
         if (node == null || sv == null) {
             return;
         }
+        applyRecordMeta(node, sv.getId(), sv.getFilters(), sv.getInfo());
         Long svEnd = sv.getEnd();
         if (svEnd != null && node.svEnd < 0) {
             node.svEnd = svEnd;
@@ -514,6 +525,102 @@ public class VariantLoader {
                 node.svEnd2 = end2;
             }
         }
+    }
+
+    /** Copy VCF ID / FILTER / INFO onto the node once (first sample merge wins). */
+    private static void applyRecordMeta(
+        VariantNode node,
+        String id,
+        List<String> filters,
+        Map<String, Object> info) {
+        if (node == null) {
+            return;
+        }
+        if (node.vcfId == null && id != null && !id.isBlank() && !".".equals(id)) {
+            node.vcfId = id;
+        }
+        if (node.vcfFilter == null && filters != null && !filters.isEmpty()) {
+            node.vcfFilter = String.join(";", filters);
+        }
+        node.setInfoFieldsIfAbsent(stringifyInfoMap(info));
+    }
+
+    private static final Set<String> SAMPLE_CALL_CORE_KEYS = Set.of(
+        "GT", "GQ", "DP", "AF", "isHomRef", "isNoCall", "isHet", "isHomAlt", "alleles");
+
+    private static Map<String, String> stringifyInfoMap(Map<String, Object> info) {
+        if (info == null || info.isEmpty()) {
+            return Map.of();
+        }
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : info.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank()) {
+                continue;
+            }
+            out.put(entry.getKey(), formatInfoValue(entry.getValue()));
+        }
+        return out.isEmpty() ? Map.of() : out;
+    }
+
+    private static Map<String, String> extractExtraFormatFields(Map<String, Object> gtMap) {
+        if (gtMap == null || gtMap.isEmpty()) {
+            return Map.of();
+        }
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : gtMap.entrySet()) {
+            String key = entry.getKey();
+            if (key == null || SAMPLE_CALL_CORE_KEYS.contains(key)) {
+                continue;
+            }
+            out.put(key, formatInfoValue(entry.getValue()));
+        }
+        return out.isEmpty() ? Map.of() : out;
+    }
+
+    private static String formatInfoValue(Object value) {
+        if (value == null) {
+            return ".";
+        }
+        if (value instanceof Object[] arr) {
+            return Arrays.stream(arr).map(VariantLoader::formatInfoValue).collect(Collectors.joining(","));
+        }
+        if (value instanceof int[] arr) {
+            return Arrays.stream(arr).mapToObj(Integer::toString).collect(Collectors.joining(","));
+        }
+        if (value instanceof long[] arr) {
+            return Arrays.stream(arr).mapToObj(Long::toString).collect(Collectors.joining(","));
+        }
+        if (value instanceof double[] arr) {
+            return Arrays.stream(arr).mapToObj(VariantLoader::formatInfoNumber)
+                .collect(Collectors.joining(","));
+        }
+        if (value instanceof float[] arr) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(formatInfoNumber(arr[i]));
+            }
+            return sb.toString();
+        }
+        if (value instanceof Collection<?> coll) {
+            return coll.stream().map(VariantLoader::formatInfoValue).collect(Collectors.joining(","));
+        }
+        if (value instanceof Number number) {
+            return formatInfoNumber(number.doubleValue());
+        }
+        return String.valueOf(value);
+    }
+
+    private static String formatInfoNumber(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            return String.valueOf(value);
+        }
+        if (Math.rint(value) == value) {
+            return String.format("%.0f", value);
+        }
+        return String.format("%.6g", value);
     }
 
     private static long svLengthBp(VcfStructuralVariant sv) {
@@ -558,31 +665,32 @@ public class VariantLoader {
 
         // For SV breakends with GT=NA, accept them as present (NA = variant found)
         if ("NA".equalsIgnoreCase(gt)) {
-            // System.err.println("[VariantLoader.getSampleCallForAllele]   GT=NA (breakend with no explicit genotype) -> ACCEPT");
             double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
             int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
             double af = calculateAlleleFraction(gtMap, altAllele);
-            // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp + ", af=" + af);
             return new VariantNode.SampleCall(
-                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af);
+                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af,
+                extractExtraFormatFields(gtMap));
         }
         
         // GT contains allele bases (e.g. "G/A") or indices (e.g. "0/1"); skip if this alt is not present
         if (gt != null && !gtContainsAlt(gt, altAllele)) {
-            // System.err.println("[VariantLoader.getSampleCallForAllele]   Alt not in GT, skipping");
             return null;
         }
 
         double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
         int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
         double af = calculateAlleleFraction(gtMap, altAllele);
-        // System.err.println("[VariantLoader.getSampleCallForAllele] Creating SampleCall for sample '" + sampleName + "', gt=" + gt + ", gq=" + gq + ", dp=" + dp + ", af=" + af);
         return new VariantNode.SampleCall(
-            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af);
+            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af,
+            extractExtraFormatFields(gtMap));
     }
 
-    /** Prefer a VCF file Sample on the track so visibility/overlay follow the settings UI. */
-    private static Sample resolveVcfSample(int trackIndex) {
+    /**
+     * Prefer the VCF {@link Sample} on the track that matches this loader's file path,
+     * so visibility/transparent toggles stay per-file when multiple VCFs share a track.
+     */
+    private Sample resolveVcfSample(int trackIndex) {
         if (trackIndex < 0) {
             return null;
         }
@@ -592,14 +700,35 @@ public class VariantLoader {
                 return null;
             }
             SampleTrack track = registry.getSampleTracks().get(trackIndex);
+            String pathKey = normalizePathKey(vcfPath);
+            Sample fallback = null;
             for (Sample sample : track.getSamples()) {
-                if (sample.getDataType() == Sample.DataType.VCF) {
+                if (sample == null || sample.getDataType() != Sample.DataType.VCF) {
+                    continue;
+                }
+                if (fallback == null) {
+                    fallback = sample;
+                }
+                if (pathKey != null && sample.getPath() != null
+                    && pathKey.equals(normalizePathKey(sample.getPath()))) {
                     return sample;
                 }
             }
+            return fallback;
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    private static String normalizePathKey(Path path) {
+        if (path == null) {
+            return null;
+        }
+        try {
+            return path.toAbsolutePath().normalize().toString();
+        } catch (Exception e) {
+            return path.toString();
+        }
     }
     
     /**
@@ -752,34 +881,10 @@ public class VariantLoader {
         // Re-map previously unmapped samples
         List<String> stillUnmapped = new ArrayList<>();
         for (String vcfSample : unmappedSamples) {
-            boolean found = false;
-            
-            // Try to find matching sample track
-            for (int i = 0; i < registry.getSampleTracks().size(); i++) {
-                SampleTrack track = registry.getSampleTracks().get(i);
-                String trackName = track.getDisplayName();
-
-                if (trackName != null && (trackName.equals(vcfSample) || trackName.contains(vcfSample))) {
-                    vcfSampleToTrackIndex.put(vcfSample, i);
-                    found = true;
-                    break;
-                }
-
-                for (Sample sample : track.getSamples()) {
-                    String sampleName = sample.getName();
-                    if (sampleName != null && (sampleName.equals(vcfSample) || sampleName.contains(vcfSample))) {
-                        vcfSampleToTrackIndex.put(vcfSample, i);
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (found) {
-                    break;
-                }
-            }
-            
-            if (!found) {
+            int trackIndex = registry.findTrackIndexMatchingName(vcfSample);
+            if (trackIndex >= 0) {
+                vcfSampleToTrackIndex.put(vcfSample, trackIndex);
+            } else {
                 stillUnmapped.add(vcfSample);
             }
         }

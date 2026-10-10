@@ -81,11 +81,15 @@ public class MasterTrackPainter {
 
   public void clearVariantList() {
     this.variantList = null;
+    // Drop in-flight density results so a finishing thread cannot keep the old list
+    // reachable via densityCached / republish, or re-trigger on a cleared painter.
+    densityGeneration++;
     clearDensityArrays();
     densityCached = null;
     densityCachedStart = -1;
     densityCachedEnd = -1;
     densityBusy = false;
+    densityFilterGeneration = -1;
   }
 
   public VariantList getVariantList() {
@@ -1011,21 +1015,27 @@ public class MasterTrackPainter {
     gc.setFill(scaleBg);
     gc.fillRoundRect(scaleX - 1, top - 1, scaleW + 2, h + 2, 4, 4);
 
+    // Soft light-gray scale (readable on dark chrome without stark white).
+    Color scaleInk = Color.rgb(186, 186, 186);
     gc.setFont(AppFonts.getFont("Segoe UI", 10));
-    gc.setFill(canvas.axisInk());
+    gc.setFill(scaleInk);
     gc.setTextBaseline(javafx.geometry.VPos.TOP);
     gc.fillText(String.valueOf(Math.max(1, maxCount)), scaleX + 3, top + 1);
     gc.setTextBaseline(javafx.geometry.VPos.BOTTOM);
     gc.fillText("0", scaleX + 3, top + h - 1);
 
-    gc.setStroke(chrome.stroke());
-    gc.setLineWidth(1.0);
+    gc.setStroke(scaleInk);
+    gc.setGlobalAlpha(0.9);
+    gc.setLineWidth(1.5);
     double axisX = scaleX + scaleW - 4;
     gc.strokeLine(axisX, top + 1, axisX, top + h - 1);
+    gc.setLineWidth(1.3);
     for (int i = 0; i <= 4; i++) {
       double y = top + (i * h / 4.0);
-      gc.strokeLine(axisX - 4, y, axisX, y);
+      double tick = (i == 0 || i == 4) ? 6 : 4;
+      gc.strokeLine(axisX - tick, y, axisX, y);
     }
+    gc.setGlobalAlpha(1.0);
 
     // Color legends to the right of the scale
     gc.setFont(AppFonts.getFont("Segoe UI", 11));

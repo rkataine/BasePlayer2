@@ -5,12 +5,18 @@ import htsjdk.tribble.readers.LineIterator;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFCodec;
+import htsjdk.variant.vcf.VCFCompoundHeaderLine;
+import htsjdk.variant.vcf.VCFFilterHeaderLine;
 import htsjdk.variant.vcf.VCFHeader;
+import htsjdk.variant.vcf.VCFHeaderLineCount;
+import htsjdk.variant.vcf.VCFHeaderLineType;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +25,7 @@ import java.util.stream.Collectors;
 
 import org.baseplayer.variant.BreakendAlt;
 import org.baseplayer.variant.VariantTypeVisuals;
+import org.baseplayer.variant.VcfHeaderFieldDef;
 import org.baseplayer.variant.VcfSnvIndel;
 import org.baseplayer.variant.VcfStructuralVariant;
 import org.baseplayer.variant.VcfVariantType;
@@ -154,6 +161,81 @@ public class VcfReader implements AutoCloseable {
 
     public List<String> getSampleNames() {
         return sampleNames;
+    }
+
+    /** Immutable ##INFO definitions from the header (ID-sorted). */
+    public List<VcfHeaderFieldDef> getInfoHeaderDefs() {
+        return extractCompoundDefs(header.getInfoHeaderLines(), VcfHeaderFieldDef.Kind.INFO);
+    }
+
+    /** Immutable ##FILTER definitions from the header (ID-sorted). */
+    public List<VcfHeaderFieldDef> getFilterHeaderDefs() {
+        Collection<VCFFilterHeaderLine> lines = header.getFilterLines();
+        if (lines == null || lines.isEmpty()) {
+            return List.of();
+        }
+        List<VcfHeaderFieldDef> out = new ArrayList<>(lines.size());
+        for (VCFFilterHeaderLine line : lines) {
+            if (line == null || line.getID() == null || line.getID().isBlank()) {
+                continue;
+            }
+            out.add(new VcfHeaderFieldDef(
+                VcfHeaderFieldDef.Kind.FILTER,
+                line.getID(),
+                null,
+                null,
+                line.getDescription() != null ? line.getDescription() : ""));
+        }
+        out.sort(Comparator.comparing(VcfHeaderFieldDef::id, String.CASE_INSENSITIVE_ORDER));
+        return List.copyOf(out);
+    }
+
+    /** Immutable ##FORMAT definitions from the header (ID-sorted). */
+    public List<VcfHeaderFieldDef> getFormatHeaderDefs() {
+        return extractCompoundDefs(header.getFormatHeaderLines(), VcfHeaderFieldDef.Kind.FORMAT);
+    }
+
+    private static List<VcfHeaderFieldDef> extractCompoundDefs(
+        Collection<? extends VCFCompoundHeaderLine> lines,
+        VcfHeaderFieldDef.Kind kind) {
+        if (lines == null || lines.isEmpty()) {
+            return List.of();
+        }
+        List<VcfHeaderFieldDef> out = new ArrayList<>(lines.size());
+        for (VCFCompoundHeaderLine line : lines) {
+            if (line == null || line.getID() == null || line.getID().isBlank()) {
+                continue;
+            }
+            out.add(new VcfHeaderFieldDef(
+                kind,
+                line.getID(),
+                formatHeaderNumber(line),
+                formatHeaderType(line.getType()),
+                line.getDescription() != null ? line.getDescription() : ""));
+        }
+        out.sort(Comparator.comparing(VcfHeaderFieldDef::id, String.CASE_INSENSITIVE_ORDER));
+        return List.copyOf(out);
+    }
+
+    private static String formatHeaderType(VCFHeaderLineType type) {
+        return type != null ? type.name() : null;
+    }
+
+    private static String formatHeaderNumber(VCFCompoundHeaderLine line) {
+        if (line == null) {
+            return null;
+        }
+        VCFHeaderLineCount countType = line.getCountType();
+        if (countType == null) {
+            return null;
+        }
+        return switch (countType) {
+            case INTEGER -> String.valueOf(line.getCount());
+            case A -> "A";
+            case R -> "R";
+            case G -> "G";
+            case UNBOUNDED -> ".";
+        };
     }
 
     private void visitOverlappingVariants(String chromosome, long start, long end,
@@ -390,6 +472,12 @@ public class VcfReader implements AutoCloseable {
      * or TRA if mate is on different chromosome.
      */
     private VcfVariantType classifyStructuralVariant(VariantContext ctx) {
+        // FACETS / ASCAT-style segment VCFs often keep SVTYPE=DEL|DUP (or <DEL>/<DUP>)
+        // while carrying CNV metrics — prefer Gain/Loss/Neutral over classic SV labels.
+        if (hasCnvSegmentMetrics(ctx)) {
+            return classifyCnvSegment(ctx);
+        }
+
         // Check for SVCLASS first (if provided by caller like Manta)
         String svClass = ctx.getAttributeAsString("SVCLASS", null);
         if (svClass != null) {
@@ -411,21 +499,16 @@ public class VcfReader implements AutoCloseable {
         }
         
         String svType = ctx.getAttributeAsString("SVTYPE", null);
-        // System.err.println("[VcfReader.classifyStructuralVariant] pos=" + ctx.getStart() + ", SVTYPE=" + svType);
         
         if (svType != null) {
             switch (svType.toUpperCase()) {
                 case "DEL": 
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DELETION");
                     return VcfVariantType.SV_DELETION;
                 case "INS": 
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INSERTION");
                     return VcfVariantType.SV_INSERTION;
                 case "DUP": 
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DUPLICATION");
                     return VcfVariantType.SV_DUPLICATION;
                 case "INV": 
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION");
                     return VcfVariantType.SV_INVERSION;
                 case "BND":
                     // Breakend: classify as translocation if mate is on different chromosome
@@ -445,7 +528,6 @@ public class VcfReader implements AutoCloseable {
                     // Same chromosome or CHR2 not available: keep as breakend
                     return VcfVariantType.SV_BREAKEND;
                 case "TRA": case "CTX": 
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_TRANSLOCATION");
                     return VcfVariantType.SV_TRANSLOCATION;
                 case "CNV":
                     return classifyCnvSegment(ctx);
@@ -458,19 +540,15 @@ public class VcfReader implements AutoCloseable {
             if (alt.startsWith("<")) {
                 String symbolic = alt.substring(1, alt.length() - 1).toUpperCase();
                 if (symbolic.startsWith("DEL")) {
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DELETION (from ALT)");
                     return VcfVariantType.SV_DELETION;
                 }
                 if (symbolic.startsWith("INS")) {
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INSERTION (from ALT)");
                     return VcfVariantType.SV_INSERTION;
                 }
                 if (symbolic.startsWith("DUP")) {
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_DUPLICATION (from ALT)");
                     return VcfVariantType.SV_DUPLICATION;
                 }
                 if (symbolic.startsWith("INV")) {
-                    // System.err.println("[VcfReader.classifyStructuralVariant]   -> SV_INVERSION (from ALT)");
                     return VcfVariantType.SV_INVERSION;
                 }
                 if (symbolic.startsWith("CNV")) {
@@ -497,6 +575,17 @@ public class VcfReader implements AutoCloseable {
      * aneuploid tumors (TCN≈ploidy with near-zero logR).
      */
     private static final double CNV_LOGR_BUFFER = 0.2;
+
+    /**
+     * True when the record carries FACETS-style copy-number segment metrics.
+     * Bare {@code CN} alone is ignored — classic SVs sometimes set it.
+     */
+    private static boolean hasCnvSegmentMetrics(VariantContext ctx) {
+        return doubleInfo(ctx, "CNLR_MEDIAN") != null
+            || doubleInfo(ctx, "CNLR_MEDIAN_CLUST") != null
+            || intInfo(ctx, "TCN_EM") != null
+            || intInfo(ctx, "TCN") != null;
+    }
 
     /**
      * FACETS-style CNV: prefer {@code CNLR_MEDIAN} (relative to normal), else {@code TCN_EM}

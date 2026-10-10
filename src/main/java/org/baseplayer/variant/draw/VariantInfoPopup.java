@@ -1,7 +1,9 @@
 package org.baseplayer.variant.draw;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.components.InfoPopup;
@@ -9,12 +11,24 @@ import org.baseplayer.components.PopupContent;
 import org.baseplayer.components.PopupContent.Badge;
 import org.baseplayer.io.Settings;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.control.Label;
+import javafx.scene.control.TitledPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.text.TextAlignment;
 import javafx.stage.Window;
 
 public class VariantInfoPopup extends InfoPopup {
@@ -23,8 +37,14 @@ public class VariantInfoPopup extends InfoPopup {
   private static final double TOP_RIGHT_MARGIN_Y = 6;
   private static final double POPUP_ESTIMATED_WIDTH = 460;
 
+  /** Highlight these INFO keys in the summary when present (CNV / FACETS first). */
+  private static final String[] HIGHLIGHT_INFO_KEYS = {
+      "TCN_EM", "TCN", "LCN_EM", "CNLR_MEDIAN", "CF_EM", "MAF_EM",
+      "NUM_MARK", "SVTYPE", "SVLEN", "END", "IMPRECISE"
+  };
+
   public VariantInfoPopup() {
-    super(440, 560, true);
+    super(440, 620, true);
   }
 
   public void show(VariantNode node, VariantNode.SampleCall call, String chromosome,
@@ -70,6 +90,12 @@ public class VariantInfoPopup extends InfoPopup {
     c.row("REF", nullToDash(node.ref));
     c.row("ALT", nullToDash(node.alt));
     c.row("Type", typeLabel(node.type));
+    if (node.vcfId != null && !node.vcfId.isBlank()) {
+      c.row("ID", node.vcfId);
+    }
+    if (node.vcfFilter != null && !node.vcfFilter.isBlank()) {
+      c.row("FILTER", node.vcfFilter);
+    }
     if (node.siteQuality >= 0) {
       c.row("Site QUAL", formatNumber(node.siteQuality));
     }
@@ -81,6 +107,22 @@ public class VariantInfoPopup extends InfoPopup {
     long matePos = node.matePosition();
     if (mateChrom != null || matePos >= 0) {
       c.row("Mate", formatMate(mateChrom, matePos));
+    }
+
+    Map<String, String> info = node.getInfoFields();
+    if (!info.isEmpty()) {
+      boolean anyHighlight = false;
+      for (String key : HIGHLIGHT_INFO_KEYS) {
+        String value = info.get(key);
+        if (value != null && !value.isBlank()) {
+          if (!anyHighlight) {
+            c.separator();
+            c.section(VariantTypeVisuals.isCnv(node.type) ? "CNV metrics" : "Key INFO");
+            anyHighlight = true;
+          }
+          c.row(key, value);
+        }
+      }
     }
 
     if (call != null) {
@@ -171,7 +213,124 @@ public class VariantInfoPopup extends InfoPopup {
       }
     }
 
+    // Expandable dumps live below the summary TextArea (InfoPopup interactive section).
+    if (!info.isEmpty()) {
+      c.node(buildExpandableMap("All INFO fields", info));
+    }
+    if (call != null && call.formatFields != null && !call.formatFields.isEmpty()) {
+      c.node(buildExpandableMap("Sample FORMAT fields", call.formatFields));
+    }
+    if (node.getSampleCount() > 1) {
+      c.node(buildExpandableOtherSamples(node, call));
+    }
+
     return c;
+  }
+
+  private static Node buildExpandableMap(String title, Map<String, String> fields) {
+    VBox body = new VBox(3);
+    body.setPadding(new Insets(4, 0, 2, 4));
+    for (Map.Entry<String, String> entry : fields.entrySet()) {
+      body.getChildren().add(kvRow(entry.getKey(), nullToDash(entry.getValue())));
+    }
+    return titledPane(title + " (" + fields.size() + ")", body);
+  }
+
+  private static Node buildExpandableOtherSamples(VariantNode node, VariantNode.SampleCall clicked) {
+    VBox body = new VBox(4);
+    body.setPadding(new Insets(4, 0, 2, 4));
+    for (VariantNode.SampleCall other : node.getSamples()) {
+      if (other == null || other == clicked) {
+        continue;
+      }
+      String name = sampleName(other);
+      if (name == null) {
+        name = "Sample";
+      }
+      StringBuilder summary = new StringBuilder();
+      if (other.gt != null && !other.gt.isBlank()) {
+        summary.append(other.gt);
+      }
+      if (other.alleleFraction >= 0) {
+        if (summary.length() > 0) {
+          summary.append("  ");
+        }
+        summary.append(String.format("AF=%.3f", other.alleleFraction));
+      }
+      if (other.depth >= 0) {
+        if (summary.length() > 0) {
+          summary.append("  ");
+        }
+        summary.append("DP=").append(other.depth);
+      }
+      if (other.quality >= 0) {
+        if (summary.length() > 0) {
+          summary.append("  ");
+        }
+        summary.append("GQ=").append(formatNumber(other.quality));
+      }
+      body.getChildren().add(kvRow(name, summary.length() > 0 ? summary.toString() : "—"));
+
+      if (other.formatFields != null && !other.formatFields.isEmpty()) {
+        Map<String, String> extras = new LinkedHashMap<>(other.formatFields);
+        for (Map.Entry<String, String> entry : extras.entrySet()) {
+          body.getChildren().add(kvRow("  " + entry.getKey(), nullToDash(entry.getValue())));
+        }
+      }
+    }
+    int otherCount = Math.max(0, node.getSampleCount() - (clicked != null ? 1 : 0));
+    return titledPane("Other samples (" + otherCount + ")", body);
+  }
+
+  private static TitledPane titledPane(String title, Node content) {
+    TitledPane pane = new TitledPane(title, content);
+    pane.setExpanded(false);
+    pane.setAnimated(false);
+    pane.setCollapsible(true);
+    pane.setMaxWidth(Double.MAX_VALUE);
+    pane.getStyleClass().add("variant-info-expand");
+    pane.setStyle(
+        "-fx-text-fill: #d3d3d3;"
+            + "-fx-font-size: 11;"
+            + "-fx-background-color: transparent;");
+    // Skin applies after attach — style the title bar once it exists.
+    pane.skinProperty().addListener((obs, oldSkin, newSkin) -> {
+      if (newSkin == null) {
+        return;
+      }
+      Node titleNode = pane.lookup(".title");
+      if (titleNode != null) {
+        titleNode.setStyle(
+            "-fx-background-color: #2a2a2a;"
+                + "-fx-background-radius: 4;"
+                + "-fx-padding: 4 6 4 6;");
+      }
+    });
+    return pane;
+  }
+
+  private static HBox kvRow(String key, String value) {
+    HBox row = new HBox(8);
+    row.setAlignment(Pos.TOP_LEFT);
+    Label keyLabel = new Label(key);
+    keyLabel.setFont(AppFonts.getUIFont());
+    keyLabel.setTextFill(Color.GRAY);
+    keyLabel.setMinWidth(110);
+    keyLabel.setMaxWidth(140);
+    keyLabel.setWrapText(true);
+
+    Label valueLabel = new Label(value);
+    valueLabel.setFont(AppFonts.getMonoFont(11));
+    valueLabel.setTextFill(Color.LIGHTGRAY);
+    valueLabel.setWrapText(true);
+    valueLabel.setTextAlignment(TextAlignment.LEFT);
+    HBox.setHgrow(valueLabel, Priority.ALWAYS);
+    valueLabel.setMaxWidth(Double.MAX_VALUE);
+
+    Region spacer = new Region();
+    HBox.setHgrow(spacer, Priority.SOMETIMES);
+    row.getChildren().addAll(keyLabel, valueLabel);
+    return row;
   }
 
   private static String formatAllele(VariantNode node) {
@@ -230,7 +389,7 @@ public class VariantInfoPopup extends InfoPopup {
   }
 
   private static Color colorForType(VcfVariantType type) {
-    return org.baseplayer.variant.VariantTypeVisuals.color(type);
+    return VariantTypeVisuals.color(type);
   }
 
   private static String toHex(Color color) {
