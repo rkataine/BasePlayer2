@@ -304,7 +304,11 @@ public final class ZoomController {
     double acceleration = stack.viewLength / canvas.getWidth() * 10;
     double newSize = stack.viewLength - GenomicCanvas.zoomFactor * acceleration * direction;
     if (newSize < GenomicCanvas.minZoom) {
-      return;
+      // Already at minimum view length — further zoom-in is a no-op.
+      if (stack.viewLength <= GenomicCanvas.minZoom + 1e-6) {
+        return;
+      }
+      newSize = GenomicCanvas.minZoom;
     }
     double genomicAtCursor = stack.start + targetX * stack.scale;
     double start = Math.max(1, genomicAtCursor - (pivot * newSize));
@@ -316,22 +320,32 @@ public final class ZoomController {
   }
 
   void zoomAnimation(double start, double end) {
-    if (end - start < GenomicCanvas.minZoom) {
-      return;
-    }
     DrawStack stack = canvas.drawStack;
-    if (shouldSkipZoomAnimation(start, end)) {
+    double requestedLen = end - start;
+    if (requestedLen < GenomicCanvas.minZoom) {
+      // Drag/button zoom past the floor: snap to minZoom around the target,
+      // but do nothing if we are already at the minimum view length.
+      if (stack.viewLength <= GenomicCanvas.minZoom + 1e-6) {
+        return;
+      }
+      double center = (start + end) / 2.0;
+      start = center - GenomicCanvas.minZoom / 2.0;
+      end = center + GenomicCanvas.minZoom / 2.0;
+    }
+    final double targetStart = start;
+    final double targetEnd = end;
+    if (shouldSkipZoomAnimation(targetStart, targetEnd)) {
       cancelZoomAnimation(true);
-      canvas.setStartEnd(start, end);
+      canvas.setStartEnd(targetStart, targetEnd);
       return;
     }
 
     cancelZoomAnimation(true);
-    pendingZoomStart = start;
-    pendingZoomEnd = end;
+    pendingZoomStart = targetStart;
+    pendingZoomEnd = targetEnd;
 
-    double overlapStart = Math.max(start, stack.start);
-    double overlapEnd = Math.min(end, stack.end);
+    double overlapStart = Math.max(targetStart, stack.start);
+    double overlapEnd = Math.min(targetEnd, stack.end);
     double overlapSize = Math.max(0, overlapEnd - overlapStart);
     double currentSize = stack.end - stack.start;
     if (overlapSize / currentSize < 0.3) {
@@ -352,7 +366,7 @@ public final class ZoomController {
     if (snapshots.isEmpty()) {
       stack.nav.animationRunning = false;
       stack.nav.navigating = false;
-      canvas.setStartEnd(start, end);
+      canvas.setStartEnd(targetStart, targetEnd);
       pendingZoomStart = Double.NaN;
       pendingZoomEnd = Double.NaN;
       return;
@@ -369,8 +383,8 @@ public final class ZoomController {
           startNanos[0] = now;
         }
         double t = Math.min(1.0, (now - startNanos[0]) / (double) ZOOM_ANIMATION_NANOS);
-        double currentStart = sourceStart + (start - sourceStart) * t;
-        double currentEnd = sourceEnd + (end - sourceEnd) * t;
+        double currentStart = sourceStart + (targetStart - sourceStart) * t;
+        double currentEnd = sourceEnd + (targetEnd - sourceEnd) * t;
         for (Map.Entry<GenomicCanvas, Image> entry : snapshots.entrySet()) {
           paintPreview(entry.getKey(), entry.getValue(),
               sourceStart, sourceEnd, currentStart, currentEnd);
@@ -383,7 +397,7 @@ public final class ZoomController {
           }
           stack.nav.animationRunning = false;
           stack.nav.navigating = false;
-          canvas.setStartEnd(start, end);
+          canvas.setStartEnd(targetStart, targetEnd);
           pendingZoomStart = Double.NaN;
           pendingZoomEnd = Double.NaN;
         }

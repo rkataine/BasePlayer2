@@ -25,6 +25,8 @@ import org.baseplayer.features.BedVariantAnnotation;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.features.DefaultFeatureTracks;
 import org.baseplayer.features.FeatureTrack;
+import org.baseplayer.features.MotifTrack;
+import org.baseplayer.features.MotifTrackOpen;
 import org.baseplayer.features.Track;
 import org.baseplayer.genome.ReferenceGenome;
 import org.baseplayer.io.SampleDataManager;
@@ -484,6 +486,22 @@ public final class SessionRuntime {
             BigWigTrack bw = new BigWigTrack(path);
             applyFeatureAppearance(bw, spec);
             features.addFeatureTrack(bw);
+          }
+          case "jaspar" -> {
+            Path path = PathResolver.resolve(spec.path, spec.pathRelative, projectFile);
+            if (path == null || !path.toFile().exists()) {
+              warnings.add("Missing JASPAR track: " + spec.path);
+              break;
+            }
+            Set<String> motifIds = spec.motifIds == null
+                ? Set.of()
+                : new LinkedHashSet<>(spec.motifIds);
+            MotifTrack motif = MotifTrackOpen.openWithSelection(path, motifIds);
+            if (spec.motifPvalue != null) {
+              motif.setPvalue(spec.motifPvalue);
+            }
+            applyFeatureAppearance(motif, spec);
+            features.addFeatureTrack(motif);
           }
           case "ucsc" -> {
             Track existing = findFeatureByUcscId(features, spec.ucscTrackId);

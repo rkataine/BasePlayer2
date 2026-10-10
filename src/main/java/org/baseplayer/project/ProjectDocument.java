@@ -176,7 +176,7 @@ public class ProjectDocument {
   }
 
   public static class FeatureTrackSpec {
-    public String kind; // bed, bigwig, ucsc, gnomad
+    public String kind; // bed, bigwig, ucsc, gnomad, jaspar
     public String path;
     public String pathRelative;
     public String ucscTrackId;
@@ -187,5 +187,9 @@ public class ProjectDocument {
     public Double max;
     /** BED only: {@code annotate}, {@code intersect}, {@code subtract}, or null when off. */
     public String variantAnnotationMode;
+    /** JASPAR / PFM only: selected motif matrix IDs. */
+    public List<String> motifIds;
+    /** JASPAR / PFM only: scan p-value threshold. */
+    public Double motifPvalue;
   }
 }

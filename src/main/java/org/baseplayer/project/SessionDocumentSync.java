@@ -7,6 +7,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.controllers.MainController;
@@ -14,6 +15,7 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.features.DefaultFeatureTracks;
+import org.baseplayer.features.MotifTrack;
 import org.baseplayer.features.Track;
 import org.baseplayer.genome.ReferenceGenome;
 import org.baseplayer.io.Settings;
@@ -536,6 +538,22 @@ public final class SessionDocumentSync {
           spec.pathRelative = relative;
         }
       }
+    } else if (track instanceof MotifTrack motifTrack) {
+      spec.kind = "jaspar";
+      Path path = track.getSourcePath();
+      if (path != null) {
+        Path abs = path.toAbsolutePath().normalize();
+        spec.path = PathResolver.toAbsoluteString(abs);
+        String relative = PathResolver.toRelativeString(abs, projectFile);
+        if (relative != null) {
+          spec.pathRelative = relative;
+        }
+      }
+      Set<String> ids = motifTrack.getSelectedMotifIds();
+      if (ids != null && !ids.isEmpty()) {
+        spec.motifIds = new ArrayList<>(ids);
+      }
+      spec.motifPvalue = motifTrack.getPvalue();
     } else if (track.getUcscTrackId() != null) {
       spec.kind = "ucsc";
       spec.ucscTrackId = track.getUcscTrackId();

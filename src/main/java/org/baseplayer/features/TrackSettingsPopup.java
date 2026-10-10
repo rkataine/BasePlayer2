@@ -1,7 +1,13 @@
 package org.baseplayer.features;
 
+import java.util.Optional;
+import java.util.Set;
+
+import org.baseplayer.MainApp;
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
+import org.baseplayer.project.ProjectSessionState;
+import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.utils.AppFonts;
 
 import javafx.beans.property.BooleanProperty;
@@ -141,6 +147,22 @@ public final class TrackSettingsPopup {
       c.separator();
     }
 
+    if (track instanceof MotifTrack motif) {
+      int selected = motif.getSelectedMotifIds().size();
+      int total = motif.getAllMatrices().size();
+      c.row("Motifs", selected + " / " + total + " selected");
+      c.actions(new PopupContent.ActionButton(
+          "Select motifs…",
+          true,
+          () -> openMotifPicker(motif, onApply)));
+      StringProperty pvalueField = c.input(
+          "p-value",
+          String.format("%.1e", motif.getPvalue()),
+          null);
+      pvalueField.addListener((obs, o, n) -> applyMotifPvalue(motif, n, onApply));
+      c.separator();
+    }
+
     pendingAutoScale = c.checkbox("Auto-scale", track.isAutoScale());
     String initMin = track.getMinValue() != null ? String.format("%.2f", track.getMinValue()) : "";
     String initMax = track.getMaxValue() != null ? String.format("%.2f", track.getMaxValue()) : "";
@@ -194,6 +216,54 @@ public final class TrackSettingsPopup {
     pendingMax = null;
     pendingAutoScale = null;
     pendingOnApply = null;
+  }
+
+  private static void openMotifPicker(MotifTrack motif, Runnable onApply) {
+    if (motif == null) {
+      return;
+    }
+    Window owner = MainApp.stage;
+    Set<String> current = motif.getSelectedMotifIds();
+    Optional<MotifFilterDialog.Outcome> choice = MotifFilterDialog.show(
+        owner,
+        motif.getName(),
+        motif.getAllMatrices(),
+        current,
+        "Apply");
+    if (choice.isEmpty()) {
+      return;
+    }
+    motif.setSelectedMotifs(choice.get().selectedIds());
+    persistFeatureTracks();
+    notifyChanged(onApply);
+  }
+
+  private static void applyMotifPvalue(MotifTrack motif, String text, Runnable onApply) {
+    if (motif == null || text == null) {
+      return;
+    }
+    try {
+      String trimmed = text.trim();
+      if (trimmed.isEmpty()) {
+        return;
+      }
+      double next = Double.parseDouble(trimmed);
+      if (next <= 0 || next >= 1) {
+        return;
+      }
+      if (Math.abs(motif.getPvalue() - next) < 1e-15) {
+        return;
+      }
+      motif.setPvalue(next);
+      persistFeatureTracks();
+      notifyChanged(onApply);
+    } catch (NumberFormatException ignored) {
+    }
+  }
+
+  private static void persistFeatureTracks() {
+    ProjectSessionState.get().markDirty();
+    SessionDocumentSync.writeFeatureTracksFromRuntime(ProjectSessionState.get().getFile());
   }
 
   private static void applyBarHeight(BedTrack bed, String text, Runnable onApply) {

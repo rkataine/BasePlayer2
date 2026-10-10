@@ -8,6 +8,8 @@ import org.baseplayer.features.AbstractUcscTrack;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BedTrackOpen;
 import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.features.MotifTrack;
+import org.baseplayer.features.MotifTrackOpen;
 import org.baseplayer.features.Track;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.services.FeatureTrackViewportRegistry;
@@ -485,6 +487,19 @@ public class TrackBodyCanvas extends GenomicCanvas {
   @Override
   protected void handleScroll(ScrollEvent event) {
     if (isFeatureBody() && !event.isControlDown() && event.getDeltaY() != 0 && event.getDeltaX() == 0) {
+      // Prefer in-track motif stack scroll when the hovered JASPAR track overflows.
+      TrackViewportRegistry.VisibleTrackSlot slot = getVisibleSlotAtY(event.getY());
+      if (slot != null) {
+        Track track = resolveFeatureTrack(slot);
+        if (track instanceof MotifTrack motif
+            && motif.isVisible()
+            && motif.canScrollStack()
+            && motif.scrollStack(event.getDeltaY())) {
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          event.consume();
+          return;
+        }
+      }
       double nextOffset =
           viewportRegistry.getVerticalScrollOffsetPixels() - event.getDeltaY();
       viewportRegistry.setVerticalScrollOffsetPixels(nextOffset, getHeight());
@@ -2129,6 +2144,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
         }
       }
     }
+    if (track instanceof MotifTrack motifTrack) {
+      motifTrack.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+      if (drawStack != null && track.isVisible()) {
+        String chrom = drawStack.getChromosome();
+        if (chrom != null) {
+          motifTrack.onRegionChanged(
+              chrom, (long) drawStack.getViewStart(), (long) drawStack.getViewEnd(), drawStack);
+        }
+      }
+    }
 
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
@@ -2158,12 +2183,17 @@ public class TrackBodyCanvas extends GenomicCanvas {
     MenuItem addBigWigFile = new MenuItem("Add BigWig file...");
     addBigWigFile.setOnAction(e -> showAddFileDialog("BigWig", "*.bw", "*.bigwig", "*.bigWig"));
 
+    MenuItem addJasparFile = new MenuItem("Add JASPAR / PFM file...");
+    addJasparFile.setOnAction(
+        e -> showAddFileDialog("JASPAR", "*.txt", "*.pfm", "*.jaspar"));
+
     MenuItem removeAll = new MenuItem("Remove all tracks");
     removeAll.setOnAction(e -> new ArrayList<>(getTracks()).forEach(this::removeTrack));
 
     featureContextMenu.getItems().addAll(
         addBedFile,
         addBigWigFile,
+        addJasparFile,
         new SeparatorMenuItem(),
         removeAll);
 
@@ -2316,7 +2346,11 @@ public class TrackBodyCanvas extends GenomicCanvas {
     FileChooser chooser = new FileChooser();
     chooser.setTitle("Add " + type + " Track");
 
-    String fileType = type.equals("BigWig") ? "BIGWIG" : type.toUpperCase();
+    String fileType = switch (type) {
+      case "BigWig" -> "BIGWIG";
+      case "JASPAR" -> "JASPAR";
+      default -> type.toUpperCase();
+    };
     java.io.File lastDir = UserPreferences.getLastDirectory(fileType);
     if (lastDir != null) {
       try {
@@ -2326,8 +2360,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
       }
     }
 
+    String filterLabel = type.equals("JASPAR") ? "JASPAR / PFM" : type;
     chooser.getExtensionFilters().add(
-        new FileChooser.ExtensionFilter(type + " files", extensions));
+        new FileChooser.ExtensionFilter(filterLabel + " files", extensions));
 
     java.io.File file = chooser.showOpenDialog(getScene().getWindow());
     if (file == null) {
@@ -2342,6 +2377,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
                 getScene() != null ? getScene().getWindow() : null)
             .orElse(null);
         case "BigWig" -> new BigWigTrack(file.toPath());
+        case "JASPAR" -> MotifTrackOpen.openInteractive(
+                file.toPath(),
+                getScene() != null ? getScene().getWindow() : null)
+            .orElse(null);
         default -> null;
       };
       if (track != null) {

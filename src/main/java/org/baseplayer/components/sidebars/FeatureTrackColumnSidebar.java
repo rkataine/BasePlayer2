@@ -9,6 +9,7 @@ import org.baseplayer.features.BedSetOperations;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BedTrackOpen;
 import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.features.MotifTrackOpen;
 import org.baseplayer.features.Track;
 import org.baseplayer.features.UcscTracksBrowser;
 import org.baseplayer.genome.ReferenceGenomeService;
@@ -137,9 +138,12 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     bedItem.setOnAction(e -> addBedTrack());
     MenuItem bigWigItem = new MenuItem("BigWig file...");
     bigWigItem.setOnAction(e -> addBigWigTrack());
+    MenuItem jasparItem = new MenuItem("JASPAR / PFM file...");
+    jasparItem.setOnAction(e -> addMotifTrack());
     MenuItem ucscBrowserItem = new MenuItem("Browse UCSC Tracks...");
     ucscBrowserItem.setOnAction(e -> showUcscTracksBrowser());
-    menu.getItems().addAll(bedItem, bigWigItem, new SeparatorMenuItem(), ucscBrowserItem);
+    menu.getItems().addAll(
+        bedItem, bigWigItem, jasparItem, new SeparatorMenuItem(), ucscBrowserItem);
     return menu;
   }
 
@@ -542,6 +546,42 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
       draw();
     } catch (java.io.IOException ex) {
       System.err.println("Failed to load BigWig file: " + ex.getMessage());
+    }
+  }
+
+  private void addMotifTrack() {
+    if (featureTrackCanvas == null) {
+      return;
+    }
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open JASPAR / PFM File");
+    File lastDirectory = UserPreferences.getLastDirectory("JASPAR");
+    if (lastDirectory != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDirectory);
+      } catch (IllegalArgumentException ignored) {
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new FileChooser.ExtensionFilter(
+            "JASPAR / PFM files", "*.txt", "*.pfm", "*.jaspar"),
+        new FileChooser.ExtensionFilter("All files", "*.*"));
+    File file = fileChooser.showOpenDialog(headerPane.getScene().getWindow());
+    if (file == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("JASPAR", file.getParentFile());
+    try {
+      MotifTrackOpen.openInteractive(
+              file.toPath(),
+              headerPane.getScene() != null ? headerPane.getScene().getWindow() : null)
+          .ifPresent(motifTrack -> {
+            motifTrack.setVisible(true);
+            featureTrackCanvas.addTrack(motifTrack);
+            draw();
+          });
+    } catch (java.io.IOException ex) {
+      System.err.println("Failed to load JASPAR/PFM file: " + ex.getMessage());
     }
   }
 
