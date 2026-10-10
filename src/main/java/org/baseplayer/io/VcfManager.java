@@ -1464,10 +1464,20 @@ public class VcfManager {
 
     /** Ensure the given types are not canvas-hidden (legend “show”). */
     public synchronized void ensureCanvasTypesVisible(Set<VcfVariantType> types) {
+        setCanvasTypesVisible(types, true);
+    }
+
+    /**
+     * Show or hide the given types on canvas (legend select/deselect-all).
+     * Does not modify {@link #currentFilter} or Variant Manager checkboxes.
+     */
+    public synchronized void setCanvasTypesVisible(Set<VcfVariantType> types, boolean visible) {
         if (types == null || types.isEmpty()) {
             return;
         }
-        boolean changed = canvasHiddenTypes.removeAll(types);
+        boolean changed = visible
+            ? canvasHiddenTypes.removeAll(types)
+            : canvasHiddenTypes.addAll(types);
         if (changed) {
             Platform.runLater(this::redrawCanvasesForTypeVisibility);
         }

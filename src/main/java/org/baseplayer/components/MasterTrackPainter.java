@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.baseplayer.draw.CanvasColorLegend;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
@@ -58,13 +59,7 @@ public class MasterTrackPainter {
 
   private volatile List<SvSpan> densitySvSpans = java.util.List.of();
 
-  private record LegendHit(double x, double y, double w, double h, VcfVariantType displayType) {
-    boolean contains(double px, double py) {
-      return px >= x && px <= x + w && py >= y && py <= y + h;
-    }
-  }
-
-  private final List<LegendHit> legendHits = new ArrayList<>();
+  private final CanvasColorLegend colorLegend = new CanvasColorLegend();
 
   /** True while zoom or pan was deferring density last paint frame. */
   private volatile boolean wasDeferringDensityLastFrame = false;
@@ -141,19 +136,20 @@ public class MasterTrackPainter {
    * select them in Variant Manager.
    */
   public boolean handleLegendClick(double x, double y) {
-    LegendHit hit = null;
-    for (LegendHit candidate : legendHits) {
-      if (candidate.contains(x, y)) {
-        hit = candidate;
-        break;
-      }
+    Object hitId = colorLegend.hitTest(x, y);
+    if (hitId == null) {
+      return false;
     }
-    if (hit == null) {
+    if (CanvasColorLegend.isSelectAll(hitId)) {
+      handleSelectAllLegendClick();
+      return true;
+    }
+    if (!(hitId instanceof VcfVariantType displayType)) {
       return false;
     }
 
     Set<VcfVariantType> present = legendTypeUniverse();
-    Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(hit.displayType(), present);
+    Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(displayType, present);
     VcfManager vcfManager = VcfManager.getInstance();
 
     // Synthetic LOH regions are not VCF-loaded — never prompt a reload for them.
@@ -169,6 +165,36 @@ public class MasterTrackPainter {
 
     vcfManager.toggleCanvasTypeVisibility(linked);
     return true;
+  }
+
+  /**
+   * Legend “All” checkbox: if every swatch is on, hide all; otherwise show all
+   * (canvas-only — does not prompt reload for types missing from the cache).
+   */
+  private void handleSelectAllLegendClick() {
+    Set<VcfVariantType> present = legendTypeUniverse();
+    Set<VcfVariantType> legendTypes = VariantTypeVisuals.typesForUi(present);
+    if (legendTypes.isEmpty()) {
+      return;
+    }
+
+    java.util.EnumSet<VcfVariantType> all = java.util.EnumSet.noneOf(VcfVariantType.class);
+    for (VcfVariantType type : legendTypes) {
+      all.addAll(VariantTypeVisuals.linkedTypes(type, present));
+    }
+
+    VcfManager vcfManager = VcfManager.getInstance();
+    boolean allOn = true;
+    for (VcfVariantType type : legendTypes) {
+      Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(type, present);
+      boolean materialized = linked.stream().anyMatch(vcfManager::isTypeMaterializedInCache);
+      boolean canvasOn = linked.stream().anyMatch(vcfManager::isCanvasTypeVisible);
+      if (!(materialized && canvasOn)) {
+        allOn = false;
+        break;
+      }
+    }
+    vcfManager.setCanvasTypesVisible(all, !allOn);
   }
 
   private void promptReloadForTypes(Set<VcfVariantType> types) {
@@ -193,12 +219,7 @@ public class MasterTrackPainter {
 
   /** Cursor hint when hovering a clickable density legend. */
   public boolean isOverLegend(double x, double y) {
-    for (LegendHit hit : legendHits) {
-      if (hit.contains(x, y)) {
-        return true;
-      }
-    }
-    return false;
+    return colorLegend.isOver(x, y);
   }
 
   public void drawMasterAggregates(
@@ -298,7 +319,7 @@ public class MasterTrackPainter {
         densityCachedEnd = -1;
         densityBusy = false;
       }
-      legendHits.clear();
+      colorLegend.clear();
       return;
     }
 
@@ -342,7 +363,7 @@ public class MasterTrackPainter {
     
     wasDeferringDensityLastFrame = deferDensity;
 
-    legendHits.clear();
+    colorLegend.clear();
 
     double areaH = masterTrackHeight - 4;
     boolean hasCachedSpans = !densitySvSpans.isEmpty();
@@ -1006,7 +1027,6 @@ public class MasterTrackPainter {
     double scaleX = 3;
     double scaleW = 28;
     var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
-    var canvas = org.baseplayer.ui.theme.AppTheme.canvas();
     Color scaleBg = Color.color(
         chrome.elevated().getRed(),
         chrome.elevated().getGreen(),
@@ -1038,50 +1058,18 @@ public class MasterTrackPainter {
     gc.setGlobalAlpha(1.0);
 
     // Color legends to the right of the scale
-    gc.setFont(AppFonts.getFont("Segoe UI", 11));
-    gc.setTextBaseline(javafx.geometry.VPos.TOP);
-    double legendX = scaleX + scaleW + 8;
-    double legendY = top + 2;
-    double swatchW = 12;
-    double swatchH = 10;
-    double gap = 10;
-    double rowH = 16;
-
+    List<CanvasColorLegend.Item> items = new ArrayList<>(legendTypes.size());
     for (VcfVariantType type : legendTypes) {
       Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(type, present);
       boolean materialized = linked.stream().anyMatch(vcfManager::isTypeMaterializedInCache);
       boolean canvasOn = linked.stream().anyMatch(vcfManager::isCanvasTypeVisible);
       // Loaded + canvas-visible = full swatch; not loaded or canvas-hidden = muted.
       boolean enabled = materialized && canvasOn;
-      String label = VariantTypeVisuals.shortLabel(type);
-
-      double textW = Math.max(22, label.length() * 7.2);
-      double itemW = swatchW + 5 + textW;
-
-      if (legendX + itemW > canvasWidth - 4) {
-        legendX = scaleX + scaleW + 8;
-        legendY += rowH;
-        if (legendY + swatchH > top + h) {
-          break;
-        }
-      }
-
-      Color typeColor = VariantTypeVisuals.color(type);
-      double alpha = enabled ? 0.95 : 0.28;
-      gc.setFill(Color.color(typeColor.getRed(), typeColor.getGreen(), typeColor.getBlue(), alpha));
-      gc.fillRoundRect(legendX, legendY, swatchW, swatchH, 2, 2);
-      if (!enabled) {
-        gc.setStroke(chrome.muted());
-        gc.setLineWidth(1.2);
-        gc.strokeLine(legendX + 1, legendY + swatchH - 1, legendX + swatchW - 1, legendY + 1);
-      }
-
-      gc.setFill(enabled ? canvas.axisInk() : chrome.muted());
-      gc.fillText(label, legendX + swatchW + 4, legendY - 1);
-
-      legendHits.add(new LegendHit(legendX - 2, legendY - 2, itemW + 4, swatchH + 4, type));
-      legendX += itemW + gap;
+      items.add(new CanvasColorLegend.Item(
+          type, VariantTypeVisuals.shortLabel(type), VariantTypeVisuals.color(type), enabled));
     }
+    colorLegend.draw(
+        gc, items, scaleX + scaleW + 8, top + 2, canvasWidth - 4, top + h);
   }
 
   private void drawSvSpanBars(

@@ -14,6 +14,7 @@ import org.baseplayer.services.LoadingManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.utils.GeneBiotypeVisibility;
 import org.baseplayer.variant.ComparisonProgress;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantFilter;
@@ -2361,6 +2362,16 @@ public class VariantManagerController implements Initializable {
         if (!rebuildRunning) rebuildTables(filter);
     }
 
+    /**
+     * Gene-canvas biotype legend toggled — rebuild tables without reloading VCFs.
+     */
+    public void onGeneBiotypeVisibilityChanged() {
+        if (disposed || vcfManager == null) {
+            return;
+        }
+        scheduleRebuild(vcfManager.getCurrentFilter());
+    }
+
     private void rebuildTables(VariantFilter filter) {
         final VariantFilter filterSnapshot;
         try {
@@ -2510,12 +2521,17 @@ public class VariantManagerController implements Initializable {
                     bucket.add(row);
                 }
             } else {
+                GeneBiotypeVisibility biotypes = GeneBiotypeVisibility.get();
                 for (String gene : genes) {
                     if (gene == null || gene.isBlank()) {
                         continue;
                     }
+                    String trimmed = gene.trim();
+                    if (!biotypes.isVisibleGeneName(trimmed)) {
+                        continue;
+                    }
                     VariantTable.TableRow row = new VariantTable.TableRow(
-                        sourceChromosome, region, List.of(gene.trim()));
+                        sourceChromosome, region, List.of(trimmed));
                     lohAll.add(row);
                     List<VariantTable.TableRow> bucket = lohByType.get(region.type);
                     if (bucket != null) {
@@ -2547,6 +2563,7 @@ public class VariantManagerController implements Initializable {
         if (svGeneLevel) {
             passingGenesByType = variants.computePassingGenesByType(svSlice);
         }
+        GeneBiotypeVisibility biotypes = GeneBiotypeVisibility.get();
         // Snapshot under the list lock so a concurrent chain rebuild cannot empty the walk.
         for (VariantNode node : variants.snapshotVisibleNodes(filterSnapshot)) {
             if (node == null) {
@@ -2569,14 +2586,21 @@ public class VariantManagerController implements Initializable {
                     if (gene == null || gene.isBlank()) {
                         continue;
                     }
+                    String trimmed = gene.trim();
+                    if (!biotypes.isVisibleGeneName(trimmed)) {
+                        continue;
+                    }
                     VariantTable.TableRow row = new VariantTable.TableRow(
-                        sourceChromosome, node, List.of(gene.trim()));
+                        sourceChromosome, node, List.of(trimmed));
                     svAll.add(row);
                     List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
                     if (typeBucket != null) {
                         typeBucket.add(row);
                     }
                 }
+                continue;
+            }
+            if (!passesGeneBiotypeVisibility(node, biotypes)) {
                 continue;
             }
             VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
@@ -2598,6 +2622,23 @@ public class VariantManagerController implements Initializable {
                 }
             }
         }
+    }
+
+    /** Intergenic / no-gene rows stay; gene-annotated rows respect the gene-canvas legend. */
+    private static boolean passesGeneBiotypeVisibility(
+            VariantNode node, GeneBiotypeVisibility biotypes) {
+        if (node == null || biotypes == null) {
+            return true;
+        }
+        VariantAnnotation ann = node.annotation;
+        if (ann == null) {
+            return true;
+        }
+        String geneName = ann.geneName();
+        if (geneName == null || geneName.isBlank()) {
+            return true;
+        }
+        return biotypes.isVisibleGeneName(geneName);
     }
 
     private void finishTableRebuild(TableRebuildResult result) {

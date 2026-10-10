@@ -36,6 +36,7 @@ import javafx.application.Platform;
 import javafx.collections.ListChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Cursor;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -50,6 +51,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
@@ -73,6 +75,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   private final Button sampleReplaceToggleButton = new Button("▾");
   private final Label sampleSearchStatus = new Label();
   private VBox sampleSearchBar;
+  private Region masterChromeResizeGrip;
   private HBox sampleReplaceRow;
   private boolean sampleReplaceExpanded;
   private boolean suppressSearchFieldSync;
@@ -85,15 +88,45 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     installSampleSearchBar();
   }
 
-  /** Persistent filter strip under the master header; replace expands on demand. */
+  /**
+   * Filter strip under the visible-samples slider, inside the master/aggregate
+   * chrome (not between aggregate and track body as a separate sibling).
+   */
   private void installSampleSearchBar() {
     sampleSearchBar = buildSampleSearchBar();
-    int contentIndex = rootLayout.getChildren().indexOf(contentPane);
-    if (contentIndex >= 0) {
-      rootLayout.getChildren().add(contentIndex, sampleSearchBar);
-    } else {
-      rootLayout.getChildren().add(sampleSearchBar);
-    }
+
+    // headerPane was bound to master-band height only — rebuild as:
+    // [master canvas / slider] + [filter samples]
+    headerPane.minHeightProperty().unbind();
+    headerPane.maxHeightProperty().unbind();
+    masterHeaderCanvas.widthProperty().unbind();
+    masterHeaderCanvas.heightProperty().unbind();
+    masterHeaderReactiveCanvas.widthProperty().unbind();
+    masterHeaderReactiveCanvas.heightProperty().unbind();
+    headerPane.getChildren().clear();
+
+    StackPane masterCanvasHost = new StackPane(masterHeaderCanvas, masterHeaderReactiveCanvas);
+    masterHeaderCanvas.widthProperty().bind(masterCanvasHost.widthProperty());
+    masterHeaderCanvas.heightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterHeaderReactiveCanvas.widthProperty().bind(masterCanvasHost.widthProperty());
+    masterHeaderReactiveCanvas.heightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterCanvasHost.minHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterCanvasHost.maxHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterCanvasHost.prefHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    masterCanvasHost.setMaxWidth(Double.MAX_VALUE);
+    masterCanvasHost.setMinWidth(0);
+
+    // Grip below filter (or below slider when filter is hidden) — aggregate bottom edge.
+    masterChromeResizeGrip = buildMasterChromeResizeGrip();
+    VBox masterChrome = new VBox(masterCanvasHost, sampleSearchBar, masterChromeResizeGrip);
+    masterChrome.setFillWidth(true);
+    masterChrome.setMaxWidth(Double.MAX_VALUE);
+    headerPane.getChildren().add(masterChrome);
+    // Size from chrome children first; aggregate canvas follows via filter-strip height.
+    // (Do not bind header → aggregateBandHeight: that clamps before the filter can lay out.)
+    headerPane.setMinHeight(Region.USE_PREF_SIZE);
+    headerPane.setPrefHeight(Region.USE_COMPUTED_SIZE);
+    headerPane.setMaxHeight(Region.USE_PREF_SIZE);
 
     sampleRegistry.geneFocusRevisionProperty().addListener((obs, o, n) ->
         Platform.runLater(this::syncSearchFieldFromRegistry));
@@ -101,9 +134,49 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
         (ListChangeListener<SampleTrack>) change ->
             Platform.runLater(this::updateSampleSearchBarVisibility));
     sampleSearchBar.heightProperty().addListener((obs, o, n) -> syncFilterStripHeightToRegistry());
+    masterChromeResizeGrip.heightProperty().addListener((obs, o, n) -> syncFilterStripHeightToRegistry());
     syncSearchFieldFromRegistry();
     updateReplaceUiVisibility();
     updateSampleSearchBarVisibility();
+  }
+
+  @Override
+  protected boolean usesMasterCanvasEdgeResize() {
+    // Resize lives on the grip below the filter strip (aggregate bottom edge).
+    return false;
+  }
+
+  private Region buildMasterChromeResizeGrip() {
+    Region grip = new Region();
+    grip.setMinHeight(6);
+    grip.setPrefHeight(6);
+    grip.setMaxHeight(6);
+    grip.setMaxWidth(Double.MAX_VALUE);
+    grip.setCursor(Cursor.V_RESIZE);
+    grip.setStyle(
+        "-fx-background-color: transparent; -fx-border-color: transparent transparent "
+            + AppTheme.chrome().borderHex() + " transparent; -fx-border-width: 0 0 1 0;");
+    grip.setOnMousePressed(event -> {
+      if (event.getButton() != javafx.scene.input.MouseButton.PRIMARY) {
+        return;
+      }
+      beginMasterBandResize(event.getScreenY());
+      event.consume();
+    });
+    grip.setOnMouseDragged(event -> {
+      if (!isMasterBandResizing()) {
+        return;
+      }
+      updateMasterBandResize(event.getScreenY());
+      event.consume();
+    });
+    grip.setOnMouseReleased(event -> {
+      if (isMasterBandResizing()) {
+        endMasterBandResize();
+        event.consume();
+      }
+    });
+    return grip;
   }
 
   /** Hide the filter strip when there are no samples; keep canvas/sidebar rows aligned. */
@@ -121,11 +194,14 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
   }
 
   private void syncFilterStripHeightToRegistry() {
-    if (sampleSearchBar == null || !sampleSearchBar.isManaged() || !sampleSearchBar.isVisible()) {
-      sampleRegistry.setSampleFilterStripHeightPixels(0);
-      return;
+    double h = 0;
+    if (sampleSearchBar != null && sampleSearchBar.isManaged() && sampleSearchBar.isVisible()) {
+      h += sampleSearchBar.getHeight();
     }
-    sampleRegistry.setSampleFilterStripHeightPixels(sampleSearchBar.getHeight());
+    if (masterChromeResizeGrip != null) {
+      h += masterChromeResizeGrip.getHeight();
+    }
+    sampleRegistry.setSampleFilterStripHeightPixels(h);
   }
 
   private VBox buildSampleSearchBar() {
@@ -183,9 +259,10 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
     VBox bar = new VBox(3, filterRow, sampleReplaceRow);
     bar.setPadding(new Insets(4, 6, 6, 6));
-    bar.setStyle("-fx-background-color: " + AppTheme.chrome().panelHex()
+    // Match aggregate canvas track background so filter reads as part of that band.
+    bar.setStyle("-fx-background-color: " + AppTheme.canvas().trackBackgroundHex()
         + "; -fx-border-color: " + AppTheme.chrome().borderHex()
-        + "; -fx-border-width: 0 0 1 0;");
+        + "; -fx-border-width: 1 0 1 0;");
     bar.getStyleClass().add("sample-search-bar");
     return bar;
   }

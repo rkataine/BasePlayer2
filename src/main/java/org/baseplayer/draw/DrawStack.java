@@ -28,7 +28,6 @@ import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
@@ -192,9 +191,11 @@ public class DrawStack {
     drawStack.setMinSize(0, 0);
 
     var sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
-    masterStack.minHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
-    masterStack.maxHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
-    masterStack.prefHeightProperty().bind(sampleRegistry.masterTrackHeightProperty());
+    // Aggregate spans slider band + filter-samples strip (drawn beside both).
+    var aggregateHeight = sampleRegistry.aggregateBandHeightProperty();
+    masterStack.minHeightProperty().bind(aggregateHeight);
+    masterStack.maxHeightProperty().bind(aggregateHeight);
+    masterStack.prefHeightProperty().bind(aggregateHeight);
 
     sampleTrackCanvas = new TrackBodyCanvas(new Canvas(), drawStack, this, sampleRegistry);
     drawStack.getChildren().addAll(sampleTrackCanvas, sampleTrackCanvas.getReactiveCanvas());
@@ -204,14 +205,8 @@ public class DrawStack {
     masterStack.getChildren().addAll(
         sampleAggregateCanvas, sampleAggregateCanvas.getReactiveCanvas());
 
-    // Mirror the sidebar sample-filter strip so body rows stay vertically aligned.
-    Region sampleFilterStripSpacer = new Region();
-    sampleFilterStripSpacer.minHeightProperty().bind(sampleRegistry.sampleFilterStripHeightProperty());
-    sampleFilterStripSpacer.prefHeightProperty().bind(sampleRegistry.sampleFilterStripHeightProperty());
-    sampleFilterStripSpacer.maxHeightProperty().bind(sampleRegistry.sampleFilterStripHeightProperty());
-
     VBox.setVgrow(drawStack, Priority.ALWAYS);
-    sampleColumn.getChildren().addAll(masterStack, sampleFilterStripSpacer, drawStack);
+    sampleColumn.getChildren().addAll(masterStack, drawStack);
 
     featureColumn.setMinSize(0, 0);
     featureMasterStack.setMinSize(0, 0);

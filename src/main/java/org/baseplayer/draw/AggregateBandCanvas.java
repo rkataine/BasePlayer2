@@ -1,16 +1,16 @@
 package org.baseplayer.draw;
 
-import javafx.beans.property.DoubleProperty;
+import javafx.beans.value.ObservableNumberValue;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
 
 public abstract class AggregateBandCanvas extends GenomicCanvas {
 
-  private final DoubleProperty bandHeight;
+  private final ObservableNumberValue bandHeight;
 
   protected AggregateBandCanvas(Canvas reactiveCanvas, StackPane parent,
-                                DrawStack drawStack, DoubleProperty bandHeight) {
+                                DrawStack drawStack, ObservableNumberValue bandHeight) {
     super(reactiveCanvas, parent, drawStack);
     this.bandHeight = bandHeight;
     // Override default parent-height binding: band height is owned by bandHeight.
@@ -20,7 +20,7 @@ public abstract class AggregateBandCanvas extends GenomicCanvas {
     reactiveCanvas.heightProperty().bind(bandHeight);
   }
 
-  public DoubleProperty bandHeightProperty() {
+  public ObservableNumberValue bandHeightProperty() {
     return bandHeight;
   }
 

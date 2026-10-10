@@ -1,7 +1,5 @@
 package org.baseplayer.utils;
 
-import org.baseplayer.annotation.CosmicGenes;
-
 import javafx.scene.paint.Color;
 
 /**
@@ -46,20 +44,10 @@ public final class GeneColors {
   /**
    * Get the color for a gene based on its biotype and COSMIC status.
    * COSMIC census genes are colored in a distinct orange-red color.
+   * Categories match {@link GeneBiotypeVisibility}.
    */
   public static Color getGeneColor(String geneName, String biotype) {
-    // COSMIC census genes are colored orange-red
-    if (CosmicGenes.isCosmicGene(geneName)) {
-      return COSMIC_COLOR;
-    }
-    if (biotype == null) return Color.CORNFLOWERBLUE;
-    return switch (biotype) {
-      case "protein_coding" -> Color.web("#5a9a8a");  // Muted teal
-      case "lncRNA", "lincRNA" -> Color.GRAY;
-      case "miRNA", "snRNA", "snoRNA" -> Color.LIGHTCORAL;
-      case "pseudogene", "processed_pseudogene", "transcribed_unitary_pseudogene" -> Color.LIGHTGRAY;
-      default -> Color.CORNFLOWERBLUE;
-    };
+    return GeneBiotypeVisibility.categoryOf(geneName, biotype).color();
   }
   
   /**

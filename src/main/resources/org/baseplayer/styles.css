@@ -79,6 +79,12 @@ VBox {
   -fx-background-color: #252526;
 }
 
+.sidebar-panel VBox,
+.sidebar-panel .stack-pane,
+.sidebar-panel StackPane {
+  -fx-background-color: transparent;
+}
+
 /* Minimal combo box - just text and arrow, no box */
 .minimal-combo-box {
   -fx-background-color: transparent;

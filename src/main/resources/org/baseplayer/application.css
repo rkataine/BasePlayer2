@@ -125,6 +125,14 @@ VBox {
   -fx-background-color: -bp-panel;
 }
 
+/* Nested layout nodes inherit the global VBox/StackPane surface fill — keep
+   them transparent so the sidebar panel gray shows through consistently. */
+.sidebar-panel VBox,
+.sidebar-panel .stack-pane,
+.sidebar-panel StackPane {
+  -fx-background-color: transparent;
+}
+
 /* Minimal combo box - just text and arrow, no box */
 .minimal-combo-box {
   -fx-background-color: transparent;

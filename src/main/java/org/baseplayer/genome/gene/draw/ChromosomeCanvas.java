@@ -16,10 +16,13 @@ import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.genome.draw.PositionIndicator;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.Transcript;
+import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
+import org.baseplayer.utils.GeneBiotypeVisibility;
 import org.baseplayer.utils.StackingAlgorithm;
 
+import javafx.application.Platform;
 import javafx.scene.Cursor;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
@@ -30,6 +33,10 @@ import javafx.scene.text.TextAlignment;
 import javafx.stage.Window;
 
 public class ChromosomeCanvas extends GenomicCanvas {
+  static {
+    GeneBiotypeVisibility.get().addListener(ChromosomeCanvas::onBiotypeVisibilityChanged);
+  }
+
   private final GraphicsContext gc;
   private final ReferenceGenomeService referenceGenomeService;
 
@@ -49,6 +56,21 @@ public class ChromosomeCanvas extends GenomicCanvas {
   private String selectedTranscriptId = null;
   private DrawExon.AminoAcidHitBox lastHitAminoAcid = null;  // Cached for efficient hover tracking
   private Gene lastHitGene = null;  // Cached for efficient hover tracking
+
+  private static void onBiotypeVisibilityChanged() {
+    Platform.runLater(() -> {
+      DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
+      for (DrawStack stack : stacks.getStacks()) {
+        if (stack.chromosomeCanvas != null) {
+          stack.chromosomeCanvas.draw();
+        }
+      }
+      var controller = org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+      if (controller != null) {
+        controller.onGeneBiotypeVisibilityChanged();
+      }
+    });
+  }
 
   public ChromosomeCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     super(reactiveCanvas, parent, drawStack);
@@ -493,11 +515,14 @@ public class ChromosomeCanvas extends GenomicCanvas {
     double viewLength = drawStack.getViewLength();
     double canvasWidth = getWidth();
     
+    GeneBiotypeVisibility biotypeVisibility = GeneBiotypeVisibility.get();
+
     // Filter genes: always include cancer genes, others must be >= 1 pixel wide
     List<Gene> filteredGenes = new ArrayList<>();
     for (Gene gene : genes) {
       // Skip genes outside viewport
       if (gene.end() < viewStart || gene.start() > viewEnd) continue;
+      if (!biotypeVisibility.isVisible(gene)) continue;
       
       boolean isCancerGene = CosmicGenes.isCosmicGene(gene.name());
       
@@ -582,7 +607,6 @@ public class ChromosomeCanvas extends GenomicCanvas {
     
     gc.restore();
   }
-  
 
   void geneLoadingIndicator() {
 		if (AnnotationData.isGenesLoaded()) return;

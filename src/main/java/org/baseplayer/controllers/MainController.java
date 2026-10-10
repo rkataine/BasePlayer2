@@ -133,6 +133,7 @@ public class MainController {
       ensureGeneFocusBanner(alignmentOverlayPane);
       
       setupFeatureTrackColumnSidebar();
+      installChromPaneClip();
       
       addMemUpdateListener();
       eventCoordinator.setupDrawUpdateListener(memoryUsage);
@@ -401,7 +402,7 @@ public class MainController {
 
       // Keep feature pane height unchanged while dragging divider 0.
       double featureSpan = Math.max(0, currentPos1 - oldPos0);
-      double minGeneNorm = toNorm(chromPane != null ? chromPane.getMinHeight() : 0);
+      double minGeneNorm = toNorm(getGenePaneMinHeight());
       double minSampleNorm = toNorm(getSamplePaneMinHeight());
 
       double minPos0 = Math.max(0, minGeneNorm);
@@ -452,7 +453,7 @@ public class MainController {
     double pos0 = mainSplit.getDividers().get(0).getPosition();
     double pos1 = mainSplit.getDividers().get(1).getPosition();
 
-    double minGeneNorm = toNorm(chromPane != null ? chromPane.getMinHeight() : 0);
+    double minGeneNorm = toNorm(getGenePaneMinHeight());
     double minFeatureNorm = toNorm(getFeatureTracksFloorHeight());
     double minSampleNorm = toNorm(getSamplePaneMinHeight());
 
@@ -501,6 +502,17 @@ public class MainController {
     return Math.max(0, masterHeight + bodyHeight + FEATURE_MIN_HEIGHT_PADDING_PX);
   }
 
+  /** Prevent chrom-strip content from painting over the menu bar when squeezed. */
+  private void installChromPaneClip() {
+    if (chromPane == null) {
+      return;
+    }
+    javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle();
+    clip.widthProperty().bind(chromPane.widthProperty());
+    clip.heightProperty().bind(chromPane.heightProperty());
+    chromPane.setClip(clip);
+  }
+
   private double getSamplePaneMinHeight() {
     if (mainSplit == null || mainSplit.getItems().size() < 3) return 0;
     Node samplePane = mainSplit.getItems().get(2);
@@ -508,6 +520,14 @@ public class MainController {
       return Math.max(0, region.getMinHeight());
     }
     return 0;
+  }
+
+  /** Soft floor only — Genome sidebar is fixed-size and clipped, not a resize lock. */
+  private double getGenePaneMinHeight() {
+    if (chromPane == null) {
+      return 0;
+    }
+    return Math.max(0, chromPane.getMinHeight());
   }
 
   private static double clamp(double value, double min, double max) {

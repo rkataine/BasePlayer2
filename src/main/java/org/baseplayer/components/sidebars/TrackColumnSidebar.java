@@ -302,9 +302,38 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     });
   }
 
+  /** When false, resize is owned by a chrome grip below the filter strip. */
+  protected boolean usesMasterCanvasEdgeResize() {
+    return true;
+  }
+
+  protected final void beginMasterBandResize(double screenY) {
+    isDraggingResize = true;
+    dragStartScreenY = screenY;
+    dragStartHeight = trackViewportRegistry.getMasterBandHeightPixels();
+  }
+
+  protected final void updateMasterBandResize(double screenY) {
+    if (!isDraggingResize) {
+      return;
+    }
+    double delta = screenY - dragStartScreenY;
+    trackViewportRegistry.setMasterBandHeightPixels(
+        Math.max(20, Math.min(200, dragStartHeight + delta)));
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  protected final void endMasterBandResize() {
+    isDraggingResize = false;
+  }
+
+  protected final boolean isMasterBandResizing() {
+    return isDraggingResize;
+  }
+
   private void handleMasterMouseMoved(MouseEvent event) {
     double edgeZone = masterHeaderCanvas.getHeight() - 4;
-    boolean inResizeZone = event.getY() >= edgeZone;
+    boolean inResizeZone = usesMasterCanvasEdgeResize() && event.getY() >= edgeZone;
     boolean overRangeHandle = isControlsExpanded() && isOverRangeHandle(event.getX(), event.getY());
     SampleTrackControls.Hit controlHit =
         SampleTrackControls.findHit(masterControlHits, event.getX(), event.getY());
@@ -354,10 +383,9 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     pressY = event.getY();
     masterMouseDragged = false;
 
-    if (event.getY() >= masterHeaderCanvas.getHeight() - 4) {
-      isDraggingResize = true;
-      dragStartScreenY = event.getScreenY();
-      dragStartHeight = trackViewportRegistry.getMasterBandHeightPixels();
+    if (usesMasterCanvasEdgeResize()
+        && event.getY() >= masterHeaderCanvas.getHeight() - 4) {
+      beginMasterBandResize(event.getScreenY());
       return;
     }
 
@@ -372,10 +400,7 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     }
 
     if (isDraggingResize) {
-      double delta = event.getScreenY() - dragStartScreenY;
-      trackViewportRegistry.setMasterBandHeightPixels(
-          Math.max(20, Math.min(200, dragStartHeight + delta)));
-      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      updateMasterBandResize(event.getScreenY());
       return;
     }
 
@@ -388,7 +413,7 @@ public abstract class TrackColumnSidebar extends SidebarBase {
   private void handleMasterMouseReleased(MouseEvent event) {
     boolean wasResizing = isDraggingResize;
     if (isDraggingResize) {
-      isDraggingResize = false;
+      endMasterBandResize();
       masterHeaderReactiveCanvas.setCursor(Cursor.DEFAULT);
     }
 

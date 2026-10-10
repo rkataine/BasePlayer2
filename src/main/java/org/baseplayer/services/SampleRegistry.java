@@ -23,6 +23,7 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
+import javafx.beans.binding.DoubleBinding;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleDoubleProperty;
@@ -867,6 +868,18 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     public void setSampleFilterStripHeightPixels(double heightPixels) {
         sampleFilterStripHeightPixels.set(Math.max(0, heightPixels));
+    }
+
+    /**
+     * Aggregate canvas height: master band (title / visible-samples slider) plus
+     * the filter-samples strip so density paints beside both.
+     */
+    public double getAggregateBandHeightPixels() {
+        return getMasterTrackHeight() + getSampleFilterStripHeightPixels();
+    }
+
+    public DoubleBinding aggregateBandHeightProperty() {
+        return masterBandHeightProperty().add(sampleFilterStripHeightPixels);
     }
 
     private void invalidateSampleTrackVariantIndexes() {
