@@ -29,6 +29,7 @@ import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
+import org.baseplayer.sanger.SangerTrace;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -40,7 +41,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
 
 /**
- * Manages adding sample data files (BAM, CRAM, VCF, BED, BigWig, etc.)
+ * Manages adding sample data files (BAM, CRAM, VCF, BED, BigWig, AB1, etc.)
  * to the sample tracks panel.
  */
 public class SampleDataManager {
@@ -181,6 +182,7 @@ public class SampleDataManager {
     Map<File, List<File>> bedByDir = new LinkedHashMap<>();
     List<File> allVcfs = new ArrayList<>();
     List<File> allBigWigs = new ArrayList<>();
+    List<File> allAb1s = new ArrayList<>();
     Map<File, String> groupNameByDir = new LinkedHashMap<>();
 
     for (File dir : dirs) {
@@ -202,6 +204,7 @@ public class SampleDataManager {
           case BED -> bedByDir.computeIfAbsent(dir, key -> new ArrayList<>()).add(file);
           case VCF -> allVcfs.add(file);
           case BIGWIG -> allBigWigs.add(file);
+          case AB1 -> allAb1s.add(file);
         }
       }
     }
@@ -233,6 +236,9 @@ public class SampleDataManager {
             for (File bigWig : allBigWigs) {
               addBigWigFile(bigWig);
             }
+            if (!allAb1s.isEmpty()) {
+              addAb1Files(allAb1s);
+            }
           });
     } else {
       if (!allVcfs.isEmpty()) {
@@ -240,6 +246,9 @@ public class SampleDataManager {
       }
       for (File bigWig : allBigWigs) {
         addBigWigFile(bigWig);
+      }
+      if (!allAb1s.isEmpty()) {
+        addAb1Files(allAb1s);
       }
     }
   }
@@ -1069,6 +1078,167 @@ public class SampleDataManager {
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
         });
   }
+
+  /**
+   * Add an AB1 file to an existing individual's track.
+   */
+  public static void addAb1ToTrack(int sampleIndex) {
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (sampleIndex < 0 || sampleIndex >= sampleRegistry.getSampleTracks().size()) {
+      return;
+    }
+
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Add AB1 / Sanger to " + track.getDisplayName());
+    File lastDir = UserPreferences.getLastDirectory("AB1");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new ExtensionFilter("AB1 files", "*.ab1", "*.AB1"),
+        new ExtensionFilter("All files", "*.*")
+    );
+
+    List<File> files = fileChooser.showOpenMultipleDialog(MainApp.stage);
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+    UserPreferences.setLastDirectory("AB1", files.get(0).getParentFile());
+
+    SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
+    ThreadRunner.get().submit(
+        "Loading AB1 files",
+        () -> {
+          List<Sample> loaded = new ArrayList<>();
+          for (File file : files) {
+            if (file == null) {
+              continue;
+            }
+            try {
+              SangerTrace trace = new SangerTrace(file.toPath());
+              loaded.add(new Sample(file.toPath(), trace));
+            } catch (IOException e) {
+              System.err.println("Failed to open AB1: " + file + " - " + e.getMessage());
+              failures.add(file, e.getMessage());
+            }
+          }
+          return loaded;
+        },
+        loaded -> {
+          if (loaded != null) {
+            for (Sample sample : loaded) {
+              track.addSample(sample);
+              if (sample.getPath() != null) {
+                UserPreferences.addRecentFile("AB1", sample.getPath().toFile());
+              }
+            }
+          }
+          ProjectSessionState.get().markDirty();
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          failures.commitAndShowLater();
+        });
+  }
+
+  /**
+   * Open an AB1 file chooser and add chromatograms as sample tracks.
+   */
+  public static void addAb1Files() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open AB1 / Sanger File(s)");
+    File lastDir = UserPreferences.getLastDirectory("AB1");
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new ExtensionFilter("AB1 files", "*.ab1", "*.AB1"),
+        new ExtensionFilter("All files", "*.*")
+    );
+    List<File> files = fileChooser.showOpenMultipleDialog(MainApp.stage);
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+    UserPreferences.setLastDirectory("AB1", files.get(0).getParentFile());
+    addAb1Files(files);
+  }
+
+  /** Open a single AB1 file directly without showing a chooser. */
+  public static void addAb1File(File file) {
+    if (file == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("AB1", file.getParentFile());
+    addAb1Files(Collections.singletonList(file));
+  }
+
+  /**
+   * Open AB1 files directly without showing a chooser.
+   */
+  public static void addAb1Files(List<File> files) {
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
+    final int totalFiles = files.size();
+
+    ThreadRunner.get().submit(
+        "Loading AB1 files",
+        () -> {
+          List<Sample> loaded = new ArrayList<>();
+          int index = 0;
+          for (File file : files) {
+            if (file == null) {
+              continue;
+            }
+            index++;
+            org.baseplayer.services.LoadingManager.get().setProgress(index, totalFiles);
+            try {
+              SangerTrace trace = new SangerTrace(file.toPath());
+              loaded.add(new Sample(file.toPath(), trace));
+            } catch (IOException e) {
+              System.err.println("Failed to open AB1: " + file + " - " + e.getMessage());
+              failures.add(file, e.getMessage());
+            }
+          }
+          return loaded;
+        },
+        loaded -> {
+          boolean addedTracks = false;
+          if (loaded != null) {
+            for (Sample sample : loaded) {
+              if (addSampleMergingByName(sampleRegistry, sample)) {
+                addedTracks = true;
+              }
+              if (sample.getPath() != null) {
+                UserPreferences.addRecentFile("AB1", sample.getPath().toFile());
+              }
+            }
+          }
+          int trackCount = sampleRegistry.getDisplayedTrackCount();
+          if (trackCount > 0) {
+            if (addedTracks) {
+              sampleRegistry.showAllTracksResetHeight();
+            } else {
+              sampleRegistry.includeNewTracksAtEndResetHeight();
+            }
+          }
+          ProjectSessionState.get().markDirty();
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          MainController.initializeLoadRegionButton();
+          MainController.addLoadRegionButtonToViewport();
+          failures.commitAndShowLater();
+        });
+  }
   
   /**
    * Add a BED file. Since BED files are region-based annotations,
@@ -1606,6 +1776,7 @@ public class SampleDataManager {
     List<Sample> sourceBams = samplesOfType(source, Sample.DataType.BAM);
     List<Sample> sourceBeds = samplesOfType(source, Sample.DataType.BED);
     List<Sample> sourceVcfs = samplesOfType(source, Sample.DataType.VCF);
+    List<Sample> sourceAb1s = samplesOfType(source, Sample.DataType.AB1);
 
     boolean touchedVcfVisibility = false;
     for (SampleTrack track : registry.getSampleTracks()) {
@@ -1615,6 +1786,7 @@ public class SampleDataManager {
       List<Sample> targetBams = samplesOfType(track, Sample.DataType.BAM);
       List<Sample> targetBeds = samplesOfType(track, Sample.DataType.BED);
       List<Sample> targetVcfs = samplesOfType(track, Sample.DataType.VCF);
+      List<Sample> targetAb1s = samplesOfType(track, Sample.DataType.AB1);
 
       for (int i = 0; i < targetBams.size() && i < sourceBams.size(); i++) {
         Sample from = sourceBams.get(i);
@@ -1642,6 +1814,12 @@ public class SampleDataManager {
           to.visible = from.visible;
           touchedVcfVisibility = true;
         }
+        to.overlay = from.overlay;
+      }
+      for (int i = 0; i < targetAb1s.size() && i < sourceAb1s.size(); i++) {
+        Sample from = sourceAb1s.get(i);
+        Sample to = targetAb1s.get(i);
+        to.visible = from.visible;
         to.overlay = from.overlay;
       }
     }

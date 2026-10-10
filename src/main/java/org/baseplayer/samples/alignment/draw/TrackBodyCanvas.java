@@ -37,8 +37,12 @@ import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.sanger.ChromatogramPainter;
+import org.baseplayer.sanger.SangerAligner;
+import org.baseplayer.sanger.SangerTrace;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.AminoAcids;
 import org.baseplayer.utils.AppFonts;
@@ -420,6 +424,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (canDrawReadData(slot)) {
       drawReadData(slot, rowTopY, rowHeight);
     }
+    if (canDrawSangerData(slot)) {
+      drawSangerData(slot, rowTopY, rowHeight);
+    }
     if (canDrawFeatureData(slot)) {
       drawFeatureData(slot, rowTopY, rowHeight);
     }
@@ -798,6 +805,113 @@ public class TrackBodyCanvas extends GenomicCanvas {
     } catch (Exception e) {
       System.err.println("Error drawing BAM reads: " + e.getMessage());
     }
+  }
+
+  // ── Sanger / AB1 chromatograms ───────────────────────────────────────────────
+
+  /** Matches DrawExon reference-base fetch/display threshold (≤100 kb). */
+  private static final int SANGER_ALIGN_VIEW_THRESHOLD_BP = 100_000;
+
+  private boolean canDrawSangerData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    return isSampleBody() && hasVisibleSampleOfType(slot, Sample.DataType.AB1);
+  }
+
+  private void drawSangerData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null || drawStack == null) {
+      return;
+    }
+
+    List<Sample> ab1Samples = new ArrayList<>();
+    for (Sample sample : track.getSamples()) {
+      if (sample.visible && sample.getDataType() == Sample.DataType.AB1 && sample.getSangerTrace() != null) {
+        ab1Samples.add(sample);
+      }
+    }
+    if (ab1Samples.isEmpty()) {
+      return;
+    }
+
+    String chrom = drawStack.getChromosome();
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    ReferenceGenomeService refSvc = ServiceRegistry.getInstance().getReferenceGenomeService();
+    // Same window as DrawExon reference-base fetch/display.
+    boolean refSeqAvailable = refSvc != null
+        && refSvc.hasGenome()
+        && drawStack.getViewLength() <= SANGER_ALIGN_VIEW_THRESHOLD_BP;
+
+    if (refSeqAvailable) {
+      for (Sample sample : ab1Samples) {
+        maybeAlignSangerTrace(sample.getSangerTrace(), refSvc, chrom, viewStart, viewEnd);
+      }
+    }
+
+    int stackTotal = ab1Samples.size();
+    double stackHeight = rowHeight / stackTotal;
+
+    for (int i = 0; i < ab1Samples.size(); i++) {
+      SangerTrace trace = ab1Samples.get(i).getSangerTrace();
+      double y = rowTopY + i * stackHeight;
+      boolean alignedHere = trace.isAligned() && chrom.equals(trace.getChromosome());
+      if (!alignedHere) {
+        drawSangerStatus(gc, y, stackHeight, trace, !refSeqAvailable);
+        continue;
+      }
+      ChromatogramPainter.paint(
+          gc,
+          trace,
+          viewStart,
+          viewEnd,
+          getWidth(),
+          y,
+          stackHeight,
+          chromPosToScreenPos);
+    }
+  }
+
+  private void maybeAlignSangerTrace(
+      SangerTrace trace,
+      ReferenceGenomeService refSvc,
+      String chrom,
+      double viewStart,
+      double viewEnd) {
+    if (trace == null || refSvc == null || !refSvc.hasGenome()) {
+      return;
+    }
+    final long start = (long) viewStart;
+    final long end = (long) viewEnd;
+    if (!trace.shouldRetryAlign(chrom, start)) {
+      return;
+    }
+    trace.setAligning(true);
+    trace.markAlignAttempt(chrom, start);
+    final String alignChrom = chrom;
+    ThreadRunner.get().submit(
+        "Aligning " + trace.getName(),
+        () -> SangerAligner.alignToView(trace, refSvc, alignChrom, start, end),
+        matched -> {
+          trace.setAligning(false);
+          if (Boolean.TRUE.equals(matched)) {
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          }
+        });
+  }
+
+  private static void drawSangerStatus(
+      GraphicsContext gc, double y, double height, SangerTrace trace, boolean refUnavailable) {
+    gc.setFill(Color.rgb(90, 90, 90));
+    gc.setFont(AppFonts.getUIFont(11));
+    String msg;
+    if (refUnavailable) {
+      msg = "Zoom in for reference sequence to align";
+    } else if (trace.isAligning()) {
+      msg = "Aligning…";
+    } else {
+      msg = "Navigate near locus to align";
+    }
+    gc.fillText(msg, 8, y + height / 2 + 4);
   }
 
   // ── Feature data ─────────────────────────────────────────────────────────────

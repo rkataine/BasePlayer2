@@ -8,7 +8,8 @@ public enum SampleFileKind {
   BAM("BAM/CRAM"),
   VCF("VCF"),
   BED("BED"),
-  BIGWIG("BigWig");
+  BIGWIG("BigWig"),
+  AB1("AB1");
 
   private final String label;
 
@@ -36,6 +37,9 @@ public enum SampleFileKind {
     }
     if (name.endsWith(".bw") || name.endsWith(".bigwig")) {
       return BIGWIG;
+    }
+    if (name.endsWith(".ab1")) {
+      return AB1;
     }
     return null;
   }

@@ -29,6 +29,7 @@
             <MenuItem id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM/CRAM file(s)" />
             <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open BED track file(s)" />
             <MenuItem id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig track file(s)" />
+            <MenuItem id="LOAD_AB1" onAction="#openFileMenu" text="Open AB1 / Sanger file(s)" />
             <MenuItem id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF file(s)" />
             <MenuItem id="LOAD_DIR" onAction="#openFileMenu" text="Open Directory…" />
             <Menu fx:id="recentFilesMenu" text="Open Recent Samples" onShowing="#populateRecentFilesMenu" />

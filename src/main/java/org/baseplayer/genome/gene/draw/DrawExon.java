@@ -37,6 +37,7 @@ class DrawExon {
   static final double GENE_HEIGHT = 12;
   static final double GENE_LABEL_HEIGHT = 10;
 
+  /** View-length (bp) at or below which reference bases are fetched/drawn. */
   static final int BASE_DISPLAY_THRESHOLD = 100_000;
   private static final int REFERENCE_BUFFER = 50_000;
 

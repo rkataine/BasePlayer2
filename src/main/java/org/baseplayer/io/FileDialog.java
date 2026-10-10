@@ -84,6 +84,7 @@ public class FileDialog {
     defaultPaths.put("BAM", home);
     defaultPaths.put("CTRL", home);
     defaultPaths.put("BED", home);
+    defaultPaths.put("AB1", home);
     defaultPaths.put("JSON", home);
     defaultPaths.put("XLSX", home);
 
@@ -91,6 +92,7 @@ public class FileDialog {
     filefilters.put("BAM", "*.bam, *.cram");
     filefilters.put("CTRL", "*.vcf.gz");
     filefilters.put("BED", "*.bed, *.bed.gz, *.bedgraph.gz, *.gff.gz, *.gff3.gz, *.bigwig, *.bw, *.bigbed, *.bb");
+    filefilters.put("AB1", "*.ab1");
     filefilters.put("JSON", "*.json");
     filefilters.put("XLSX", "*.xlsx");
  

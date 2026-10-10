@@ -635,8 +635,11 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     MenuItem bigwigItem = new MenuItem("BigWig");
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
 
+    MenuItem ab1Item = new MenuItem("AB1 / Sanger");
+    ab1Item.setOnAction(e -> SampleDataManager.addAb1Files());
+
     menu.getItems().addAll(
-        bamItem, vcfItem, directoryItem, new SeparatorMenuItem(), bedItem, bigwigItem);
+        bamItem, vcfItem, directoryItem, new SeparatorMenuItem(), bedItem, bigwigItem, ab1Item);
     return menu;
   }
 

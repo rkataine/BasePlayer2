@@ -949,7 +949,9 @@ public class SampleTrackListPanel extends TrackListPanel {
     bedItem.setOnAction(event -> SampleDataManager.addBedToTrack(sampleIndex));
     MenuItem vcfItem = new MenuItem("Add VCF");
     vcfItem.setOnAction(event -> SampleDataManager.addVcfToTrack(sampleIndex));
-    addMenu.getItems().addAll(bamItem, bedItem, vcfItem);
+    MenuItem ab1Item = new MenuItem("Add AB1 / Sanger");
+    ab1Item.setOnAction(event -> SampleDataManager.addAb1ToTrack(sampleIndex));
+    addMenu.getItems().addAll(bamItem, bedItem, vcfItem, ab1Item);
     addMenu.show(canvas, screenX, screenY);
   }
 

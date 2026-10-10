@@ -55,6 +55,7 @@ public class FileCommands {
       case "BAM" -> SampleDataManager.addBamFiles();
       case "BED" -> SampleDataManager.addBedSampleFile();
       case "BIGWIG" -> SampleDataManager.addBigWigFile();
+      case "AB1" -> SampleDataManager.addAb1Files();
       case "VCF" -> SampleDataManager.addVcfFile();
       case "DIR" -> SampleDataManager.openDirectorySamples();
       case "SES" -> handleSessionAction(action);
@@ -354,6 +355,7 @@ public class FileCommands {
       if (lower.endsWith(".bam") || lower.endsWith(".cram")) resolvedType = "BAM";
       else if (lower.endsWith(".bed") || lower.endsWith(".bed.gz")) resolvedType = "BED";
       else if (lower.endsWith(".bw") || lower.endsWith(".bigwig")) resolvedType = "BIGWIG";
+      else if (lower.endsWith(".ab1")) resolvedType = "AB1";
       else if (lower.endsWith(".bpproj") || lower.endsWith(".json")) resolvedType = "SES";
       else resolvedType = "";
     }
@@ -362,6 +364,7 @@ public class FileCommands {
       case "BAM" -> SampleDataManager.addBamFile(file);
       case "BED" -> SampleDataManager.addBedSampleFile(file);
       case "BIGWIG" -> SampleDataManager.addBigWigFile(file);
+      case "AB1" -> SampleDataManager.addAb1File(file);
       case "SES", "JSON" -> {
         openSession(file.toPath());
       }

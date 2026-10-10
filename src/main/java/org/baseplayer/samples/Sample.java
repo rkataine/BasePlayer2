@@ -6,11 +6,12 @@ import java.nio.file.Path;
 
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
+import org.baseplayer.sanger.SangerTrace;
 
 /**
- * Represents a single loaded data file (BAM, BED, VCF, etc.) under an individual.
+ * Represents a single loaded data file (BAM, BED, VCF, AB1, etc.) under an individual.
  * This is the generic wrapper — data-type-specific logic lives in
- * {@link AlignmentFile} (BAM/CRAM) or {@link BedTrack} (BED).
+ * {@link AlignmentFile} (BAM/CRAM), {@link BedTrack} (BED), or {@link SangerTrace} (AB1).
  * <p>
  * All data files under a {@link SampleTrack} are treated equally — there is
  * no "primary" vs "overlay" distinction.
@@ -21,7 +22,8 @@ public class Sample implements Closeable {
   public enum DataType {
     BAM,      // BAM/CRAM alignment files
     BED,      // BED annotation files
-    VCF       // VCF variant files
+    VCF,      // VCF variant files
+    AB1       // Sanger chromatogram (.ab1) files
   }
 
   private final String name;
@@ -41,6 +43,9 @@ public class Sample implements Closeable {
   /** BED track data (non-null for BED type). */
   private final BedTrack bedTrack;
 
+  /** Sanger chromatogram (non-null for AB1 type). */
+  private final SangerTrace sangerTrace;
+
   /**
    * Create a Sample from a BAM/CRAM alignment file.
    */
@@ -48,6 +53,7 @@ public class Sample implements Closeable {
     this.path = filePath;
     this.dataType = DataType.BAM;
     this.bedTrack = null;
+    this.sangerTrace = null;
     this.bamFile = new AlignmentFile(filePath);
     this.name = bamFile.getName();
   }
@@ -59,19 +65,34 @@ public class Sample implements Closeable {
     this.path = filePath;
     this.dataType = DataType.BED;
     this.bamFile = null;
+    this.sangerTrace = null;
     this.bedTrack = bedTrack;
     this.name = bedTrack.getName();
     this.overlay = true; // BED tracks are transparent by default
   }
 
+  /**
+   * Create a Sample from an AB1 Sanger chromatogram.
+   */
+  public Sample(Path filePath, SangerTrace sangerTrace) {
+    this.path = filePath;
+    this.dataType = DataType.AB1;
+    this.bamFile = null;
+    this.bedTrack = null;
+    this.sangerTrace = sangerTrace;
+    this.name = sangerTrace != null ? sangerTrace.getName()
+        : (filePath.getFileName() != null ? filePath.getFileName().toString() : filePath.toString());
+  }
+
   public Sample(Path vcfPath, DataType type) {
     if (type != DataType.VCF) {
-      throw new IllegalArgumentException("Use typed constructors for BAM/BED samples");
+      throw new IllegalArgumentException("Use typed constructors for BAM/BED/AB1 samples");
     }
     this.path = vcfPath;
     this.dataType = DataType.VCF;
     this.bamFile = null;
     this.bedTrack = null;
+    this.sangerTrace = null;
     this.name = vcfPath.getFileName() != null
         ? vcfPath.getFileName().toString()
         : vcfPath.toString();
@@ -151,6 +172,11 @@ public class Sample implements Closeable {
 
   /** Get the BED track (only for BED files). */
   public BedTrack getBedTrack() { return bedTrack; }
+
+  // ── AB1 / Sanger delegation ──
+
+  /** Get the Sanger chromatogram (only for AB1 files). */
+  public SangerTrace getSangerTrace() { return sangerTrace; }
 
   @Override
   public void close() throws IOException {
