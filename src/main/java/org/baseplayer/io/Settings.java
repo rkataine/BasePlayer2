@@ -50,11 +50,17 @@ public final class Settings {
   private static final String KEY_MAX_READ_COVERAGE        = "maxReadCoverage";
   private static final String KEY_LAST_GENOME              = "lastGenome";
   private static final String KEY_LAST_ANNOTATION          = "lastAnnotation";
+  private static final String KEY_LARGE_BED_ZOOM_LIMIT_MB  = "largeBedZoomLimitMb";
+  private static final String KEY_LARGE_BED_MAX_VIEW_LENGTH = "largeBedMaxViewLength";
 
   // ── Defaults (matching original hardcoded values) ─────────────────────
 
   public static final int    DEF_MAX_READ_VIEW_LENGTH     = 60_000;
   public static final int    DEF_MAX_COVERAGE_VIEW_LENGTH = 2_000_000;
+  /** Indexed BED files at/above this size (MB) require zoom-in before querying. */
+  public static final int    DEF_LARGE_BED_ZOOM_LIMIT_MB  = 200;
+  /** Max view length (bp) when a large indexed BED zoom limit applies. */
+  public static final int    DEF_LARGE_BED_MAX_VIEW_LENGTH = 2_000_000;
   public static final boolean DEF_ENABLE_SAMPLED_COVERAGE = false;  // Off by default for exome data
   public static final int    DEF_SAMPLED_COVERAGE_POINTS  = 20;
   public static final double DEF_COVERAGE_FRACTION        = 0.30;
@@ -88,6 +94,8 @@ public final class Settings {
   private int    maxReadCoverage;
   private String  lastGenome;
   private String  lastAnnotation;
+  private int    largeBedZoomLimitMb;
+  private int    largeBedMaxViewLength;
 
   private Settings() {
     load();
@@ -127,6 +135,8 @@ public final class Settings {
     maxReadCoverage       = prefs.getInt(KEY_MAX_READ_COVERAGE, DEF_MAX_READ_COVERAGE);
     lastGenome            = prefs.get(KEY_LAST_GENOME, null);
     lastAnnotation        = prefs.get(KEY_LAST_ANNOTATION, null);
+    largeBedZoomLimitMb   = prefs.getInt(KEY_LARGE_BED_ZOOM_LIMIT_MB, DEF_LARGE_BED_ZOOM_LIMIT_MB);
+    largeBedMaxViewLength = prefs.getInt(KEY_LARGE_BED_MAX_VIEW_LENGTH, DEF_LARGE_BED_MAX_VIEW_LENGTH);
   }
 
   // ── Getters ───────────────────────────────────────────────────────────
@@ -179,6 +189,20 @@ public final class Settings {
   /** Last selected annotation filename, or null if none saved. */
   public String getLastAnnotation() { return lastAnnotation; }
 
+  /**
+   * Compressed/plain BED file size (MB) at or above which indexed tracks require
+   * zooming in before tabix queries run. Smaller files query any view length.
+   */
+  public int getLargeBedZoomLimitMb() { return largeBedZoomLimitMb; }
+
+  /** Max view length (bp) when {@link #getLargeBedZoomLimitMb()} applies. */
+  public int getLargeBedMaxViewLength() { return largeBedMaxViewLength; }
+
+  /** Byte threshold corresponding to {@link #getLargeBedZoomLimitMb()}. */
+  public long getLargeBedZoomLimitBytes() {
+    return Math.max(0L, (long) largeBedZoomLimitMb) * 1024L * 1024L;
+  }
+
   // ── Setters (persist immediately) ─────────────────────────────────────
 
   public void setMaxReadViewLength(int bp)            { this.maxReadViewLength = bp; prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp); }
@@ -203,6 +227,14 @@ public final class Settings {
   public void setMaxReadCoverage(int n)                  { this.maxReadCoverage = n; prefs.putInt(KEY_MAX_READ_COVERAGE, n); }
   public void setLastGenome(String name)                  { this.lastGenome = name; if (name != null) prefs.put(KEY_LAST_GENOME, name); else prefs.remove(KEY_LAST_GENOME); }
   public void setLastAnnotation(String name)              { this.lastAnnotation = name; if (name != null) prefs.put(KEY_LAST_ANNOTATION, name); else prefs.remove(KEY_LAST_ANNOTATION); }
+  public void setLargeBedZoomLimitMb(int mb) {
+    this.largeBedZoomLimitMb = Math.max(0, mb);
+    prefs.putInt(KEY_LARGE_BED_ZOOM_LIMIT_MB, this.largeBedZoomLimitMb);
+  }
+  public void setLargeBedMaxViewLength(int bp) {
+    this.largeBedMaxViewLength = Math.max(1_000, bp);
+    prefs.putInt(KEY_LARGE_BED_MAX_VIEW_LENGTH, this.largeBedMaxViewLength);
+  }
 
   /**
    * Export current draw settings for project JSON (excludes machine-local prefs like API keys).
@@ -226,6 +258,8 @@ public final class Settings {
     map.put("maxReadCoverage", maxReadCoverage);
     map.put("lastGenome", lastGenome);
     map.put("lastAnnotation", lastAnnotation);
+    map.put("largeBedZoomLimitMb", largeBedZoomLimitMb);
+    map.put("largeBedMaxViewLength", largeBedMaxViewLength);
     return map;
   }
 
@@ -291,6 +325,13 @@ public final class Settings {
     if (map.containsKey("lastAnnotation")) {
       Object v = map.get("lastAnnotation");
       setLastAnnotation(v == null ? null : String.valueOf(v));
+    }
+    if (map.containsKey("largeBedZoomLimitMb")) {
+      setLargeBedZoomLimitMb(asInt(map.get("largeBedZoomLimitMb"), DEF_LARGE_BED_ZOOM_LIMIT_MB));
+    }
+    if (map.containsKey("largeBedMaxViewLength")) {
+      setLargeBedMaxViewLength(
+          asInt(map.get("largeBedMaxViewLength"), DEF_LARGE_BED_MAX_VIEW_LENGTH));
     }
   }
 

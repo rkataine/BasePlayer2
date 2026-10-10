@@ -24,6 +24,12 @@ public class BedFileReader {
 
   private static final Color DEFAULT_FEATURE_COLOR = Color.rgb(70, 130, 180);
 
+  /**
+   * Compressed/plain files at or below this size may be fully materialized when
+   * no tabix index is present. Larger files should use bgzip+{@code .tbi}.
+   */
+  public static final long FULL_LOAD_MAX_BYTES = 8L * 1024L * 1024L;
+
   public record BedFeature(
       String chrom,
       long start,
@@ -70,7 +76,11 @@ public class BedFileReader {
           String name = parts.length > 3 ? parts[3] : "";
           double score = parts.length > 4 ? parseScore(parts[4]) : 0;
           String strand = parts.length > 5 ? parts[5] : ".";
-          Color color = parts.length > 8 ? parseRgbColor(parts[8], defaultColor) : defaultColor;
+          // null = no itemRgb in the file (callers may fall back to name-hash / track color).
+          Color color = parts.length > 8 ? parseItemRgb(parts[8]) : null;
+          if (color == null && name.isBlank()) {
+            color = defaultColor;
+          }
 
           featuresByChrom
               .computeIfAbsent(chrom, k -> new ArrayList<>())
@@ -94,17 +104,27 @@ public class BedFileReader {
     catch (NumberFormatException ignored) { return 0; }
   }
 
-  private static Color parseRgbColor(String csvRgb, Color fallback) {
+  /**
+   * Parse BED itemRgb ({@code R,G,B}). Returns null when missing/invalid, or when
+   * the value is {@code 0,0,0} (UCSC “use default” sentinel).
+   */
+  private static Color parseItemRgb(String csvRgb) {
+    if (csvRgb == null || csvRgb.isBlank() || ".".equals(csvRgb.trim())) {
+      return null;
+    }
     try {
       String[] parts = csvRgb.split(",");
       if (parts.length == 3) {
-        return Color.rgb(
-            Integer.parseInt(parts[0].trim()),
-            Integer.parseInt(parts[1].trim()),
-            Integer.parseInt(parts[2].trim()));
+        int r = Integer.parseInt(parts[0].trim());
+        int g = Integer.parseInt(parts[1].trim());
+        int b = Integer.parseInt(parts[2].trim());
+        if (r == 0 && g == 0 && b == 0) {
+          return null;
+        }
+        return Color.rgb(r, g, b);
       }
-    } catch (NumberFormatException ignored) {
+    } catch (RuntimeException ignored) {
     }
-    return fallback;
+    return null;
   }
 }

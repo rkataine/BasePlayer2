@@ -341,15 +341,38 @@ public class PopupContent {
      * nodes, scroll lists) are skipped.
      */
     public String toPlainText() {
+        return toPlainText(true);
+    }
+
+    /**
+     * Body text for the selectable {@code TextArea}: same as {@link #toPlainText()}
+     * but omits header items (those are rendered as labels in {@link InfoPopup}).
+     */
+    public String toSelectablePlainText() {
+        return toPlainText(false);
+    }
+
+    private String toPlainText(boolean includeHeaders) {
         StringBuilder sb = new StringBuilder();
         for (Item item : items) {
             switch (item) {
-                case HeaderItem h ->
-                    sb.append(h.text()).append('\n');
-                case SubtitleHeaderItem h ->
-                    sb.append(h.title()).append("  ").append(h.subtitle()).append('\n');
-                case SeparatorItem _ ->
-                    sb.append("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n");
+                case HeaderItem h -> {
+                    if (includeHeaders) {
+                        sb.append(h.text()).append('\n');
+                    }
+                }
+                case SubtitleHeaderItem h -> {
+                    if (includeHeaders) {
+                        sb.append(h.title()).append("  ").append(h.subtitle()).append('\n');
+                    }
+                }
+                case SeparatorItem _ -> {
+                    // Skip leading separators that only decorate a header — they
+                    // become a lonely dash box when headers are rendered as labels.
+                    if (includeHeaders || !sb.isEmpty()) {
+                        sb.append("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n");
+                    }
+                }
                 case TextItem t ->
                     sb.append(t.text()).append('\n');
                 case SectionTitleItem s ->

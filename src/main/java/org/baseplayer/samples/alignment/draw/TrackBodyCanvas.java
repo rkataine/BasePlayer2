@@ -6,6 +6,7 @@ import org.baseplayer.draw.GenomicCanvas;
 import java.io.IOException;
 import org.baseplayer.features.AbstractUcscTrack;
 import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BedTrackOpen;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.features.Track;
 import org.baseplayer.io.UserPreferences;
@@ -97,6 +98,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   private ContextMenu featureContextMenu;
   private String lastNotifiedChrom = "";
+  /** Feature-body hover (BED interval under cursor when zoomed in). */
+  private BedTrack.BedHit hoveredBedHit;
+  private int hoveredBedSlotIndex = -1;
+  private double hoveredBedRowTopY;
   private long lastNotifiedStart = -1;
   private long lastNotifiedEnd = -1;
 
@@ -315,6 +320,15 @@ public class TrackBodyCanvas extends GenomicCanvas {
   }
 
   private void finishTrackDraw() {
+    if (isFeatureBody()) {
+      if (lastMouseX >= 0) {
+        updateFeatureHover(lastMouseX, lastMouseY);
+      } else if (!isReactiveOverlayReserved() && hoveredBedHit != null) {
+        clearReactive();
+        drawBedHoverHighlight();
+      }
+      return;
+    }
     if (!isSampleBody()) {
       return;
     }
@@ -345,7 +359,18 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   @Override
   protected void restoreReactiveOverlays() {
-    if (!isSampleBody() || isReactiveOverlayReserved()) return;
+    if (isReactiveOverlayReserved()) {
+      return;
+    }
+    if (isFeatureBody()) {
+      if (hoveredBedHit != null) {
+        drawBedHoverHighlight();
+      }
+      return;
+    }
+    if (!isSampleBody()) {
+      return;
+    }
     if (isScrollbarOverrideActive()
         || hoveredRead != null || selectedRead != null || externalLinkedReadName != null
         || hoveredVariant != null
@@ -2094,6 +2119,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
         }
       }
     }
+    if (track instanceof BedTrack bedTrack) {
+      bedTrack.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+      if (drawStack != null && track.isVisible()) {
+        String chrom = drawStack.getChromosome();
+        if (chrom != null) {
+          bedTrack.onRegionChanged(
+              chrom, (long) drawStack.getViewStart(), (long) drawStack.getViewEnd(), drawStack);
+        }
+      }
+    }
 
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
@@ -2137,7 +2172,29 @@ public class TrackBodyCanvas extends GenomicCanvas {
   }
 
   private void setupFeatureMouseHandlers() {
-    getReactiveCanvas().setOnMouseClicked(e -> {
+    Canvas reactive = getReactiveCanvas();
+
+    reactive.setOnMouseMoved(e -> {
+      if (isDragging() || drawStack.nav.animationRunning) {
+        return;
+      }
+      lastMouseX = e.getX();
+      lastMouseY = e.getY();
+      updateFeatureHover(lastMouseX, lastMouseY);
+    });
+
+    reactive.setOnMouseExited(e -> {
+      lastMouseX = -1;
+      lastMouseY = -1;
+      if (hoveredBedHit != null) {
+        hoveredBedHit = null;
+        hoveredBedSlotIndex = -1;
+        reactive.setCursor(Cursor.DEFAULT);
+        clearReactive();
+      }
+    });
+
+    reactive.setOnMouseClicked(e -> {
       if (e.isConsumed() || isDragging()
           || e.getClickCount() != 1
           || e.getButton() != MouseButton.PRIMARY) {
@@ -2166,6 +2223,78 @@ public class TrackBodyCanvas extends GenomicCanvas {
         e.consume();
       }
     });
+  }
+
+  private void updateFeatureHover(double mouseX, double mouseY) {
+    TrackViewportRegistry.VisibleTrackSlot slot = getVisibleSlotAtY(mouseY);
+    BedTrack.BedHit hit = null;
+    double rowTopY = 0;
+    int slotIndex = -1;
+    if (slot != null) {
+      Track track = resolveFeatureTrack(slot);
+      if (track instanceof BedTrack bed && track.isVisible()) {
+        double rowHeight = viewportRegistry.getTrackRowHeightPixels();
+        rowTopY =
+            slot.slotIndex() * rowHeight - viewportRegistry.getVerticalScrollOffsetPixels();
+        hit = bed.hitTest(
+            mouseX, mouseY - rowTopY,
+            getWidth(), rowHeight,
+            drawStack.getChromosome(), drawStack.getViewStart(), drawStack.getViewEnd());
+        slotIndex = slot.slotIndex();
+      }
+    }
+
+    boolean changed = !bedHitsEqual(hit, hoveredBedHit)
+        || slotIndex != hoveredBedSlotIndex
+        || (hit != null && Math.abs(rowTopY - hoveredBedRowTopY) > 0.5);
+    hoveredBedHit = hit;
+    hoveredBedSlotIndex = slotIndex;
+    hoveredBedRowTopY = rowTopY;
+    getReactiveCanvas().setCursor(hit != null ? Cursor.HAND : Cursor.DEFAULT);
+    if (changed) {
+      clearReactive();
+      if (hit != null) {
+        drawBedHoverHighlight();
+      }
+    }
+  }
+
+  private static boolean bedHitsEqual(BedTrack.BedHit a, BedTrack.BedHit b) {
+    if (a == b) {
+      return true;
+    }
+    if (a == null || b == null) {
+      return false;
+    }
+    return a.feature() == b.feature()
+        && Math.abs(a.x1() - b.x1()) < 0.5
+        && Math.abs(a.width() - b.width()) < 0.5;
+  }
+
+  private void drawBedHoverHighlight() {
+    if (hoveredBedHit == null || reactiveGc == null) {
+      return;
+    }
+    double x = hoveredBedHit.x1();
+    double y = hoveredBedRowTopY + hoveredBedHit.y1();
+    double w = hoveredBedHit.width();
+    double h = hoveredBedHit.height();
+    reactiveGc.setStroke(Color.WHITE);
+    reactiveGc.setLineWidth(1.5);
+    reactiveGc.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
+    reactiveGc.setLineWidth(1.0);
+    // Name callout above the bar when zoomed in.
+    String name = hoveredBedHit.feature().name();
+    if (name != null && !name.isEmpty() && w >= BedTrack.MIN_INTERACTIVE_WIDTH_PX) {
+      reactiveGc.setFont(AppFonts.getUIFont(10));
+      reactiveGc.setFill(Color.rgb(12, 12, 16, 0.75));
+      double labelW = Math.min(getWidth() - x - 4, Math.max(40, name.length() * 6.5 + 10));
+      double labelH = 14;
+      double labelY = Math.max(2, y - labelH - 2);
+      reactiveGc.fillRoundRect(x, labelY, labelW, labelH, 3, 3);
+      reactiveGc.setFill(Color.WHITE);
+      reactiveGc.fillText(name, x + 4, labelY + 11);
+    }
   }
 
   private TrackViewportRegistry.VisibleTrackSlot getVisibleSlotAtY(double y) {
@@ -2208,7 +2337,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
     UserPreferences.setLastDirectory(fileType, file.getParentFile());
     try {
       Track track = switch (type) {
-        case "BED" -> new BedTrack(file.toPath());
+        case "BED" -> BedTrackOpen.openInteractive(
+                file.toPath(),
+                getScene() != null ? getScene().getWindow() : null)
+            .orElse(null);
         case "BigWig" -> new BigWigTrack(file.toPath());
         default -> null;
       };

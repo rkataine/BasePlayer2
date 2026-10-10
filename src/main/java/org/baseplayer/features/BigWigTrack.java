@@ -102,12 +102,6 @@ public class BigWigTrack extends AbstractTrack {
     gc.setFill(Color.rgb(25, 25, 30));
     gc.fillRect(x, y, width, height);
     
-    // Track label
-    gc.setFill(Color.GRAY);
-    gc.setFont(AppFonts.getUIFont(9));
-    gc.setTextAlign(TextAlignment.LEFT);
-    gc.fillText(name, x + 4, y + 10);
-    
     if (!validFile) {
       gc.setFill(Color.rgb(180, 80, 80));
       gc.setFont(AppFonts.getUIFont(10));
@@ -118,8 +112,8 @@ public class BigWigTrack extends AbstractTrack {
       return;
     }
     
-    double barTop = y + 14;
-    double barHeight = height - 18;
+    double barTop = y + 2;
+    double barHeight = Math.max(4, height - 4);
     
     // For now, show placeholder with file info
     // Full BigWig reading requires implementing R-tree index traversal

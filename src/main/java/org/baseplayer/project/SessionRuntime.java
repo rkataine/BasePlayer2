@@ -21,6 +21,7 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.AbstractTrack;
 import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BedVariantAnnotation;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.features.DefaultFeatureTracks;
 import org.baseplayer.features.FeatureTrack;
@@ -546,6 +547,14 @@ public final class SessionRuntime {
     }
     if (spec.max != null) {
       track.setMaxValue(spec.max);
+    }
+    if (track instanceof BedTrack bed) {
+      BedVariantAnnotation.Mode mode =
+          BedVariantAnnotation.Mode.fromPersisted(spec.variantAnnotationMode);
+      if (mode != BedVariantAnnotation.Mode.OFF) {
+        // Avoid rebuilding VCF chains during session restore; filters apply later.
+        bed.setVariantAnnotationMode(mode);
+      }
     }
   }
 

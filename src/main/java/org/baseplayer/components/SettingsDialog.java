@@ -47,6 +47,8 @@ public class SettingsDialog {
   private final ComboBox<ModificationColorScheme> modificationColorSchemeCombo;
   private final ComboBox<Settings.ReadInfoPopupPosition> readInfoPopupPositionCombo;
   private final Spinner<Integer> maxReadCoverageSpinner;
+  private final Spinner<Integer> largeBedZoomLimitMbSpinner;
+  private final Spinner<Integer> largeBedMaxViewSpinner;
 
   public SettingsDialog() {
     dialog = new Stage(StageStyle.DECORATED);
@@ -80,6 +82,8 @@ public class SettingsDialog {
     readInfoPopupPositionCombo.setValue(settings.getReadInfoPopupPosition());
     styleComboBox(readInfoPopupPositionCombo);
     maxReadCoverageSpinner        = intSpinner(100, 100_000, settings.getMaxReadCoverage(), 100);
+    largeBedZoomLimitMbSpinner    = intSpinner(0, 10_000, settings.getLargeBedZoomLimitMb(), 50);
+    largeBedMaxViewSpinner        = intSpinner(100_000, 50_000_000, settings.getLargeBedMaxViewLength(), 500_000);
 
     // ── Layout ──────────────────────────────────────────────────────────
 
@@ -96,6 +100,18 @@ public class SettingsDialog {
     addRow(zoomGrid, row++, "Coverage view max (bp):", maxCoverageViewSpinner,
         "Above this, sampled coverage is used");
     root.getChildren().add(zoomGrid);
+
+    root.getChildren().add(new Separator());
+
+    // Section: Feature / BED tracks
+    root.getChildren().add(sectionLabel("Feature Tracks (BED)"));
+    GridPane bedGrid = createGrid();
+    row = 0;
+    addRow(bedGrid, row++, "Large BED size (MB):", largeBedZoomLimitMbSpinner,
+        "Indexed BED files at or above this size require zoom-in before loading features (0 = always limit)");
+    addRow(bedGrid, row++, "Large BED view max (bp):", largeBedMaxViewSpinner,
+        "Max view length when the large-BED zoom limit applies");
+    root.getChildren().add(bedGrid);
 
     root.getChildren().add(new Separator());
 
@@ -203,6 +219,8 @@ public class SettingsDialog {
     settings.setModificationColorScheme(modificationColorSchemeCombo.getValue());
     settings.setReadInfoPopupPosition(readInfoPopupPositionCombo.getValue());
     settings.setMaxReadCoverage(maxReadCoverageSpinner.getValue());
+    settings.setLargeBedZoomLimitMb(largeBedZoomLimitMbSpinner.getValue());
+    settings.setLargeBedMaxViewLength(largeBedMaxViewSpinner.getValue());
 
     // Trigger redraw so changes are visible immediately
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -223,6 +241,8 @@ public class SettingsDialog {
     modificationColorSchemeCombo.setValue(Settings.DEF_MODIFICATION_COLOR_SCHEME);
     readInfoPopupPositionCombo.setValue(Settings.DEF_READ_INFO_POPUP_POSITION);
     maxReadCoverageSpinner.getValueFactory().setValue(Settings.DEF_MAX_READ_COVERAGE);
+    largeBedZoomLimitMbSpinner.getValueFactory().setValue(Settings.DEF_LARGE_BED_ZOOM_LIMIT_MB);
+    largeBedMaxViewSpinner.getValueFactory().setValue(Settings.DEF_LARGE_BED_MAX_VIEW_LENGTH);
   }
 
   // ── Helper methods ────────────────────────────────────────────────────

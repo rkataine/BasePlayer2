@@ -9,10 +9,12 @@ import javafx.scene.paint.Color;
  */
 public abstract class AbstractTrack implements Track {
   
-  protected final String name;
+  protected String name;
   protected final String type;
   protected double preferredHeight = 30;
   protected boolean visible = false;  // Disabled by default - user must click eye icon
+  /** When true, track is excluded from feature-aggregate set-op painting. */
+  protected boolean aggregateDisabled = false;
   protected Color color = Color.GRAY;
   /**
    * Contig name prefix used by this track's data source ({@code ""} or {@code "chr"}).
@@ -51,10 +53,27 @@ public abstract class AbstractTrack implements Track {
   public String getName() {
     return name;
   }
+
+  public void setName(String name) {
+    if (name == null || name.isBlank()) {
+      return;
+    }
+    this.name = name.trim();
+  }
   
   @Override
   public String getType() {
     return type;
+  }
+
+  @Override
+  public boolean isAggregateDisabled() {
+    return aggregateDisabled;
+  }
+
+  @Override
+  public void setAggregateDisabled(boolean aggregateDisabled) {
+    this.aggregateDisabled = aggregateDisabled;
   }
   
   @Override

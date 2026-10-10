@@ -373,7 +373,7 @@ public class VariantList {
             }
 
             if (isDrawableUnderFilter(
-                    current, filter, geneTracks, passingGenesByType, clusterTracks)) {
+                    this, current, filter, geneTracks, passingGenesByType, clusterTracks)) {
                 current.nextVisible = null;
                 current.prevVisible = prevVisible;
                 if (prevVisible == null) {
@@ -605,7 +605,8 @@ public class VariantList {
         Map<VcfVariantType, Map<String, Set<Integer>>> byType = new EnumMap<>(VcfVariantType.class);
         VariantNode current = head;
         while (current != null) {
-            if (filter == null || filter.passesBaseNodeLevel(current)) {
+            if ((filter == null || filter.passesBaseNodeLevel(current))
+                    && org.baseplayer.features.BedVariantAnnotation.passes(this, current)) {
                 List<String> genes = geneKeysOf(current);
                 if (!genes.isEmpty()) {
                     Set<Integer> trackHits = null;
@@ -752,7 +753,8 @@ public class VariantList {
         ArrayList<VariantNode> nodes = new ArrayList<>();
         VariantNode current = head;
         while (current != null) {
-            if (filter.passesBaseNodeLevel(current)) {
+            if (filter.passesBaseNodeLevel(current)
+                    && org.baseplayer.features.BedVariantAnnotation.passes(this, current)) {
                 nodes.add(current);
             }
             current = current.next;
@@ -899,7 +901,7 @@ public class VariantList {
      */
     private static String geneSampleIndexKey(VariantFilter filter) {
         if (filter == null) {
-            return "";
+            return "bedAnn|" + org.baseplayer.features.BedVariantAnnotation.filterKey();
         }
         return "base|"
             + filter.getMinQuality()
@@ -914,7 +916,8 @@ public class VariantList {
             + "|" + filter.getAllowedEffects()
             + "|" + filter.getInfoFieldFilters()
             + "|" + filter.getAllowedFilterValues()
-            + "|" + filter.isFilterFieldsActive();
+            + "|" + filter.isFilterFieldsActive()
+            + "|" + org.baseplayer.features.BedVariantAnnotation.filterKey();
     }
 
     private static String clusterSampleIndexKey(VariantFilter filter) {
@@ -987,17 +990,22 @@ public class VariantList {
     }
 
     private static String filterKeyOf(VariantFilter filter) {
-        return filter == null ? "" : filter.toStableKey();
+        String base = filter == null ? "" : filter.toStableKey();
+        return base + "|" + org.baseplayer.features.BedVariantAnnotation.filterKey();
     }
 
 
     private static boolean isDrawableUnderFilter(
+            VariantList list,
             VariantNode node,
             VariantFilter filter,
             Map<String, Set<Integer>> geneSampleIndex,
             Map<VcfVariantType, Set<String>> passingGenesByType,
             Map<VariantNode, Set<Integer>> clusterSampleIndex) {
         if (node == null || node.getSampleCount() == 0) {
+            return false;
+        }
+        if (!org.baseplayer.features.BedVariantAnnotation.passes(list, node)) {
             return false;
         }
         if (filter == null) {

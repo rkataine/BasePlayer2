@@ -185,5 +185,7 @@ public class ProjectDocument {
     public String color;
     public Double min;
     public Double max;
+    /** BED only: {@code annotate}, {@code intersect}, {@code subtract}, or null when off. */
+    public String variantAnnotationMode;
   }
 }

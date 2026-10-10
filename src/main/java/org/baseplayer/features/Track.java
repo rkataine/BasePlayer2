@@ -37,6 +37,16 @@ public interface Track {
    * Set track visibility.
    */
   void setVisible(boolean visible);
+
+  /**
+   * When true, this track is excluded from the feature aggregate band
+   * (e.g. a BED source after Intersect created a derived track).
+   */
+  default boolean isAggregateDisabled() {
+    return false;
+  }
+
+  default void setAggregateDisabled(boolean aggregateDisabled) {}
   
   /**
    * Draw the track.

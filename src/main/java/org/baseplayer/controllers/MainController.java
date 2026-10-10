@@ -87,6 +87,8 @@ public class MainController {
   private boolean applyingDividers = false;
   /** Breathing room under the feature sidebar button row when no tracks are loaded. */
   private static final double FEATURE_MIN_HEIGHT_PADDING_PX = 6;
+  /** Fallback height for the feature filter strip before it has a real layout height. */
+  private static final double FEATURE_FILTER_STRIP_ESTIMATE_PX = 36;
 
   // Shared glasspane over the alignment split area for cross-stack connector arcs.
   private Canvas crossStackOverlayCanvas;
@@ -183,7 +185,14 @@ public class MainController {
           if (featureRegistry.getDisplayedTrackCount() <= 0) {
             fitEmptyFeaturePaneToButtonRow();
           } else {
-            enforceVerticalDividerBounds();
+            expandFeaturePaneToFloor();
+          }
+        }));
+    featureRegistry.filterStripHeightProperty().addListener((obs, o, n) ->
+        Platform.runLater(() -> {
+          if (featureRegistry.getDisplayedTrackCount() > 0) {
+            applyFeatureTracksPaneFloor();
+            expandFeaturePaneToFloor();
           }
         }));
 
@@ -212,7 +221,7 @@ public class MainController {
       return;
     }
     if (ServiceRegistry.getInstance().getFeatureTrackViewportRegistry().getDisplayedTrackCount() > 0) {
-      enforceVerticalDividerBounds();
+      expandFeaturePaneToFloor();
       return;
     }
     double featureNorm = toNorm(getFeatureTracksFloorHeight());
@@ -224,6 +233,32 @@ public class MainController {
     double minSampleNorm = toNorm(getSamplePaneMinHeight());
     double pos1 = Math.min(pos0 + featureNorm, 1.0 - minSampleNorm);
     setVerticalDividerPositions(pos0, Math.max(pos0, pos1));
+  }
+
+  /**
+   * Grow the feature pane to at least the chrome + one track-row floor when tracks
+   * are present (opening a BED previously left the strip at the empty button-row size).
+   */
+  private void expandFeaturePaneToFloor() {
+    applyFeatureTracksPaneFloor();
+    if (mainSplit == null || mainSplit.getDividers().size() < 2) {
+      enforceVerticalDividerBounds();
+      return;
+    }
+    double featureNorm = toNorm(getFeatureTracksFloorHeight());
+    if (featureNorm <= 0) {
+      Platform.runLater(this::expandFeaturePaneToFloor);
+      return;
+    }
+    double pos0 = mainSplit.getDividers().get(0).getPosition();
+    double pos1 = mainSplit.getDividers().get(1).getPosition();
+    double minSampleNorm = toNorm(getSamplePaneMinHeight());
+    double neededPos1 = Math.min(pos0 + featureNorm, 1.0 - minSampleNorm);
+    if (pos1 + 1e-9 < neededPos1) {
+      setVerticalDividerPositions(pos0, Math.max(pos0, neededPos1));
+    } else {
+      enforceVerticalDividerBounds();
+    }
   }
 
   private void setupCrossStackOverlay() {
@@ -490,16 +525,28 @@ public class MainController {
 
   private double getFeatureTracksFloorHeight() {
     var featureRegistry = ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
-    double masterHeight = Math.max(
+    // Aggregate band = master header + filter strip (search bar / grip).
+    double chromeHeight = Math.max(
         TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
-        featureRegistry.getMasterBandHeightPixels());
+        featureRegistry.getAggregateBandHeightPixels());
     if (featureRegistry.getDisplayedTrackCount() <= 0) {
       // No tracks: only the sidebar button row (+ / settings) plus a little padding.
-      return masterHeight + FEATURE_MIN_HEIGHT_PADDING_PX;
+      double masterOnly = Math.max(
+          TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
+          featureRegistry.getMasterBandHeightPixels());
+      return masterOnly + FEATURE_MIN_HEIGHT_PADDING_PX;
+    }
+    // Filter strip may not have laid out yet; reserve a minimum so the body is not
+    // eaten when the search bar appears after the first track is added.
+    double filterStrip = featureRegistry.getFilterStripHeightPixels();
+    if (filterStrip < 1) {
+      chromeHeight = Math.max(
+          chromeHeight,
+          featureRegistry.getMasterBandHeightPixels() + FEATURE_FILTER_STRIP_ESTIMATE_PX);
     }
     int bodySlots = Math.max(1, featureRegistry.getVisibleTrackSlotCount());
     double bodyHeight = bodySlots * TrackViewportRegistry.DEFAULT_TRACK_ROW_HEIGHT_PIXELS;
-    return Math.max(0, masterHeight + bodyHeight + FEATURE_MIN_HEIGHT_PADDING_PX);
+    return Math.max(0, chromeHeight + bodyHeight + FEATURE_MIN_HEIGHT_PADDING_PX);
   }
 
   /** Prevent chrom-strip content from painting over the menu bar when squeezed. */

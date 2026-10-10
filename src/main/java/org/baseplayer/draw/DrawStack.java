@@ -213,12 +213,10 @@ public class DrawStack {
     featureBodyStack.setMinSize(0, 0);
     var featureViewportRegistry =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
-    featureMasterStack.minHeightProperty().bind(
-        featureViewportRegistry.masterBandHeightProperty());
-    featureMasterStack.maxHeightProperty().bind(
-        featureViewportRegistry.masterBandHeightProperty());
-    featureMasterStack.prefHeightProperty().bind(
-        featureViewportRegistry.masterBandHeightProperty());
+    var featureAggregateHeight = featureViewportRegistry.aggregateBandHeightProperty();
+    featureMasterStack.minHeightProperty().bind(featureAggregateHeight);
+    featureMasterStack.maxHeightProperty().bind(featureAggregateHeight);
+    featureMasterStack.prefHeightProperty().bind(featureAggregateHeight);
 
     featureAggregateCanvas =
         new FeatureAggregateCanvas(new Canvas(), featureMasterStack, this);

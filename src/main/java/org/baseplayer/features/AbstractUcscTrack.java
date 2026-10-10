@@ -187,12 +187,6 @@ public abstract class AbstractUcscTrack extends AbstractTrack {
     gc.setFill(Color.rgb(25, 25, 30));
     gc.fillRect(x, y, width, height);
     
-    // Track label
-    gc.setFill(Color.GRAY);
-    gc.setFont(AppFonts.getUIFont(9));
-    gc.setTextAlign(TextAlignment.LEFT);
-    gc.fillText(name, x + 4, y + 10);
-    
     // Check region size
     if (end - start > MAX_REGION_SIZE) {
       gc.setFill(Color.rgb(80, 80, 80));
@@ -203,8 +197,8 @@ public abstract class AbstractUcscTrack extends AbstractTrack {
       return;
     }
     
-    double barTop = y + 14;
-    double barHeight = height - 18;
+    double barTop = y + 2;
+    double barHeight = Math.max(4, height - 4);
     
     // Loading indicator
     if (loading) {

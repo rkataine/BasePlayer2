@@ -7,6 +7,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.features.BedVariantAnnotation;
 import org.baseplayer.io.VariantTableExcelWriter.SheetSource;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
@@ -111,7 +112,8 @@ public final class VariantExcelExportBuilder {
             Consumer<List<String>> consumer) {
         List<GeneGroup> groups = AbstractNestedVariantTable.buildGeneGroups(
             rows, groupByChromosome, filter, false);
-        List<String> reusable = new ArrayList<>(20);
+        List<String> reusable = new ArrayList<>(
+            20 + BedVariantAnnotation.excelColumnHeaders().size());
         for (GeneGroup group : groups) {
             String description = resolveGeneDescription(group);
             for (VariantEntry entry : group.variants) {
@@ -140,7 +142,8 @@ public final class VariantExcelExportBuilder {
             Consumer<List<String>> consumer) {
         List<GeneGroup> groups = AbstractNestedVariantTable.buildGeneGroups(
             rows, false, filter, false);
-        List<String> reusable = new ArrayList<>(18);
+        List<String> reusable = new ArrayList<>(
+            18 + BedVariantAnnotation.excelColumnHeaders().size());
         for (GeneGroup group : groups) {
             String description = resolveGeneDescription(group);
             for (VariantEntry entry : group.variants) {
@@ -214,7 +217,7 @@ public final class VariantExcelExportBuilder {
         headers.add("DP");
         headers.add("Site QUAL");
         headers.add("Cancer gene");
-        // Future: control / population columns append here, before description.
+        headers.addAll(BedVariantAnnotation.excelColumnHeaders());
         headers.add("Gene description");
         return headers;
     }
@@ -237,7 +240,7 @@ public final class VariantExcelExportBuilder {
         headers.add("DP");
         headers.add("Site QUAL");
         headers.add("Cancer gene");
-        // Future: control / population columns append here, before description.
+        headers.addAll(BedVariantAnnotation.excelColumnHeaders());
         headers.add("Gene description");
         return headers;
     }
@@ -270,6 +273,7 @@ public final class VariantExcelExportBuilder {
         values.add(formatDp(call));
         values.add(formatSiteQual(node));
         values.add(formatCancerGene(group));
+        appendBedAnnotationColumns(values, row);
         values.add(nullToEmpty(description));
     }
 
@@ -300,7 +304,18 @@ public final class VariantExcelExportBuilder {
         values.add(formatDp(call));
         values.add(formatSiteQual(node));
         values.add(formatCancerGene(group));
+        appendBedAnnotationColumns(values, row);
         values.add(nullToEmpty(description));
+    }
+
+    private static void appendBedAnnotationColumns(List<String> values, TableRow row) {
+        if (row == null || row.node() == null) {
+            for (int i = 0, n = BedVariantAnnotation.excelColumnHeaders().size(); i < n; i++) {
+                values.add("");
+            }
+            return;
+        }
+        values.addAll(BedVariantAnnotation.excelColumnValues(row.chromosome(), row.node()));
     }
 
     private static String resolveGeneDescription(GeneGroup group) {

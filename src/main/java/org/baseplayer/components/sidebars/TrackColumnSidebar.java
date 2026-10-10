@@ -234,7 +234,16 @@ public abstract class TrackColumnSidebar extends SidebarBase {
    */
   protected abstract void redrawAfterVisibleTrackRangeChange();
 
+  /**
+   * True when the visible-range slider chrome should paint/handle input.
+   * Independent of aggregate/density band height — a tall band with one track
+   * must not imply slider controls (that used to snap height back to default).
+   */
   protected final boolean isControlsExpanded() {
+    int trackCount = trackViewportRegistry.getDisplayedTrackCount();
+    if (!shouldAutoExpandMasterHeader(trackCount)) {
+      return false;
+    }
     return trackViewportRegistry.getMasterBandHeightPixels()
         > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1;
   }
@@ -256,13 +265,14 @@ public abstract class TrackColumnSidebar extends SidebarBase {
 
   private void syncMasterHeaderRenderState() {
     int trackCount = trackViewportRegistry.getDisplayedTrackCount();
+    double masterH = trackViewportRegistry.getMasterBandHeightPixels();
 
-    if ((trackCount <= 0 || !shouldAutoExpandMasterHeader(trackCount)) && isControlsExpanded()) {
-      trackViewportRegistry.setMasterBandHeightPixels(
-          TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
-    }
-    if (shouldAutoExpandMasterHeader(trackCount) && !isControlsExpanded()) {
+    // Multi-track: ensure room for the visible-range slider. Never snap a
+    // user-resized aggregate/density band back down — that fought drag-resize.
+    if (shouldAutoExpandMasterHeader(trackCount)
+        && masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
       trackViewportRegistry.setMasterBandHeightPixels(EXPANDED_MASTER_HEIGHT);
+      masterH = EXPANDED_MASTER_HEIGHT;
     }
 
     int firstVisible = 0;
@@ -274,9 +284,12 @@ public abstract class TrackColumnSidebar extends SidebarBase {
           trackViewportRegistry.getLastVisibleTrackSlot()));
     }
 
+    boolean rangeControlsVisible = shouldAutoExpandMasterHeader(trackCount)
+        && masterH > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1;
+
     masterHeaderRenderState = new MasterHeaderRenderState(
         trackCount,
-        trackCount > 0 && isControlsExpanded(),
+        rangeControlsVisible,
         canShowReloadButton(),
         firstVisible,
         lastVisible,

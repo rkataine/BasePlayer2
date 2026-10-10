@@ -1105,17 +1105,53 @@ public class SampleDataManager {
     TrackBodyCanvas featureCanvas = MainController.getFeatureTrackCanvas();
     if (featureCanvas == null) return;
 
-    ThreadRunner.get().submit("Loading " + file.getName() + "\u2026",
+    Path bedPath = file.toPath();
+    ThreadRunner.get().submit(
+        "Scanning " + file.getName() + "\u2026",
         () -> {
-          try { return new BedTrack(file.toPath()); }
-          catch (IOException e) { System.err.println("Failed to load BED: " + e.getMessage()); return null; }
+          try {
+            return org.baseplayer.io.readers.BedFeatureNameCatalog.scanForDialog(bedPath);
+          } catch (IOException e) {
+            System.err.println("Failed to scan BED names: " + e.getMessage());
+            return java.util.Optional
+                .<org.baseplayer.io.readers.BedFeatureNameCatalog.Catalog>empty();
+          }
         },
-        bedTrack -> {
-          if (bedTrack == null) return;
-          bedTrack.setVisible(true);
-          featureCanvas.addTrack(bedTrack);
-          UserPreferences.addRecentFile("BED", file);
-          ProjectSessionState.get().markDirty();
+        catalogOpt -> {
+          org.baseplayer.features.BedFeatureFilterDialog.Outcome filter = null;
+          if (catalogOpt != null && catalogOpt.isPresent()) {
+            var choice = org.baseplayer.features.BedFeatureFilterDialog.show(
+                MainApp.stage, file.getName(), catalogOpt.get());
+            if (choice.isEmpty()) {
+              return;
+            }
+            filter = choice.get();
+          }
+          org.baseplayer.features.BedFeatureFilterDialog.Outcome finalFilter = filter;
+          ThreadRunner.get().submit(
+              "Loading " + file.getName() + "\u2026",
+              () -> {
+                try {
+                  BedTrack track = new BedTrack(bedPath);
+                  if (finalFilter != null && !finalFilter.loadAll()) {
+                    track.setNameFilter(
+                        finalFilter.selectedKeys(), finalFilter.listedNames());
+                  }
+                  return track;
+                } catch (IOException e) {
+                  System.err.println("Failed to load BED: " + e.getMessage());
+                  return null;
+                }
+              },
+              bedTrack -> {
+                if (bedTrack == null) {
+                  return;
+                }
+                bedTrack.setVisible(true);
+                featureCanvas.addTrack(bedTrack);
+                UserPreferences.addRecentFile("BED", file);
+                ProjectSessionState.get().markDirty();
+              });
         });
   }
   

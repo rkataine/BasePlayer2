@@ -819,10 +819,14 @@ public class CoverageDrawer {
         double featureY = laneTopBase + lane * (laneHeight + laneGap);
         double featureH = laneHeight;
 
-        List<BedFeature> features = sample.getBedTrack().getFeatures(chrom);
+        org.baseplayer.features.BedTrack bedTrack = sample.getBedTrack();
+        bedTrack.prepareRegion(chrom, (long) viewStart, (long) viewEnd);
+        List<BedFeature> features =
+            bedTrack.getFeaturesOverlapping(chrom, (long) viewStart, (long) viewEnd);
         if (features == null || features.isEmpty()) continue;
 
         double alpha = sample.overlay ? 0.45 : 0.8;
+        int lastDrawnPixelX = Integer.MIN_VALUE;
         int from = org.baseplayer.features.BedTrack.findFirstOverlappingIndex(
             features, viewStart, viewEnd);
         for (int fi = from; fi < features.size(); fi++) {
@@ -841,16 +845,23 @@ public class CoverageDrawer {
           double x1 = Math.max(0, Math.min(canvasWidth, sx1));
           double x2 = Math.max(0, Math.min(canvasWidth, sx2));
           double w = Math.max(1, x2 - x1);
+          int xPixel = (int) x1;
+          boolean singlePixel = (int) x2 <= xPixel;
+          if (singlePixel && xPixel == lastDrawnPixelX) {
+            continue;
+          }
 
-          Color base = feature.color();
+          Color base = org.baseplayer.features.BedTrack.colorForFeature(feature);
           gc.setFill(Color.color(base.getRed(), base.getGreen(), base.getBlue(), alpha));
           double arc = Math.min(2.0, Math.max(0.0, featureH * 0.5));
           gc.fillRoundRect(x1, featureY, w, featureH, arc, arc);
+          if (singlePixel) {
+            lastDrawnPixelX = xPixel;
+          }
 
-          if (w > 40 && featureH >= 7 && feature.name() != null && !feature.name().isEmpty()) {
-            gc.setFill(Color.rgb(235, 235, 235, 0.9));
-            gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 8));
-            gc.fillText(feature.name(), x1 + 2, featureY + featureH - 1);
+          if (w >= 18 && featureH >= 7 && feature.name() != null && !feature.name().isEmpty()) {
+            org.baseplayer.features.BedTrack.drawFeatureNameLabel(
+                gc, feature.name(), x1 + 2, featureY - 2);
           }
         }
       }

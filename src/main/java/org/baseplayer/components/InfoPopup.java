@@ -169,8 +169,18 @@ public class InfoPopup {
     public void show(PopupContent popupContent, Window owner, double x, double y) {
         content.getChildren().clear();
 
-        // ── Single selectable TextArea with all text content ─────────────────
-        String text = popupContent.toPlainText();
+        // ── Headers as real labels (not the selectable TextArea) ─────────────
+        for (PopupContent.Item item : popupContent.items()) {
+            switch (item) {
+                case PopupContent.HeaderItem h -> renderHeader(h.text(), h.color());
+                case PopupContent.SubtitleHeaderItem h ->
+                    renderSubtitleHeader(h.title(), h.subtitle(), h.titleColor());
+                default -> { /* later */ }
+            }
+        }
+
+        // ── Selectable TextArea for copyable body text (excludes headers) ───
+        String text = popupContent.toSelectablePlainText();
         if (!text.isEmpty()) {
             TextArea ta = new TextArea(text);
             ta.setEditable(false);
@@ -220,6 +230,35 @@ public class InfoPopup {
         }
 
         popup.show(owner, x, y);
+    }
+
+    private void renderHeader(String text, Color color) {
+        Label title = new Label(text != null ? text : "");
+        title.setFont(AppFonts.getBoldFont(14));
+        title.setTextFill(color != null ? color : Color.LIGHTGRAY);
+        title.setWrapText(true);
+        title.setMaxWidth(maxWidth - 28);
+        content.getChildren().add(title);
+    }
+
+    private void renderSubtitleHeader(String titleText, String subtitle, Color titleColor) {
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_LEFT);
+
+        Label title = new Label(titleText != null ? titleText : "");
+        title.setFont(AppFonts.getBoldFont(14));
+        title.setTextFill(titleColor != null ? titleColor : Color.LIGHTGRAY);
+
+        Label badge = new Label(subtitle != null ? subtitle : "");
+        badge.setFont(AppFonts.getUIFont(10));
+        badge.setTextFill(Color.WHITE);
+        badge.setStyle(
+                "-fx-background-color: #555;" +
+                "-fx-background-radius: 8;" +
+                "-fx-padding: 1 7 1 7;");
+
+        row.getChildren().addAll(title, badge);
+        content.getChildren().add(row);
     }
 
     /** Hide the popup. */

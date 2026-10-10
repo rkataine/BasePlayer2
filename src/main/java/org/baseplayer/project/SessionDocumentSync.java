@@ -511,17 +511,20 @@ public final class SessionDocumentSync {
     spec.min = track.getMinValue();
     spec.max = track.getMaxValue();
 
-    if (track instanceof BedTrack) {
+    if (track instanceof BedTrack bedTrack) {
+      // Derived (set-op) tracks are runtime-only — no source path to persist.
+      if (bedTrack.isDerived() || bedTrack.getSourcePath() == null) {
+        return null;
+      }
       spec.kind = "bed";
       Path path = track.getSourcePath();
-      if (path != null) {
-        Path abs = path.toAbsolutePath().normalize();
-        spec.path = PathResolver.toAbsoluteString(abs);
-        String relative = PathResolver.toRelativeString(abs, projectFile);
-        if (relative != null) {
-          spec.pathRelative = relative;
-        }
+      Path abs = path.toAbsolutePath().normalize();
+      spec.path = PathResolver.toAbsoluteString(abs);
+      String relative = PathResolver.toRelativeString(abs, projectFile);
+      if (relative != null) {
+        spec.pathRelative = relative;
       }
+      spec.variantAnnotationMode = bedTrack.getVariantAnnotationMode().toPersisted();
     } else if (track instanceof BigWigTrack) {
       spec.kind = "bigwig";
       Path path = track.getSourcePath();

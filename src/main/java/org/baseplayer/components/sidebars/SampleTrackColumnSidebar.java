@@ -539,8 +539,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
   @Override
   protected boolean shouldAutoExpandMasterHeader(int displayedTrackCount) {
-    // Keep filter/group controls reachable even when only one sample matches a subset.
-    return displayedTrackCount >= 1;
+    // Visible-range slider is pointless for a single sample; filter strip stays below.
+    return displayedTrackCount > 1;
   }
 
   @Override
@@ -1013,7 +1013,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     while (node != null) {
       if (node.type == VcfVariantType.SV_TRANSLOCATION || node.type == VcfVariantType.SV_BREAKEND) {
         if (inVisibleView(chromosome, node.position, viewWindows)
-            && (filter == null || filter.passesNodeLevel(node))) {
+            && (filter == null || filter.passesNodeLevel(node))
+            && org.baseplayer.features.BedVariantAnnotation.passes(list, node)) {
           String mateChr = node.mateChromosome();
           long matePos = node.matePosition();
           if (mateChr != null && !mateChr.isBlank() && matePos >= 0
