@@ -216,6 +216,17 @@ public class ChromosomeCanvas extends GenomicCanvas {
     
     reactiveCanvas.setOnMouseExited(event -> clearHover());
   }
+
+  /**
+   * Gene canvas owns its height during {@link #draw()}. Listening to the parent
+   * StackPane height (default {@link GenomicCanvas} behavior) creates a redraw loop
+   * once content-sized canvas updates propagate: setHeight → parent resize → update → draw.
+   * Viewport changes are already handled via {@code chromScrollPane} listeners in {@link DrawStack}.
+   */
+  @Override
+  protected void setupParentHeightListener(StackPane parent) {
+    // intentionally empty
+  }
   
   private void clearHover() {
     if (hoveredGene != null || hoveredAminoAcid != null) {

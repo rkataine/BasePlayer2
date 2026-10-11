@@ -9,6 +9,7 @@ import org.baseplayer.services.ServiceRegistry;
 
 import javafx.animation.AnimationTimer;
 import javafx.animation.PauseTransition;
+import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.scene.canvas.Canvas;
@@ -63,6 +64,9 @@ public class GenomicCanvas extends Canvas {
   /** Reused after mouse release to clear {@link #mouseDragged}. */
   private PauseTransition dragFlagClearTimer;
 
+  /** Coalesce parent-size local redraws for this canvas (not a global update). */
+  private boolean localRedrawPending;
+
   public GenomicCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
     this.drawStack = drawStack;
@@ -74,7 +78,15 @@ public class GenomicCanvas extends Canvas {
     widthProperty().bind(parent.widthProperty());
     reactiveCanvas.heightProperty().bind(parent.heightProperty());
     reactiveCanvas.widthProperty().bind(parent.widthProperty());
-    parent.widthProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
+    // Size is already bound; only repaint this canvas. A global {@link #update}
+    // here re-enters full-stack layout and can loop when a SplitPane child jitters.
+    parent.widthProperty().addListener((obs, oldVal, newVal) -> {
+      if (oldVal != null && newVal != null
+          && Math.abs(newVal.doubleValue() - oldVal.doubleValue()) < 0.5) {
+        return;
+      }
+      requestLocalRedraw();
+    });
     reactiveCanvas.setOnMouseEntered(event -> {
       DrawStack previous = stackManager.getHoverStack();
       stackManager.setHoverStack(drawStack);
@@ -91,11 +103,30 @@ public class GenomicCanvas extends Canvas {
   }
 
   /**
-   * Hook for parent-height change → redraw.  ChromosomeCanvas overrides this
-   * to avoid a feedback loop (it sets its own height during draw()).
+   * Parent-height change → local redraw only (not {@link #update}).
+   * {@link org.baseplayer.genome.gene.draw.ChromosomeCanvas} overrides to a no-op
+   * because it sets its own height during {@code draw()}.
    */
-  protected final void setupParentHeightListener(StackPane parent) {
-    parent.heightProperty().addListener((obs, oldVal, newVal) -> update.set(!update.get()));
+  protected void setupParentHeightListener(StackPane parent) {
+    parent.heightProperty().addListener((obs, oldVal, newVal) -> {
+      if (oldVal != null && newVal != null
+          && Math.abs(newVal.doubleValue() - oldVal.doubleValue()) < 0.5) {
+        return;
+      }
+      requestLocalRedraw();
+    });
+  }
+
+  /** Repaint only this canvas after a parent size change (coalesced per pulse). */
+  protected final void requestLocalRedraw() {
+    if (localRedrawPending) {
+      return;
+    }
+    localRedrawPending = true;
+    Platform.runLater(() -> {
+      localRedrawPending = false;
+      draw();
+    });
   }
 
   protected void draw() {

@@ -192,8 +192,10 @@ public class DrawStack {
 
     var sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     // Aggregate spans slider band + filter-samples strip (drawn beside both).
+    // Prefer/max bind to the band height, but leave min unbound so a short column
+    // can shrink the band instead of leaving a ~2px jittering body stack.
     var aggregateHeight = sampleRegistry.aggregateBandHeightProperty();
-    masterStack.minHeightProperty().bind(aggregateHeight);
+    masterStack.setMinHeight(0);
     masterStack.maxHeightProperty().bind(aggregateHeight);
     masterStack.prefHeightProperty().bind(aggregateHeight);
 
@@ -214,7 +216,9 @@ public class DrawStack {
     var featureViewportRegistry =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
     var featureAggregateHeight = featureViewportRegistry.aggregateBandHeightProperty();
-    featureMasterStack.minHeightProperty().bind(featureAggregateHeight);
+    // Same as sample master: rigid min=pref=max made the body inherit SplitPane
+    // rounding noise (1.6↔2.4px) when the feature strip is collapsed to chrome size.
+    featureMasterStack.setMinHeight(0);
     featureMasterStack.maxHeightProperty().bind(featureAggregateHeight);
     featureMasterStack.prefHeightProperty().bind(featureAggregateHeight);
 
