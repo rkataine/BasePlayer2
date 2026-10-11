@@ -1879,7 +1879,8 @@ public class SampleDataManager {
     registry.setHoverSample(-1);
 
     VcfManager.getInstance().closeCurrentVcf();
-    org.baseplayer.io.Settings.get().resetDefaults();
+    // Do not reset Settings — draw prefs (read height, coverage, …) are user-global
+    // and must survive new project / clear / project switch.
     ProjectSessionState.get().resetDocument();
 
     var stackManager = ServiceRegistry.getInstance().getDrawStackManager();

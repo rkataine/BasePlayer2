@@ -62,6 +62,11 @@ public class VariantNode {
     private volatile Map<String, String> infoFields;
     /** Set by VariantAnnotator; null until annotation has been run for this chromosome. */
     public VariantAnnotation annotation;
+    /**
+     * Population allele frequency from a control VCF (e.g. gnomAD AC/AN).
+     * Null when unmatched or control annotation has not been run.
+     */
+    public Double controlAf;
 
     /**
      * VCF call data for one sample at this allele.

@@ -54,6 +54,12 @@ public class VariantList {
     
     /** Whether these variants have been annotated */
     private boolean annotated = false;
+
+    /**
+     * Absolute path of the control VCF used for {@link VariantNode#controlAf}, or null
+     * when control AF has not been annotated (or was cleared).
+     */
+    private String controlAfSourcePath;
     
     private int vcfCountWhenLoaded = 0;
 
@@ -1323,6 +1329,7 @@ public class VariantList {
             node.nextVisible = null;
             node.prevVisible = null;
             node.annotation = null;
+            node.controlAf = null;
             node.clearDisplayCache();
             node.clearSamplesForDispose();
             node.clearInfoForDispose();
@@ -1349,6 +1356,7 @@ public class VariantList {
         loadedFilterKey = null;
         loadedFilter = null;
         annotated = false;
+        controlAfSourcePath = null;
         vcfCountWhenLoaded = 0;
         lohRegions = List.of();
     }
@@ -1506,6 +1514,14 @@ public class VariantList {
      */
     public boolean isAnnotated() {
         return annotated;
+    }
+
+    public String getControlAfSourcePath() {
+        return controlAfSourcePath;
+    }
+
+    public void setControlAfSourcePath(String controlAfSourcePath) {
+        this.controlAfSourcePath = controlAfSourcePath;
     }
 
     public void setVcfCountWhenLoaded(int count) {

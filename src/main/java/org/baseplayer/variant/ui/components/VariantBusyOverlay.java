@@ -7,25 +7,16 @@ import org.baseplayer.services.ThreadRunner;
 
 import javafx.animation.Timeline;
 import javafx.scene.control.Button;
-import javafx.scene.control.Label;
-import javafx.scene.control.ProgressBar;
-import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TabPane;
 import javafx.scene.layout.VBox;
 
 /**
- * Loading / busy overlay for variant manager: show/hide, progress text, cancel.
+ * Variant Manager busy dimmer only — no text, spinner, or cancel on the window.
+ * Progress and cancel live in the app-wide {@code LoadingPopup} via {@link ThreadRunner}.
  */
 public class VariantBusyOverlay {
 
-    public record Nodes(
-        VBox loadingModal,
-        ProgressIndicator loadingSpinner,
-        Label loadingLabel,
-        ProgressBar loadingProgressBar,
-        Label loadingEtaLabel,
-        Button loadingCancelButton
-    ) {}
+    public record Nodes(VBox loadingModal) {}
 
     public record LockTargets(
         TabPane filterTabPane,
@@ -35,28 +26,17 @@ public class VariantBusyOverlay {
 
     private Nodes nodes;
     private LockTargets lockTargets;
-    private Runnable onCancel;
     private Timeline loadingModalDelayTimer;
     private volatile boolean allChromosomeAnnotationRunning;
     private volatile ThreadRunner.RunnerTask allChromosomeAnnotationTask;
 
     public void install(Nodes nodes) {
         this.nodes = nodes;
-        if (nodes != null && nodes.loadingCancelButton() != null) {
-            nodes.loadingCancelButton().setOnAction(e -> {
-                if (onCancel != null) {
-                    onCancel.run();
-                }
-            });
-        }
+        stripOverlayChrome();
     }
 
     public void setLockTargets(LockTargets lockTargets) {
         this.lockTargets = lockTargets;
-    }
-
-    public void setOnCancel(Runnable onCancel) {
-        this.onCancel = onCancel;
     }
 
     public void setAllChromosomeAnnotationRunning(boolean running) {
@@ -75,21 +55,8 @@ public class VariantBusyOverlay {
         return allChromosomeAnnotationTask;
     }
 
-    public void show(String message) {
-        show(message, true);
-    }
-
-    /**
-     * Show the loading modal. When {@code cancellable} is false, the Cancel button is hidden
-     * (used for short non-interruptible work such as Excel export).
-     */
-    public void show(String message, boolean cancellable) {
-        applyLoadingModalVisuals(message);
-        if (nodes != null && nodes.loadingCancelButton() != null) {
-            nodes.loadingCancelButton().setManaged(cancellable);
-            nodes.loadingCancelButton().setVisible(cancellable);
-            nodes.loadingCancelButton().setDisable(!cancellable);
-        }
+    /** Show the dimmer overlay (no message). */
+    public void show() {
         if (nodes != null && nodes.loadingModal() != null) {
             nodes.loadingModal().setVisible(true);
             nodes.loadingModal().setManaged(true);
@@ -108,8 +75,8 @@ public class VariantBusyOverlay {
     }
 
     /**
-     * Update overlay message from all-chromosome annotation progress.
-     * Also updates the active ThreadRunner task suffix when one is set.
+     * Forward all-chromosome progress to the ThreadRunner / LoadingPopup only.
+     * Does not paint text on the Variant Manager overlay.
      */
     public void updateProgress(VcfManager.AllChromosomeProgress progress) {
         if (!allChromosomeAnnotationRunning || progress == null) {
@@ -125,15 +92,13 @@ public class VariantBusyOverlay {
             task.setProgressSuffix(message);
             ThreadRunner.get().notifyDescriptionChanged();
         }
-        applyLoadingModalVisuals("Annotating all chromosomes… " + message);
     }
 
     /**
      * Sync overlay + lock targets with ThreadRunner busy state and annotation flag.
      *
-     * <p>When only ThreadRunner work is active, the app-wide {@code LoadingPopup} already
-     * shows progress — keep filters locked but do not paint a second "Loading" label on
-     * the Variant Manager dimmer (it sits behind the popup).
+     * <p>When ThreadRunner work is active, {@code LoadingPopup} shows progress —
+     * the Variant Manager only dims.
      */
     public void syncBusyOverlay() {
         boolean tasksRunning = !ThreadRunner.get().getActiveTasks().isEmpty();
@@ -143,34 +108,21 @@ public class VariantBusyOverlay {
         }
         boolean busy = tasksRunning || allChromosomeAnnotationRunning;
         setControlsLocked(busy);
-        if (allChromosomeAnnotationRunning) {
-            showBusyOverlay();
-        } else if (tasksRunning) {
-            hideVisualOnly();
+        if (busy) {
+            show();
         } else {
             hide();
         }
     }
 
     /**
-     * Lock filter-related controls; when locking, also show the busy overlay.
+     * Lock filter-related controls; when locking, also show the dimmer.
      */
     public void lockFilterControls(boolean locked) {
         setControlsLocked(locked);
         if (locked) {
-            showBusyOverlay();
+            show();
         }
-    }
-
-    public void showBusyOverlay() {
-        String message = "Loading";
-        List<ThreadRunner.RunnerTask> tasks = ThreadRunner.get().getActiveTasks();
-        if (!tasks.isEmpty()) {
-            message = tasks.get(tasks.size() - 1).getDescription();
-        } else if (allChromosomeAnnotationRunning) {
-            message = "Annotating all chromosomes…";
-        }
-        show(message);
     }
 
     public void cancelDelayedLoadingModal() {
@@ -178,8 +130,6 @@ public class VariantBusyOverlay {
             loadingModalDelayTimer.stop();
             loadingModalDelayTimer = null;
         }
-        // Never tear down while ThreadRunner still has work — keeps the loading
-        // modal / filter lock coherent across multi-phase comparison rebuilds.
         if (!allChromosomeAnnotationRunning
                 && ThreadRunner.get().getActiveTasks().isEmpty()) {
             hide();
@@ -188,27 +138,14 @@ public class VariantBusyOverlay {
         }
     }
 
-    public void applyLoadingModalVisuals(String message) {
+    /** Hide any leftover chrome inside the dimmer node (labels, buttons, etc.). */
+    private void stripOverlayChrome() {
         if (nodes == null || nodes.loadingModal() == null) {
             return;
         }
-        nodes.loadingLabel().setText(message == null || message.isBlank() ? "Loading" : message);
-        if (nodes.loadingSpinner() != null) {
-            nodes.loadingSpinner().setManaged(false);
-            nodes.loadingSpinner().setVisible(false);
-        }
-        if (nodes.loadingProgressBar() != null) {
-            nodes.loadingProgressBar().setManaged(false);
-            nodes.loadingProgressBar().setVisible(false);
-        }
-        if (nodes.loadingEtaLabel() != null) {
-            nodes.loadingEtaLabel().setManaged(false);
-            nodes.loadingEtaLabel().setVisible(false);
-        }
-        if (nodes.loadingCancelButton() != null) {
-            nodes.loadingCancelButton().setManaged(true);
-            nodes.loadingCancelButton().setVisible(true);
-            nodes.loadingCancelButton().setDisable(false);
+        for (javafx.scene.Node child : nodes.loadingModal().getChildren()) {
+            child.setVisible(false);
+            child.setManaged(false);
         }
     }
 

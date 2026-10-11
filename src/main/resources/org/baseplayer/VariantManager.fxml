@@ -437,15 +437,8 @@
                 onAction="#handleExpandMinimized"/>
     </HBox>
 
-    <VBox fx:id="loadingModal" visible="false" managed="false" spacing="12"
-          alignment="CENTER" mouseTransparent="false"
-          style="-fx-background-color: rgba(0, 0, 0, 0.55);">
-        <Label fx:id="loadingLabel" text="Loading"
-               style="-fx-text-fill: white; -fx-font-size: 22px; -fx-font-weight: bold;"/>
-        <ProgressIndicator fx:id="loadingSpinner" prefWidth="1" prefHeight="1" visible="false" managed="false"/>
-        <ProgressBar fx:id="loadingProgressBar" prefWidth="1" progress="0" visible="false" managed="false"/>
-        <Label fx:id="loadingEtaLabel" text="" visible="false" managed="false"/>
-        <Button fx:id="loadingCancelButton" text="Cancel" styleClass="secondary-button"
-                onAction="#handleCancelLoadingModal"/>
-    </VBox>
+    <!-- Dimmer only — progress/cancel live in the app-wide LoadingPopup. -->
+    <VBox fx:id="loadingModal" visible="false" managed="false"
+          mouseTransparent="false"
+          style="-fx-background-color: rgba(0, 0, 0, 0.55);"/>
 </StackPane>

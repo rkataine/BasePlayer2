@@ -77,7 +77,9 @@ public final class SessionDocumentSync {
     }
     doc.genome.annotation = Settings.get().getLastAnnotation();
 
-    doc.settings = Settings.get().toSnapshot();
+    // User draw settings stay in Settings / java.util.prefs — not in the project.
+    // Keep an empty map so older readers see a stable field; do not snapshot prefs here.
+    doc.settings = new java.util.LinkedHashMap<>();
     if (doc.ui == null) {
       doc.ui = new ProjectDocument.UiSpec();
     }
@@ -91,6 +93,7 @@ public final class SessionDocumentSync {
     }
 
     writeVariantFilterFromRuntime(VcfManager.getInstance());
+    writeControlFilesFromRuntime();
     writeSampleGroupsFromRegistry();
     writeSampleTracksFromRuntime(projectFile);
     writeFeatureTracksFromRuntime(projectFile);
@@ -150,6 +153,95 @@ public final class SessionDocumentSync {
   public static void writeVariantFilterFromRuntime(VcfManager vcfManager) {
     ProjectDocument doc = live();
     doc.variantFilter = captureFilter(vcfManager);
+  }
+
+  /**
+   * Persist Control Files tab state (control VCF path + pop-freq toggles) from the
+   * open Variant Manager when present, then keep {@link ProjectDocument.ClassFilterSpec}
+   * control-AF fields aligned (they are what restore loads into the filter UI).
+   */
+  public static void writeControlFilesFromRuntime() {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    org.baseplayer.variant.ui.VariantManagerController controller =
+        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+    if (controller != null) {
+      controller.writeControlFilesToDocument(doc.controlFiles);
+    }
+    // ClassFilterSpec is restored into the Variant Manager; keep it in lockstep with
+    // ControlFilesSpec so a deferred filter-apply cannot leave max AF unsaved.
+    syncControlAfIntoVariantFilter(doc);
+  }
+
+  /**
+   * Live-write Control Files pop-freq toggles into the project document (SSOT).
+   * Call from UI listeners so save does not depend on filter-apply debounce.
+   */
+  public static void writeControlFilterSettings(boolean filterByControlAf, double maxControlAf) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.filterByControlAf = filterByControlAf;
+    doc.controlFiles.maxControlAf = maxControlAf < 0 ? 0.01 : Math.min(1.0, maxControlAf);
+    syncControlAfIntoVariantFilter(doc);
+    ProjectSessionState.get().markDirty();
+  }
+
+  /** Live-write the open control VCF path into the project document. */
+  public static void writeControlVcfPath(String controlVcfPath) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.controlVcfPath = controlVcfPath;
+    ProjectSessionState.get().markDirty();
+  }
+
+  /**
+   * Copy control-AF toggles from {@link ProjectDocument#controlFiles} into point/SV
+   * filter specs when control settings look intentional (path, filter on, or non-default max).
+   */
+  static void syncControlAfIntoVariantFilter(ProjectDocument doc) {
+    if (doc == null || doc.controlFiles == null || !hasControlFilesSettings(doc.controlFiles)) {
+      return;
+    }
+    if (doc.variantFilter == null) {
+      doc.variantFilter = new ProjectDocument.VariantFilterSpec();
+    }
+    if (doc.variantFilter.point == null) {
+      doc.variantFilter.point = new ProjectDocument.ClassFilterSpec();
+    }
+    if (doc.variantFilter.sv == null) {
+      doc.variantFilter.sv = new ProjectDocument.ClassFilterSpec();
+    }
+    applyControlAf(doc.variantFilter.point, doc.controlFiles);
+    applyControlAf(doc.variantFilter.sv, doc.controlFiles);
+  }
+
+  private static boolean hasControlFilesSettings(ProjectDocument.ControlFilesSpec spec) {
+    if (spec == null) {
+      return false;
+    }
+    if (spec.controlVcfPath != null && !spec.controlVcfPath.isBlank()) {
+      return true;
+    }
+    if (spec.filterByControlAf) {
+      return true;
+    }
+    // Default max is 0.01 — any other value means the user edited the field.
+    return Math.abs(spec.maxControlAf - 0.01) > 1e-12;
+  }
+
+  private static void applyControlAf(
+      ProjectDocument.ClassFilterSpec classSpec, ProjectDocument.ControlFilesSpec control) {
+    if (classSpec == null || control == null) {
+      return;
+    }
+    classSpec.filterByControlAf = control.filterByControlAf;
+    classSpec.maxControlAf = control.maxControlAf < 0 ? 0.01 : Math.min(1.0, control.maxControlAf);
   }
 
   public static void writeStacksFromRuntime() {
@@ -457,6 +549,8 @@ public final class SessionDocumentSync {
     if (filter.getAllowedFilterValues() != null) {
       spec.allowedFilterValues = new ArrayList<>(filter.getAllowedFilterValues());
     }
+    spec.filterByControlAf = filter.isFilterByControlAf();
+    spec.maxControlAf = filter.getMaxControlAf();
     return spec;
   }
 

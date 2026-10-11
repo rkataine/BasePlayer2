@@ -41,7 +41,8 @@ import com.google.gson.GsonBuilder;
  */
 public final class VariantCacheStore {
 
-  public static final int SCHEMA_VERSION = 4;
+  /** v5: per-node control AF + list-level control VCF source path. */
+  public static final int SCHEMA_VERSION = 5;
   private static final int MAGIC = 0x42505631; // "BPV1"
   private static final String META_FILE = "meta.json";
   private static final String CHROM_SUFFIX = ".bpv.zst";
@@ -207,6 +208,7 @@ public final class VariantCacheStore {
       detail.filterKey = list.getLoadedFilterKey();
       detail.annotated = list.isAnnotated();
       detail.vcfCount = list.getVcfCountWhenLoaded();
+      detail.controlAfSourcePath = list.getControlAfSourcePath();
       meta.chromosomes.add(chrom);
       meta.chromosomeDetails.add(detail);
 
@@ -219,6 +221,8 @@ public final class VariantCacheStore {
           .append(detail.annotated)
           .append('#')
           .append(detail.vcfCount)
+          .append('#')
+          .append(detail.controlAfSourcePath == null ? "" : detail.controlAfSourcePath)
           .append(';');
     }
     meta.contentSignature = signature.toString();
@@ -342,6 +346,7 @@ public final class VariantCacheStore {
       writeNullableString(out, list.getLoadedFilterKey());
       out.writeBoolean(list.isAnnotated());
       out.writeInt(list.getVcfCountWhenLoaded());
+      writeNullableString(out, list.getControlAfSourcePath());
 
       List<VariantList.LoadedRegion> regions = list.getLoadedRegions();
       out.writeInt(regions.size());
@@ -396,6 +401,7 @@ public final class VariantCacheStore {
       String filterKey = readNullableString(in);
       boolean annotated = in.readBoolean();
       int vcfCount = in.readInt();
+      String controlAfSourcePath = readNullableString(in);
 
       int regionCount = in.readInt();
       for (int i = 0; i < regionCount; i++) {
@@ -427,6 +433,7 @@ public final class VariantCacheStore {
       list.setLoadedFilterKey(filterKey);
       list.setAnnotated(annotated);
       list.setVcfCountWhenLoaded(vcfCount > 0 ? vcfCount : VcfManager.getInstance().getLoadedVcfCount());
+      list.setControlAfSourcePath(controlAfSourcePath);
       return list;
     }
   }
@@ -472,6 +479,12 @@ public final class VariantCacheStore {
           writeNullableString(out, g);
         }
       }
+    }
+
+    // Population AF from control VCF (gnomAD etc.); null = unmatched / not annotated.
+    out.writeBoolean(node.controlAf != null);
+    if (node.controlAf != null) {
+      out.writeDouble(node.controlAf);
     }
   }
 
@@ -542,6 +555,10 @@ public final class VariantCacheStore {
       node.annotation = new VariantAnnotation(
           chrom, position, effect, geneName, transcriptId,
           aaChange, codonChange, codonNumber, isCancerGene, cosmic, overlappingGenes);
+    }
+
+    if (in.readBoolean()) {
+      node.controlAf = in.readDouble();
     }
 
     return node;
@@ -635,6 +652,8 @@ public final class VariantCacheStore {
     public String filterKey;
     public boolean annotated;
     public int vcfCount;
+    /** Absolute path of control VCF used for population AF, or null. */
+    public String controlAfSourcePath;
   }
 
   public static final class VcfFingerprint {

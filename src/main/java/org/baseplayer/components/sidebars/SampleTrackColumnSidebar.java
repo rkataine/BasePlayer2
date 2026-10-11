@@ -479,8 +479,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     graphics.setFont(Font.font("Segoe UI", 10));
     graphics.setFill(Color.web("#9ea7b3"));
 
-    String focusedGene = sampleRegistry.getFocusedGeneName();
-    if (focusedGene != null && !focusedGene.isBlank()) {
+    if (sampleRegistry.hasGeneFocusBanner()) {
+      String focusedGene = sampleRegistry.getFocusedGeneName();
       graphics.fillText("Gene focus: " + focusedGene, 8, headerBarHeight + 14);
       graphics.setFill(Color.web("#ffa500"));
       graphics.fillText("[clear x]", panelWidth - 70, headerBarHeight + 14);

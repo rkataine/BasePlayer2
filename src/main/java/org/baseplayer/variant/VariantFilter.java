@@ -117,6 +117,14 @@ public class VariantFilter {
     private boolean filterFieldsActive = false;                       // Whether to apply FILTER field filtering
 
     /**
+     * When true, hide variants whose {@link VariantNode#controlAf} is strictly greater
+     * than {@link #maxControlAf}. Unmatched variants ({@code controlAf == null}) stay visible.
+     */
+    private boolean filterByControlAf = false;
+    /** Inclusive max population AF when {@link #filterByControlAf} is on (default 0.01). */
+    private double maxControlAf = 0.01;
+
+    /**
      * Inclusive minimum SV span length in bp ({@code svEnd - position}).
      * {@code 0} = no minimum. Applied only to structural types.
      */
@@ -149,6 +157,16 @@ public class VariantFilter {
     public double getMaxAlleleFraction() { return maxAlleleFraction; }
     public void setMaxAlleleFraction(double maxAlleleFraction) {
         this.maxAlleleFraction = maxAlleleFraction < 0 ? 1.0 : Math.min(1.0, maxAlleleFraction);
+    }
+
+    public boolean isFilterByControlAf() { return filterByControlAf; }
+    public void setFilterByControlAf(boolean filterByControlAf) {
+        this.filterByControlAf = filterByControlAf;
+    }
+
+    public double getMaxControlAf() { return maxControlAf; }
+    public void setMaxControlAf(double maxControlAf) {
+        this.maxControlAf = maxControlAf < 0 ? 0.01 : Math.min(1.0, maxControlAf);
     }
 
     public boolean isCancerGenesOnly() { return cancerGenesOnly; }
@@ -786,6 +804,8 @@ public class VariantFilter {
         copy.minDepth = this.minDepth;
         copy.minAlleleFraction = this.minAlleleFraction;
         copy.maxAlleleFraction = this.maxAlleleFraction;
+        copy.filterByControlAf = this.filterByControlAf;
+        copy.maxControlAf = this.maxControlAf;
         copy.cancerGenesOnly = this.cancerGenesOnly;
         copy.minSharedSamples = this.minSharedSamples;
         copy.maxSharedSamples = this.maxSharedSamples;
@@ -1055,6 +1075,12 @@ public class VariantFilter {
         } else {
             if (f.cancerGenesOnly) return false;
             if (!f.allowedEffects.contains(VariantEffect.INTERGENIC)) return false;
+        }
+
+        if (f.filterByControlAf
+                && node.controlAf != null
+                && node.controlAf > f.maxControlAf) {
+            return false;
         }
 
         return true;
@@ -1814,6 +1840,7 @@ public class VariantFilter {
             && minDepth == 0
             && minAlleleFraction == 0.0
             && maxAlleleFraction >= 1.0
+            && !filterByControlAf
             && minSvLengthBp <= 0
             && maxSvLengthBp == Long.MAX_VALUE
             && !cancerGenesOnly

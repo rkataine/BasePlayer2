@@ -30,9 +30,20 @@ public class ProjectDocument {
   public String name;
 
   public GenomeSpec genome = new GenomeSpec();
+  /**
+   * Legacy field; draw settings (read height, coverage, …) are user-global via
+   * {@link org.baseplayer.io.Settings} and are no longer restored from project JSON.
+   * New saves keep this empty.
+   */
   public Map<String, Object> settings = new LinkedHashMap<>();
   public UiSpec ui = new UiSpec();
   public VariantFilterSpec variantFilter = new VariantFilterSpec();
+  /**
+   * Local population-frequency control VCF (e.g. gnomAD sites). AF values live on
+   * chromosome caches; this path is reopened so the Control Files tab can re-filter
+   * without re-annotating when the cache already has matching AFs.
+   */
+  public ControlFilesSpec controlFiles = new ControlFilesSpec();
   public ViewportSpec sampleViewport = new ViewportSpec();
   public ViewportSpec featureViewport = new ViewportSpec();
   public SampleFilterSpec sampleFilter = new SampleFilterSpec();
@@ -106,6 +117,17 @@ public class ProjectDocument {
     public List<String> allowedEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
     public List<String> allowedFilterValues = new ArrayList<>();
+    /** Display-time population AF filter (does not affect VCF load cache keys). */
+    public boolean filterByControlAf;
+    public double maxControlAf = 0.01;
+  }
+
+  /** Control Files tab: local gnomAD/control VCF path + pop-freq filter toggles. */
+  public static class ControlFilesSpec {
+    /** Absolute path to bgzipped+tabix control VCF, or null/blank when unused. */
+    public String controlVcfPath;
+    public boolean filterByControlAf;
+    public double maxControlAf = 0.01;
   }
 
   /**

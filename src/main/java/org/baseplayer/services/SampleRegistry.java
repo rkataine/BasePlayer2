@@ -611,12 +611,40 @@ public class SampleRegistry extends TrackViewportRegistry {
         return focusedGeneLocus;
     }
 
-    /** True when a named gene (not a position click) currently drives the sample subset. */
+    /**
+     * True when a named gene (not a position click) currently restricts the sample list.
+     * False when focus includes every sample — nothing is filtered, so no banner/UI.
+     */
     public boolean hasGeneFocusBanner() {
-        return hasFocusedTracks()
+        return hasRestrictingFocusedTracks()
             && focusedGeneName != null
             && !focusedGeneName.isBlank()
             && !focusedGeneName.startsWith("Position:");
+    }
+
+    /** Focus set that actually hides at least one sample. */
+    public boolean hasRestrictingFocusedTracks() {
+        return focusedTracks != null
+            && !focusedTracks.isEmpty()
+            && !geneFocusIncludesAllSampleTracks(focusedTracks);
+    }
+
+    /** True when {@code focus} contains every non-null sample track (no filtering). */
+    private boolean geneFocusIncludesAllSampleTracks(Set<SampleTrack> focus) {
+        if (focus == null || sampleTracks.isEmpty()) {
+            return false;
+        }
+        int total = 0;
+        for (SampleTrack track : sampleTracks) {
+            if (track == null) {
+                continue;
+            }
+            total++;
+            if (!focus.contains(track)) {
+                return false;
+            }
+        }
+        return total > 0;
     }
 
     public IntegerProperty geneFocusRevisionProperty() {
@@ -654,6 +682,11 @@ public class SampleRegistry extends TrackViewportRegistry {
                 focusedTracks = null;
                 focusedGeneName = null;
                 focusedGeneLocus = null;
+            } else if (geneFocusIncludesAllSampleTracks(focusedTracks)) {
+                // Every sample has the feature — focus would filter nothing; drop it.
+                focusedTracks = null;
+                focusedGeneName = null;
+                focusedGeneLocus = null;
             } else {
                 focusedGeneName = featureName;
                 focusedGeneLocus = resolveGeneLocus(featureName);
@@ -680,13 +713,13 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     public boolean hasActiveSubset() {
-        return hasActiveSampleFilterQuery() || hasFocusedTracks();
+        return hasActiveSampleFilterQuery() || hasRestrictingFocusedTracks();
     }
 
     public boolean hasActiveSubsetSource(SubsetSource source) {
         return switch (source) {
             case TEXT_FILTER -> hasActiveSampleFilterQuery();
-            case GENE_FOCUS -> hasFocusedTracks();
+            case GENE_FOCUS -> hasRestrictingFocusedTracks();
         };
     }
 

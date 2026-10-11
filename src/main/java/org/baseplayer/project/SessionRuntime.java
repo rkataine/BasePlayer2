@@ -83,9 +83,8 @@ public final class SessionRuntime {
       ProjectSessionState.get().replaceDocument(document);
       clearUserFeatureTracks();
 
-      if (document.settings != null && !document.settings.isEmpty()) {
-        Settings.get().applySnapshot(document.settings);
-      }
+      // Draw settings (read height, coverage fraction, …) live in user prefs via
+      // Settings — never overwrite them from project JSON on open.
       applyGenome(document, warnings);
       applyDarkMode(document.ui != null && document.ui.darkMode);
       applyManeOnly(document.ui == null || document.ui.maneOnly);
@@ -581,6 +580,9 @@ public final class SessionRuntime {
     FeatureTrackViewportRegistry features =
         ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
 
+    // Keep ClassFilterSpec control-AF fields aligned with ControlFilesSpec before
+    // building the runtime filter (UI scrape / live writes use ControlFilesSpec).
+    SessionDocumentSync.syncControlAfIntoVariantFilter(document);
     VariantFilter filter = restoreFilter(document.variantFilter);
     restoreSessionAvailableFilters(document.variantFilter);
     VcfManager.getInstance().applyFilter(filter);
@@ -886,6 +888,8 @@ public final class SessionRuntime {
     if (spec.allowedFilterValues != null) {
       filter.setAllowedFilterValues(new HashSet<>(spec.allowedFilterValues));
     }
+    filter.setFilterByControlAf(spec.filterByControlAf);
+    filter.setMaxControlAf(spec.maxControlAf > 0 ? spec.maxControlAf : 0.01);
     return filter;
   }
 

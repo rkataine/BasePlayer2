@@ -110,11 +110,6 @@ public class VariantManagerController implements Initializable {
 
     // Loading Modal
     @FXML private VBox loadingModal;
-    @FXML private ProgressIndicator loadingSpinner;
-    @FXML private Label loadingLabel;
-    @FXML private ProgressBar loadingProgressBar;
-    @FXML private Label loadingEtaLabel;
-    @FXML private Button loadingCancelButton;
     
     @FXML private HBox minimizedPane;
     @FXML private Button minimizedExpandButton;
@@ -209,6 +204,8 @@ public class VariantManagerController implements Initializable {
     private volatile boolean disposed;
     private volatile boolean annotationRunning;
     private volatile Thread annotationThread;
+    private volatile boolean controlAnnotationRunning;
+    private volatile ThreadRunner.RunnerTask controlAnnotationTask;
     private long lastSeenVariantsRevision = -1;
     private String pendingScrollToChromosome;
     
@@ -301,7 +298,10 @@ public class VariantManagerController implements Initializable {
                 controlFileNameColumn,
                 controlFileTypeColumn,
                 controlFileActionsColumn));
+        wireControlFilesPanel(controlFilesPanel);
         pointWorkspace.setControl(controlFilesPanel);
+        // Early restore for Point; SV is restored after restructureModeWorkspaces().
+        restoreControlFilesFromSession(controlFilesPanel);
 
         agentPanel = new AgentPanel();
         agentPanel.install(
@@ -318,20 +318,12 @@ public class VariantManagerController implements Initializable {
             this::buildVariantContext);
 
         busyOverlay = new VariantBusyOverlay();
-        busyOverlay.install(
-            new VariantBusyOverlay.Nodes(
-                loadingModal,
-                loadingSpinner,
-                loadingLabel,
-                loadingProgressBar,
-                loadingEtaLabel,
-                loadingCancelButton));
+        busyOverlay.install(new VariantBusyOverlay.Nodes(loadingModal));
         busyOverlay.setLockTargets(
             new VariantBusyOverlay.LockTargets(
                 filterTabPane,
                 annotateLockButtons(),
                 reloadBannerButton));
-        busyOverlay.setOnCancel(this::handleCancelLoadingModal);
 
         initializeVariantTable();
         initializeSvVariantTable();
@@ -481,9 +473,16 @@ public class VariantManagerController implements Initializable {
         javafx.util.Pair<Node, ControlFilesPanel.Nodes> svCtrl = ControlFilesPanel.buildUi();
         ControlFilesPanel svControlFilesPanel = new ControlFilesPanel();
         svControlFilesPanel.install(svCtrl.getValue());
+        svCtrl.getKey().setUserData(svControlFilesPanel);
+        wireControlFilesPanel(svControlFilesPanel);
         if (svWorkspace != null) {
             svWorkspace.setControl(svControlFilesPanel);
         }
+        wireControlFilesPanelMirroring();
+        restoreControlFilesFromSession(
+            pointWorkspace != null ? pointWorkspace.control() : null);
+        restoreControlFilesFromSession(
+            svWorkspace != null ? svWorkspace.control() : null);
         svControlTab = new Tab("Control Files", svCtrl.getKey());
         svControlTab.setClosable(false);
 
@@ -1227,7 +1226,9 @@ public class VariantManagerController implements Initializable {
      * so rapid slider movements only trigger one update 200ms after the last change.
      */
     private void scheduleFilterUpdate() {
-        if (suppressFilterApplyEvents || isAllChromosomeAnnotationRunning()) {
+        if (suppressFilterApplyEvents
+                || isAllChromosomeAnnotationRunning()
+                || controlAnnotationRunning) {
             return;
         }
         if (filterDebounceTimer != null) {
@@ -1237,7 +1238,9 @@ public class VariantManagerController implements Initializable {
     }
 
     private void scheduleImmediateFilterApply() {
-        if (suppressFilterApplyEvents || isAllChromosomeAnnotationRunning()) {
+        if (suppressFilterApplyEvents
+                || isAllChromosomeAnnotationRunning()
+                || controlAnnotationRunning) {
             return;
         }
         Platform.requestNextPulse();
@@ -1858,30 +1861,10 @@ public class VariantManagerController implements Initializable {
         });
     }
 
-    @FXML
-    private void handleCancelLoadingModal() {
-        ThreadRunner.RunnerTask task = busyOverlay != null
-            ? busyOverlay.getAllChromosomeAnnotationTask()
-            : null;
-        if (task != null) {
-            task.cancel();
-        } else {
-            ThreadRunner.get().cancelAll();
-        }
-        // Cancel skips ThreadRunner onSuccess — clear rebuild flags so the next
-        // filter apply is not permanently blocked.
-        tableRebuildTask = null;
-        rebuildRunning = false;
-        if (busyOverlay != null) {
-            busyOverlay.setAllChromosomeAnnotationRunning(false);
-            busyOverlay.setAllChromosomeAnnotationTask(null);
-            busyOverlay.lockFilterControls(false);
-            busyOverlay.hide();
-        }
-    }
-
     private void applyFiltersNow() {
-        if (suppressFilterApplyEvents || isAllChromosomeAnnotationRunning()) {
+        if (suppressFilterApplyEvents
+                || isAllChromosomeAnnotationRunning()
+                || controlAnnotationRunning) {
             return;
         }
 
@@ -2101,6 +2084,187 @@ public class VariantManagerController implements Initializable {
         }
     }
 
+    private void wireControlFilesPanel(ControlFilesPanel panel) {
+        if (panel == null) {
+            return;
+        }
+        panel.setWindowSupplier(() -> {
+            Node anchor = controlFilesTable != null ? controlFilesTable : pointMainSplitPane;
+            if (anchor != null && anchor.getScene() != null) {
+                return anchor.getScene().getWindow();
+            }
+            return null;
+        });
+        panel.setSourcesSupplier(() ->
+            sourceVariantLists != null ? sourceVariantLists : List.of());
+        panel.setOnFilterSettingsChanged(this::scheduleImmediateFilterApply);
+        panel.setAnnotateExecutor(this::runControlAnnotationAsync);
+        panel.setAfterAnnotate(changed -> {
+            if (Boolean.TRUE.equals(changed)) {
+                applyFiltersNow();
+            }
+        });
+    }
+
+    /** Point and SV Control Files tabs share the same durable pop-freq settings. */
+    private void wireControlFilesPanelMirroring() {
+        ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
+        ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
+        if (point != null) {
+            point.setOnSettingsMirrored(source -> {
+                if (sv != null && source != sv) {
+                    sv.mirrorFilterSettingsFrom(source);
+                }
+            });
+        }
+        if (sv != null) {
+            sv.setOnSettingsMirrored(source -> {
+                if (point != null && source != point) {
+                    point.mirrorFilterSettingsFrom(source);
+                }
+            });
+        }
+    }
+
+    /**
+     * Run control-file AF annotation via {@link ThreadRunner} so the app-wide
+     * {@code LoadingPopup} shows progress. Variant Manager only dims (no text).
+     */
+    private void runControlAnnotationAsync(Runnable work) {
+        if (work == null) {
+            return;
+        }
+        if (controlAnnotationRunning) {
+            ThreadRunner.RunnerTask prev = controlAnnotationTask;
+            if (prev != null) {
+                prev.cancel();
+            }
+        }
+        controlAnnotationRunning = true;
+        if (busyOverlay != null) {
+            busyOverlay.cancelDelayedLoadingModal();
+            busyOverlay.lockFilterControls(true);
+        }
+        controlAnnotationTask = ThreadRunner.get().submit(
+            "Annotating control AF…",
+            () -> {
+                work.run();
+                return Boolean.TRUE;
+            },
+            result -> {
+                controlAnnotationRunning = false;
+                controlAnnotationTask = null;
+                if (busyOverlay != null) {
+                    busyOverlay.syncBusyOverlay();
+                }
+                if (disposed) {
+                    return;
+                }
+                VariantFilter filter = buildFilterFromUI();
+                if (vcfManager != null) {
+                    vcfManager.applyFilter(filter);
+                }
+                scheduleRebuild(filter);
+                org.baseplayer.project.ProjectSessionState.get().markDirty();
+            });
+    }
+
+    /**
+     * After chrom load / switch: when a control VCF is open and this chrom lacks AFs,
+     * annotate (modal). Otherwise rebuild tables only — no control side effects.
+     */
+    private void annotateControlAfThenRebuild() {
+        ControlFilesPanel panel = activeControlPanelWithOpenFile();
+        if (panel == null) {
+            // Controlling off: identical to pre-control loadData rebuild path.
+            scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
+            return;
+        }
+        if (!panel.annotator().needsAnnotation(sourceVariants)
+                && !anySourceNeedsControlAf(panel)) {
+            // Cache already has control AF for this file — just show tables.
+            scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
+            return;
+        }
+        runControlAnnotationAsync(() -> panel.annotateLoadedSources(false));
+    }
+
+    /** Called from session save to persist control VCF path + pop-freq toggles. */
+    public void writeControlFilesToDocument(
+            org.baseplayer.project.ProjectDocument.ControlFilesSpec spec) {
+        // Prefer the panel that has an open control VCF; otherwise Point, then SV.
+        ControlFilesPanel panel = activeControlPanelWithOpenFile();
+        if (panel == null) {
+            panel = activeControlPanel();
+        }
+        if (panel != null) {
+            panel.writeToDocument(spec);
+        }
+    }
+
+    private void restoreControlFilesFromSession(ControlFilesPanel panel) {
+        if (panel == null) {
+            return;
+        }
+        org.baseplayer.project.ProjectDocument doc =
+            org.baseplayer.project.ProjectSessionState.get().getDocument();
+        if (doc == null || doc.controlFiles == null) {
+            return;
+        }
+        boolean previous = suppressFilterApplyEvents;
+        suppressFilterApplyEvents = true;
+        try {
+            panel.restoreFromDocument(doc.controlFiles);
+        } finally {
+            suppressFilterApplyEvents = previous;
+        }
+    }
+
+    private boolean anySourceNeedsControlAf(ControlFilesPanel panel) {
+        if (panel == null || sourceVariantLists == null) {
+            return false;
+        }
+        for (VcfManager.CachedChromosomeVariants cached : sourceVariantLists) {
+            if (cached != null && panel.annotator().needsAnnotation(cached.variants())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void annotateControlAfQuietly(VariantList list) {
+        ControlFilesPanel panel = activeControlPanelWithOpenFile();
+        if (panel == null || list == null) {
+            return;
+        }
+        if (!panel.annotator().needsAnnotation(list)) {
+            scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
+            return;
+        }
+        runControlAnnotationAsync(() -> panel.annotateIfOpen(list));
+    }
+
+    private ControlFilesPanel activeControlPanel() {
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            return pointWorkspace.control();
+        }
+        return svWorkspace != null ? svWorkspace.control() : null;
+    }
+
+    private ControlFilesPanel activeControlPanelWithOpenFile() {
+        if (pointWorkspace != null
+                && pointWorkspace.control() != null
+                && pointWorkspace.control().annotator().isOpen()) {
+            return pointWorkspace.control();
+        }
+        if (svWorkspace != null
+                && svWorkspace.control() != null
+                && svWorkspace.control().annotator().isOpen()) {
+            return svWorkspace.control();
+        }
+        return null;
+    }
+
     @FXML
     private void handleApplyControlSettings() {
         if (pointWorkspace != null && pointWorkspace.control() != null) {
@@ -2317,41 +2481,57 @@ public class VariantManagerController implements Initializable {
         updateModeTabVisibility();
 
         refreshReloadBannerState();
-        scheduleRebuild(vcfManager.getCurrentFilter());
-
-        if (!annotationRunning
-            && chromosome != null
-            && !chromosome.isBlank()
-            && !vcfManager.isAnnotated(chromosome)
-            && !isCurrentChromosomeStillLoading()) {
-            annotationRunning = true;
-            final String capturedChrom = chromosome;
-            final VariantList capturedVariants = sourceVariants;
-            annotationThread = new Thread(() -> {
-                boolean interrupted = Thread.currentThread().isInterrupted();
-                if (!interrupted) {
-                    try {
-                        vcfManager.ensureAnnotated(capturedChrom);
-                    } catch (Throwable ignored) {
-                        // Keep table refreshes alive even if annotation fails.
-                    }
-                }
-
-                Platform.runLater(() -> {
-                    annotationRunning = false;
-                    if (interrupted) {
-                        return;
-                    }
-                    if (!Objects.equals(capturedChrom, chromosome) || capturedVariants != sourceVariants) {
-                        loadData();
-                        return;
-                    }
-                    scheduleRebuild(vcfManager.getCurrentFilter());
-                });
-            }, "variant-annotator");
-            annotationThread.setDaemon(true);
-            annotationThread.start();
+        if (activeControlPanelWithOpenFile() != null) {
+            annotateControlAfThenRebuild();
+        } else {
+            scheduleRebuild(vcfManager.getCurrentFilter());
         }
+        maybeStartGeneAnnotation();
+    }
+
+    private void maybeStartGeneAnnotation() {
+        if (annotationRunning
+            || chromosome == null
+            || chromosome.isBlank()
+            || vcfManager == null
+            || vcfManager.isAnnotated(chromosome)
+            || isCurrentChromosomeStillLoading()) {
+            return;
+        }
+        annotationRunning = true;
+        final String capturedChrom = chromosome;
+        final VariantList capturedVariants = sourceVariants;
+        annotationThread = new Thread(() -> {
+            boolean interrupted = Thread.currentThread().isInterrupted();
+            if (!interrupted) {
+                try {
+                    vcfManager.ensureAnnotated(capturedChrom);
+                } catch (Throwable ignored) {
+                    // Keep table refreshes alive even if annotation fails.
+                }
+            }
+
+            Platform.runLater(() -> {
+                annotationRunning = false;
+                if (interrupted) {
+                    return;
+                }
+                if (!Objects.equals(capturedChrom, chromosome) || capturedVariants != sourceVariants) {
+                    loadData();
+                    return;
+                }
+                // Controlling off: rebuild only. Controlling on: annotate if cache lacks AFs.
+                if (activeControlPanelWithOpenFile() != null) {
+                    annotateControlAfQuietly(capturedVariants);
+                } else {
+                    scheduleRebuild(vcfManager != null
+                        ? vcfManager.getCurrentFilter()
+                        : buildFilterFromUI());
+                }
+            });
+        }, "variant-annotator");
+        annotationThread.setDaemon(true);
+        annotationThread.start();
     }
 
     private void scheduleRebuild(VariantFilter filter) {
@@ -3099,6 +3279,13 @@ public class VariantManagerController implements Initializable {
             if (t == null || t.isCompleted() || t.isCancelled()) {
                 tableRebuildTask = null;
                 rebuildRunning = false;
+            }
+        }
+        if (controlAnnotationRunning && ThreadRunner.get().getActiveTasks().isEmpty()) {
+            ThreadRunner.RunnerTask t = controlAnnotationTask;
+            if (t == null || t.isCompleted() || t.isCancelled()) {
+                controlAnnotationTask = null;
+                controlAnnotationRunning = false;
             }
         }
         if (busyOverlay != null) {

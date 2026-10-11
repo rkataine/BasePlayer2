@@ -89,6 +89,9 @@ public final class VariantClassWorkspace {
         if (comparison != null) {
             comparison.writeTo(slice);
         }
+        if (control != null) {
+            control.writeTo(slice);
+        }
         return slice;
     }
 
@@ -101,6 +104,9 @@ public final class VariantClassWorkspace {
         }
         if (comparison != null) {
             comparison.loadFrom(slice);
+        }
+        if (control != null) {
+            control.loadFrom(slice);
         }
     }
 

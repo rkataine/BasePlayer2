@@ -330,12 +330,22 @@ public class VcfReader implements AutoCloseable {
     public List<VcfSnvIndel> querySnvsAndIndels(String chromosome, long start, long end) 
             throws IOException {
         List<VcfSnvIndel> variants = new ArrayList<>();
+        visitSnvsAndIndels(chromosome, start, end, variants::add);
+        return variants;
+    }
+
+    /** Stream overlapping SNVs/indels without materializing a full list. */
+    public void visitSnvsAndIndels(
+            String chromosome, long start, long end, Consumer<VcfSnvIndel> consumer)
+            throws IOException {
+        if (consumer == null) {
+            return;
+        }
         visitOverlappingVariants(chromosome, start, end, ctx -> {
             if (!isStructuralVariant(ctx)) {
-                variants.add(parseSnvIndel(ctx, classifySnvIndel(ctx)));
+                consumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
             }
         });
-        return variants;
     }
 
     public List<VcfStructuralVariant> queryStructuralVariantsForChromosome(String chromosome) 

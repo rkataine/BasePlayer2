@@ -755,10 +755,16 @@ public class VariantFiltersPanel {
                 effects.addAll(entry.getKey().effects);
             }
         }
-        // Effects without a checkbox (e.g. Coding / Non-coding on point) stay allowed.
-        Set<VariantEffect> coveredByUi = snapshotShownVariantEffects();
+        // Only selected categories pass. Effects that belong to a known category but have
+        // no visible checkbox (historically Coding / Non-coding on point) must NOT be
+        // auto-allowed — that kept non-coding genes visible when only Missense/Trunc
+        // were checked. Orphan effects with no EffectCategory stay allowed.
+        Set<VariantEffect> categorized = EnumSet.noneOf(VariantEffect.class);
+        for (EffectCategory category : EffectCategory.values()) {
+            categorized.addAll(category.effects);
+        }
         for (VariantEffect effect : VariantEffect.values()) {
-            if (!coveredByUi.contains(effect)) {
+            if (!categorized.contains(effect)) {
                 effects.add(effect);
             }
         }
@@ -892,9 +898,10 @@ public class VariantFiltersPanel {
             int columnCount = variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL ? 2 : 4;
             int index = 0;
             for (EffectCategory category : EffectCategory.values()) {
-                // Point UI: skip generic Coding / Non-coding — keep the specific categories.
+                // Point UI: skip generic Coding (CODING_OTHER) — keep specific categories.
+                // Non-coding stays visible so Missense/Trunc-only selections can exclude it.
                 if (variantClass != VariantTypeVisuals.VariantClass.STRUCTURAL
-                        && (category == EffectCategory.CODING || category == EffectCategory.NONCODING)) {
+                        && category == EffectCategory.CODING) {
                     continue;
                 }
                 if (variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL
@@ -906,9 +913,21 @@ public class VariantFiltersPanel {
                     continue;
                 }
                 CheckBox cb = new CheckBox(effectCategoryLabel(category));
-                boolean selected = currentFilter != null
-                    ? category.matchesAllowed(currentFilter.getAllowedEffects())
-                    : previousSelection.getOrDefault(category, true);
+                // Prefer the live UI selection (like variant types) so gene navigation /
+                // populate-on-revision does not wipe a missense-only choice from the filter
+                // snapshot that was used at chromosome load time.
+                boolean selected;
+                if (previousSelection.containsKey(category)) {
+                    selected = Boolean.TRUE.equals(previousSelection.get(category));
+                } else if (!previousSelection.isEmpty()) {
+                    // New category while user already chose effects → off (e.g. Non-coding
+                    // appearing must not re-enable after Missense/Trunc-only).
+                    selected = false;
+                } else if (currentFilter != null) {
+                    selected = category.matchesAllowed(currentFilter.getAllowedEffects());
+                } else {
+                    selected = true;
+                }
                 cb.setSelected(selected);
                 cb.getStyleClass().add("filter-checkbox");
                 cb.selectedProperty().addListener(effectCheckListener);

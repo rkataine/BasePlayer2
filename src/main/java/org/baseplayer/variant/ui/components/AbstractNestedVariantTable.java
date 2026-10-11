@@ -814,6 +814,7 @@ public abstract class AbstractNestedVariantTable {
         private static final double COL_COUNT = 64;
         private static final double COL_SAMPLES = 72;
         private static final double COL_AF = 70;
+        private static final double COL_GNOMAD = 72;
         private static final double COL_REFALT = 88;
         private static final double COL_TYPE = 52;
         private static final double COL_EFFECT = 100;
@@ -1490,6 +1491,7 @@ public abstract class AbstractNestedVariantTable {
                 cols.add(headerLabel("Mate", widths.effect), widths.effect);
                 cols.add(headerLabel("Samples", widths.samples), widths.samples);
                 cols.add(headerLabel("AF", widths.af), widths.af);
+                cols.add(headerLabel("gnomAD", widths.gnomad), widths.gnomad);
                 cols.add(headerLabel("QUAL", widths.gq), widths.gq);
                 cols.addGrow(headerGrow(""));
             } else {
@@ -1502,6 +1504,7 @@ public abstract class AbstractNestedVariantTable {
                 }
                 cols.add(headerLabel("Samples", widths.samples), widths.samples);
                 cols.add(headerLabel("AF", widths.af), widths.af);
+                cols.add(headerLabel("gnomAD", widths.gnomad), widths.gnomad);
                 cols.add(headerLabel("GQ", widths.gq), widths.gq);
                 cols.addGrow(headerGrow(""));
             }
@@ -1573,6 +1576,7 @@ public abstract class AbstractNestedVariantTable {
             final DoubleProperty types = new SimpleDoubleProperty(COL_TYPES);
             final DoubleProperty samples = new SimpleDoubleProperty(COL_SAMPLES);
             final DoubleProperty af = new SimpleDoubleProperty(COL_AF);
+            final DoubleProperty gnomad = new SimpleDoubleProperty(COL_GNOMAD);
             final DoubleProperty pos = new SimpleDoubleProperty(COL_POS);
             final DoubleProperty refAlt = new SimpleDoubleProperty(COL_REFALT);
             final DoubleProperty type = new SimpleDoubleProperty(COL_TYPE);
@@ -1944,6 +1948,8 @@ public abstract class AbstractNestedVariantTable {
             samples.getStyleClass().add(colorClass);
             Label af = fixedCol(formatAlleleFractions(tableRow.node(), filter), widths.af, "vn-summary");
             af.getStyleClass().add(colorClass);
+            Label gnomad = fixedCol(formatControlAf(tableRow.node()), widths.gnomad, "vn-summary");
+            gnomad.getStyleClass().add(colorClass);
             Label gq = fixedCol(
                 layout == VariantDetailLayout.STRUCTURAL
                     ? formatSvQual(tableRow)
@@ -1952,6 +1958,7 @@ public abstract class AbstractNestedVariantTable {
             gq.getStyleClass().add(colorClass);
             cols.add(samples, widths.samples);
             cols.add(af, widths.af);
+            cols.add(gnomad, widths.gnomad);
             cols.add(gq, widths.gq);
             Region trail = new Region();
             trail.getStyleClass().add("vn-col");
@@ -2544,6 +2551,24 @@ public abstract class AbstractNestedVariantTable {
             return String.format(Locale.ROOT, "%.2f", max);
         }
         return String.format(Locale.ROOT, "%.2f–%.2f", min, max);
+    }
+
+    /** Population AF from control VCF ({@link VariantNode#controlAf}). */
+    static String formatControlAf(VariantNode node) {
+        if (node == null || node.controlAf == null) {
+            return "—";
+        }
+        double af = node.controlAf;
+        if (af == 0) {
+            return "0";
+        }
+        if (af >= 0.01) {
+            return String.format(Locale.ROOT, "%.4f", af);
+        }
+        if (af >= 0.0001) {
+            return String.format(Locale.ROOT, "%.6f", af);
+        }
+        return String.format(Locale.ROOT, "%.2e", af);
     }
 
     static String sampleDisplayName(VariantNode.SampleCall call) {

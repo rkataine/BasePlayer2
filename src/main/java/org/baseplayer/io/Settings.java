@@ -9,11 +9,13 @@ import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.samples.alignment.draw.ModificationColorScheme;
 
 /**
- * Application-wide settings with persistence via java.util.prefs.
- * Singleton — access via Settings.get().
+ * User-global application settings with persistence via {@link Preferences}.
+ * Singleton — access via {@link #get()}.
  *
- * All numeric values have sensible defaults matching the original hardcoded constants.
- * Changes are written to prefs immediately and take effect on next draw/fetch.
+ * <p>These are <b>not</b> project settings. Values survive new project, clear, and
+ * opening another project. Setters write prefs immediately (and flush) so the next
+ * draw/fetch and the next app launch see the change. Only {@link #resetDefaults()}
+ * (Settings dialog) should wipe them — never project clear/load.
  */
 public final class Settings {
 
@@ -203,42 +205,118 @@ public final class Settings {
     return Math.max(0L, (long) largeBedZoomLimitMb) * 1024L * 1024L;
   }
 
-  // ── Setters (persist immediately) ─────────────────────────────────────
+  // ── Setters (persist immediately to user prefs) ───────────────────────
 
-  public void setMaxReadViewLength(int bp)            { this.maxReadViewLength = bp; prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp); }
-  public void setMaxCoverageViewLength(int bp)        { this.maxCoverageViewLength = bp; prefs.putInt(KEY_MAX_COVERAGE_VIEW_LENGTH, bp); }
-  public void setEnableSampledCoverage(boolean enable) { this.enableSampledCoverage = enable; prefs.putBoolean(KEY_ENABLE_SAMPLED_COVERAGE, enable); }
-  public void setSampledCoveragePoints(int n)         { this.sampledCoveragePoints = n; prefs.putInt(KEY_SAMPLED_COVERAGE_POINTS, n); }
-  public void setCoverageFraction(double f)           { this.coverageFraction = f; prefs.putDouble(KEY_COVERAGE_FRACTION, f); }
-  public void setReadGap(double px)                   { this.readGap = px; prefs.putDouble(KEY_READ_GAP, px); }
-  public void setReadHeight(double px)                { this.readHeight = px; prefs.putDouble(KEY_READ_HEIGHT, px); }
-  public void setSmoothSmallFiles(boolean smooth)     { this.smoothSmallFiles = smooth; prefs.putBoolean(KEY_SMOOTH_SMALL_FILES, smooth); }
-  public void setMismatchMinFraction(double f)         { this.mismatchMinFraction = f; prefs.putDouble(KEY_MISMATCH_MIN_FRACTION, f); }
-  public void setMismatchMinCount(int n)               { this.mismatchMinCount = n; prefs.putInt(KEY_MISMATCH_MIN_COUNT, n); }
-  public void setReadColorMode(ReadColorMode mode)     { this.readColorMode = mode; prefs.put(KEY_READ_COLOR_MODE, mode.name()); }
+  public void setMaxReadViewLength(int bp) {
+    this.maxReadViewLength = bp;
+    prefs.putInt(KEY_MAX_READ_VIEW_LENGTH, bp);
+    flushPrefs();
+  }
+  public void setMaxCoverageViewLength(int bp) {
+    this.maxCoverageViewLength = bp;
+    prefs.putInt(KEY_MAX_COVERAGE_VIEW_LENGTH, bp);
+    flushPrefs();
+  }
+  public void setEnableSampledCoverage(boolean enable) {
+    this.enableSampledCoverage = enable;
+    prefs.putBoolean(KEY_ENABLE_SAMPLED_COVERAGE, enable);
+    flushPrefs();
+  }
+  public void setSampledCoveragePoints(int n) {
+    this.sampledCoveragePoints = n;
+    prefs.putInt(KEY_SAMPLED_COVERAGE_POINTS, n);
+    flushPrefs();
+  }
+  public void setCoverageFraction(double f) {
+    this.coverageFraction = f;
+    prefs.putDouble(KEY_COVERAGE_FRACTION, f);
+    flushPrefs();
+  }
+  public void setReadGap(double px) {
+    this.readGap = px;
+    prefs.putDouble(KEY_READ_GAP, px);
+    flushPrefs();
+  }
+  public void setReadHeight(double px) {
+    this.readHeight = px;
+    prefs.putDouble(KEY_READ_HEIGHT, px);
+    flushPrefs();
+  }
+  public void setSmoothSmallFiles(boolean smooth) {
+    this.smoothSmallFiles = smooth;
+    prefs.putBoolean(KEY_SMOOTH_SMALL_FILES, smooth);
+    flushPrefs();
+  }
+  public void setMismatchMinFraction(double f) {
+    this.mismatchMinFraction = f;
+    prefs.putDouble(KEY_MISMATCH_MIN_FRACTION, f);
+    flushPrefs();
+  }
+  public void setMismatchMinCount(int n) {
+    this.mismatchMinCount = n;
+    prefs.putInt(KEY_MISMATCH_MIN_COUNT, n);
+    flushPrefs();
+  }
+  public void setReadColorMode(ReadColorMode mode) {
+    this.readColorMode = mode;
+    prefs.put(KEY_READ_COLOR_MODE, mode.name());
+    flushPrefs();
+  }
   public void setModificationColorScheme(ModificationColorScheme scheme) {
     this.modificationColorScheme = scheme;
     prefs.put(KEY_MODIFICATION_COLOR_SCHEME, scheme.name());
+    flushPrefs();
   }
   public void setReadInfoPopupPosition(ReadInfoPopupPosition position) {
     this.readInfoPopupPosition = position;
     prefs.put(KEY_READ_INFO_POPUP_POSITION, position.name());
+    flushPrefs();
   }
-  public void setMaxReadCoverage(int n)                  { this.maxReadCoverage = n; prefs.putInt(KEY_MAX_READ_COVERAGE, n); }
-  public void setLastGenome(String name)                  { this.lastGenome = name; if (name != null) prefs.put(KEY_LAST_GENOME, name); else prefs.remove(KEY_LAST_GENOME); }
-  public void setLastAnnotation(String name)              { this.lastAnnotation = name; if (name != null) prefs.put(KEY_LAST_ANNOTATION, name); else prefs.remove(KEY_LAST_ANNOTATION); }
+  public void setMaxReadCoverage(int n) {
+    this.maxReadCoverage = n;
+    prefs.putInt(KEY_MAX_READ_COVERAGE, n);
+    flushPrefs();
+  }
+  public void setLastGenome(String name) {
+    this.lastGenome = name;
+    if (name != null) {
+      prefs.put(KEY_LAST_GENOME, name);
+    } else {
+      prefs.remove(KEY_LAST_GENOME);
+    }
+    flushPrefs();
+  }
+  public void setLastAnnotation(String name) {
+    this.lastAnnotation = name;
+    if (name != null) {
+      prefs.put(KEY_LAST_ANNOTATION, name);
+    } else {
+      prefs.remove(KEY_LAST_ANNOTATION);
+    }
+    flushPrefs();
+  }
   public void setLargeBedZoomLimitMb(int mb) {
     this.largeBedZoomLimitMb = Math.max(0, mb);
     prefs.putInt(KEY_LARGE_BED_ZOOM_LIMIT_MB, this.largeBedZoomLimitMb);
+    flushPrefs();
   }
   public void setLargeBedMaxViewLength(int bp) {
     this.largeBedMaxViewLength = Math.max(1_000, bp);
     prefs.putInt(KEY_LARGE_BED_MAX_VIEW_LENGTH, this.largeBedMaxViewLength);
+    flushPrefs();
+  }
+
+  private static void flushPrefs() {
+    try {
+      prefs.flush();
+    } catch (Exception e) {
+      System.err.println("Settings: failed to flush preferences: " + e.getMessage());
+    }
   }
 
   /**
-   * Export current draw settings for project JSON (excludes machine-local prefs like API keys).
-   * Genome/annotation last-used keys are included so a session can restore them.
+   * Export current values (for diagnostics / optional import). Draw settings are
+   * user-global and are <b>not</b> written into project JSON on save.
    */
   public Map<String, Object> toSnapshot() {
     Map<String, Object> map = new LinkedHashMap<>();
@@ -264,7 +342,8 @@ public final class Settings {
   }
 
   /**
-   * Apply a project settings snapshot into the live singleton (also writes prefs).
+   * Import a settings map into the live singleton and user prefs.
+   * Not used on project open — projects must not overwrite user draw settings.
    */
   public void applySnapshot(Map<String, Object> map) {
     if (map == null || map.isEmpty()) return;

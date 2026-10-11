@@ -37,8 +37,12 @@ public class CoverageDrawer {
     public final int sampleIndex;
     /** Total coverage per pixel column */
     public final double[] coverage;
+    /** Forward / reverse strand coverage per pixel column */
+    public final double[] coverageFwd, coverageRev;
     /** Mismatch counts per base per column */
     public final double[] mmA, mmC, mmG, mmT;
+    /** Forward / reverse strand mismatch counts per base per column */
+    public final double[] mmAFwd, mmARev, mmCFwd, mmCRev, mmGFwd, mmGRev, mmTFwd, mmTRev;
     /** Methylation ratio per column (0-1, or -1 = no data) */
     public final double[] methylRatio;
     /** Smoothed methylation ratio for line drawing */
@@ -75,10 +79,20 @@ public class CoverageDrawer {
       this.sample = sample;
       this.sampleIndex = sampleIndex;
       this.coverage = new double[numColumns];
+      this.coverageFwd = new double[numColumns];
+      this.coverageRev = new double[numColumns];
       this.mmA = new double[numColumns];
       this.mmC = new double[numColumns];
       this.mmG = new double[numColumns];
       this.mmT = new double[numColumns];
+      this.mmAFwd = new double[numColumns];
+      this.mmARev = new double[numColumns];
+      this.mmCFwd = new double[numColumns];
+      this.mmCRev = new double[numColumns];
+      this.mmGFwd = new double[numColumns];
+      this.mmGRev = new double[numColumns];
+      this.mmTFwd = new double[numColumns];
+      this.mmTRev = new double[numColumns];
       this.methylRatio = new double[numColumns];
       this.smoothedMethylRatio = new double[numColumns];
       this.signalSum = new double[numColumns];
@@ -239,24 +253,29 @@ public class CoverageDrawer {
 
     // ── Pixel-level coverage sweep-line (replaces regionLen-sized events[]) ──
     int[] pixEvents = new int[numColumns + 2];
+    int[] pixEventsFwd = new int[numColumns + 2];
+    int[] pixEventsRev = new int[numColumns + 2];
 
     // For methylation only: per-position data needed for accurate per-CpG ratios
     int[] baseEvents = isMethyl ? new int[regionLen + 2] : null;
     int[] bisConv    = isMethyl ? new int[regionLen]      : null;
 
-    // Per-pixel: map genomic position → per-allele counts. Take the PEAK
-    // mismatch count at any single genomic position within the pixel rather
-    // than summing across all positions. Summing inflates values when multiple
-    // genomic positions land in one pixel (zoom-out within read view), giving
-    // misleading variant counts on the coverage track. Mirrors the bin-level
-    // logic used by AlignmentFile's streamed coverage matrix cache.
+    // Per-pixel: map genomic position → per-allele strand counts.
+    // Layout: [A_fwd, C_fwd, G_fwd, T_fwd, A_rev, C_rev, G_rev, T_rev].
+    // Take the PEAK mismatch count at any single genomic position within the
+    // pixel rather than summing across all positions. Summing inflates values
+    // when multiple genomic positions land in one pixel (zoom-out within read
+    // view), giving misleading variant counts on the coverage track. Mirrors
+    // the bin-level logic used by AlignmentFile's streamed coverage matrix cache.
     @SuppressWarnings("unchecked")
     java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[numColumns];
 
     // Single pass through reads
     for (BAMRecord read : reads) {
+      boolean reverse = read.isReverseStrand();
       // Map read exonic segments to pixel columns for coverage (CIGAR-aware)
       addPixelCoverageEvents(read, pixEvents, numColumns);
+      addPixelCoverageEvents(read, reverse ? pixEventsRev : pixEventsFwd, numColumns);
 
       // Base-level events for methylation (CIGAR-aware)
       if (isMethyl) {
@@ -282,12 +301,13 @@ public class CoverageDrawer {
           int px = (int)(double) chromPosToScreenPos.apply((double) mPos);
           if (px < 0 || px >= numColumns) continue;
           if (posMM[px] == null) posMM[px] = new java.util.HashMap<>();
-          int[] c = posMM[px].computeIfAbsent(mPos, k -> new int[4]);
+          int[] c = posMM[px].computeIfAbsent(mPos, k -> new int[8]);
+          int baseOffset = reverse ? 4 : 0;
           switch (Character.toUpperCase((char) read.mismatches[m + 1])) {
-            case 'A' -> c[0]++;
-            case 'C' -> c[1]++;
-            case 'G' -> c[2]++;
-            case 'T' -> c[3]++;
+            case 'A' -> c[baseOffset]++;
+            case 'C' -> c[baseOffset + 1]++;
+            case 'G' -> c[baseOffset + 2]++;
+            case 'T' -> c[baseOffset + 3]++;
           }
         }
       }
@@ -380,14 +400,35 @@ public class CoverageDrawer {
     }
 
     // Extract per-pixel peak: highest read count supporting any single allele
-    // at any single genomic position within the pixel.
+    // at any single genomic position within the pixel. Keep F/R from that same
+    // peak position so strand balance reflects one locus, not mixed peaks.
     for (int px = 0; px < numColumns; px++) {
       if (posMM[px] == null) continue;
       for (int[] c : posMM[px].values()) {
-        if (c[0] > row.mmA[px]) row.mmA[px] = c[0];
-        if (c[1] > row.mmC[px]) row.mmC[px] = c[1];
-        if (c[2] > row.mmG[px]) row.mmG[px] = c[2];
-        if (c[3] > row.mmT[px]) row.mmT[px] = c[3];
+        int aTotal = c[0] + c[4];
+        int cTotal = c[1] + c[5];
+        int gTotal = c[2] + c[6];
+        int tTotal = c[3] + c[7];
+        if (aTotal > row.mmA[px]) {
+          row.mmA[px] = aTotal;
+          row.mmAFwd[px] = c[0];
+          row.mmARev[px] = c[4];
+        }
+        if (cTotal > row.mmC[px]) {
+          row.mmC[px] = cTotal;
+          row.mmCFwd[px] = c[1];
+          row.mmCRev[px] = c[5];
+        }
+        if (gTotal > row.mmG[px]) {
+          row.mmG[px] = gTotal;
+          row.mmGFwd[px] = c[2];
+          row.mmGRev[px] = c[6];
+        }
+        if (tTotal > row.mmT[px]) {
+          row.mmT[px] = tTotal;
+          row.mmTFwd[px] = c[3];
+          row.mmTRev[px] = c[7];
+        }
       }
       posMM[px] = null; // release for GC
     }
@@ -395,9 +436,15 @@ public class CoverageDrawer {
     // Convert pixel events → running coverage
     double maxCov = 0;
     int running = 0;
+    int runningFwd = 0;
+    int runningRev = 0;
     for (int px = 0; px < numColumns; px++) {
       running += pixEvents[px];
+      runningFwd += pixEventsFwd[px];
+      runningRev += pixEventsRev[px];
       row.coverage[px] = Math.max(0, running);
+      row.coverageFwd[px] = Math.max(0, runningFwd);
+      row.coverageRev[px] = Math.max(0, runningRev);
       if (row.coverage[px] > maxCov) maxCov = row.coverage[px];
     }
     // Don't create row if coverage is effectively zero (below rendering threshold)

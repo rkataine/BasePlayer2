@@ -194,10 +194,20 @@ public class TrackBodyCanvas extends GenomicCanvas {
                                    int genomicPos,
                                    int pixelColumn,
                                    double coverage,
+                                   double coverageFwd,
+                                   double coverageRev,
                                    double mmA,
                                    double mmC,
                                    double mmG,
                                    double mmT,
+                                   double mmAFwd,
+                                   double mmARev,
+                                   double mmCFwd,
+                                   double mmCRev,
+                                   double mmGFwd,
+                                   double mmGRev,
+                                   double mmTFwd,
+                                   double mmTRev,
                                    double signalAvg,
                                    double signalMin,
                                    double signalMax,
@@ -205,7 +215,21 @@ public class TrackBodyCanvas extends GenomicCanvas {
                                    java.util.Map<Character, Double> modTypeCounts,
                                    java.util.Map<Character, Double> modTypeAvgProbs) {}
 
-  private record AltCount(char altBase, double count) {}
+  private record AltCount(char altBase, double count, double fwd, double rev) {}
+
+  private record TooltipLine(String text, Color color, boolean bold) {
+    TooltipLine(String text, Color color) {
+      this(text, color, false);
+    }
+  }
+
+  /** Strand-support reliability for a coverage allele. */
+  private enum StrandReliability {
+    BALANCED,
+    WEAK_STRAND,
+    STRAND_BIAS,
+    UNKNOWN
+  }
 
   public TrackBodyCanvas(
       Canvas reactiveCanvas,
@@ -360,7 +384,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
         if (hit != hoveredRead) {
           hoveredRead = hit;
         }
-        hoveredVariant = findVariantHit(lastMouseX, lastMouseY);
+        // Coverage band owns the hover when BAM+VCF share a track.
+        hoveredVariant = isMouseInCoverageSection(lastMouseX, lastMouseY)
+            ? null
+            : findVariantHit(lastMouseX, lastMouseY);
       }
     }
     if (!isReactiveOverlayReserved()) {
@@ -590,7 +617,11 @@ public class TrackBodyCanvas extends GenomicCanvas {
       }
 
       BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
-      VariantDrawer.VariantHit variantHit = findVariantHit(lastMouseX, lastMouseY);
+      // Do not highlight / hand-cursor VCF alleles while the pointer is in the
+      // upper coverage band — coverage hover owns that region when BAM is open.
+      VariantDrawer.VariantHit variantHit = isMouseInCoverageSection(lastMouseX, lastMouseY)
+          ? null
+          : findVariantHit(lastMouseX, lastMouseY);
       boolean hand = variantHit != null || hit != null;
       reactiveCanvas.setCursor(hand ? Cursor.HAND : Cursor.DEFAULT);
 
@@ -616,7 +647,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
       }
       if (event.getClickCount() == 1 && event.isStillSincePress()) {
         Window owner = reactiveCanvas.getScene() != null ? reactiveCanvas.getScene().getWindow() : null;
-        VariantDrawer.VariantHit variantHit = findVariantHit(event.getX(), event.getY());
+        VariantDrawer.VariantHit variantHit = isMouseInCoverageSection(event.getX(), event.getY())
+            ? null
+            : findVariantHit(event.getX(), event.getY());
         if (variantHit != null && owner != null) {
           selectedRead = null;
           readInfoPopup.hide();
@@ -1423,6 +1456,45 @@ public class TrackBodyCanvas extends GenomicCanvas {
     return findCoverageHoverInfo(mx, my) != null;
   }
 
+  /**
+   * True when the pointer is in the upper coverage band of a visible BAM sample.
+   * Used to suppress VCF variant hover/click while coverage owns that region.
+   */
+  private boolean isMouseInCoverageSection(double mx, double my) {
+    if (isScrollbarOverrideActive()) return false;
+    if (mx < 0 || my < 0) return false;
+    if (!canDrawCoverageData()) return false;
+
+    double sampleH = sampleRegistry.getSampleHeight();
+    if (sampleH <= 0) return false;
+    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
+    double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
+        Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
+    double covH = coverageOnly ? sampleH : coverageFractionH;
+
+    List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots = sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      SampleTrack track = sampleRegistry.getSampleTracks().get(visibleSlot.trackIndex());
+      if (!track.isVisible()) continue;
+
+      boolean hasBam = false;
+      for (Sample sample : track.getSamples()) {
+        if (sample.visible && sample.getDataType() == Sample.DataType.BAM) {
+          hasBam = true;
+          break;
+        }
+      }
+      if (!hasBam) continue;
+
+      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
+      if (my >= sampleY && my < sampleY + covH) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private CoverageHoverInfo findCoverageHoverInfo(double mx, double my) {
     if (isScrollbarOverrideActive()) return null;
     if (mx < 0 || my < 0) return null;
@@ -1498,10 +1570,20 @@ public class TrackBodyCanvas extends GenomicCanvas {
             genomicPos,
             px,
             cov,
+            row.coverageFwd[px],
+            row.coverageRev[px],
             row.mmA[px],
             row.mmC[px],
             row.mmG[px],
             row.mmT[px],
+            row.mmAFwd[px],
+            row.mmARev[px],
+            row.mmCFwd[px],
+            row.mmCRev[px],
+            row.mmGFwd[px],
+            row.mmGRev[px],
+            row.mmTFwd[px],
+            row.mmTRev[px],
             signalAvg,
             signalMin,
             signalMax,
@@ -1541,13 +1623,22 @@ public class TrackBodyCanvas extends GenomicCanvas {
   }
 
   private void drawCoverageTooltip(CoverageHoverInfo hover, double mx, double my) {
-    List<String> lines = new ArrayList<>();
+    List<TooltipLine> lines = new ArrayList<>();
     String chrom = drawStack.getChromosome() != null ? drawStack.getChromosome() : "";
-    lines.add(chrom + ":" + hover.genomicPos() + " cov=" + (int) Math.round(hover.coverage()));
+    int covRounded = (int) Math.round(hover.coverage());
+    int covFwd = (int) Math.round(hover.coverageFwd());
+    int covRev = (int) Math.round(hover.coverageRev());
+    lines.add(new TooltipLine(
+        chrom + ":" + hover.genomicPos() + "  cov=" + covRounded, Color.WHITE, true));
+    if (covFwd + covRev > 0) {
+      lines.add(new TooltipLine(
+          String.format(Locale.ROOT, "strand  \u25B8%d  \u25C2%d", covFwd, covRev),
+          Color.rgb(200, 200, 200)));
+    }
 
     // Determine active color mode and data type
-    ReadColorMode colorMode = hover.row().sample.getBamFile() != null 
-        ? hover.row().sample.getBamFile().getReadColorMode() 
+    ReadColorMode colorMode = hover.row().sample.getBamFile() != null
+        ? hover.row().sample.getBamFile().getReadColorMode()
         : ReadColorMode.STRAND;
     CoverageDataType dataType = colorMode.getDataType();
 
@@ -1557,88 +1648,184 @@ public class TrackBodyCanvas extends GenomicCanvas {
       String ref = refSvc.getBases(drawStack.getChromosome(), hover.genomicPos(), hover.genomicPos());
       if (ref != null && ref.length() == 1) {
         refBase = Character.toUpperCase(ref.charAt(0));
-        lines.add("ref=" + refBase);
+        lines.add(new TooltipLine("ref=" + refBase, Color.rgb(210, 210, 210)));
       }
     }
 
-    if ((dataType == CoverageDataType.SIGNAL || dataType == CoverageDataType.QUALITY) 
+    AltCount dominantAlt = null;
+
+    if ((dataType == CoverageDataType.SIGNAL || dataType == CoverageDataType.QUALITY)
         && hover.signalCount() > 0) {
-      // Display numeric data statistics (signal tags or quality)
       String modeLabel = colorMode.getLabel();
-      lines.add(String.format(Locale.ROOT, "%s avg: %.1f", modeLabel, hover.signalAvg()));
-      lines.add(String.format(Locale.ROOT, "min: %.1f, max: %.1f", hover.signalMin(), hover.signalMax()));
-      lines.add(String.format(Locale.ROOT, "samples: %d", hover.signalCount()));
+      lines.add(new TooltipLine(
+          String.format(Locale.ROOT, "%s avg: %.1f", modeLabel, hover.signalAvg()), Color.WHITE));
+      lines.add(new TooltipLine(
+          String.format(Locale.ROOT, "min: %.1f, max: %.1f", hover.signalMin(), hover.signalMax()),
+          Color.WHITE));
+      lines.add(new TooltipLine(
+          String.format(Locale.ROOT, "samples: %d", hover.signalCount()), Color.WHITE));
     } else if (dataType == CoverageDataType.MODIFICATION && !hover.modTypeCounts().isEmpty()) {
-      // Display base modification statistics
-      lines.add("Base modifications:");
+      lines.add(new TooltipLine("Base modifications:", Color.rgb(210, 210, 210)));
       List<java.util.Map.Entry<Character, Double>> modEntries = new ArrayList<>(hover.modTypeCounts().entrySet());
       modEntries.sort(Comparator.comparingDouble(java.util.Map.Entry<Character, Double>::getValue).reversed());
-      
+
       for (java.util.Map.Entry<Character, Double> entry : modEntries) {
         char modKey = entry.getKey();
         double count = entry.getValue();
         double avgProb = hover.modTypeAvgProbs().getOrDefault(modKey, 0.0);
         String modName = getModificationName(modKey);
         double af = hover.coverage() > 0 ? count / hover.coverage() : 0;
-        lines.add(String.format(Locale.ROOT, "%s: %.0f (%.1f%%, p=%.2f)", 
-            modName, count, af * 100.0, avgProb));
+        lines.add(new TooltipLine(String.format(Locale.ROOT, "%s: %.0f (%.1f%%, p=%.2f)",
+            modName, count, af * 100.0, avgProb), Color.WHITE));
       }
     } else {
-      // Display mismatches (default)
       double cov = Math.max(0.0, hover.coverage());
       List<AltCount> alts = new ArrayList<>(4);
-      if (hover.mmA() > 0) alts.add(new AltCount('A', hover.mmA()));
-      if (hover.mmC() > 0) alts.add(new AltCount('C', hover.mmC()));
-      if (hover.mmG() > 0) alts.add(new AltCount('G', hover.mmG()));
-      if (hover.mmT() > 0) alts.add(new AltCount('T', hover.mmT()));
+      if (hover.mmA() > 0) alts.add(new AltCount('A', hover.mmA(), hover.mmAFwd(), hover.mmARev()));
+      if (hover.mmC() > 0) alts.add(new AltCount('C', hover.mmC(), hover.mmCFwd(), hover.mmCRev()));
+      if (hover.mmG() > 0) alts.add(new AltCount('G', hover.mmG(), hover.mmGFwd(), hover.mmGRev()));
+      if (hover.mmT() > 0) alts.add(new AltCount('T', hover.mmT(), hover.mmTFwd(), hover.mmTRev()));
       alts.sort(Comparator.comparingDouble(AltCount::count).reversed());
 
       if (alts.isEmpty()) {
-        lines.add("No mismatches");
+        lines.add(new TooltipLine("No mismatches", Color.rgb(180, 180, 180)));
       } else {
-        char dominantAlt = alts.get(0).altBase();
+        dominantAlt = alts.get(0);
         for (AltCount alt : alts) {
           double af = cov > 0 ? alt.count() / cov : 0;
           String change = (refBase == '?')
               ? ("alt " + alt.altBase())
               : (refBase + ">" + alt.altBase());
-          lines.add(String.format(Locale.ROOT, "%s %.0f (%.1f%%)",
-              change, alt.count(), af * 100.0));
+          Color alleleColor = mismatchColor(alt.altBase());
+          lines.add(new TooltipLine(String.format(Locale.ROOT, "%s  %.0f (%.1f%%)",
+              change, alt.count(), af * 100.0), alleleColor, true));
+
+          int fwd = (int) Math.round(alt.fwd());
+          int rev = (int) Math.round(alt.rev());
+          if (fwd + rev > 0) {
+            StrandReliability reliability = classifyStrandReliability(fwd, rev);
+            lines.add(new TooltipLine(
+                String.format(Locale.ROOT, "  \u25B8%d  \u25C2%d  %s  %s",
+                    fwd, rev, strandBalanceBar(fwd, rev), reliabilityLabel(reliability)),
+                reliabilityColor(reliability)));
+          }
         }
-        String aaChange = computeAaChangeAtPosition(hover.genomicPos(), dominantAlt);
+        String aaChange = computeAaChangeAtPosition(hover.genomicPos(), dominantAlt.altBase());
         if (aaChange != null) {
-          lines.add("AA: " + aaChange);
+          lines.add(new TooltipLine("AA: " + aaChange, Color.rgb(255, 220, 120)));
         }
       }
     }
 
     reactiveGc.setFont(AppFonts.getFont("System", FontWeight.BOLD, 11));
-    double padX = 5;
-    double padY = 3;
-    double lineH = 14;
+    double padX = 6;
+    double padY = 4;
+    double lineH = 15;
+    double barReserve = dominantAlt != null ? 10 : 0;
     int maxLen = 0;
-    for (String line : lines) {
-      maxLen = Math.max(maxLen, line.length());
+    for (TooltipLine line : lines) {
+      maxLen = Math.max(maxLen, line.text().length());
     }
-    double boxW = maxLen * 7.1 + 2 * padX;
-    double boxH = lines.size() * lineH + 2 * padY;
+    double boxW = Math.max(120, maxLen * 7.0 + 2 * padX + 8);
+    double boxH = lines.size() * lineH + 2 * padY + barReserve;
     double bx = mx + 12;
     double by = my + 12;
     if (bx + boxW > getWidth()) bx = mx - boxW - 8;
     if (by + boxH > getHeight()) by = my - boxH - 8;
 
-    reactiveGc.setFill(Color.rgb(20, 20, 20, 0.88));
+    Color borderColor = Color.rgb(230, 230, 230, 0.95);
+    if (dominantAlt != null) {
+      StrandReliability top = classifyStrandReliability(
+          (int) Math.round(dominantAlt.fwd()), (int) Math.round(dominantAlt.rev()));
+      borderColor = reliabilityColor(top);
+    }
+
+    reactiveGc.setFill(Color.rgb(20, 20, 20, 0.90));
     reactiveGc.fillRect(bx, by, boxW, boxH);
-    reactiveGc.setStroke(Color.rgb(230, 230, 230, 0.95));
+    reactiveGc.setStroke(borderColor);
+    reactiveGc.setLineWidth(1.5);
     reactiveGc.strokeRect(bx + 0.5, by + 0.5, boxW - 1, boxH - 1);
+    reactiveGc.setLineWidth(1.0);
+
+    double contentTop = by + padY;
+    if (dominantAlt != null && dominantAlt.fwd() + dominantAlt.rev() > 0) {
+      drawStrandReliabilityBar(bx + padX, contentTop, boxW - 2 * padX, 5,
+          dominantAlt.fwd(), dominantAlt.rev());
+      contentTop += barReserve;
+    }
 
     for (int i = 0; i < lines.size(); i++) {
-      String line = lines.get(i);
-      reactiveGc.setFill(line.startsWith("AA:")
-          ? Color.rgb(255, 220, 120)
-          : Color.WHITE);
-      reactiveGc.fillText(line, bx + padX, by + padY + (i + 1) * lineH - 3);
+      TooltipLine line = lines.get(i);
+      reactiveGc.setFont(AppFonts.getFont("System",
+          line.bold() ? FontWeight.BOLD : FontWeight.NORMAL, 11));
+      reactiveGc.setFill(line.color());
+      reactiveGc.fillText(line.text(), bx + padX, contentTop + (i + 1) * lineH - 3);
     }
+  }
+
+  private static Color mismatchColor(char base) {
+    return switch (Character.toUpperCase(base)) {
+      case 'A' -> DrawColors.MISMATCH_A;
+      case 'C' -> DrawColors.MISMATCH_C;
+      case 'G' -> DrawColors.MISMATCH_G;
+      case 'T' -> DrawColors.MISMATCH_T;
+      default -> DrawColors.MISMATCH_OTHER;
+    };
+  }
+
+  private static StrandReliability classifyStrandReliability(int fwd, int rev) {
+    int total = fwd + rev;
+    if (total <= 0) return StrandReliability.UNKNOWN;
+    if (fwd == 0 || rev == 0) {
+      return total >= 3 ? StrandReliability.STRAND_BIAS : StrandReliability.WEAK_STRAND;
+    }
+    double minorityFrac = Math.min(fwd, rev) / (double) total;
+    if (minorityFrac < 0.15 && total >= 8) return StrandReliability.STRAND_BIAS;
+    if (minorityFrac < 0.25) return StrandReliability.WEAK_STRAND;
+    return StrandReliability.BALANCED;
+  }
+
+  private static String reliabilityLabel(StrandReliability reliability) {
+    return switch (reliability) {
+      case BALANCED -> "OK";
+      case WEAK_STRAND -> "weak";
+      case STRAND_BIAS -> "bias";
+      case UNKNOWN -> "";
+    };
+  }
+
+  private static Color reliabilityColor(StrandReliability reliability) {
+    return switch (reliability) {
+      case BALANCED -> Color.rgb(120, 210, 130);
+      case WEAK_STRAND -> Color.rgb(230, 190, 80);
+      case STRAND_BIAS -> Color.rgb(230, 110, 100);
+      case UNKNOWN -> Color.rgb(200, 200, 200);
+    };
+  }
+
+  /** Compact unicode bar showing forward vs reverse allele support. */
+  private static String strandBalanceBar(int fwd, int rev) {
+    int total = fwd + rev;
+    if (total <= 0) return "";
+    int cells = 8;
+    int fwdCells = (int) Math.round(cells * (fwd / (double) total));
+    fwdCells = Math.max(0, Math.min(cells, fwdCells));
+    int revCells = cells - fwdCells;
+    return "\u25A0".repeat(fwdCells) + "\u25A1".repeat(revCells);
+  }
+
+  private void drawStrandReliabilityBar(double x, double y, double width, double height,
+                                        double fwd, double rev) {
+    double total = fwd + rev;
+    if (total <= 0 || width <= 0) return;
+    double fwdW = width * (fwd / total);
+    double revW = width - fwdW;
+    reactiveGc.setFill(DrawColors.READ_FORWARD);
+    reactiveGc.fillRect(x, y, Math.max(0, fwdW), height);
+    reactiveGc.setFill(DrawColors.READ_REVERSE);
+    reactiveGc.fillRect(x + fwdW, y, Math.max(0, revW), height);
+    reactiveGc.setStroke(Color.rgb(240, 240, 240, 0.7));
+    reactiveGc.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
   }
 
   private boolean setExternalMateHighlightFrom(TrackBodyCanvas owner, String readName) {
