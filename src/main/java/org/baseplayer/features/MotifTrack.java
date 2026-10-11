@@ -19,6 +19,7 @@ import org.baseplayer.features.motif.PwmScorer.Hit;
 import org.baseplayer.features.motif.PwmScorer.PreparedMotif;
 import org.baseplayer.features.motif.SequenceLogoPainter;
 import org.baseplayer.genome.ReferenceGenomeService;
+import org.baseplayer.services.LoadingManager;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.utils.AppFonts;
@@ -45,7 +46,7 @@ public class MotifTrack extends AbstractTrack {
   private static final double LOGO_HEIGHT = 72;
   private static final double HIT_BAR_HEIGHT = 8;
   /** Space above logo/bar for the motif name (same idea as BedTrack / genes). */
-  private static final double NAME_SLOT_H = 14;
+  private static final double NAME_SLOT_H = 16;
   private static final double ROW_TOP_PAD = 4;
   private static final double MIN_LABEL_WIDTH_PX = 18;
   /**
@@ -53,8 +54,10 @@ public class MotifTrack extends AbstractTrack {
    * matching gene {@code GENE_PADDING}.
    */
   private static final double ITEM_PAD_PX = 15.0;
-  /** Vertical padding between stacked motif lanes. */
-  private static final double LANE_GAP = 12;
+  /** Vertical padding between stacked lanes when name labels are shown. */
+  private static final double LANE_GAP_WITH_LABELS = 4;
+  /** Tight gap when packing bars/logos without a name row. */
+  private static final double LANE_GAP_COMPACT = 2;
   private static final int MAX_STACK_ROWS = 40;
   /** Extra bases around the view so small pans/zooms reuse the last scan. */
   private static final long QUERY_PADDING_BP = 500L;
@@ -85,8 +88,6 @@ public class MotifTrack extends AbstractTrack {
 
   /** Last stacked layout for hit-testing (track-local Y, after scroll). */
   private List<StackedHit> lastStackedHits = List.of();
-  private double lastStackTrackHeight;
-  /** Vertical scroll inside this track when stacked lanes exceed the row height. */
   private double stackScrollOffset;
   private double stackContentHeight;
   private double stackViewHeight;
@@ -107,16 +108,22 @@ public class MotifTrack extends AbstractTrack {
       0.0);
 
   /**
-   * Screen-space right edge used for packing: logo body, name drawn above it,
-   * plus a fixed gap — same idea as gene stacking in {@code ChromosomeCanvas}.
+   * Screen-space right edge used for packing: logo/bar body, and name width only
+   * when the hit is wide enough for a visible label.
    */
   private static double visualEndIncludingName(
       Hit hit, double viewStart, double viewLength, double canvasWidth) {
     double x1 = ((hit.start1Based() - viewStart) / viewLength) * canvasWidth;
     double x2 = ((hit.end1Based() + 1.0 - viewStart) / viewLength) * canvasWidth;
+    double visibleX1 = Math.max(0, x1);
+    double visibleX2 = Math.min(canvasWidth, x2);
+    double visibleW = Math.max(0, visibleX2 - visibleX1);
     String name = hit.motifName();
-    double labelEnd = Math.max(0, x1) + 2 + measureNameWidth(name);
-    return Math.max(x2, labelEnd) + ITEM_PAD_PX;
+    if (name != null && !name.isEmpty() && visibleW >= MIN_LABEL_WIDTH_PX) {
+      double labelEnd = visibleX1 + 2 + measureNameWidth(name);
+      return Math.max(x2, labelEnd) + ITEM_PAD_PX;
+    }
+    return x2 + ITEM_PAD_PX;
   }
 
   private static double measureNameWidth(String name) {
@@ -124,7 +131,7 @@ public class MotifTrack extends AbstractTrack {
       return 0;
     }
     LABEL_PROBE.setText(name);
-    LABEL_PROBE.setFont(AppFonts.getUIFont(9));
+    LABEL_PROBE.setFont(AppFonts.getUIFont(BedTrack.FEATURE_NAME_FONT_SIZE));
     return Math.ceil(LABEL_PROBE.getLayoutBounds().getWidth());
   }
 
@@ -289,6 +296,15 @@ public class MotifTrack extends AbstractTrack {
     return chrom.equals(cacheChrom) && start >= cacheStart && end <= cacheEnd;
   }
 
+  private static boolean isNavigationAnimating() {
+    try {
+      DrawStack stack = ServiceRegistry.getInstance().getDrawStackManager().getFirst();
+      return stack != null && stack.nav != null && stack.nav.animationRunning;
+    } catch (Exception ignored) {
+      return false;
+    }
+  }
+
   private void requestScan(String chromosome, long start, long end) {
     if (chromosome == null || end <= start) {
       return;
@@ -330,15 +346,15 @@ public class MotifTrack extends AbstractTrack {
     long padEnd = end + QUERY_PADDING_BP;
     int generation = fetchGeneration.incrementAndGet();
     ThreadRunner.RunnerTask previous = activeScanTask;
-    if (previous != null) {
-      previous.cancel();
-    }
     loading = true;
     statusMessage = "";
     final List<PreparedMotif> motifs = activeMotifs;
     final String trackLabel = getName();
+    final ThreadRunner.RunnerTask[] taskRef = new ThreadRunner.RunnerTask[1];
 
-    activeScanTask = ThreadRunner.get().submit(
+    // Register the new task before cancelling the previous one so LoadingPopup
+    // never sees an empty active-task list (which would hide the modal).
+    taskRef[0] = ThreadRunner.get().submit(
         "Aligning motifs (" + trackLabel + ")…",
         () -> {
           if (generation != fetchGeneration.get()) {
@@ -351,7 +367,22 @@ public class MotifTrack extends AbstractTrack {
             if (generation != fetchGeneration.get()) {
               return null;
             }
-            List<Hit> hits = PwmScorer.scan(bases, fetchStart, motifs);
+            int motifCount = motifs == null ? 0 : motifs.size();
+            if (motifCount > 0) {
+              LoadingManager.get().setProgress(0, motifCount);
+            }
+            List<Hit> hits = PwmScorer.scan(bases, fetchStart, motifs, (cur, tot) -> {
+              if (generation != fetchGeneration.get()) {
+                return;
+              }
+              ThreadRunner.RunnerTask task = taskRef[0];
+              if (task == null || task.isCancelled()) {
+                return;
+              }
+              task.setProgressSuffix(cur + "/" + tot);
+              ThreadRunner.get().notifyDescriptionChanged();
+              LoadingManager.get().setProgress(cur, tot);
+            });
             return new ScanResult(hits, bare, padStart, padEnd, null);
           } catch (Exception ex) {
             return new ScanResult(List.of(), bare, padStart, padEnd, ex.getMessage());
@@ -382,6 +413,10 @@ public class MotifTrack extends AbstractTrack {
           }
           notifyLoaded();
         });
+    activeScanTask = taskRef[0];
+    if (previous != null) {
+      previous.cancel();
+    }
   }
 
   private void notifyLoaded() {
@@ -412,8 +447,12 @@ public class MotifTrack extends AbstractTrack {
     String bare = ChromosomeNames.strip(chromosome);
     long viewStart = (long) start;
     long viewEnd = (long) Math.ceil(end);
+    // Prefer onRegionChanged for scans; paint only starts one when idle and not
+    // animating (restart-per-frame would flash/hide the loading modal).
     if (!cacheCovers(bare, viewStart, viewEnd)
-        && (viewEnd - viewStart) <= MAX_SCAN_VIEW_BP) {
+        && (viewEnd - viewStart) <= MAX_SCAN_VIEW_BP
+        && !loading
+        && !isNavigationAnimating()) {
       requestScan(chromosome, viewStart, viewEnd);
     }
 
@@ -435,69 +474,43 @@ public class MotifTrack extends AbstractTrack {
     double viewLength = end - start;
     double pxPerBp = width / viewLength;
     boolean logos = pxPerBp >= MIN_LOGO_PX_PER_BP;
-    // Stack only when zoomed in enough that name labels are shown.
-    boolean stackOverlaps = anyMotifLabelVisible(hits, start, end, viewLength, width);
-    if (stackOverlaps) {
-      drawStackedHits(gc, x, y, width, height, start, end, viewLength, pxPerBp, logos, hits);
-    } else {
-      resetStackScroll();
-      drawSingleLaneHits(gc, x, y, width, height, start, end, viewLength, pxPerBp, logos, hits);
-    }
+    // Always stack overlaps; reserve label row only when a name will paint on-screen.
+    boolean showLabels = anyMotifLabelVisible(hits, x, width, start, end, viewLength);
+    drawStackedHits(gc, x, y, width, height, start, end, viewLength, pxPerBp, logos, hits, showLabels);
     gc.setTextAlign(TextAlignment.LEFT);
   }
 
+  /** Same visibility rule as stacked label painting (on-screen width). */
   private static boolean anyMotifLabelVisible(
-      List<Hit> hits, double start, double end, double viewLength, double width) {
+      List<Hit> hits,
+      double trackX,
+      double trackWidth,
+      double start,
+      double end,
+      double viewLength) {
     for (Hit hit : hits) {
       if (hit.end1Based() < start || hit.start1Based() > end) {
         continue;
       }
-      double w = ((hit.end1Based() + 1 - hit.start1Based()) / viewLength) * width;
-      if (w >= MIN_LABEL_WIDTH_PX) {
+      if (hit.motifName() == null || hit.motifName().isEmpty()) {
+        continue;
+      }
+      double x1 = trackX + ((hit.start1Based() - start) / viewLength) * trackWidth;
+      double x2 = trackX + ((hit.end1Based() + 1 - start) / viewLength) * trackWidth;
+      double visibleW = Math.min(trackX + trackWidth, x2) - Math.max(trackX, x1);
+      if (visibleW >= MIN_LABEL_WIDTH_PX) {
         return true;
       }
     }
     return false;
   }
 
-  private void drawSingleLaneHits(
-      GraphicsContext gc, double x, double y, double width, double height,
-      double start, double end, double viewLength, double pxPerBp, boolean logos,
-      List<Hit> hits) {
-    double bodyH = logos
-        ? Math.min(LOGO_HEIGHT, Math.max(12, height - ROW_TOP_PAD - 2))
-        : Math.min(HIT_BAR_HEIGHT, Math.max(3, height - ROW_TOP_PAD - 2));
-    double featureY = y + ROW_TOP_PAD + Math.max(0, (height - ROW_TOP_PAD - 2 - bodyH) / 2);
-    Map<String, MotifMatrix> matrices = byId;
-    List<StackedHit> painted = new ArrayList<>();
-    int lastPixel = Integer.MIN_VALUE;
-    for (Hit hit : hits) {
-      if (hit.end1Based() < start || hit.start1Based() > end) {
-        continue;
-      }
-      double x1 = x + ((hit.start1Based() - start) / viewLength) * width;
-      double x2 = x + ((hit.end1Based() + 1 - start) / viewLength) * width;
-      double w = Math.max(1, x2 - x1);
-      int xPixel = (int) x1;
-      if (w <= 1.5 && xPixel == lastPixel) {
-        continue;
-      }
-      lastPixel = xPixel;
-      Color c = FeatureNameColors.colorForName(hit.motifName());
-      paintHitBody(gc, matrices, hit, c, x1, featureY, w, bodyH, pxPerBp, logos);
-      painted.add(new StackedHit(hit, x1 - x, featureY - y, w, bodyH));
-    }
-    lastStackedHits = painted;
-    lastStackTrackHeight = height;
-  }
-
   private void drawStackedHits(
       GraphicsContext gc, double x, double y, double width, double height,
       double start, double end, double viewLength, double pxPerBp, boolean logos,
-      List<Hit> hits) {
+      List<Hit> hits, boolean showLabels) {
     double bodyH = logos ? LOGO_HEIGHT : HIT_BAR_HEIGHT;
-    // Keep full name slot + logo + gap; never compress (that overlapped names/logos).
-    double lanePitch = NAME_SLOT_H + bodyH + LANE_GAP;
+    double laneGap = showLabels ? LANE_GAP_WITH_LABELS : LANE_GAP_COMPACT;
 
     StackingAlgorithm.StackResult<Hit> stacked =
         HIT_STACKER.stack(hits, start, end, width);
@@ -509,12 +522,19 @@ public class MotifTrack extends AbstractTrack {
     }
     if (usedRows == 0) {
       lastStackedHits = List.of();
-      lastStackTrackHeight = height;
       resetStackScroll();
       return;
     }
 
-    double contentH = ROW_TOP_PAD + usedRows * lanePitch + 2;
+    // Per-row name slot: unlabeled rows pack tightly (no empty label band).
+    double[] rowNameSlot = new double[usedRows];
+    double contentH = ROW_TOP_PAD + 2;
+    for (int row = 0; row < usedRows; row++) {
+      boolean rowHasLabel = showLabels
+          && rowHasVisibleMotifLabel(stacked.getRow(row), x, width, start, viewLength);
+      rowNameSlot[row] = rowHasLabel ? NAME_SLOT_H : 0;
+      contentH += rowNameSlot[row] + bodyH + laneGap;
+    }
     setPreferredHeight(contentH);
     stackContentHeight = contentH;
     stackViewHeight = height;
@@ -526,29 +546,55 @@ public class MotifTrack extends AbstractTrack {
     List<StackedHit> stackedHits = new ArrayList<>();
     // No gc.clip/save — those opcodes on a live track canvas have corrupted
     // NGCanvas during project restore. Cull lanes by Y instead.
+    double laneTop = y + ROW_TOP_PAD - stackScrollOffset;
+    double maxNameSlot = 0;
     for (int row = 0; row < usedRows; row++) {
-      double laneTop = y + ROW_TOP_PAD + row * lanePitch - stackScrollOffset;
-      double featureY = laneTop + NAME_SLOT_H;
-      if (featureY + bodyH < y || laneTop > y + height) {
-        continue;
-      }
-      for (Hit hit : stacked.getRow(row)) {
-        double x1 = x + ((hit.start1Based() - start) / viewLength) * width;
-        double x2 = x + ((hit.end1Based() + 1 - start) / viewLength) * width;
-        double w = Math.max(1, x2 - x1);
-        Color c = FeatureNameColors.colorForName(hit.motifName());
-        paintHitBody(gc, matrices, hit, c, x1, featureY, w, bodyH, pxPerBp, logos);
-        if (w >= MIN_LABEL_WIDTH_PX && hit.motifName() != null && !hit.motifName().isEmpty()) {
-          BedTrack.drawFeatureNameLabel(gc, hit.motifName(), x1 + 2, featureY - 2);
+      double nameSlot = rowNameSlot[row];
+      double featureY = laneTop + nameSlot;
+      maxNameSlot = Math.max(maxNameSlot, nameSlot);
+      if (featureY + bodyH >= y && laneTop <= y + height) {
+        for (Hit hit : stacked.getRow(row)) {
+          double x1 = x + ((hit.start1Based() - start) / viewLength) * width;
+          double x2 = x + ((hit.end1Based() + 1 - start) / viewLength) * width;
+          double visibleW = Math.min(x + width, x2) - Math.max(x, x1);
+          double w = Math.max(1, x2 - x1);
+          Color c = FeatureNameColors.colorForName(hit.motifName());
+          paintHitBody(gc, matrices, hit, c, x1, featureY, w, bodyH, pxPerBp, logos);
+          if (nameSlot > 0.5
+              && visibleW >= MIN_LABEL_WIDTH_PX
+              && hit.motifName() != null
+              && !hit.motifName().isEmpty()) {
+            BedTrack.drawFeatureNameLabel(gc, hit.motifName(), x1 + 2, featureY - 2);
+          }
+          stackedHits.add(new StackedHit(hit, x1 - x, featureY - y, w, bodyH));
         }
-        stackedHits.add(new StackedHit(hit, x1 - x, featureY - y, w, bodyH));
       }
+      laneTop = featureY + bodyH + laneGap;
     }
     if (stackOverflow) {
       paintStackScrollHint(gc, x, y, width, height);
     }
     lastStackedHits = stackedHits;
-    lastStackTrackHeight = height;
+  }
+
+  private static boolean rowHasVisibleMotifLabel(
+      List<Hit> row,
+      double trackX,
+      double trackWidth,
+      double start,
+      double viewLength) {
+    for (Hit hit : row) {
+      if (hit.motifName() == null || hit.motifName().isEmpty()) {
+        continue;
+      }
+      double x1 = trackX + ((hit.start1Based() - start) / viewLength) * trackWidth;
+      double x2 = trackX + ((hit.end1Based() + 1 - start) / viewLength) * trackWidth;
+      double visibleW = Math.min(trackX + trackWidth, x2) - Math.max(trackX, x1);
+      if (visibleW >= MIN_LABEL_WIDTH_PX) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Thin right-edge thumb so overflow / scroll position is visible. */
@@ -595,14 +641,11 @@ public class MotifTrack extends AbstractTrack {
     if (trackWidth <= 0 || viewEnd <= viewStart || lastStackedHits.isEmpty()) {
       return null;
     }
-    // Prefer last draw's stacked layout when height matches.
-    if (Math.abs(trackHeight - lastStackTrackHeight) > 1) {
-      return null;
-    }
     for (int i = lastStackedHits.size() - 1; i >= 0; i--) {
       StackedHit sh = lastStackedHits.get(i);
       if (clickX >= sh.x1() && clickX <= sh.x1() + sh.width()
-          && clickY >= sh.y1() - NAME_SLOT_H && clickY <= sh.y1() + sh.height()) {
+          && clickY >= sh.y1() - 3
+          && clickY <= sh.y1() + sh.height() + 2) {
         return new MotifHit(sh.hit(), sh.x1(), sh.y1(), sh.width(), sh.height());
       }
     }

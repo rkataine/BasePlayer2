@@ -42,13 +42,15 @@ import javafx.stage.Window;
 public class BedTrack extends AbstractTrack {
 
   public static final double DEFAULT_BAR_HEIGHT_PX = 10;
+  /** Shared name label size for BED bars and motif logos. */
+  public static final double FEATURE_NAME_FONT_SIZE = 12;
   private static final double MIN_BAR_HEIGHT_PX = 2;
   private static final double MAX_BAR_HEIGHT_PX = 48;
   private static final double ROW_TOP_PAD = 2;
-  private static final double NAME_SLOT_H = 11;
+  private static final double NAME_SLOT_H = 14;
   /** Show name labels once a feature is at least this wide (px). */
   private static final double MIN_LABEL_WIDTH_PX = 18;
-  private static final double LABEL_CHAR_WIDTH = 8.0;
+  private static final double LABEL_CHAR_WIDTH = 9.5;
   private static final double LABEL_PAD_PX = 12.0;
   private static final double LANE_GAP = 3;
   private static final int MAX_STACK_ROWS = 40;
@@ -70,10 +72,13 @@ public class BedTrack extends AbstractTrack {
       BedFeature feature, double viewStart, double viewLength, double canvasWidth) {
     double x1 = ((feature.start() + 1 - viewStart) / viewLength) * canvasWidth;
     double x2 = ((feature.end() - viewStart) / viewLength) * canvasWidth;
-    double bodyW = Math.max(1, x2 - x1);
+    // Only reserve horizontal label space for the on-screen segment.
+    double visibleX1 = Math.max(0, x1);
+    double visibleX2 = Math.min(canvasWidth, x2);
+    double visibleW = Math.max(0, visibleX2 - visibleX1);
     String name = feature.name();
-    if (name != null && !name.isEmpty() && bodyW >= MIN_LABEL_WIDTH_PX) {
-      double labelEnd = Math.max(0, x1) + 2 + name.length() * LABEL_CHAR_WIDTH + LABEL_PAD_PX;
+    if (name != null && !name.isEmpty() && visibleW >= MIN_LABEL_WIDTH_PX) {
+      double labelEnd = visibleX1 + 2 + name.length() * LABEL_CHAR_WIDTH + LABEL_PAD_PX;
       return Math.max(x2, labelEnd);
     }
     return x2 + 2;
@@ -546,17 +551,22 @@ public class BedTrack extends AbstractTrack {
       return;
     }
 
-    // Stack only when zoomed in enough that name labels are shown.
-    if (anyBedLabelVisible(features, start, end, viewLength, width)) {
-      drawStackedBars(gc, x, y, width, height, start, end, viewLength, features);
-    } else {
-      drawSingleLaneBars(gc, x, y, width, height, start, end, viewLength, features, layout);
-    }
+    // Always stack overlaps; reserve label row only when a name will actually paint
+    // on-screen (visible width), not merely because the genomic span is wide.
+    boolean showLabels =
+        anyBedLabelVisible(features, x, width, start, end, viewLength);
+    drawStackedBars(gc, x, y, width, height, start, end, viewLength, features, showLabels);
     gc.setTextAlign(TextAlignment.LEFT);
   }
 
+  /** Same visibility rule as {@link #drawStackedBars} label painting. */
   private static boolean anyBedLabelVisible(
-      List<BedFeature> features, double start, double end, double viewLength, double width) {
+      List<BedFeature> features,
+      double trackX,
+      double trackWidth,
+      double start,
+      double end,
+      double viewLength) {
     int from = findFirstOverlappingIndex(features, start, end);
     for (int i = from; i < features.size(); i++) {
       BedFeature feature = features.get(i);
@@ -566,51 +576,18 @@ public class BedTrack extends AbstractTrack {
       if (feature.end() < start) {
         continue;
       }
-      double featureWidth =
-          Math.max(1, ((feature.end() - feature.start()) / viewLength) * width);
-      if (featureWidth >= MIN_LABEL_WIDTH_PX && !feature.name().isEmpty()) {
+      if (feature.name() == null || feature.name().isEmpty()) {
+        continue;
+      }
+      double featureX1 =
+          Math.max(trackX, trackX + ((feature.start() + 1 - start) / viewLength) * trackWidth);
+      double featureX2 =
+          Math.min(trackX + trackWidth, trackX + ((feature.end() - start) / viewLength) * trackWidth);
+      if (featureX2 - featureX1 >= MIN_LABEL_WIDTH_PX) {
         return true;
       }
     }
     return false;
-  }
-
-  private void drawSingleLaneBars(
-      GraphicsContext gc, double x, double y, double width, double height,
-      double start, double end, double viewLength, List<BedFeature> features,
-      FeatureLayout layout) {
-    lastStackedHits = List.of();
-    lastStackScoresMode = false;
-    lastStackTrackHeight = height;
-    int lastDrawnPixelX = Integer.MIN_VALUE;
-    int from = findFirstOverlappingIndex(features, start, end);
-    List<BedHit> painted = new ArrayList<>();
-    for (int i = from; i < features.size(); i++) {
-      BedFeature feature = features.get(i);
-      if (feature.start() + 1 > end) {
-        break;
-      }
-      if (feature.end() < start) {
-        continue;
-      }
-      double featureX1 = Math.max(x, x + ((feature.start() + 1 - start) / viewLength) * width);
-      double featureX2 = Math.min(x + width, x + ((feature.end() - start) / viewLength) * width);
-      double featureWidth = Math.max(1, featureX2 - featureX1);
-      int xPixel = (int) featureX1;
-      boolean singlePixel = (int) featureX2 <= xPixel;
-      if (singlePixel && xPixel == lastDrawnPixelX) {
-        continue;
-      }
-      double barY = layout.featureY();
-      double barH = layout.featureHeight();
-      gc.setFill(colorForFeature(feature));
-      gc.fillRect(featureX1, barY, featureWidth, barH);
-      if (singlePixel) {
-        lastDrawnPixelX = xPixel;
-      }
-      painted.add(new BedHit(feature, featureX1 - x, barY - y, featureWidth, barH));
-    }
-    lastStackedHits = painted;
   }
 
   private void drawScoresMode(
@@ -663,9 +640,9 @@ public class BedTrack extends AbstractTrack {
 
   private void drawStackedBars(
       GraphicsContext gc, double x, double y, double width, double height,
-      double start, double end, double viewLength, List<BedFeature> features) {
+      double start, double end, double viewLength, List<BedFeature> features,
+      boolean showLabels) {
     double barH = Math.max(MIN_BAR_HEIGHT_PX, Math.min(MAX_BAR_HEIGHT_PX, barHeightPixels));
-    double idealLanePitch = NAME_SLOT_H + barH + LANE_GAP;
 
     StackingAlgorithm.StackResult<BedFeature> stacked =
         FEATURE_STACKER.stack(features, start, end, width);
@@ -682,36 +659,71 @@ public class BedTrack extends AbstractTrack {
       return;
     }
 
-    double available = Math.max(idealLanePitch, height - ROW_TOP_PAD - 2);
-    double lanePitch = idealLanePitch;
-    double drawBarH = barH;
-    if (usedRows * idealLanePitch > available) {
-      lanePitch = available / usedRows;
-      drawBarH = Math.max(MIN_BAR_HEIGHT_PX, lanePitch - NAME_SLOT_H - LANE_GAP);
+    // Per-row name slot: only rows that paint a label keep the label band.
+    double[] rowNameSlot = new double[usedRows];
+    double contentH = ROW_TOP_PAD + 2;
+    for (int row = 0; row < usedRows; row++) {
+      boolean rowHasLabel = showLabels
+          && rowHasVisibleBedLabel(stacked.getRow(row), x, width, start, viewLength);
+      rowNameSlot[row] = rowHasLabel ? NAME_SLOT_H : 0;
+      contentH += rowNameSlot[row] + barH + LANE_GAP;
     }
+    setPreferredHeight(contentH);
 
-    setPreferredHeight(ROW_TOP_PAD + usedRows * idealLanePitch + 2);
+    double available = Math.max(barH + LANE_GAP, height - ROW_TOP_PAD - 2);
+    double scale = contentH - ROW_TOP_PAD - 2 > available
+        ? available / (contentH - ROW_TOP_PAD - 2)
+        : 1.0;
 
     List<BedHit> stackedHits = new ArrayList<>();
+    double laneTop = y + ROW_TOP_PAD;
+    double maxNameSlot = 0;
     for (int row = 0; row < usedRows; row++) {
-      double laneTop = y + ROW_TOP_PAD + row * lanePitch;
-      double barY = laneTop + NAME_SLOT_H;
+      double nameSlot = rowNameSlot[row] * scale;
+      double drawBarH = Math.max(MIN_BAR_HEIGHT_PX, barH * scale);
+      double laneGap = LANE_GAP * scale;
+      double barY = laneTop + nameSlot;
+      maxNameSlot = Math.max(maxNameSlot, nameSlot);
       for (BedFeature feature : stacked.getRow(row)) {
         double featureX1 = Math.max(x, x + ((feature.start() + 1 - start) / viewLength) * width);
         double featureX2 = Math.min(x + width, x + ((feature.end() - start) / viewLength) * width);
         double featureWidth = Math.max(1, featureX2 - featureX1);
         gc.setFill(colorForFeature(feature));
         gc.fillRect(featureX1, barY, featureWidth, drawBarH);
-        if (featureWidth >= MIN_LABEL_WIDTH_PX && !feature.name().isEmpty()) {
+        if (nameSlot > 0.5
+            && featureWidth >= MIN_LABEL_WIDTH_PX
+            && !feature.name().isEmpty()) {
           drawFeatureNameLabel(gc, feature.name(), featureX1 + 2, barY - 2);
         }
         stackedHits.add(new BedHit(
             feature, featureX1 - x, barY - y, featureWidth, drawBarH));
       }
+      laneTop = barY + drawBarH + laneGap;
     }
     lastStackedHits = stackedHits;
     lastStackScoresMode = false;
     lastStackTrackHeight = height;
+  }
+
+  private static boolean rowHasVisibleBedLabel(
+      List<BedFeature> row,
+      double trackX,
+      double trackWidth,
+      double start,
+      double viewLength) {
+    for (BedFeature feature : row) {
+      if (feature.name() == null || feature.name().isEmpty()) {
+        continue;
+      }
+      double featureX1 =
+          Math.max(trackX, trackX + ((feature.start() + 1 - start) / viewLength) * trackWidth);
+      double featureX2 =
+          Math.min(trackX + trackWidth, trackX + ((feature.end() - start) / viewLength) * trackWidth);
+      if (featureX2 - featureX1 >= MIN_LABEL_WIDTH_PX) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -728,13 +740,13 @@ public class BedTrack extends AbstractTrack {
     return FeatureNameColors.colorForName(feature.name());
   }
 
-  /** Plain white name label; {@code textY} is the baseline just above the bar. */
+  /** Plain white name label; {@code textY} is the baseline just above the bar/logo. */
   public static void drawFeatureNameLabel(
       GraphicsContext gc, String name, double textX, double textY) {
     if (name == null || name.isEmpty()) {
       return;
     }
-    gc.setFont(AppFonts.getUIFont(9));
+    gc.setFont(AppFonts.getUIFont(FEATURE_NAME_FONT_SIZE));
     gc.setFill(Color.WHITE);
     gc.fillText(name, textX, textY);
   }
@@ -756,11 +768,22 @@ public class BedTrack extends AbstractTrack {
 
   /**
    * Hit-test a point in track-local coordinates. Only returns a hit when the
-   * feature is wide enough on screen (zoomed in).
+   * feature is at least {@link #MIN_INTERACTIVE_WIDTH_PX} wide.
    */
   public BedHit hitTest(
       double clickX, double clickY, double trackWidth, double trackHeight,
       String chromosome, double viewStart, double viewEnd) {
+    return hitTest(
+        clickX, clickY, trackWidth, trackHeight,
+        chromosome, viewStart, viewEnd, MIN_INTERACTIVE_WIDTH_PX);
+  }
+
+  /**
+   * Hit-test with a custom minimum on-screen width (use {@code 1} for hover).
+   */
+  public BedHit hitTest(
+      double clickX, double clickY, double trackWidth, double trackHeight,
+      String chromosome, double viewStart, double viewEnd, double minWidthPx) {
     if (trackWidth <= 0 || viewEnd <= viewStart) {
       return null;
     }
@@ -769,11 +792,13 @@ public class BedTrack extends AbstractTrack {
         && Math.abs(trackHeight - lastStackTrackHeight) <= 1) {
       for (int i = lastStackedHits.size() - 1; i >= 0; i--) {
         BedHit sh = lastStackedHits.get(i);
-        if (sh.width() < MIN_INTERACTIVE_WIDTH_PX) {
+        if (sh.width() < minWidthPx) {
           continue;
         }
+        // Hit the bar body (small pad); name-slot clicks still count above the bar.
         if (clickX >= sh.x1() && clickX <= sh.x1() + sh.width()
-            && clickY >= sh.y1() - NAME_SLOT_H && clickY <= sh.y1() + sh.height() + 2) {
+            && clickY >= sh.y1() - 3
+            && clickY <= sh.y1() + sh.height() + 2) {
           return sh;
         }
       }
@@ -816,7 +841,7 @@ public class BedTrack extends AbstractTrack {
       double x1 = Math.max(0, ((feature.start() + 1 - viewStart) / viewLength) * trackWidth);
       double x2 = Math.min(trackWidth, ((feature.end() - viewStart) / viewLength) * trackWidth);
       double w = Math.max(1, x2 - x1);
-      if (w < MIN_INTERACTIVE_WIDTH_PX) {
+      if (w < minWidthPx) {
         continue;
       }
       if (clickX < x1 || clickX > x1 + w) {
@@ -827,7 +852,7 @@ public class BedTrack extends AbstractTrack {
       t = Math.max(0, Math.min(1, t));
       double barH = Math.max(1, layout.featureHeight() * t);
       double barY = layout.featureY() + layout.featureHeight() - barH;
-      if (clickY >= barY - NAME_SLOT_H && clickY <= barY + barH + 2) {
+      if (clickY >= barY - 3 && clickY <= barY + barH + 2) {
         hit = new BedHit(feature, x1, barY, w, barH);
       }
     }

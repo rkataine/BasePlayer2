@@ -75,13 +75,14 @@ public final class SequenceLogoPainter {
     }
   }
 
+  /** WebLogo/JASPAR use Arial Bold; avoid Arial Black (too heavy when stretched). */
   private static java.awt.Font resolveAwtFont() {
-    java.awt.Font font = new java.awt.Font("Arial Black", java.awt.Font.BOLD, REF_FONT_SIZE);
+    java.awt.Font font = new java.awt.Font("Arial", java.awt.Font.BOLD, REF_FONT_SIZE);
     String family = font.getFamily() == null ? "" : font.getFamily().toLowerCase();
-    if (family.contains("dialog") || (!family.contains("arial") && !family.contains("black"))) {
-      font = new java.awt.Font("Arial", java.awt.Font.BOLD, REF_FONT_SIZE);
+    if (family.contains("dialog") || !family.contains("arial")) {
+      font = new java.awt.Font("Helvetica", java.awt.Font.BOLD, REF_FONT_SIZE);
       family = font.getFamily() == null ? "" : font.getFamily().toLowerCase();
-      if (family.contains("dialog")) {
+      if (family.contains("dialog") || !family.contains("helvetica")) {
         font = new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.BOLD, REF_FONT_SIZE);
       }
     }

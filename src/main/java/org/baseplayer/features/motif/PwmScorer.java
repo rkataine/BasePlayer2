@@ -2,6 +2,7 @@ package org.baseplayer.features.motif;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 /**
  * Simplified MOODS-style PWM scoring: log-odds vs background, reverse complement,
@@ -79,13 +80,30 @@ public final class PwmScorer {
       String sequence,
       int regionStart1Based,
       List<PreparedMotif> motifs) {
+    return scan(sequence, regionStart1Based, motifs, null);
+  }
+
+  /**
+   * Same as {@link #scan(String, int, List)} with optional progress
+   * {@code (currentMotif, totalMotifs)} (1-based current).
+   */
+  public static List<Hit> scan(
+      String sequence,
+      int regionStart1Based,
+      List<PreparedMotif> motifs,
+      BiConsumer<Integer, Integer> progress) {
     if (sequence == null || sequence.isEmpty() || motifs == null || motifs.isEmpty()) {
       return List.of();
     }
     int n = sequence.length();
     byte[] bases = encode(sequence);
     List<Hit> hits = new ArrayList<>();
-    for (PreparedMotif motif : motifs) {
+    int total = motifs.size();
+    for (int mi = 0; mi < total; mi++) {
+      if (progress != null) {
+        progress.accept(mi + 1, total);
+      }
+      PreparedMotif motif = motifs.get(mi);
       int len = motif.matrix.length();
       if (len > n) {
         continue;
