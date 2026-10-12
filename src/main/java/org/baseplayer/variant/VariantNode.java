@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
@@ -147,14 +148,27 @@ public class VariantNode {
             Map<String, String> formatFields) {
             this.track = track;
             this.sample = sample;
-            this.gt = gt;
+            this.gt = compactGt(gt);
             this.quality = quality;
             this.depth = depth;
             this.alleleFraction = alleleFraction;
-            this.isPhased = gt != null && gt.contains("|");
+            this.isPhased = this.gt != null && this.gt.indexOf('|') >= 0;
+            // Extra FORMAT maps are intentionally not retained on the hot load path.
             this.formatFields = formatFields == null || formatFields.isEmpty()
                 ? Map.of()
                 : Map.copyOf(formatFields);
+        }
+
+        /** Share common GT literals across millions of calls. */
+        private static String compactGt(String gt) {
+            if (gt == null) {
+                return null;
+            }
+            return switch (gt) {
+                case "0/1", "0|1", "1/0", "1|0", "0/0", "0|0", "1/1", "1|1",
+                     "1/2", "2/1", "0/2", "2/0", "NA", "./.", ".|." -> gt.intern();
+                default -> gt.length() <= 8 ? gt.intern() : gt;
+            };
         }
 
         /** Current index in {@link SampleRegistry#getSampleTracks()}, or -1 if the track is gone. */
@@ -239,6 +253,11 @@ public class VariantNode {
     public Map<String, String> getInfoFields() {
         Map<String, String> fields = infoFields;
         return fields != null ? fields : Map.of();
+    }
+
+    /** True after {@link #setInfoFieldsIfAbsent} stored a non-empty map. */
+    public boolean hasInfoFields() {
+        return infoFields != null && !infoFields.isEmpty();
     }
 
     /** INFO value for {@code key}, or null. */
@@ -359,7 +378,7 @@ public class VariantNode {
     }
 
     /**
-     * Iterate sample calls without allocating a copy. Prefer this on hot LOH/filter paths.
+     * Iterate sample calls without allocating a copy. Prefer this on hot filter/draw paths.
      * {@code consumer} must not call back into mutating methods on this node.
      */
     public synchronized void forEachSample(Consumer<SampleCall> consumer) {
@@ -368,6 +387,20 @@ public class VariantNode {
         }
         for (SampleCall call : samples) {
             consumer.accept(call);
+        }
+    }
+
+    /**
+     * Like {@link #forEachSample(Consumer)} but stops when {@code visitor} returns {@code true}.
+     */
+    public synchronized void forEachSampleUntil(Predicate<SampleCall> visitor) {
+        if (samples == null || visitor == null) {
+            return;
+        }
+        for (SampleCall call : samples) {
+            if (visitor.test(call)) {
+                return;
+            }
         }
     }
 

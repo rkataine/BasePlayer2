@@ -1,6 +1,7 @@
 package org.baseplayer.components;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -8,6 +9,7 @@ import java.util.Set;
 
 import org.baseplayer.draw.CanvasColorLegend;
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.draw.CoverageDrawer;
@@ -15,6 +17,8 @@ import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.DrawColors;
+import org.baseplayer.variant.VariantComparisonClusters;
+import org.baseplayer.variant.VariantDensityPyramid;
 import org.baseplayer.variant.VariantDrawSeek;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -25,10 +29,9 @@ import org.baseplayer.variant.VcfVariantType;
 import javafx.application.Platform;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
+import javafx.scene.text.Font;
 
 public class MasterTrackPainter {
-
-  private static final int DENSITY_BINS = 600;
 
   private final SampleRegistry sampleRegistry;
   private final CoverageDrawer coverageDrawer;
@@ -36,33 +39,31 @@ public class MasterTrackPainter {
 
   private volatile VariantList variantList;
 
-  private volatile VariantList densityCached = null;
-  private volatile int[] densitySnv;
-  private volatile int[] densityIndel;
-  private volatile int[] densityDel;
-  private volatile int[] densityInv;
-  private volatile int[] densityDup;
-  private volatile int[] densityIns;
-  private volatile int[] densityTra;
-  private volatile int[] densityBnd;
-  private volatile int[] densityLohAa;
-  private volatile int[] densityLohBb;
-  private volatile int densityMax = 1;
-  private volatile boolean densityBusy = false;
-  private volatile double densityCachedStart = -1;
-  private volatile double densityCachedEnd = -1;
-  private volatile int densityGeneration = 0;
-  private volatile int densityFilterGeneration = -1;
-
-  private record SvSpan(long start, long end, VcfVariantType type, int sampleCount) {
-  }
-
-  private volatile List<SvSpan> densitySvSpans = java.util.List.of();
+  /** Chromosome-scoped multi-resolution density; rebuilt on load / filter / track set. */
+  private volatile VariantDensityPyramid pyramid;
+  private volatile boolean pyramidRebuildPending;
+  private volatile boolean pyramidBusy = false;
+  private volatile int pyramidGeneration = 0;
 
   private final CanvasColorLegend colorLegend = new CanvasColorLegend();
 
-  /** True while zoom or pan was deferring density last paint frame. */
-  private volatile boolean wasDeferringDensityLastFrame = false;
+  /** Zoomed-in precise bars — reuse across paints while view/filter/chain stay put. */
+  private record PreciseBar(double x, double w, int count, VcfVariantType type) {}
+  private List<PreciseBar> preciseBarsCache = List.of();
+  private int preciseBarsMaxC = 1;
+  private VariantList preciseBarsList;
+  private double preciseBarsViewStart = Double.NaN;
+  private double preciseBarsViewEnd = Double.NaN;
+  private double preciseBarsPixelSize = Double.NaN;
+  private double preciseBarsWidth = Double.NaN;
+  private int preciseBarsFilterGen = -1;
+  private int preciseBarsChainGen = -1;
+
+  /** Clickable comparison-cluster highlights painted on the density band. */
+  private record ClusterHit(
+      double x, double y, double w, double h,
+      VariantComparisonClusters.ComparisonCluster cluster) {}
+  private List<ClusterHit> clusterHits = List.of();
 
   public MasterTrackPainter(CoverageDrawer coverageDrawer, Runnable redrawCallback) {
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
@@ -72,19 +73,29 @@ public class MasterTrackPainter {
 
   public void setVariantList(VariantList variantList) {
     this.variantList = variantList;
+    pyramid = null;
+    clearPreciseBarsCache();
   }
 
   public void clearVariantList() {
     this.variantList = null;
-    // Drop in-flight density results so a finishing thread cannot keep the old list
-    // reachable via densityCached / republish, or re-trigger on a cleared painter.
-    densityGeneration++;
-    clearDensityArrays();
-    densityCached = null;
-    densityCachedStart = -1;
-    densityCachedEnd = -1;
-    densityBusy = false;
-    densityFilterGeneration = -1;
+    pyramidGeneration++;
+    pyramid = null;
+    pyramidBusy = false;
+    pyramidRebuildPending = false;
+    clearPreciseBarsCache();
+  }
+
+  private void clearPreciseBarsCache() {
+    preciseBarsCache = List.of();
+    preciseBarsMaxC = 1;
+    preciseBarsList = null;
+    preciseBarsViewStart = Double.NaN;
+    preciseBarsViewEnd = Double.NaN;
+    preciseBarsPixelSize = Double.NaN;
+    preciseBarsWidth = Double.NaN;
+    preciseBarsFilterGen = -1;
+    preciseBarsChainGen = -1;
   }
 
   public VariantList getVariantList() {
@@ -104,30 +115,9 @@ public class MasterTrackPainter {
     return VcfManager.getInstance().getSessionAvailableTypes();
   }
 
-  private void clearDensityArrays() {
-    densitySnv = null;
-    densityIndel = null;
-    densityDel = null;
-    densityInv = null;
-    densityDup = null;
-    densityIns = null;
-    densityTra = null;
-    densityBnd = null;
-    densityLohAa = null;
-    densityLohBb = null;
-    densitySvSpans = java.util.List.of();
-  }
-
   public void forceCalculateDensity(DrawStack drawStack) {
-    VariantList variants = this.variantList;
-    if (variants != null && !variants.isEmpty()) {
-      densityCached = null;
-      clearDensityArrays();
-      densityCachedStart = -1;
-      densityCachedEnd = -1;
-      densityBusy = false;
-      triggerVariantDensityCompute(variants, drawStack);
-    }
+    pyramid = null;
+    ensurePyramidAsync(drawStack, true);
   }
 
   /**
@@ -222,6 +212,74 @@ public class MasterTrackPainter {
     return colorLegend.isOver(x, y);
   }
 
+  /** Cursor hint when hovering a comparison-cluster highlight/tag. */
+  public boolean isOverCluster(double x, double y) {
+    return hitCluster(x, y) != null;
+  }
+
+  /**
+   * Click a cluster highlight: filter samples to contributors and show cluster-focus banner.
+   * @return true if a cluster was hit and focus applied
+   */
+  public boolean handleClusterClick(double x, double y) {
+    ClusterHit hit = hitCluster(x, y);
+    if (hit == null || hit.cluster() == null) {
+      return false;
+    }
+    VariantComparisonClusters.ComparisonCluster cluster = hit.cluster();
+    List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
+    List<SampleTrack> contributors = new ArrayList<>(cluster.sampleCount());
+    for (int idx : cluster.sampleTracks) {
+      if (idx >= 0 && idx < allTracks.size()) {
+        SampleTrack track = allTracks.get(idx);
+        if (track != null) {
+          contributors.add(track);
+        }
+      }
+    }
+    if (contributors.isEmpty()) {
+      return false;
+    }
+    String detail = cluster.size
+        + (cluster.size == 1 ? " mutation" : " mutations")
+        + " · "
+        + cluster.sampleCount()
+        + (cluster.sampleCount() == 1 ? " sample" : " samples");
+    sampleRegistry.applyClusterSubset(contributors, detail);
+
+    int displayedCount = sampleRegistry.getDisplayedTrackCount();
+    if (displayedCount > 0) {
+      sampleRegistry.setVisibleSamples(0, displayedCount - 1, estimateSampleViewportHeight());
+    }
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    return true;
+  }
+
+  private ClusterHit hitCluster(double x, double y) {
+    // Prefer later (top-most / tag) hits when clusters overlap.
+    for (int i = clusterHits.size() - 1; i >= 0; i--) {
+      ClusterHit hit = clusterHits.get(i);
+      if (x >= hit.x() && x <= hit.x() + hit.w()
+          && y >= hit.y() && y <= hit.y() + hit.h()) {
+        return hit;
+      }
+    }
+    return null;
+  }
+
+  private double estimateSampleViewportHeight() {
+    org.baseplayer.services.DrawStackManager stacks =
+        ServiceRegistry.getInstance().getDrawStackManager();
+    if (!stacks.isEmpty() && stacks.getFirst().sampleTrackCanvas != null) {
+      double h = stacks.getFirst().sampleTrackCanvas.getHeight();
+      if (h > 0) {
+        return h;
+      }
+    }
+    return Math.max(0, sampleRegistry.getSampleHeight()
+        * Math.max(1, sampleRegistry.getVisibleSampleCount()));
+  }
+
   public void drawMasterAggregates(
       GraphicsContext gc,
       DrawStack drawStack,
@@ -312,95 +370,224 @@ public class MasterTrackPainter {
 
     VariantList variants = this.variantList;
     if (variants == null || variants.isEmpty()) {
-      if (densityCached != null) {
-        densityCached = null;
-        clearDensityArrays();
-        densityCachedStart = -1;
-        densityCachedEnd = -1;
-        densityBusy = false;
-      }
+      pyramid = null;
       colorLegend.clear();
+      clusterHits = List.of();
       return;
     }
 
-    if (variants != densityCached) {
-      densityBusy = false;
-      clearDensityArrays();
-      densityCachedStart = -1;
-      densityCachedEnd = -1;
+    // Pyramid finest level is 1kb. Once those bins are ≥2px wide, the screen can
+    // resolve finer than the pyramid — paint live allele bars (same as before the
+    // pyramid, but without waiting for pixelSize > 1 / base-letter zoom).
+    double viewLength = Math.max(1.0, drawStack.getViewLength());
+    double pxPerBp = canvasWidth / viewLength;
+    long finestBin = VariantDensityPyramid.BIN_SIZES_BP[
+        VariantDensityPyramid.BIN_SIZES_BP.length - 1];
+    boolean zoomedInPrecise = pxPerBp * finestBin >= 2.0 || pxPerBp > 1.0;
+    if (!zoomedInPrecise) {
+      ensurePyramidAsync(drawStack, false);
     }
-
-    org.baseplayer.io.VcfManager vcfMgr = org.baseplayer.io.VcfManager.getInstance();
-    int currentFilterGen = vcfMgr.getFilterGeneration();
-    
-    // Defer bin recompute while zooming/panning, or when zoomed in (precise path
-    // paints live alleles and does not need the coarse bin cache).
-    boolean isZoomingNow = drawStack.nav.lineZoomerActive || drawStack.nav.animationRunning;
-    boolean zoomedInPrecise = drawStack.getPixelSize() > 1.0;
-    boolean deferDensity = isZoomingNow || drawStack.nav.navigating || zoomedInPrecise;
-    
-    // When interaction ends, invalidate cache coords so the next frame recomputes,
-    // but keep last density arrays so the master band does not flash blank.
-    boolean interactionJustEnded = wasDeferringDensityLastFrame && !deferDensity;
-    if (interactionJustEnded) {
-      densityCachedStart = -1;
-      densityCachedEnd = -1;
-      densityBusy = false;
-    }
-    
-    if (!deferDensity) {
-      boolean filterChanged = currentFilterGen != densityFilterGeneration;
-      boolean viewChanged = densityCachedStart < 0
-          || densityCachedEnd < 0
-          || Math.abs(drawStack.getViewStart() - densityCachedStart) > drawStack.getViewLength() * 0.1
-          || Math.abs(drawStack.getViewEnd() - densityCachedEnd) > drawStack.getViewLength() * 0.1;
-      
-      if ((variants != densityCached || viewChanged || filterChanged) && !densityBusy) {
-        densityFilterGeneration = currentFilterGen;
-        triggerVariantDensityCompute(variants, drawStack);
-      }
-    }
-    
-    wasDeferringDensityLastFrame = deferDensity;
 
     colorLegend.clear();
+    clusterHits = List.of();
 
     double areaH = masterTrackHeight - 4;
-    boolean hasCachedSpans = !densitySvSpans.isEmpty();
+    VariantDensityPyramid pyr = this.pyramid;
+    boolean hasCachedSpans = pyr != null && !pyr.svSpans().isEmpty();
     boolean hasLiveLohSpans = hasVisibleLohRegions(variants);
     double svH = (hasCachedSpans || hasLiveLohSpans) ? Math.min(10, areaH * 0.22) : 0;
     double densH = areaH - svH;
 
-    int scaleMax = Math.max(1, densityMax);
-    double pixelSize = drawStack.getPixelSize();
-    if (pixelSize > 1.0) {
-      // Zoomed in: paint exact allele-aligned bars from the live filter chain.
+    VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
+    List<ClusterHit> pendingClusterTags = drawClusterBackgrounds(
+        gc, drawStack, canvasWidth, 2, densH, variants, activeFilter);
+
+    int scaleMax = 1;
+    if (zoomedInPrecise) {
       scaleMax = drawPreciseDensityBars(
-          gc, drawStack, canvasWidth, 2, densH, variants,
-          org.baseplayer.io.VcfManager.getInstance().getCurrentFilter());
-    } else {
-      boolean hasDensityData = densitySnv != null
-          || densityIndel != null
-          || densityDel != null
-          || densityInv != null
-          || densityDup != null
-          || densityIns != null
-          || densityTra != null
-          || densityBnd != null
-          || densityLohAa != null
-          || densityLohBb != null;
-      if (hasDensityData) {
-        drawDensityBars(gc, drawStack, canvasWidth, 2, densH);
-      }
+          gc, drawStack, canvasWidth, 2, densH, variants, activeFilter);
+    } else if (pyr != null) {
+      scaleMax = drawPyramidBars(gc, drawStack, canvasWidth, 2, densH, pyr);
     }
     if (svH >= 4) {
-      // Cached SV spans + live LOH region bars (LOH is rebuilt with the filter chain
-      // and must not wait on deferred density while zoomed in).
-      drawSvSpanBars(gc, drawStack, canvasWidth, 2 + densH, svH);
+      drawSvSpanBars(gc, drawStack, canvasWidth, 2 + densH, svH, pyr);
       drawLohRegionBars(gc, drawStack, canvasWidth, 2 + densH, svH, variants);
     }
 
+    // Tags above bars so labels stay readable; hit targets cover highlight + tag.
+    clusterHits = paintClusterTags(gc, pendingClusterTags);
+
     drawDensityChrome(gc, canvasWidth, 2, densH > 0 ? densH : areaH, scaleMax);
+  }
+
+  /**
+   * Faint genomic bands for comparison-window clusters overlapping the view.
+   * Returns placeholder hits (full highlight rects) for tag painting / click targets.
+   */
+  private List<ClusterHit> drawClusterBackgrounds(
+      GraphicsContext gc,
+      DrawStack drawStack,
+      double canvasWidth,
+      double top,
+      double h,
+      VariantList variants,
+      VariantFilter filter) {
+    if (variants == null || filter == null || !filter.hasComparisonWindow() || h < 8) {
+      return List.of();
+    }
+    List<VariantComparisonClusters.ComparisonCluster> clusters =
+        variants.listUniqueComparisonClusters(filter);
+    if (clusters.isEmpty()) {
+      return List.of();
+    }
+
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double viewLen = Math.max(1.0, viewEnd - viewStart);
+    double pxPerBp = canvasWidth / viewLen;
+
+    boolean dark = org.baseplayer.ui.theme.AppTheme.isDark();
+    Color fill = Color.rgb(255, 196, 72, dark ? 0.14 : 0.18);
+    Color stroke = Color.rgb(255, 176, 48, dark ? 0.35 : 0.45);
+
+    List<ClusterHit> hits = new ArrayList<>();
+    for (VariantComparisonClusters.ComparisonCluster cluster : clusters) {
+      long g0 = cluster.genomicStart();
+      long g1 = cluster.genomicEnd();
+      if (g1 < viewStart || g0 > viewEnd) {
+        continue;
+      }
+      double x1 = (g0 - viewStart) * pxPerBp;
+      double x2 = (g1 - viewStart) * pxPerBp;
+      double x = Math.max(0, Math.min(x1, x2));
+      double w = Math.min(canvasWidth, Math.max(x1, x2)) - x;
+      if (w < 3) {
+        w = 3;
+      }
+      gc.setFill(fill);
+      gc.fillRect(x, top, w, h);
+      gc.setStroke(stroke);
+      gc.setLineWidth(1);
+      gc.strokeRect(x + 0.5, top + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
+      hits.add(new ClusterHit(x, top, w, h, cluster));
+    }
+    return hits;
+  }
+
+  /** Draw “Cluster · N mut · M samples” tags; expand hit boxes to include tags. */
+  private List<ClusterHit> paintClusterTags(GraphicsContext gc, List<ClusterHit> backgrounds) {
+    if (backgrounds == null || backgrounds.isEmpty()) {
+      return List.of();
+    }
+    Font tagFont = AppFonts.getFont("Segoe UI", 10);
+    gc.setFont(tagFont);
+    Color tagBg = Color.rgb(40, 32, 16, org.baseplayer.ui.theme.AppTheme.isDark() ? 0.82 : 0.88);
+    Color tagFg = Color.rgb(255, 220, 150);
+
+    List<ClusterHit> hits = new ArrayList<>(backgrounds.size());
+    for (ClusterHit bg : backgrounds) {
+      VariantComparisonClusters.ComparisonCluster cluster = bg.cluster();
+      String label = "Cluster · "
+          + cluster.size + (cluster.size == 1 ? " mut" : " muts")
+          + " · "
+          + cluster.sampleCount()
+          + (cluster.sampleCount() == 1 ? " sample" : " samples");
+      double textW = Math.max(40, label.length() * 6.2);
+      double tagH = 14;
+      double tagX = Math.min(bg.x() + 2, Math.max(0, bg.x() + bg.w() - textW - 4));
+      if (tagX + textW + 6 > bg.x() + bg.w() && bg.w() > 20) {
+        tagX = bg.x() + 2;
+        textW = Math.max(24, bg.w() - 4);
+      }
+      double tagY = bg.y() + 2;
+      double tagW = textW + 8;
+
+      gc.setFill(tagBg);
+      gc.fillRoundRect(tagX, tagY, tagW, tagH, 4, 4);
+      gc.setFill(tagFg);
+      gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+      gc.fillText(label, tagX + 4, tagY + tagH / 2.0, Math.max(10, tagW - 6));
+
+      // Hit covers highlight band and tag (tag may extend slightly).
+      double hx = Math.min(bg.x(), tagX);
+      double hy = Math.min(bg.y(), tagY);
+      double hx2 = Math.max(bg.x() + bg.w(), tagX + tagW);
+      double hy2 = Math.max(bg.y() + bg.h(), tagY + tagH);
+      hits.add(new ClusterHit(hx, hy, hx2 - hx, hy2 - hy, cluster));
+    }
+    return hits;
+  }
+
+  private void ensurePyramidAsync(DrawStack drawStack, boolean force) {
+    VariantList variants = this.variantList;
+    if (variants == null || variants.isEmpty() || drawStack == null) {
+      return;
+    }
+    VcfManager vcfMgr = VcfManager.getInstance();
+    int filterGen = vcfMgr.getFilterGeneration();
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    int displayedFp = VariantDensityPyramid.fingerprintDisplayedTracks(displayed);
+    variants.ensureVisibleChain(vcfMgr.getCurrentFilter());
+    int chainGen = variants.getVisibleChainGeneration();
+
+    VariantDensityPyramid current = this.pyramid;
+    if (!force && current != null && current.matches(variants, filterGen, chainGen, displayedFp)) {
+      return;
+    }
+    // Never stack concurrent builds — each allocates multi-level BitSets for the
+    // whole chromosome. Only force/filter requests coalesce into a follow-up build.
+    if (pyramidBusy) {
+      if (force) {
+        pyramidRebuildPending = true;
+      }
+      return;
+    }
+
+    pyramidRebuildPending = false;
+    final int myGeneration = ++pyramidGeneration;
+    pyramidBusy = true;
+    final VariantFilter filter = vcfMgr.getCurrentFilter();
+    final Map<SampleTrack, Integer> displayedMap = VariantDensityPyramid.displayedTrackMap(
+        displayed, sampleRegistry.getSampleTracks());
+    final long chromLen = Math.max(2L, (long) Math.ceil(drawStack.chromSize));
+    final int buildFilterGen = filterGen;
+    final int buildChainGen = chainGen;
+    final int buildDisplayedFp = displayedFp;
+
+    Thread t = new Thread(() -> {
+      try {
+        VariantDensityPyramid built = VariantDensityPyramid.build(
+            variants, filter, displayedMap, chromLen,
+            buildFilterGen, buildChainGen, buildDisplayedFp);
+        Platform.runLater(() -> {
+          if (myGeneration != pyramidGeneration) {
+            return;
+          }
+          pyramid = built;
+          pyramidBusy = false;
+          redrawCallback.run();
+          if (pyramidRebuildPending) {
+            pyramidRebuildPending = false;
+            ensurePyramidAsync(drawStack, true);
+          }
+        });
+      } catch (Exception e) {
+        System.err.println("Density pyramid build failed: " + e.getMessage());
+        e.printStackTrace();
+        Platform.runLater(() -> {
+          if (myGeneration != pyramidGeneration) {
+            return;
+          }
+          pyramidBusy = false;
+          if (pyramidRebuildPending) {
+            pyramidRebuildPending = false;
+            ensurePyramidAsync(drawStack, true);
+          }
+        });
+      }
+    }, "density-pyramid");
+    t.setDaemon(true);
+    t.start();
   }
 
   private static boolean hasVisibleLohRegions(VariantList variants) {
@@ -417,314 +604,6 @@ public class MasterTrackPainter {
       }
     }
     return false;
-  }
-
-  private void triggerVariantDensityCompute(VariantList variants, DrawStack drawStack) {
-    densityCached = variants;
-    densityBusy = true;
-    final int myGeneration = ++densityGeneration;
-
-    if (variants == null) {
-      clearDensityArrays();
-      densityBusy = false;
-      return;
-    }
-
-    final double viewStart = drawStack.getViewStart();
-    final double viewEnd = drawStack.getViewEnd();
-    final List<Integer> aggregateTrackIndices = sampleRegistry.getDisplayedTrackIndices();
-    final VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
-
-    // Snapshot displayed track identity → live index once (no indexOf in the per-node loop).
-    final Map<SampleTrack, Integer> displayedTrackToIndex = new IdentityHashMap<>(
-        Math.max(16, aggregateTrackIndices.size() * 2));
-    List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
-    for (int idx : aggregateTrackIndices) {
-      if (idx < 0 || idx >= allTracks.size()) {
-        continue;
-      }
-      SampleTrack track = allTracks.get(idx);
-      if (track != null) {
-        displayedTrackToIndex.put(track, idx);
-      }
-    }
-
-    Thread t = new Thread(() -> {
-      try {
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] snvBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] indelBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] delBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] invBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] dupBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] insBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] traBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] bndBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] lohAaBySample = new java.util.HashSet[DENSITY_BINS];
-        @SuppressWarnings("unchecked")
-        java.util.Set<Integer>[] lohBbBySample = new java.util.HashSet[DENSITY_BINS];
-
-        List<SvSpan> spans = new ArrayList<>();
-        double viewLen = Math.max(1, viewEnd - viewStart);
-
-        variants.ensureVisibleChain(activeFilter);
-
-        // Upstream SV spans that overlap the view.
-        for (VariantNode node : variants.getVisibleSvByPosition()) {
-          if (node.position >= viewStart) {
-            break;
-          }
-          if (node.svEnd < viewStart || node.position > viewEnd) {
-            continue;
-          }
-          accumulateDensityNode(
-              variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
-              snvBySample, indelBySample, delBySample, invBySample, dupBySample,
-              insBySample, traBySample, bndBySample, lohAaBySample, lohBbBySample, spans, true);
-        }
-
-        // Synthetic LOH AA/BB region spans (outside the VCF linked list).
-        for (VariantNode node : variants.getLohRegions()) {
-          if (node == null || !VariantTypeVisuals.isLohRegion(node.type)) {
-            continue;
-          }
-          if (node.svEnd < viewStart || node.position > viewEnd) {
-            continue;
-          }
-          accumulateDensityNode(
-              variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
-              snvBySample, indelBySample, delBySample, invBySample, dupBySample,
-              insBySample, traBySample, bndBySample, lohAaBySample, lohBbBySample, spans, true);
-        }
-
-        // Thread-local seek: density runs off the FX thread and must not share drawer state.
-        VariantDrawSeek densitySeek = new VariantDrawSeek();
-        VariantNode node = densitySeek.seek(variants, (long) viewStart);
-        while (node != null && node.position <= viewEnd) {
-          accumulateDensityNode(
-              variants, node, activeFilter, displayedTrackToIndex, viewStart, viewEnd, viewLen,
-              snvBySample, indelBySample, delBySample, invBySample, dupBySample,
-              insBySample, traBySample, bndBySample, lohAaBySample, lohBbBySample, spans, false);
-          node = node.nextVisible;
-        }
-
-        int[] snv = new int[DENSITY_BINS];
-        int[] indel = new int[DENSITY_BINS];
-        int[] del = new int[DENSITY_BINS];
-        int[] inv = new int[DENSITY_BINS];
-        int[] dup = new int[DENSITY_BINS];
-        int[] ins = new int[DENSITY_BINS];
-        int[] tra = new int[DENSITY_BINS];
-        int[] bnd = new int[DENSITY_BINS];
-        int[] lohAa = new int[DENSITY_BINS];
-        int[] lohBb = new int[DENSITY_BINS];
-
-        for (int i = 0; i < DENSITY_BINS; i++) {
-          if (snvBySample[i] != null) snv[i] = snvBySample[i].size();
-          if (indelBySample[i] != null) indel[i] = indelBySample[i].size();
-          if (delBySample[i] != null) del[i] = delBySample[i].size();
-          if (invBySample[i] != null) inv[i] = invBySample[i].size();
-          if (dupBySample[i] != null) dup[i] = dupBySample[i].size();
-          if (insBySample[i] != null) ins[i] = insBySample[i].size();
-          if (traBySample[i] != null) tra[i] = traBySample[i].size();
-          if (bndBySample[i] != null) bnd[i] = bndBySample[i].size();
-          if (lohAaBySample[i] != null) lohAa[i] = lohAaBySample[i].size();
-          if (lohBbBySample[i] != null) lohBb[i] = lohBbBySample[i].size();
-        }
-
-        int maxC = 1;
-        for (int i = 0; i < DENSITY_BINS; i++) {
-          maxC = Math.max(maxC, snv[i]);
-          maxC = Math.max(maxC, indel[i]);
-          maxC = Math.max(maxC, del[i]);
-          maxC = Math.max(maxC, inv[i]);
-          maxC = Math.max(maxC, dup[i]);
-          maxC = Math.max(maxC, ins[i]);
-          maxC = Math.max(maxC, tra[i]);
-          maxC = Math.max(maxC, bnd[i]);
-          maxC = Math.max(maxC, lohAa[i]);
-          maxC = Math.max(maxC, lohBb[i]);
-        }
-
-        final int[] fSnv = snv;
-        final int[] fIndel = indel;
-        final int[] fDel = del;
-        final int[] fInv = inv;
-        final int[] fDup = dup;
-        final int[] fIns = ins;
-        final int[] fTra = tra;
-        final int[] fBnd = bnd;
-        final int[] fLohAa = lohAa;
-        final int[] fLohBb = lohBb;
-        final int fMax = maxC;
-        final List<SvSpan> fSpans = spans;
-
-        Platform.runLater(() -> {
-          if (myGeneration != densityGeneration) {
-            return;
-          }
-          densitySnv = fSnv;
-          densityIndel = fIndel;
-          densityDel = fDel;
-          densityInv = fInv;
-          densityDup = fDup;
-          densityIns = fIns;
-          densityTra = fTra;
-          densityBnd = fBnd;
-          densityLohAa = fLohAa;
-          densityLohBb = fLohBb;
-          densityMax = fMax;
-          densitySvSpans = fSpans;
-          densityBusy = false;
-          densityCachedStart = viewStart;
-          densityCachedEnd = viewEnd;
-
-          double currentViewLen = Math.max(1.0, drawStack.getViewEnd() - drawStack.getViewStart());
-          boolean viewportShifted = Math.abs(drawStack.getViewStart() - viewStart) > currentViewLen * 0.05
-              || Math.abs(drawStack.getViewEnd() - viewEnd) > currentViewLen * 0.05;
-          if (viewportShifted) {
-            // Keep the just-published bars (stretch-rendered) and schedule one recompute
-            // unless the user is still navigating/zooming.
-            boolean stillDeferring = drawStack.nav.navigating
-                || drawStack.nav.lineZoomerActive
-                || drawStack.nav.animationRunning;
-            if (!stillDeferring && variantList != null && !variantList.isEmpty()) {
-              densityCachedStart = -1;
-              densityCachedEnd = -1;
-              triggerVariantDensityCompute(variantList, drawStack);
-            }
-            redrawCallback.run();
-            return;
-          }
-
-          redrawCallback.run();
-        });
-      } catch (Exception e) {
-        System.err.println("Density computation failed: " + e.getMessage());
-        e.printStackTrace();
-        densityBusy = false;
-      }
-    }, "density-compute");
-    t.setDaemon(true);
-    t.start();
-  }
-
-  private void accumulateDensityNode(
-      VariantList variants,
-      VariantNode node,
-      VariantFilter activeFilter,
-      Map<SampleTrack, Integer> displayedTrackToIndex,
-      double viewStart,
-      double viewEnd,
-      double viewLen,
-      java.util.Set<Integer>[] snvBySample,
-      java.util.Set<Integer>[] indelBySample,
-      java.util.Set<Integer>[] delBySample,
-      java.util.Set<Integer>[] invBySample,
-      java.util.Set<Integer>[] dupBySample,
-      java.util.Set<Integer>[] insBySample,
-      java.util.Set<Integer>[] traBySample,
-      java.util.Set<Integer>[] bndBySample,
-      java.util.Set<Integer>[] lohAaBySample,
-      java.util.Set<Integer>[] lohBbBySample,
-      List<SvSpan> spans,
-      boolean treatAsSvSpan) {
-    List<Integer> passingIndices = new ArrayList<>();
-    int chainGen = variants.getVisibleChainGeneration();
-    boolean useCache = node.hasDisplayCache(chainGen);
-    for (Map.Entry<SampleTrack, Integer> entry : displayedTrackToIndex.entrySet()) {
-      SampleTrack track = entry.getKey();
-      Integer trackIdx = entry.getValue();
-      VariantNode.SampleCall call = useCache
-          ? node.getDisplayCall(track, chainGen)
-          : variants.getDisplayCall(
-              node, trackIdx != null ? trackIdx : -1, track, activeFilter);
-      // LOH AA regions are homozygous REF by definition — still count them.
-      if (call == null
-          || (node.isHomozygousRef(call) && !VariantTypeVisuals.isLohRegion(node.type))) {
-        continue;
-      }
-      passingIndices.add(entry.getValue());
-    }
-    if (passingIndices.isEmpty()) {
-      return;
-    }
-
-    boolean isSvWithSpan = treatAsSvSpan
-        || (node.svEnd > node.position
-            && (node.type == VcfVariantType.SV_DELETION
-                || node.type == VcfVariantType.SV_INSERTION
-                || node.type == VcfVariantType.SV_DUPLICATION
-                || node.type == VcfVariantType.SV_INVERSION
-                || VariantTypeVisuals.isCnv(node.type)
-                || VariantTypeVisuals.isLohRegion(node.type)));
-
-    if (isSvWithSpan && node.svEnd >= viewStart && node.position <= viewEnd) {
-      long s = Math.max((long) viewStart, node.position);
-      long e = Math.min((long) viewEnd, node.svEnd);
-      int b0 = (int) Math.max(0,
-          Math.min(DENSITY_BINS - 1, (s - viewStart) * DENSITY_BINS / viewLen));
-      int b1 = (int) Math.max(0,
-          Math.min(DENSITY_BINS - 1, (e - viewStart) * DENSITY_BINS / viewLen));
-
-      java.util.Set<Integer>[] targetArray = switch (node.type) {
-        case SV_DELETION, SV_CNV_LOSS -> delBySample;
-        case LOH_AA -> lohAaBySample;
-        case LOH_BB -> lohBbBySample;
-        case SV_INVERSION -> invBySample;
-        case SV_DUPLICATION, SV_CNV_GAIN -> dupBySample;
-        case SV_INSERTION -> insBySample;
-        default -> delBySample;
-      };
-
-      for (int b = b0; b <= b1; b++) {
-        if (targetArray[b] == null) {
-          targetArray[b] = new java.util.HashSet<>();
-        }
-        targetArray[b].addAll(passingIndices);
-      }
-      spans.add(new SvSpan(node.position, node.svEnd, node.type, passingIndices.size()));
-    } else if (node.position >= viewStart && node.position <= viewEnd) {
-      int bin = (int) Math.max(0,
-          Math.min(DENSITY_BINS - 1, (node.position - viewStart) * DENSITY_BINS / viewLen));
-
-      switch (node.type) {
-        case SNV -> {
-          if (snvBySample[bin] == null) {
-            snvBySample[bin] = new java.util.HashSet<>();
-          }
-          snvBySample[bin].addAll(passingIndices);
-        }
-        case INSERTION, DELETION, MNV -> {
-          if (indelBySample[bin] == null) {
-            indelBySample[bin] = new java.util.HashSet<>();
-          }
-          indelBySample[bin].addAll(passingIndices);
-        }
-        case SV_TRANSLOCATION -> {
-          if (traBySample[bin] == null) {
-            traBySample[bin] = new java.util.HashSet<>();
-          }
-          traBySample[bin].addAll(passingIndices);
-        }
-        case SV_BREAKEND -> {
-          if (bndBySample[bin] == null) {
-            bndBySample[bin] = new java.util.HashSet<>();
-          }
-          bndBySample[bin].addAll(passingIndices);
-        }
-        default -> {
-        }
-      }
-    }
   }
 
   /**
@@ -765,90 +644,109 @@ public class MasterTrackPainter {
     double viewEnd = drawStack.getViewEnd();
     double pixelSize = drawStack.getPixelSize();
     double maxBarH = h - 1;
-    int maxC = Math.max(1, displayedTrackToIndex.size());
 
     variants.ensureVisibleChain(activeFilter);
-
-    record PreciseBar(double x, double w, int count, VcfVariantType type) {}
-    List<PreciseBar> bars = new ArrayList<>();
-
+    int filterGen = VcfManager.getInstance().getFilterGeneration();
     int chainGen = variants.getVisibleChainGeneration();
-    VcfManager vcfManager = VcfManager.getInstance();
-    Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
-    java.util.function.Consumer<VariantNode> collect = node -> {
-      if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
-        return;
-      }
-      int count = 0;
-      boolean useCache = node.hasDisplayCache(chainGen);
-      for (Map.Entry<SampleTrack, Integer> e : displayedTrackToIndex.entrySet()) {
-        SampleTrack track = e.getKey();
-        Integer trackIdx = e.getValue();
-        VariantNode.SampleCall call = useCache
-            ? node.getDisplayCall(track, chainGen)
-            : variants.getDisplayCall(
-                node, trackIdx != null ? trackIdx : -1, track, activeFilter);
-        if (call == null
-            || (node.isHomozygousRef(call) && !VariantTypeVisuals.isLohRegion(node.type))) {
+    boolean cacheHit = preciseBarsList == variants
+        && preciseBarsFilterGen == filterGen
+        && preciseBarsChainGen == chainGen
+        && preciseBarsWidth == canvasWidth
+        && preciseBarsPixelSize == pixelSize
+        && preciseBarsViewStart == viewStart
+        && preciseBarsViewEnd == viewEnd
+        && preciseBarsCache != null;
+
+    List<PreciseBar> bars;
+    int maxC;
+    if (cacheHit) {
+      bars = preciseBarsCache;
+      maxC = Math.max(1, preciseBarsMaxC);
+    } else {
+      bars = new ArrayList<>();
+      int windowMax = 1;
+      BitSet passing = new BitSet(Math.max(64, allTracks.size() + 1));
+      VcfManager vcfManager = VcfManager.getInstance();
+      Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
+      java.util.function.Consumer<VariantNode> collect = node -> {
+        if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
+          return;
+        }
+        passing.clear();
+        int count = variants.collectDisplayTrackIndices(
+            node, activeFilter, displayedTrackToIndex, passing);
+        if (count <= 0) {
+          return;
+        }
+
+        long g0 = node.position;
+        long g1 = org.baseplayer.variant.draw.VariantDrawer.alleleEndExclusive(node);
+        if (node.svEnd > node.position
+            && (node.type == VcfVariantType.SV_DELETION
+                || node.type == VcfVariantType.SV_INSERTION
+                || node.type == VcfVariantType.SV_DUPLICATION
+                || node.type == VcfVariantType.SV_INVERSION
+                || VariantTypeVisuals.isCnv(node.type)
+                || VariantTypeVisuals.isLohRegion(node.type))) {
+          g1 = node.svEnd;
+        }
+        if (g1 <= viewStart || g0 > viewEnd) {
+          return;
+        }
+
+        double x1 = (g0 - viewStart) * pixelSize;
+        double x2 = (g1 - viewStart) * pixelSize;
+        double x = Math.max(0, Math.min(x1, x2));
+        double w = Math.min(canvasWidth, Math.max(x1, x2)) - x;
+        if (w < 1) {
+          w = 1;
+        }
+
+        bars.add(new PreciseBar(x, w, count, node.type));
+      };
+
+      for (VariantNode node : variants.getVisibleSvByPosition()) {
+        if (node.position >= viewStart) {
+          break;
+        }
+        if (node.svEnd < viewStart || node.position > viewEnd) {
           continue;
         }
-        count++;
-      }
-      if (count <= 0) {
-        return;
+        collect.accept(node);
       }
 
-      long g0 = node.position;
-      long g1 = org.baseplayer.variant.draw.VariantDrawer.alleleEndExclusive(node);
-      if (node.svEnd > node.position
-          && (node.type == VcfVariantType.SV_DELETION
-              || node.type == VcfVariantType.SV_INSERTION
-              || node.type == VcfVariantType.SV_DUPLICATION
-              || node.type == VcfVariantType.SV_INVERSION
-              || VariantTypeVisuals.isCnv(node.type)
-              || VariantTypeVisuals.isLohRegion(node.type))) {
-        g1 = node.svEnd;
-      }
-      if (g1 <= viewStart || g0 > viewEnd) {
-        return;
+      for (VariantNode region : variants.getLohRegions()) {
+        if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
+          continue;
+        }
+        if (region.svEnd < viewStart || region.position > viewEnd) {
+          continue;
+        }
+        collect.accept(region);
       }
 
-      double x1 = (g0 - viewStart) * pixelSize;
-      double x2 = (g1 - viewStart) * pixelSize;
-      double x = Math.max(0, Math.min(x1, x2));
-      double w = Math.min(canvasWidth, Math.max(x1, x2)) - x;
-      if (w < 1) {
-        w = 1;
+      VariantDrawSeek seek = new VariantDrawSeek();
+      VariantNode node = seek.seek(variants, (long) viewStart);
+      while (node != null && node.position <= viewEnd) {
+        collect.accept(node);
+        node = node.nextVisible;
       }
 
-      bars.add(new PreciseBar(x, w, count, node.type));
-    };
+      for (PreciseBar bar : bars) {
+        windowMax = Math.max(windowMax, bar.count());
+      }
+      // 2× window peak so tallest bars only reach half the band.
+      maxC = Math.max(1, windowMax * 2);
 
-    for (VariantNode node : variants.getVisibleSvByPosition()) {
-      if (node.position >= viewStart) {
-        break;
-      }
-      if (node.svEnd < viewStart || node.position > viewEnd) {
-        continue;
-      }
-      collect.accept(node);
-    }
-
-    for (VariantNode region : variants.getLohRegions()) {
-      if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
-        continue;
-      }
-      if (region.svEnd < viewStart || region.position > viewEnd) {
-        continue;
-      }
-      collect.accept(region);
-    }
-
-    VariantDrawSeek seek = new VariantDrawSeek();
-    VariantNode node = seek.seek(variants, (long) viewStart);
-    while (node != null && node.position <= viewEnd) {
-      collect.accept(node);
-      node = node.nextVisible;
+      preciseBarsCache = List.copyOf(bars);
+      preciseBarsMaxC = maxC;
+      preciseBarsList = variants;
+      preciseBarsViewStart = viewStart;
+      preciseBarsViewEnd = viewEnd;
+      preciseBarsPixelSize = pixelSize;
+      preciseBarsWidth = canvasWidth;
+      preciseBarsFilterGen = filterGen;
+      preciseBarsChainGen = chainGen;
     }
 
     double bottom = top + h;
@@ -864,56 +762,28 @@ public class MasterTrackPainter {
     return maxC;
   }
 
-  private void drawDensityBars(
+  private int drawPyramidBars(
       GraphicsContext gc,
       DrawStack drawStack,
       double canvasWidth,
       double top,
-      double h) {
-    if (drawStack.getViewLength() <= 0) return;
-    if (densityDel == null && densitySnv == null && densityIndel == null
-        && densityInv == null && densityDup == null && densityIns == null
-        && densityTra == null && densityBnd == null
-        && densityLohAa == null && densityLohBb == null) {
-      return;
+      double h,
+      VariantDensityPyramid pyr) {
+    if (pyr == null || drawStack.getViewLength() <= 0 || h <= 0 || canvasWidth <= 0) {
+      return 1;
     }
 
-    double maxBarH = h - 1;
-    int maxC = Math.max(1, densityMax);
-
-    double cachedViewLength = densityCachedEnd - densityCachedStart;
-    double currentViewLength = drawStack.getViewLength();
-
-    // After pan/zoom we clear cached start/end to force recompute but keep last bin
-    // arrays to avoid a blank flash. Identity-map until the new compute publishes
-    // valid coords — otherwise scaleX=0 / Inf skips almost every column.
-    boolean cacheCoordsValid =
-        densityCachedStart >= 0 && densityCachedEnd > densityCachedStart;
-    double scaleX;
-    double translateX;
-    if (cacheCoordsValid) {
-      scaleX = cachedViewLength / Math.max(1, currentViewLength);
-      translateX = (densityCachedStart - drawStack.getViewStart())
-          * (canvasWidth / Math.max(1, currentViewLength));
-      if (!(scaleX > 1e-9) || Double.isNaN(scaleX) || Double.isInfinite(scaleX)) {
-        scaleX = 1.0;
-        translateX = 0.0;
-      }
-    } else {
-      scaleX = 1.0;
-      translateX = 0.0;
+    VariantDensityPyramid.Level level = pyr.pickLevel(drawStack.getViewLength(), canvasWidth);
+    if (level == null) {
+      return 1;
     }
 
     VcfManager vcfManager = VcfManager.getInstance();
-    // Use isCanvasTypeDrawn (legend membership + not hidden). The indel density bin is
-    // shared across INS/DEL/MNV/COMPLEX — default-visible types not in the legend must
-    // not keep the bucket painting after every legend swatch is deselected.
     boolean showSnv = vcfManager.isCanvasTypeDrawn(VcfVariantType.SNV);
     boolean showIndel = vcfManager.isCanvasTypeDrawn(VcfVariantType.INSERTION)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.DELETION)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.MNV)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.COMPLEX);
-    // CNV loss/gain accumulate into the DEL/DUP density bins — gate on those types too.
     boolean showDel = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
     boolean showInv = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INVERSION);
@@ -929,52 +799,62 @@ public class MasterTrackPainter {
     boolean dupColorIsCnv = !vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION)
         && vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
 
+    boolean[] visible = new boolean[VariantDensityPyramid.Channel.values().length];
+    visible[VariantDensityPyramid.Channel.SNV.ordinal()] = showSnv;
+    visible[VariantDensityPyramid.Channel.INDEL.ordinal()] = showIndel;
+    visible[VariantDensityPyramid.Channel.DEL.ordinal()] = showDel;
+    visible[VariantDensityPyramid.Channel.INV.ordinal()] = showInv;
+    visible[VariantDensityPyramid.Channel.DUP.ordinal()] = showDup;
+    visible[VariantDensityPyramid.Channel.INS.ordinal()] = showIns;
+    visible[VariantDensityPyramid.Channel.TRA.ordinal()] = showTra;
+    visible[VariantDensityPyramid.Channel.BND.ordinal()] = showBnd;
+    visible[VariantDensityPyramid.Channel.LOH_AA.ordinal()] = showLohAa;
+    visible[VariantDensityPyramid.Channel.LOH_BB.ordinal()] = showLohBb;
+
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double viewLen = Math.max(1.0, viewEnd - viewStart);
+    int maxC = Math.max(1, pyr.maxInView(level, viewStart, viewEnd, visible));
+    double maxBarH = h - 1;
+
+    int[] snv = level.channel(VariantDensityPyramid.Channel.SNV);
+    int[] indel = level.channel(VariantDensityPyramid.Channel.INDEL);
+    int[] del = level.channel(VariantDensityPyramid.Channel.DEL);
+    int[] inv = level.channel(VariantDensityPyramid.Channel.INV);
+    int[] dup = level.channel(VariantDensityPyramid.Channel.DUP);
+    int[] ins = level.channel(VariantDensityPyramid.Channel.INS);
+    int[] tra = level.channel(VariantDensityPyramid.Channel.TRA);
+    int[] bnd = level.channel(VariantDensityPyramid.Channel.BND);
+    int[] lohAa = level.channel(VariantDensityPyramid.Channel.LOH_AA);
+    int[] lohBb = level.channel(VariantDensityPyramid.Channel.LOH_BB);
+
     for (int px = 0; px < (int) canvasWidth; px++) {
-      // Map screen pixel to cached coordinate space, accounting for both scale and translation
-      double cachedPx = (px - translateX) / scaleX;
-      if (Double.isNaN(cachedPx) || Double.isInfinite(cachedPx)) {
-        continue;
-      }
-
-      int b0 = (int) Math.floor(cachedPx * DENSITY_BINS / canvasWidth);
-      int b1 = (int) Math.floor((cachedPx + 1.0) * DENSITY_BINS / canvasWidth);
-
-      // Fully outside the cached bin range
-      if (b1 < 0 || b0 >= DENSITY_BINS) {
-        continue;
-      }
-      b0 = Math.max(0, b0);
-      b1 = Math.min(DENSITY_BINS - 1, b1);
+      double g0 = viewStart + px * viewLen / canvasWidth;
+      double g1 = viewStart + (px + 1) * viewLen / canvasWidth;
+      int b0 = pyr.genomicToBin(g0, level);
+      int b1 = pyr.genomicToBin(g1, level);
       if (b1 < b0) {
-        continue;
+        int tmp = b0;
+        b0 = b1;
+        b1 = tmp;
       }
 
-      int snvVal = 0;
-      int indelVal = 0;
-      int delVal = 0;
-      int invVal = 0;
-      int dupVal = 0;
-      int insVal = 0;
-      int traVal = 0;
-      int bndVal = 0;
-      int lohAaVal = 0;
-      int lohBbVal = 0;
-
+      int snvVal = 0, indelVal = 0, delVal = 0, invVal = 0, dupVal = 0;
+      int insVal = 0, traVal = 0, bndVal = 0, lohAaVal = 0, lohBbVal = 0;
       for (int b = b0; b <= b1; b++) {
-        if (showSnv && densitySnv != null) snvVal = Math.max(snvVal, densitySnv[b]);
-        if (showIndel && densityIndel != null) indelVal = Math.max(indelVal, densityIndel[b]);
-        if (showDel && densityDel != null) delVal = Math.max(delVal, densityDel[b]);
-        if (showInv && densityInv != null) invVal = Math.max(invVal, densityInv[b]);
-        if (showDup && densityDup != null) dupVal = Math.max(dupVal, densityDup[b]);
-        if (showIns && densityIns != null) insVal = Math.max(insVal, densityIns[b]);
-        if (showTra && densityTra != null) traVal = Math.max(traVal, densityTra[b]);
-        if (showBnd && densityBnd != null) bndVal = Math.max(bndVal, densityBnd[b]);
-        if (showLohAa && densityLohAa != null) lohAaVal = Math.max(lohAaVal, densityLohAa[b]);
-        if (showLohBb && densityLohBb != null) lohBbVal = Math.max(lohBbVal, densityLohBb[b]);
+        if (showSnv) snvVal = Math.max(snvVal, snv[b]);
+        if (showIndel) indelVal = Math.max(indelVal, indel[b]);
+        if (showDel) delVal = Math.max(delVal, del[b]);
+        if (showInv) invVal = Math.max(invVal, inv[b]);
+        if (showDup) dupVal = Math.max(dupVal, dup[b]);
+        if (showIns) insVal = Math.max(insVal, ins[b]);
+        if (showTra) traVal = Math.max(traVal, tra[b]);
+        if (showBnd) bndVal = Math.max(bndVal, bnd[b]);
+        if (showLohAa) lohAaVal = Math.max(lohAaVal, lohAa[b]);
+        if (showLohBb) lohBbVal = Math.max(lohBbVal, lohBb[b]);
       }
 
-      record BarData(int value, VcfVariantType type) {
-      }
+      record BarData(int value, VcfVariantType type) {}
       List<BarData> bars = new ArrayList<>();
       if (snvVal > 0) bars.add(new BarData(snvVal, VcfVariantType.SNV));
       if (indelVal > 0) bars.add(new BarData(indelVal, VcfVariantType.DELETION));
@@ -1003,6 +883,7 @@ public class MasterTrackPainter {
         gc.fillRect(px, bottom - bh, 1, bh);
       }
     }
+    return maxC;
   }
 
   private void drawDensityChrome(
@@ -1077,8 +958,12 @@ public class MasterTrackPainter {
       DrawStack drawStack,
       double canvasWidth,
       double top,
-      double h) {
-    List<SvSpan> spans = densitySvSpans;
+      double h,
+      VariantDensityPyramid pyr) {
+    if (pyr == null) {
+      return;
+    }
+    List<VariantDensityPyramid.SvSpan> spans = pyr.svSpans();
     double viewStart = drawStack.getViewStart();
     double viewLen = drawStack.getViewLength();
     if (viewLen <= 0 || spans.isEmpty()) return;
@@ -1087,9 +972,8 @@ public class MasterTrackPainter {
     double barH = Math.max(2, h - 3);
     VcfManager vcfManager = VcfManager.getInstance();
     Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
-    for (SvSpan span : spans) {
-      // LOH spans are painted live via {@link #drawLohRegionBars} so legend toggles
-      // and zoomed-in views stay in sync without waiting on density recompute.
+    for (VariantDensityPyramid.SvSpan span : spans) {
+      // LOH spans are painted live via {@link #drawLohRegionBars}.
       if (VariantTypeVisuals.isLohRegion(span.type())) {
         continue;
       }
@@ -1151,7 +1035,7 @@ public class MasterTrackPainter {
     VcfManager vcf = VcfManager.getInstance();
     VariantFilter filter = vcf.getCurrentFilter();
     Set<VcfVariantType> legendTypes = vcf.getSessionAvailableTypes();
-    int chainGen = variants.getVisibleChainGeneration();
+    BitSet passing = new BitSet(Math.max(64, allTracks.size() + 1));
     double barY = top + 1;
     double barH = Math.max(2, h - 3);
 
@@ -1167,20 +1051,9 @@ public class MasterTrackPainter {
         continue;
       }
 
-      int sampleCount = 0;
-      boolean useCache = node.hasDisplayCache(chainGen);
-      for (Map.Entry<SampleTrack, Integer> e : displayedTracks.entrySet()) {
-        SampleTrack track = e.getKey();
-        Integer trackIdx = e.getValue();
-        VariantNode.SampleCall call = useCache
-            ? node.getDisplayCall(track, chainGen)
-            : variants.getDisplayCall(
-                node, trackIdx != null ? trackIdx : -1, track, filter);
-        if (call == null) {
-          continue;
-        }
-        sampleCount++;
-      }
+      passing.clear();
+      int sampleCount = variants.collectDisplayTrackIndices(
+          node, filter, displayedTracks, passing);
       if (sampleCount <= 0) {
         continue;
       }

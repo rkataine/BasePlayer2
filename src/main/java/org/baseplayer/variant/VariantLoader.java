@@ -226,7 +226,8 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
                                 snv.getRef(), alt, snv.getType(), call);
-                            applyRecordMeta(cursor[0], snv.getId(), snv.getFilters(), snv.getInfo());
+                            applyRecordMeta(
+                                cursor[0], snv.getId(), snv.getFilters(), snv.getInfo(), loadFilter);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -281,7 +282,7 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
                                 sv.getRef(), alt, sv.getType(), call);
-                            applySvFields(cursor[0], sv, alt);
+                            applySvFields(cursor[0], sv, alt, loadFilter);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -402,7 +403,8 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], snv.getPosition(),
                                 snv.getRef(), alt, snv.getType(), call);
-                            applyRecordMeta(cursor[0], snv.getId(), snv.getFilters(), snv.getInfo());
+                            applyRecordMeta(
+                                cursor[0], snv.getId(), snv.getFilters(), snv.getInfo(), loadFilter);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -455,7 +457,7 @@ public class VariantLoader {
                             int trackIdx = entry.getValue();
                             cursor[0] = target.addVariantWithCursor(cursor[0], sv.getPosition(),
                                 sv.getRef(), alt, sv.getType(), call);
-                            applySvFields(cursor[0], sv, alt);
+                            applySvFields(cursor[0], sv, alt, loadFilter);
                             if (siteQual >= 0 && cursor[0].siteQuality < 0) cursor[0].siteQuality = siteQual;
                             variantCount[0]++;
                             
@@ -492,11 +494,12 @@ public class VariantLoader {
     }
 
     /** Copy SV span, mate coordinates, and site INFO onto the just-inserted node. */
-    private static void applySvFields(VariantNode node, VcfStructuralVariant sv, String alt) {
+    private static void applySvFields(
+            VariantNode node, VcfStructuralVariant sv, String alt, VariantFilter loadFilter) {
         if (node == null || sv == null) {
             return;
         }
-        applyRecordMeta(node, sv.getId(), sv.getFilters(), sv.getInfo());
+        applyRecordMeta(node, sv.getId(), sv.getFilters(), sv.getInfo(), loadFilter);
         Long svEnd = sv.getEnd();
         if (svEnd != null && node.svEnd < 0) {
             node.svEnd = svEnd;
@@ -527,52 +530,47 @@ public class VariantLoader {
         }
     }
 
-    /** Copy VCF ID / FILTER / INFO onto the node once (first sample merge wins). */
+    /**
+     * Copy VCF ID always; FILTER / INFO values only when the load filter requested them.
+     * ##INFO / ##FILTER header defs stay in {@link org.baseplayer.io.VcfManager} (session union).
+     */
     private static void applyRecordMeta(
         VariantNode node,
         String id,
         List<String> filters,
-        Map<String, Object> info) {
+        Map<String, Object> info,
+        VariantFilter loadFilter) {
         if (node == null) {
             return;
         }
         if (node.vcfId == null && id != null && !id.isBlank() && !".".equals(id)) {
             node.vcfId = id;
         }
-        if (node.vcfFilter == null && filters != null && !filters.isEmpty()) {
+        boolean keepFilter = loadFilter != null && loadFilter.shouldPersistVcfFilter();
+        if (keepFilter && node.vcfFilter == null && filters != null && !filters.isEmpty()) {
             node.vcfFilter = String.join(";", filters);
         }
-        node.setInfoFieldsIfAbsent(stringifyInfoMap(info));
+        if (node.hasInfoFields()) {
+            return;
+        }
+        Set<String> keys = loadFilter != null ? loadFilter.infoKeysToPersist() : Set.of();
+        if (keys.isEmpty()) {
+            return;
+        }
+        node.setInfoFieldsIfAbsent(stringifyInfoKeys(info, keys));
     }
 
-    private static final Set<String> SAMPLE_CALL_CORE_KEYS = Set.of(
-        "GT", "GQ", "DP", "AF", "isHomRef", "isNoCall", "isHet", "isHomAlt", "alleles");
-
-    private static Map<String, String> stringifyInfoMap(Map<String, Object> info) {
-        if (info == null || info.isEmpty()) {
+    /** Stringify only the requested INFO keys (empty → nothing stored). */
+    private static Map<String, String> stringifyInfoKeys(Map<String, Object> info, Set<String> keys) {
+        if (info == null || info.isEmpty() || keys == null || keys.isEmpty()) {
             return Map.of();
         }
         LinkedHashMap<String, String> out = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : info.entrySet()) {
-            if (entry.getKey() == null || entry.getKey().isBlank()) {
+        for (String key : keys) {
+            if (key == null || key.isBlank() || !info.containsKey(key)) {
                 continue;
             }
-            out.put(entry.getKey(), formatInfoValue(entry.getValue()));
-        }
-        return out.isEmpty() ? Map.of() : out;
-    }
-
-    private static Map<String, String> extractExtraFormatFields(Map<String, Object> gtMap) {
-        if (gtMap == null || gtMap.isEmpty()) {
-            return Map.of();
-        }
-        LinkedHashMap<String, String> out = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : gtMap.entrySet()) {
-            String key = entry.getKey();
-            if (key == null || SAMPLE_CALL_CORE_KEYS.contains(key)) {
-                continue;
-            }
-            out.put(key, formatInfoValue(entry.getValue()));
+            out.put(key, formatInfoValue(info.get(key)));
         }
         return out.isEmpty() ? Map.of() : out;
     }
@@ -668,9 +666,10 @@ public class VariantLoader {
             double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
             int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
             double af = calculateAlleleFraction(gtMap, altAllele);
+            // Skip extra FORMAT maps at load — they dominate per-call RAM (AD, F1R2, SB, …).
+            // GT/GQ/DP/AF cover filters and drawing; details popup can stay lean.
             return new VariantNode.SampleCall(
-                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af,
-                extractExtraFormatFields(gtMap));
+                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af, null);
         }
         
         // GT contains allele bases (e.g. "G/A") or indices (e.g. "0/1"); skip if this alt is not present
@@ -682,8 +681,7 @@ public class VariantLoader {
         int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
         double af = calculateAlleleFraction(gtMap, altAllele);
         return new VariantNode.SampleCall(
-            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af,
-            extractExtraFormatFields(gtMap));
+            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af, null);
     }
 
     /**

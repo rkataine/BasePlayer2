@@ -25,8 +25,10 @@ import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
@@ -449,6 +451,7 @@ public final class VariantCacheStore {
     out.writeDouble(node.siteQuality);
     writeNullableString(out, node.vcfId);
     writeNullableString(out, node.vcfFilter);
+    // Point alleles omit INFO in memory; keep wire format compatible (empty map).
     writeStringMap(out, node.getInfoFields());
 
     List<VariantNode.SampleCall> calls = node.getSamples();
@@ -459,7 +462,8 @@ public final class VariantCacheStore {
       out.writeDouble(call.quality);
       out.writeInt(call.depth);
       out.writeDouble(call.alleleFraction);
-      writeStringMap(out, call.formatFields);
+      // Extra FORMAT fields are no longer kept in RAM — write empty for compatibility.
+      writeStringMap(out, Map.of());
     }
 
     VariantAnnotation ann = node.annotation;
@@ -503,7 +507,6 @@ public final class VariantCacheStore {
     long svEnd2 = in.readLong();
     double siteQuality = in.readDouble();
     String vcfId = readNullableString(in);
-    String vcfFilter = readNullableString(in);
     Map<String, String> infoFields = readStringMap(in);
 
     VariantNode node = new VariantNode(position, ref, alt, type);
@@ -512,8 +515,20 @@ public final class VariantCacheStore {
     node.svEnd2 = svEnd2;
     node.siteQuality = siteQuality;
     node.vcfId = vcfId;
-    node.vcfFilter = vcfFilter;
-    node.setInfoFieldsIfAbsent(infoFields);
+    // FILTER column values are only kept when FILTER= rules are active (reload from VCF).
+    // Drop legacy per-allele FILTER strings from older caches.
+    node.vcfFilter = null;
+    // INFO values: keep only canvas CNV keys from cache; user INFO filters force VCF reload.
+    if (type != null && VariantTypeVisuals.isCnv(type) && infoFields != null && !infoFields.isEmpty()) {
+      Map<String, String> slim = new LinkedHashMap<>();
+      for (String key : VariantFilter.CANVAS_CNV_INFO_KEYS) {
+        String val = infoFields.get(key);
+        if (val != null) {
+          slim.put(key, val);
+        }
+      }
+      node.setInfoFieldsIfAbsent(slim);
+    }
 
     int callCount = in.readInt();
     for (int i = 0; i < callCount; i++) {
@@ -522,7 +537,7 @@ public final class VariantCacheStore {
       double quality = in.readDouble();
       int depth = in.readInt();
       double af = in.readDouble();
-      Map<String, String> formatFields = readStringMap(in);
+      readStringMap(in); // discard legacy FORMAT extras — not retained in RAM
 
       int liveIndex = -1;
       if (savedTrackIndex >= 0 && savedTrackIndex < savedNames.length) {
@@ -530,7 +545,7 @@ public final class VariantCacheStore {
         if (mapped != null) liveIndex = mapped;
       }
       if (liveIndex >= 0) {
-        node.addSample(new VariantNode.SampleCall(liveIndex, null, gt, quality, depth, af, formatFields));
+        node.addSample(new VariantNode.SampleCall(liveIndex, null, gt, quality, depth, af, null));
       }
     }
 

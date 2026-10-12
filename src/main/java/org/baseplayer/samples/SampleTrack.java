@@ -21,6 +21,11 @@ public class SampleTrack implements Closeable {
   private String name;
   private String customName;
   private final List<Sample> samples = new ArrayList<>();
+  /**
+   * Index in {@link org.baseplayer.services.SampleRegistry#getSampleTracks()}, or -1.
+   * Maintained by the registry for O(1) lookups (avoids {@code indexOf} on hot paths).
+   */
+  private volatile int registryIndex = -1;
 
   /**
    * Create a track for an individual with an initial data file.
@@ -53,6 +58,16 @@ public class SampleTrack implements Closeable {
 
   /** Set the raw name. */
   public void setName(String name) { this.name = name; }
+
+  /** Live index in the sample-track list, or {@code -1} when not registered. */
+  public int getRegistryIndex() {
+    return registryIndex;
+  }
+
+  /** Called by {@link org.baseplayer.services.SampleRegistry} when the track list changes. */
+  public void setRegistryIndex(int index) {
+    this.registryIndex = index;
+  }
 
   // ── Sample groups (a track may belong to several) ──
 

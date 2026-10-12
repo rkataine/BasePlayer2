@@ -93,10 +93,10 @@ public class VariantList {
     private String geneSampleIndexFilterKey;
 
     /**
-     * Soft-match cluster → union of mutated sample track indices (identity-keyed by node).
-     * Built when {@link VariantFilter#hasComparisonWindow()} is true.
+     * Transitive window cluster per allele (identity-keyed). Only members of clusters
+     * with size ≥ 2 are present. Built when {@link VariantFilter#hasComparisonWindow()}.
      */
-    private Map<VariantNode, Set<Integer>> clusterSampleIndex = Map.of();
+    private Map<VariantNode, VariantComparisonClusters.ComparisonCluster> clusterIndex = Map.of();
     private String clusterSampleIndexFilterKey;
     
     /**
@@ -358,7 +358,7 @@ public class VariantList {
 
         Map<String, Set<Integer>> geneTracks = null;
         Map<VcfVariantType, Set<String>> passingGenesByType = null;
-        Map<VariantNode, Set<Integer>> clusterTracks = null;
+        Map<VariantNode, VariantComparisonClusters.ComparisonCluster> clusters = null;
         if (filter != null && filter.isGeneLevel()) {
             geneTracks = ensureGeneSampleIndex(filter);
             VariantFilter svSlice = filter.getSvSlice() != null ? filter.getSvSlice() : filter;
@@ -366,7 +366,7 @@ public class VariantList {
                 passingGenesByType = computePassingGenesByType(svSlice);
             }
         } else if (filter != null && filter.hasComparisonWindow()) {
-            clusterTracks = ensureClusterSampleIndex(filter);
+            clusters = ensureComparisonClusters(filter);
         }
 
         VariantNode prevVisible = null;
@@ -379,7 +379,7 @@ public class VariantList {
             }
 
             if (isDrawableUnderFilter(
-                    this, current, filter, geneTracks, passingGenesByType, clusterTracks)) {
+                    this, current, filter, geneTracks, passingGenesByType, clusters)) {
                 current.nextVisible = null;
                 current.prevVisible = prevVisible;
                 if (prevVisible == null) {
@@ -545,47 +545,137 @@ public class VariantList {
         if (filter == null) {
             return null;
         }
+        Set<Integer> failedLineages = ensureDisplayFailedLineages(node, gen, filter);
+
+        // Prefer a solid (non-overlay) visible call when several VCFs share a track.
+        // Scan under the node lock via forEachSampleUntil — no List.copyOf.
+        final VariantNode.SampleCall[] overlayFallback = { null };
+        final VariantNode.SampleCall[] solid = { null };
+        node.forEachSampleUntil(candidate -> {
+            if (candidate == null) {
+                return false;
+            }
+            if (track != null) {
+                if (candidate.getTrack() != track) {
+                    return false;
+                }
+            } else if (trackIndex >= 0 && candidate.getTrackIndex() != trackIndex) {
+                return false;
+            }
+            if (!isDisplayEligible(node, candidate, filter, failedLineages)) {
+                return false;
+            }
+            if (VariantTypeVisuals.isLohRegion(node.type)) {
+                solid[0] = candidate;
+                return true;
+            }
+            if (!candidate.isUiOverlay()) {
+                solid[0] = candidate;
+                return true;
+            }
+            if (overlayFallback[0] == null) {
+                overlayFallback[0] = candidate;
+            }
+            return false;
+        });
+        return solid[0] != null ? solid[0] : overlayFallback[0];
+    }
+
+    /** Failed lineage ids for live display checks; cached per chain generation. */
+    public Set<Integer> displayFailedLineages(VariantNode node, VariantFilter filter) {
+        if (node == null || filter == null) {
+            return Set.of();
+        }
+        return ensureDisplayFailedLineages(node, visibleChainGeneration, filter);
+    }
+
+    private static Set<Integer> ensureDisplayFailedLineages(
+            VariantNode node, int gen, VariantFilter filter) {
         if (!node.hasDisplayFailedLineages(gen)) {
             Set<Integer> failed = filter.hasActiveGroupComparison()
                 ? filter.failedLineagesForNode(node)
                 : Set.of();
             node.setDisplayFailedLineages(gen, failed);
         }
-        Set<Integer> failedLineages = node.getDisplayFailedLineages(gen);
+        return node.getDisplayFailedLineages(gen);
+    }
 
-        // Prefer a solid (non-overlay) visible call when several VCFs share a track.
-        VariantNode.SampleCall overlayFallback = null;
-        for (VariantNode.SampleCall candidate : node.getSamples()) {
-            if (candidate == null) {
-                continue;
-            }
-            if (track != null) {
-                if (candidate.getTrack() != track) {
+    /** Whether {@code candidate} may be drawn for {@code node} under {@code filter}. */
+    public static boolean isDisplayEligible(
+            VariantNode node,
+            VariantNode.SampleCall candidate,
+            VariantFilter filter,
+            Set<Integer> failedLineages) {
+        if (node == null || candidate == null || filter == null) {
+            return false;
+        }
+        if (!filter.passesSampleThresholds(node, candidate)) {
+            return false;
+        }
+        if (!VariantTypeVisuals.isLohRegion(node.type) && node.isHomozygousRef(candidate)) {
+            return false;
+        }
+        if (VariantTypeVisuals.isLohRegion(node.type)) {
+            return true;
+        }
+        return filter.passesSampleGroupConstraint(node, candidate, failedLineages);
+    }
+
+    /**
+     * Collect unique displayed track indices with a display-eligible call on {@code node}.
+     * Walks samples once (inverted vs tracks×samples) and writes into {@code into}.
+     *
+     * @return number of bits set in {@code into} for this node (cardinality after OR is caller's)
+     */
+    public int collectDisplayTrackIndices(
+            VariantNode node,
+            VariantFilter filter,
+            Map<SampleTrack, Integer> displayedTrackToIndex,
+            java.util.BitSet into) {
+        if (node == null || displayedTrackToIndex == null || displayedTrackToIndex.isEmpty()
+                || into == null) {
+            return 0;
+        }
+        int gen = visibleChainGeneration;
+        int before = into.cardinality();
+        if (node.hasDisplayCache(gen)) {
+            for (Map.Entry<SampleTrack, Integer> entry : displayedTrackToIndex.entrySet()) {
+                VariantNode.SampleCall call = node.getDisplayCall(entry.getKey(), gen);
+                if (call == null) {
                     continue;
                 }
-            } else if (trackIndex >= 0 && candidate.getTrackIndex() != trackIndex) {
-                continue;
+                if (!VariantTypeVisuals.isLohRegion(node.type) && node.isHomozygousRef(call)) {
+                    continue;
+                }
+                Integer idx = entry.getValue();
+                if (idx != null && idx >= 0) {
+                    into.set(idx);
+                }
             }
-            if (!filter.passesSampleThresholds(node, candidate)) {
-                continue;
-            }
-            if (!VariantTypeVisuals.isLohRegion(node.type) && node.isHomozygousRef(candidate)) {
-                continue;
-            }
-            if (VariantTypeVisuals.isLohRegion(node.type)) {
-                return candidate;
-            }
-            if (!filter.passesSampleGroupConstraint(node, candidate, failedLineages)) {
-                continue;
-            }
-            if (!candidate.isUiOverlay()) {
-                return candidate;
-            }
-            if (overlayFallback == null) {
-                overlayFallback = candidate;
-            }
+            return into.cardinality() - before;
         }
-        return overlayFallback;
+        if (filter == null) {
+            return 0;
+        }
+        Set<Integer> failedLineages = ensureDisplayFailedLineages(node, gen, filter);
+        node.forEachSample(candidate -> {
+            if (candidate == null) {
+                return;
+            }
+            SampleTrack t = candidate.getTrack();
+            if (t == null) {
+                return;
+            }
+            Integer idx = displayedTrackToIndex.get(t);
+            if (idx == null || idx < 0 || into.get(idx)) {
+                return;
+            }
+            if (!isDisplayEligible(node, candidate, filter, failedLineages)) {
+                return;
+            }
+            into.set(idx);
+        });
+        return into.cardinality() - before;
     }
 
     /**
@@ -611,31 +701,31 @@ public class VariantList {
         Map<VcfVariantType, Map<String, Set<Integer>>> byType = new EnumMap<>(VcfVariantType.class);
         VariantNode current = head;
         while (current != null) {
-            if ((filter == null || filter.passesBaseNodeLevel(current))
-                    && org.baseplayer.features.BedVariantAnnotation.passes(this, current)) {
-                List<String> genes = geneKeysOf(current);
+            final VariantNode node = current;
+            if ((filter == null || filter.passesBaseNodeLevel(node))
+                    && org.baseplayer.features.BedVariantAnnotation.passes(this, node)) {
+                List<String> genes = geneKeysOf(node);
                 if (!genes.isEmpty()) {
-                    Set<Integer> trackHits = null;
-                    for (VariantNode.SampleCall call : current.getSamples()) {
-                        if (call == null) continue;
-                        if (current.isHomozygousRef(call)) {
-                            continue; // HomRef is not a mutated sample
+                    Set<Integer> trackHits = new HashSet<>();
+                    node.forEachSample(call -> {
+                        if (call == null) {
+                            return;
                         }
-                        if (filter != null && !filter.passesSampleThresholds(current, call)) {
-                            continue;
+                        if (node.isHomozygousRef(call)) {
+                            return; // HomRef is not a mutated sample
+                        }
+                        if (filter != null && !filter.passesSampleThresholds(node, call)) {
+                            return;
                         }
                         int trackIndex = call.getTrackIndex();
                         if (trackIndex >= 0) {
-                            if (trackHits == null) {
-                                trackHits = new HashSet<>();
-                            }
                             trackHits.add(trackIndex);
                         }
-                    }
-                    if (trackHits != null && !trackHits.isEmpty()) {
+                    });
+                    if (!trackHits.isEmpty()) {
                         Map<String, Set<Integer>> typeIndex = null;
-                        if (current.type != null) {
-                            typeIndex = byType.computeIfAbsent(current.type, t -> new HashMap<>());
+                        if (node.type != null) {
+                            typeIndex = byType.computeIfAbsent(node.type, t -> new HashMap<>());
                         }
                         for (String gene : genes) {
                             index.computeIfAbsent(gene, g -> new HashSet<>()).addAll(trackHits);
@@ -741,19 +831,20 @@ public class VariantList {
     }
 
     /**
-     * Build or reuse per-variant local window → sample track unions for comparison window.
-     * For each allele, samples are the union of all soft-matching alleles within the window
-     * (non-transitive), so min/max shared-sample bounds apply to local hotspot density —
-     * including dropping fragile/repeat clusters via the max thumb.
-     * Gene-level mode takes precedence and should not call this.
+     * Build or reuse transitive window clusters.
+     * Only alleles in clusters of size ≥ 2 are indexed; singletons are omitted so
+     * the visible chain drops them. Sample counts are distinct tracks in the cluster.
      */
-    public Map<VariantNode, Set<Integer>> ensureClusterSampleIndex(VariantFilter filter) {
+    public Map<VariantNode, VariantComparisonClusters.ComparisonCluster> ensureComparisonClusters(
+            VariantFilter filter) {
         if (filter == null || !filter.hasComparisonWindow()) {
+            // Drop cached chains when window/gene-level rules turn clustering off.
+            clearClusterSampleIndex();
             return Map.of();
         }
         String key = clusterSampleIndexKey(filter);
-        if (key.equals(clusterSampleIndexFilterKey) && clusterSampleIndex != null) {
-            return clusterSampleIndex;
+        if (key.equals(clusterSampleIndexFilterKey) && clusterIndex != null) {
+            return clusterIndex;
         }
 
         ArrayList<VariantNode> nodes = new ArrayList<>();
@@ -766,83 +857,127 @@ public class VariantList {
             current = current.next;
         }
 
-        int n = nodes.size();
-        @SuppressWarnings("unchecked")
-        Set<Integer>[] nodeTracks = new Set[n];
-        for (int i = 0; i < n; i++) {
-            Set<Integer> tracks = new HashSet<>();
-            for (VariantNode.SampleCall call : nodes.get(i).getSamples()) {
-                if (call == null) continue;
-                if (nodes.get(i).isHomozygousRef(call)) continue;
-                if (!filter.passesSampleThresholds(nodes.get(i), call)) continue;
-                int trackIndex = call.getTrackIndex();
-                if (trackIndex >= 0) {
-                    tracks.add(trackIndex);
-                }
+        Map<String, ArrayList<VariantNode>> byFamily = new HashMap<>();
+        for (VariantNode node : nodes) {
+            // Skip types whose class slice has no window — they stay on exact-allele rules.
+            if (filter.comparisonWindowBpFor(node.type) <= 0) {
+                continue;
             }
-            nodeTracks[i] = tracks;
+            byFamily
+                .computeIfAbsent(VariantComparisonClusters.sweepBucket(node.type), f -> new ArrayList<>())
+                .add(node);
         }
 
-        // Sweep within compatible families; indel/SV cross-match uses a shared "svish" bucket.
-        Map<String, ArrayList<Integer>> byFamily = new HashMap<>();
-        for (int i = 0; i < n; i++) {
-            String family = sweepBucket(nodes.get(i).type);
-            byFamily.computeIfAbsent(family, f -> new ArrayList<>()).add(i);
-        }
-
-        int windowBp = filter.getComparisonWindowBp();
-        Map<VariantNode, Set<Integer>> index = new java.util.IdentityHashMap<>(Math.max(16, n * 2));
-        for (ArrayList<Integer> idxs : byFamily.values()) {
-            for (int a = 0; a < idxs.size(); a++) {
-                int i = idxs.get(a);
-                VariantNode ni = nodes.get(i);
-                Set<Integer> union = new HashSet<>(nodeTracks[i]);
-                long iStart = ni.position;
-                long iEnd = VariantComparisonClusters.clusterEnd(ni);
-                long leftBound = iStart - 2L * windowBp;
-                long rightBound = iEnd + 2L * windowBp;
-
-                for (int b = a - 1; b >= 0; b--) {
-                    int j = idxs.get(b);
-                    VariantNode nj = nodes.get(j);
-                    if (VariantComparisonClusters.clusterEnd(nj) < leftBound) {
-                        break;
-                    }
-                    if (VariantComparisonClusters.softMatch(ni, nj, windowBp)) {
-                        union.addAll(nodeTracks[j]);
-                    }
+        Map<VariantNode, VariantComparisonClusters.ComparisonCluster> index =
+            new java.util.IdentityHashMap<>(Math.max(16, nodes.size()));
+        for (ArrayList<VariantNode> familyNodes : byFamily.values()) {
+            int windowBp = windowBpForFamily(filter, familyNodes);
+            if (windowBp <= 0) {
+                continue;
+            }
+            VariantComparisonClusters.sortGenomic(familyNodes);
+            for (VariantComparisonClusters.ChainRange range
+                    : VariantComparisonClusters.chainRanges(familyNodes, windowBp)) {
+                if (range.size() < 2) {
+                    continue;
                 }
-                for (int b = a + 1; b < idxs.size(); b++) {
-                    int j = idxs.get(b);
-                    VariantNode nj = nodes.get(j);
-                    if (nj.position > rightBound) {
-                        break;
-                    }
-                    if (VariantComparisonClusters.softMatch(ni, nj, windowBp)) {
-                        union.addAll(nodeTracks[j]);
-                    }
+                Set<Integer> union = new HashSet<>();
+                long paintEnd = 0;
+                for (int i = range.fromInclusive; i < range.toExclusive; i++) {
+                    VariantNode member = familyNodes.get(i);
+                    collectClusterSampleTracks(member, filter, union);
+                    paintEnd = Math.max(
+                        paintEnd, VariantComparisonClusters.paintEndExclusive(member));
                 }
-                index.put(ni, union);
+                VariantNode first = familyNodes.get(range.fromInclusive);
+                VariantNode last = familyNodes.get(range.toExclusive - 1);
+                VariantComparisonClusters.ComparisonCluster cluster =
+                    new VariantComparisonClusters.ComparisonCluster(
+                        first, last, range.size(), union, paintEnd);
+                for (int i = range.fromInclusive; i < range.toExclusive; i++) {
+                    index.put(familyNodes.get(i), cluster);
+                }
             }
         }
 
-        clusterSampleIndex = index;
+        clusterIndex = index;
         clusterSampleIndexFilterKey = key;
         return index;
     }
 
-    /** Sweep bucket: SNVs alone; indels+SVs together for fragile-site soft-match. */
-    private static String sweepBucket(VcfVariantType type) {
-        String family = VariantComparisonClusters.typeFamily(type);
-        if ("del".equals(family) || "ins".equals(family) || "sv".equals(family)) {
-            return "svish";
+    /** Max applied window among types present in this sweep bucket. */
+    private static int windowBpForFamily(VariantFilter filter, List<VariantNode> familyNodes) {
+        if (filter == null || familyNodes == null || familyNodes.isEmpty()) {
+            return 0;
         }
-        return family;
+        int w = 0;
+        for (VariantNode node : familyNodes) {
+            if (node != null) {
+                w = Math.max(w, filter.comparisonWindowBpFor(node.type));
+            }
+        }
+        return w;
+    }
+
+    private static void collectClusterSampleTracks(
+            VariantNode node, VariantFilter filter, Set<Integer> into) {
+        if (node == null || into == null) {
+            return;
+        }
+        node.forEachSample(call -> {
+            if (call == null) {
+                return;
+            }
+            if (!node.isAltCarrier(call)) {
+                return;
+            }
+            if (filter != null && !filter.passesSampleThresholds(node, call)) {
+                return;
+            }
+            int trackIndex = call.getTrackIndex();
+            if (trackIndex >= 0) {
+                into.add(trackIndex);
+            }
+        });
     }
 
     public void clearClusterSampleIndex() {
-        clusterSampleIndex = Map.of();
+        clusterIndex = Map.of();
         clusterSampleIndexFilterKey = null;
+    }
+
+    /**
+     * Distinct comparison clusters that currently appear on the visible chain
+     * (respects shared-sample / group / type rules). Empty when the comparison
+     * window is off. Order is genomic start.
+     */
+    public List<VariantComparisonClusters.ComparisonCluster> listUniqueComparisonClusters(
+            VariantFilter filter) {
+        if (filter == null || !filter.hasComparisonWindow()) {
+            clearClusterSampleIndex();
+            return List.of();
+        }
+        ensureVisibleChain(filter);
+        Map<VariantNode, VariantComparisonClusters.ComparisonCluster> index =
+            ensureComparisonClusters(filter);
+        if (index.isEmpty()) {
+            return List.of();
+        }
+        // Only clusters with ≥1 allele still passing the active filter — stricter
+        // shared-sample / group rules must drop highlights, not leave stale bands.
+        java.util.IdentityHashMap<VariantComparisonClusters.ComparisonCluster, Boolean> seen =
+            new java.util.IdentityHashMap<>();
+        List<VariantComparisonClusters.ComparisonCluster> out = new ArrayList<>();
+        for (VariantNode node = visibleHead; node != null; node = node.nextVisible) {
+            VariantComparisonClusters.ComparisonCluster cluster = index.get(node);
+            if (cluster != null && seen.put(cluster, Boolean.TRUE) == null) {
+                out.add(cluster);
+            }
+        }
+        out.sort(java.util.Comparator
+            .comparingLong(VariantComparisonClusters.ComparisonCluster::genomicStart)
+            .thenComparingLong(VariantComparisonClusters.ComparisonCluster::genomicEnd));
+        return out;
     }
 
     private void invalidateSampleIndexes() {
@@ -927,7 +1062,19 @@ public class VariantList {
     }
 
     private static String clusterSampleIndexKey(VariantFilter filter) {
-        return geneSampleIndexKey(filter) + "|cmpWindow=" + (filter == null ? 0 : filter.getComparisonWindowBp());
+        if (filter == null) {
+            return geneSampleIndexKey(null) + "|cmpWindow=0";
+        }
+        int pointW = filter.getPointSlice() != null
+            ? filter.comparisonWindowBpFor(VcfVariantType.SNV)
+            : filter.getComparisonWindowBp();
+        int svW = filter.getSvSlice() != null
+            ? filter.comparisonWindowBpFor(VcfVariantType.SV_DELETION)
+            : filter.getComparisonWindowBp();
+        // Genomic chains + sample unions depend on base node/sample thresholds and window.
+        // Shared-sample min/max is applied when listing visible clusters, not here —
+        // otherwise every slider nudge would rebuild the whole index.
+        return geneSampleIndexKey(filter) + "|cmpWindow=" + pointW + "/" + svW;
     }
 
     /** Generation counter for the filter-visible skip chain; seekers use this to invalidate. */
@@ -1007,7 +1154,7 @@ public class VariantList {
             VariantFilter filter,
             Map<String, Set<Integer>> geneSampleIndex,
             Map<VcfVariantType, Set<String>> passingGenesByType,
-            Map<VariantNode, Set<Integer>> clusterSampleIndex) {
+            Map<VariantNode, VariantComparisonClusters.ComparisonCluster> comparisonClusters) {
         if (node == null || node.getSampleCount() == 0) {
             return false;
         }
@@ -1046,8 +1193,14 @@ public class VariantList {
         Set<Integer> aggregatedTracks = null;
         if (filter.isGeneLevel() && geneSampleIndex != null) {
             aggregatedTracks = aggregatedTracksForGenes(node, geneSampleIndex);
-        } else if (filter.hasComparisonWindow() && clusterSampleIndex != null) {
-            aggregatedTracks = clusterSampleIndex.getOrDefault(node, Set.of());
+        } else if (filter.comparisonWindowBpFor(node.type) > 0) {
+            // Window mode for this class: only multi-allele chains; singletons hidden.
+            VariantComparisonClusters.ComparisonCluster cluster =
+                comparisonClusters != null ? comparisonClusters.get(node) : null;
+            if (cluster == null || cluster.size < 2) {
+                return false;
+            }
+            aggregatedTracks = cluster.sampleTracks;
         }
         if (!filter.passesNodeLevel(node, aggregatedTracks)) {
             return false;

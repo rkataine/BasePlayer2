@@ -44,6 +44,7 @@ public class SampleComparisonPanel {
       IntegerRangeSlider sharedSampleRangeSlider,
       CheckBox geneLevelComparisonCheckBox,
       TextField comparisonWindowField,
+      Button comparisonWindowApplyButton,
       Label commonVariantsHelpLabel,
       VBox comparisonGroupsContainer,
       Label groupComparisonSummaryLabel,
@@ -60,6 +61,8 @@ public class SampleComparisonPanel {
   private ToggleGroup presentMatchModeGroup;
   private final Map<SampleTag, VariantFilter.GroupRole> comparisonTagRoles =
       new EnumMap<>(SampleTag.class);
+  /** Window bp last committed via Apply / load — not live field text. */
+  private int appliedComparisonWindowBp = 0;
 
   public void install(
       Nodes nodes,
@@ -89,7 +92,8 @@ public class SampleComparisonPanel {
 
     filter.setGeneLevel(
         nodes.geneLevelComparisonCheckBox() != null && nodes.geneLevelComparisonCheckBox().isSelected());
-    filter.setComparisonWindowBp(readComparisonWindowBp());
+    // Only the applied window drives clustering — typing alone does not.
+    filter.setComparisonWindowBp(appliedComparisonWindowBp);
 
     Map<SampleTag, VariantFilter.GroupRole> roles = new EnumMap<>(SampleTag.class);
     for (Map.Entry<SampleTag, VariantFilter.GroupRole> entry : comparisonTagRoles.entrySet()) {
@@ -115,12 +119,13 @@ public class SampleComparisonPanel {
 
     if (nodes.geneLevelComparisonCheckBox() != null) {
       nodes.geneLevelComparisonCheckBox().setSelected(filter.isGeneLevel());
-      updateComparisonWindowEnabled();
-      updateCommonVariantsHelpLabel();
     }
+    appliedComparisonWindowBp = Math.max(0, filter.getComparisonWindowBp());
     if (nodes.comparisonWindowField() != null) {
-      nodes.comparisonWindowField().setText(Integer.toString(Math.max(0, filter.getComparisonWindowBp())));
+      nodes.comparisonWindowField().setText(Integer.toString(appliedComparisonWindowBp));
     }
+    updateComparisonWindowEnabled();
+    updateCommonVariantsHelpLabel();
 
     comparisonTagRoles.clear();
     if (filter.getTagRoles() != null) {
@@ -138,12 +143,13 @@ public class SampleComparisonPanel {
     }
     if (nodes.geneLevelComparisonCheckBox() != null) {
       nodes.geneLevelComparisonCheckBox().setSelected(false);
-      updateComparisonWindowEnabled();
-      updateCommonVariantsHelpLabel();
     }
+    appliedComparisonWindowBp = 0;
     if (nodes.comparisonWindowField() != null) {
       nodes.comparisonWindowField().setText("0");
     }
+    updateComparisonWindowEnabled();
+    updateCommonVariantsHelpLabel();
     comparisonTagRoles.clear();
     applyPresentMatchModeToRadios(VariantFilter.PresentMatchMode.ALL);
     refreshGroups();
@@ -185,11 +191,6 @@ public class SampleComparisonPanel {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
     nodes.comparisonGroupsContainer().getChildren().clear();
 
-    Label note = new Label(
-        "Roles apply inside each sample group (family). Tag a track in Sample Organization, then set its role here.");
-    note.getStyleClass().add("subsection-label");
-    note.setWrapText(true);
-    nodes.comparisonGroupsContainer().getChildren().add(note);
     nodes.comparisonGroupsContainer().getChildren().add(buildPresetRow());
 
     boolean anyTagged = false;
@@ -216,9 +217,13 @@ public class SampleComparisonPanel {
     if (nodes == null) return;
     if (nodes.sharedSampleRangeSlider() != null) nodes.sharedSampleRangeSlider().setDisable(locked);
     if (nodes.geneLevelComparisonCheckBox() != null) nodes.geneLevelComparisonCheckBox().setDisable(locked);
+    boolean windowLocked = locked
+        || (nodes.geneLevelComparisonCheckBox() != null && nodes.geneLevelComparisonCheckBox().isSelected());
     if (nodes.comparisonWindowField() != null) {
-      nodes.comparisonWindowField().setDisable(locked
-          || (nodes.geneLevelComparisonCheckBox() != null && nodes.geneLevelComparisonCheckBox().isSelected()));
+      nodes.comparisonWindowField().setDisable(windowLocked);
+    }
+    if (nodes.comparisonWindowApplyButton() != null) {
+      nodes.comparisonWindowApplyButton().setDisable(windowLocked);
     }
     if (nodes.refreshComparisonGroupsButton() != null) nodes.refreshComparisonGroupsButton().setDisable(locked);
     if (nodes.presentMatchAllRadio() != null) nodes.presentMatchAllRadio().setDisable(locked);
@@ -271,12 +276,12 @@ public class SampleComparisonPanel {
       updateCommonVariantsHelpLabel();
     }
 
+    // Window field: typing does not rebuild clusters — only Apply commits.
+    if (nodes.comparisonWindowApplyButton() != null) {
+      nodes.comparisonWindowApplyButton().setOnAction(e -> applyComparisonWindow());
+    }
     if (nodes.comparisonWindowField() != null) {
-      nodes.comparisonWindowField().textProperty().addListener((obs, oldVal, newVal) -> {
-        updateCommonVariantsHelpLabel();
-        if (isSuppressing()) return;
-        fireDebounced();
-      });
+      nodes.comparisonWindowField().setOnAction(e -> applyComparisonWindow());
     }
 
     if (nodes.sharedSampleRangeSlider() == null) return;
@@ -289,42 +294,51 @@ public class SampleComparisonPanel {
     nodes.sharedSampleRangeSlider().highValueProperty().addListener(rangeListener);
   }
 
+  private void applyComparisonWindow() {
+    if (isSuppressing()) {
+      return;
+    }
+    appliedComparisonWindowBp = readComparisonWindowFieldBp();
+    updateCommonVariantsHelpLabel();
+    fireImmediate();
+  }
+
   private void updateCommonVariantsHelpLabel() {
     if (nodes.commonVariantsHelpLabel() == null) return;
     boolean geneLevel = nodes.geneLevelComparisonCheckBox() != null
         && nodes.geneLevelComparisonCheckBox().isSelected();
-    int windowBp = readComparisonWindowBp();
+    int windowBp = appliedComparisonWindowBp;
     if (nodes.sharedSampleRangeSlider() != null) {
       if (geneLevel) {
         nodes.sharedSampleRangeSlider().setSummaryUnit("samples (gene)");
       } else if (windowBp > 0) {
-        nodes.sharedSampleRangeSlider().setSummaryUnit("samples (window)");
+        nodes.sharedSampleRangeSlider().setSummaryUnit("samples (cluster)");
       } else {
         nodes.sharedSampleRangeSlider().setSummaryUnit("samples");
       }
     }
     if (geneLevel) {
-      nodes.commonVariantsHelpLabel().setText(
-          "Keep genes mutated in at least this many samples (left) and at most this many (right). All variants in a matching gene are shown.");
+      nodes.commonVariantsHelpLabel().setText("Count samples mutated anywhere in the gene.");
     } else if (windowBp > 0) {
       nodes.commonVariantsHelpLabel().setText(
-          "Counts samples with a soft-matching call within " + windowBp
-              + " bp (same type family; indels/SVs may match across types). "
-              + "Use the right thumb to drop hotspot / fragile / repeat clusters shared by too many samples.");
+          "Clusters within " + windowBp + " bp; singletons hidden. Slider = samples in cluster.");
     } else {
-      nodes.commonVariantsHelpLabel().setText(
-          "Keep variants shared by at least this many samples (left) and at most this many (right). Use this to drop private variants or those shared by everyone.");
+      nodes.commonVariantsHelpLabel().setText("Shared-sample range (min–max).");
     }
   }
 
   private void updateComparisonWindowEnabled() {
-    if (nodes.comparisonWindowField() == null) return;
     boolean geneLevel = nodes.geneLevelComparisonCheckBox() != null
         && nodes.geneLevelComparisonCheckBox().isSelected();
-    nodes.comparisonWindowField().setDisable(geneLevel);
+    if (nodes.comparisonWindowField() != null) {
+      nodes.comparisonWindowField().setDisable(geneLevel);
+    }
+    if (nodes.comparisonWindowApplyButton() != null) {
+      nodes.comparisonWindowApplyButton().setDisable(geneLevel);
+    }
   }
 
-  private int readComparisonWindowBp() {
+  private int readComparisonWindowFieldBp() {
     if (nodes.comparisonWindowField() == null) return 0;
     try {
       return Math.max(0, Integer.parseInt(nodes.comparisonWindowField().getText().trim()));
@@ -573,34 +587,33 @@ public class SampleComparisonPanel {
    * Build a Sample Comparison UI tree programmatically (for the SV mode workspace).
    */
   public static Pair<javafx.scene.Node, Nodes> buildUi() {
-    Label help = new Label(
-        "Keep variants shared by at least this many samples (left) and at most this many (right). "
-            + "Use this to drop private variants or those shared by everyone.");
+    Label help = new Label("Shared-sample range (min–max).");
     help.getStyleClass().add("subsection-label");
     help.setWrapText(true);
 
-    CheckBox geneLevel = new CheckBox("Gene level (count samples mutated anywhere in the gene)");
+    CheckBox geneLevel = new CheckBox("Gene level");
     geneLevel.getStyleClass().add("filter-checkbox");
 
     TextField windowField = new TextField("0");
-    windowField.setPrefWidth(80);
+    windowField.setPrefWidth(72);
+    windowField.setMaxWidth(90);
     windowField.getStyleClass().add("filter-field");
-    Label windowHint = new Label("0 = exact allele; >0 soft-matches nearby / overlapping SVs");
-    windowHint.getStyleClass().add("subsection-label");
-    windowHint.setWrapText(true);
+    Button windowApply = new Button("Apply");
+    windowApply.setMinWidth(64);
+    windowApply.getStyleClass().add("secondary-button");
 
     IntegerRangeSlider rangeSlider = new IntegerRangeSlider();
 
     VBox left = new VBox(12);
     left.getStyleClass().add("filter-panel");
     left.setPadding(new Insets(16));
-    Label commonTitle = new Label("Common Variants");
+    Label commonTitle = new Label("Common variants");
     commonTitle.getStyleClass().add("section-header");
-    Label windowLabel = new Label("Window size (bp)");
+    Label windowLabel = new Label("Window (bp)");
     windowLabel.getStyleClass().add("subsection-label");
-    HBox windowRow = new HBox(8, windowLabel, windowField, windowHint);
+    windowLabel.setMinWidth(80);
+    HBox windowRow = new HBox(8, windowLabel, windowField, windowApply);
     windowRow.setAlignment(Pos.CENTER_LEFT);
-    HBox.setHgrow(windowHint, Priority.ALWAYS);
     left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
 
     VBox groupsContainer = new VBox(6);
@@ -609,37 +622,33 @@ public class SampleComparisonPanel {
     summary.getStyleClass().add("value-label");
     summary.setWrapText(true);
     Button refresh = new Button("Refresh");
+    refresh.setMinWidth(72);
     refresh.getStyleClass().add("secondary-button");
 
-    RadioButton matchAll = new RadioButton("All of them (AND)");
+    RadioButton matchAll = new RadioButton("All (AND)");
     matchAll.getStyleClass().add("filter-radio");
     matchAll.setSelected(true);
-    RadioButton matchAny = new RadioButton("Any of them (OR)");
+    RadioButton matchAny = new RadioButton("Any (OR)");
     matchAny.getStyleClass().add("filter-radio");
 
-    Button calculateLoh = new Button("Calculate LOH regions");
+    Button calculateLoh = new Button("Calculate LOH");
+    calculateLoh.setMinWidth(110);
     calculateLoh.getStyleClass().add("secondary-button");
     calculateLoh.setDisable(true);
-    Button apply = new Button("Apply Comparison");
+    Button apply = new Button("Apply");
+    apply.setMinWidth(64);
     apply.getStyleClass().add("primary-button");
 
     VBox right = new VBox(12);
     right.getStyleClass().add("filter-panel");
     right.setPadding(new Insets(16));
-    Label groupsTitle = new Label("Sample Tags");
+    Label groupsTitle = new Label("Sample tags");
     groupsTitle.getStyleClass().add("section-header");
     Region groupsSpacer = new Region();
     HBox groupsHeader = new HBox(8, groupsTitle, groupsSpacer, refresh);
     HBox.setHgrow(groupsSpacer, Priority.ALWAYS);
     groupsHeader.setAlignment(Pos.CENTER_LEFT);
-    Label groupsHelp = new Label(
-        "Assign roles to fixed tags (Mother, Father, Child, Parental, Marker). "
-            + "Roles are applied inside each sample group (family). "
-            + "Use presets for common trio / LOH patterns. "
-            + "LOH regions are built only when you press Calculate LOH regions.");
-    groupsHelp.getStyleClass().add("subsection-label");
-    groupsHelp.setWrapText(true);
-    Label presentTitle = new Label("When multiple tags require present / genotype");
+    Label presentTitle = new Label("Multi-tag match");
     presentTitle.getStyleClass().add("section-header");
     HBox presentRow = new HBox(16, matchAll, matchAny);
     presentRow.setAlignment(Pos.CENTER_LEFT);
@@ -647,7 +656,6 @@ public class SampleComparisonPanel {
     applyRow.setAlignment(Pos.CENTER_RIGHT);
     right.getChildren().addAll(
         groupsHeader,
-        groupsHelp,
         groupsContainer,
         summary,
         presentTitle,
@@ -674,6 +682,7 @@ public class SampleComparisonPanel {
         rangeSlider,
         geneLevel,
         windowField,
+        windowApply,
         help,
         groupsContainer,
         summary,
@@ -692,7 +701,9 @@ public class SampleComparisonPanel {
     if (root == null || onApply == null) {
       return;
     }
-    findButtonByText(root, "Apply Comparison").ifPresent(btn -> btn.setOnAction(e -> onApply.run()));
+    // Right-pane primary Apply (not the window Apply secondary button).
+    findButtonByStyleClass(root, "primary-button")
+        .ifPresent(btn -> btn.setOnAction(e -> onApply.run()));
   }
 
   /** Optional: attach Calculate LOH button action after {@link #buildUi()}. */
@@ -700,7 +711,7 @@ public class SampleComparisonPanel {
     if (root == null || onCalculate == null) {
       return;
     }
-    findButtonByText(root, "Calculate LOH regions")
+    findButtonByText(root, "Calculate LOH")
         .ifPresent(btn -> btn.setOnAction(e -> onCalculate.run()));
   }
 
@@ -711,6 +722,22 @@ public class SampleComparisonPanel {
     if (node instanceof javafx.scene.Parent parent) {
       for (javafx.scene.Node child : parent.getChildrenUnmodifiable()) {
         java.util.Optional<Button> found = findButtonByText(child, text);
+        if (found.isPresent()) {
+          return found;
+        }
+      }
+    }
+    return java.util.Optional.empty();
+  }
+
+  private static java.util.Optional<Button> findButtonByStyleClass(
+      javafx.scene.Node node, String styleClass) {
+    if (node instanceof Button button && button.getStyleClass().contains(styleClass)) {
+      return java.util.Optional.of(button);
+    }
+    if (node instanceof javafx.scene.Parent parent) {
+      for (javafx.scene.Node child : parent.getChildrenUnmodifiable()) {
+        java.util.Optional<Button> found = findButtonByStyleClass(child, styleClass);
         if (found.isPresent()) {
           return found;
         }

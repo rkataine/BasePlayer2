@@ -273,16 +273,16 @@
                             <Insets top="16" right="16" bottom="16" left="16"/>
                         </padding>
                         <VBox spacing="8">
-                            <Label text="Common Variants" styleClass="section-header"/>
-                            <Label fx:id="commonVariantsHelpLabel" text="Keep variants shared by at least this many samples (left) and at most this many (right). Use this to drop private variants or those shared by everyone."
+                            <Label text="Common variants" styleClass="section-header"/>
+                            <Label fx:id="commonVariantsHelpLabel" text="Shared-sample range (min–max)."
                                    styleClass="subsection-label" wrapText="true"/>
-                            <CheckBox fx:id="geneLevelComparisonCheckBox" text="Gene level (count samples mutated anywhere in the gene)"
+                            <CheckBox fx:id="geneLevelComparisonCheckBox" text="Gene level"
                                       styleClass="filter-checkbox"/>
                             <HBox spacing="8" alignment="CENTER_LEFT">
-                                <Label text="Window size (bp)" styleClass="subsection-label"/>
-                                <TextField fx:id="comparisonWindowField" text="0" prefWidth="80" styleClass="filter-field"/>
-                                <Label text="0 = exact allele; &gt;0 soft-matches nearby / overlapping SVs"
-                                       styleClass="subsection-label" wrapText="true" HBox.hgrow="ALWAYS"/>
+                                <Label text="Window (bp)" styleClass="subsection-label" minWidth="80"/>
+                                <TextField fx:id="comparisonWindowField" text="0" prefWidth="72" maxWidth="90" styleClass="filter-field"/>
+                                <Button fx:id="comparisonWindowApplyButton" text="Apply" styleClass="secondary-button"
+                                        minWidth="64" maxWidth="Infinity"/>
                             </HBox>
                             <IntegerRangeSlider fx:id="sharedSampleRangeSlider"/>
                         </VBox>
@@ -296,30 +296,30 @@
                         </padding>
                         <VBox spacing="8" VBox.vgrow="ALWAYS">
                             <HBox spacing="8" alignment="CENTER_LEFT">
-                                <Label text="Sample Tags" styleClass="section-header"/>
+                                <Label text="Sample tags" styleClass="section-header"/>
                                 <Region HBox.hgrow="ALWAYS"/>
-                                <Button fx:id="refreshComparisonGroupsButton" text="Refresh" styleClass="secondary-button" onAction="#handleRefreshComparisonGroups"/>
+                                <Button fx:id="refreshComparisonGroupsButton" text="Refresh" styleClass="secondary-button"
+                                        minWidth="72" onAction="#handleRefreshComparisonGroups"/>
                             </HBox>
-                            <Label text="Assign roles to fixed tags (Mother, Father, Child, Parental, Marker). Roles are applied inside each sample group (family). Use presets for common trio / LOH patterns."
-                                   styleClass="subsection-label" wrapText="true"/>
                             <VBox fx:id="comparisonGroupsContainer" spacing="6" VBox.vgrow="ALWAYS"/>
                             <Label fx:id="groupComparisonSummaryLabel" text="No tag constraints" styleClass="value-label" wrapText="true"/>
                         </VBox>
                         <VBox spacing="6">
-                            <Label text="When multiple tags require present / genotype" styleClass="section-header"/>
+                            <Label text="Multi-tag match" styleClass="section-header"/>
                             <HBox spacing="16" alignment="CENTER_LEFT">
-                                <RadioButton fx:id="presentMatchAllRadio" text="All of them (AND)" selected="true" styleClass="filter-radio"/>
-                                <RadioButton fx:id="presentMatchAnyRadio" text="Any of them (OR)" styleClass="filter-radio"/>
+                                <RadioButton fx:id="presentMatchAllRadio" text="All (AND)" selected="true" styleClass="filter-radio"/>
+                                <RadioButton fx:id="presentMatchAnyRadio" text="Any (OR)" styleClass="filter-radio"/>
                             </HBox>
                         </VBox>
                         <HBox spacing="12" alignment="CENTER_RIGHT">
                             <padding>
                                 <Insets top="12"/>
                             </padding>
-                            <Button fx:id="calculateLohButton" text="Calculate LOH regions"
-                                    styleClass="secondary-button" disable="true"
+                            <Button fx:id="calculateLohButton" text="Calculate LOH"
+                                    styleClass="secondary-button" disable="true" minWidth="110"
                                     onAction="#handleCalculateLohRegions"/>
-                            <Button text="Apply Comparison" styleClass="primary-button" onAction="#handleApplyComparison"/>
+                            <Button text="Apply" styleClass="primary-button" minWidth="64"
+                                    onAction="#handleApplyComparison"/>
                         </HBox>
                     </VBox>
                 </ScrollPane>

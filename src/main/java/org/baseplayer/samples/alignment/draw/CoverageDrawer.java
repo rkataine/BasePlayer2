@@ -35,14 +35,18 @@ public class CoverageDrawer {
   public static class SampleRow {
     public final Sample sample;
     public final int sampleIndex;
+    public final int numColumns;
     /** Total coverage per pixel column */
     public final double[] coverage;
-    /** Forward / reverse strand coverage per pixel column */
-    public final double[] coverageFwd, coverageRev;
+    /**
+     * Forward / reverse strand coverage per pixel. Allocated lazily on first
+     * write — hover tooltips need them, but skip when the row is discarded early.
+     */
+    public double[] coverageFwd, coverageRev;
     /** Mismatch counts per base per column */
     public final double[] mmA, mmC, mmG, mmT;
-    /** Forward / reverse strand mismatch counts per base per column */
-    public final double[] mmAFwd, mmARev, mmCFwd, mmCRev, mmGFwd, mmGRev, mmTFwd, mmTRev;
+    /** Forward / reverse strand mismatch counts; allocated only when mismatches exist. */
+    public double[] mmAFwd, mmARev, mmCFwd, mmCRev, mmGFwd, mmGRev, mmTFwd, mmTRev;
     /** Methylation ratio per column (0-1, or -1 = no data) */
     public final double[] methylRatio;
     /** Smoothed methylation ratio for line drawing */
@@ -78,21 +82,12 @@ public class CoverageDrawer {
     SampleRow(Sample sample, int sampleIndex, int numColumns) {
       this.sample = sample;
       this.sampleIndex = sampleIndex;
+      this.numColumns = numColumns;
       this.coverage = new double[numColumns];
-      this.coverageFwd = new double[numColumns];
-      this.coverageRev = new double[numColumns];
       this.mmA = new double[numColumns];
       this.mmC = new double[numColumns];
       this.mmG = new double[numColumns];
       this.mmT = new double[numColumns];
-      this.mmAFwd = new double[numColumns];
-      this.mmARev = new double[numColumns];
-      this.mmCFwd = new double[numColumns];
-      this.mmCRev = new double[numColumns];
-      this.mmGFwd = new double[numColumns];
-      this.mmGRev = new double[numColumns];
-      this.mmTFwd = new double[numColumns];
-      this.mmTRev = new double[numColumns];
       this.methylRatio = new double[numColumns];
       this.smoothedMethylRatio = new double[numColumns];
       this.signalSum = new double[numColumns];
@@ -107,6 +102,38 @@ public class CoverageDrawer {
       java.util.Arrays.fill(signalMax, Double.MIN_VALUE);
       this.maxSignal = Double.MIN_VALUE;
       this.minSignal = Double.MAX_VALUE;
+    }
+
+    void ensureStrandCoverage() {
+      if (coverageFwd == null) {
+        coverageFwd = new double[numColumns];
+        coverageRev = new double[numColumns];
+      }
+    }
+
+    void ensureStrandMismatches() {
+      if (mmAFwd == null) {
+        mmAFwd = new double[numColumns];
+        mmARev = new double[numColumns];
+        mmCFwd = new double[numColumns];
+        mmCRev = new double[numColumns];
+        mmGFwd = new double[numColumns];
+        mmGRev = new double[numColumns];
+        mmTFwd = new double[numColumns];
+        mmTRev = new double[numColumns];
+      }
+    }
+
+    public double strandCovFwd(int px) {
+      return coverageFwd != null && px >= 0 && px < coverageFwd.length ? coverageFwd[px] : 0;
+    }
+
+    public double strandCovRev(int px) {
+      return coverageRev != null && px >= 0 && px < coverageRev.length ? coverageRev[px] : 0;
+    }
+
+    public double strandMm(double[] arr, int px) {
+      return arr != null && px >= 0 && px < arr.length ? arr[px] : 0;
     }
   }
 
@@ -147,9 +174,16 @@ public class CoverageDrawer {
 
     if (sampleRegistry.getSampleTracks().isEmpty()) { rows = new SampleRow[0]; return; }
 
+    // Short sample rows: skip BAM coverage and reads entirely (variants still draw).
+    if (!Settings.get().isSampleHeightEnoughForReads(sampleRegistry.getSampleHeight())) {
+      rows = new SampleRow[0];
+      return;
+    }
+
     String chrom = drawStack.getChromosome();
     int start = Math.max(0, (int) drawStack.getViewStart());
     int end = (int) drawStack.getViewEnd();
+    // Within read-zoom: build coverage from reads; otherwise coverage-cache path.
     boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
     boolean isHoverStack = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
 
@@ -180,7 +214,7 @@ public class CoverageDrawer {
       }
     }
 
-    // Also build rows for non-visible methylation samples (master track only)
+    // Off-viewport methylation for master band: coverage only — never fetch reads.
     java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     for (int slot = 0; slot < displayedTrackIndices.size(); slot++) {
       if (slot >= sampleRegistry.getFirstVisibleSample() && slot <= sampleRegistry.getLastVisibleSample()) {
@@ -192,7 +226,7 @@ public class CoverageDrawer {
       for (Sample sf : track.getSamples()) {
         if (!sf.visible || !sf.isMethylationData() || processedFiles.contains(sf)) continue;
 
-        SampleRow row = buildRow(sf, sIdx, chrom, start, end, coverageOnly, isHoverStack);
+        SampleRow row = buildRow(sf, sIdx, chrom, start, end, true, isHoverStack);
         if (row != null) {
           row.methylColorIndex = methylColorIdx++;
           row.masterTrackOnly = true;
@@ -402,35 +436,45 @@ public class CoverageDrawer {
     // Extract per-pixel peak: highest read count supporting any single allele
     // at any single genomic position within the pixel. Keep F/R from that same
     // peak position so strand balance reflects one locus, not mixed peaks.
+    boolean anyMismatch = false;
     for (int px = 0; px < numColumns; px++) {
-      if (posMM[px] == null) continue;
-      for (int[] c : posMM[px].values()) {
-        int aTotal = c[0] + c[4];
-        int cTotal = c[1] + c[5];
-        int gTotal = c[2] + c[6];
-        int tTotal = c[3] + c[7];
-        if (aTotal > row.mmA[px]) {
-          row.mmA[px] = aTotal;
-          row.mmAFwd[px] = c[0];
-          row.mmARev[px] = c[4];
-        }
-        if (cTotal > row.mmC[px]) {
-          row.mmC[px] = cTotal;
-          row.mmCFwd[px] = c[1];
-          row.mmCRev[px] = c[5];
-        }
-        if (gTotal > row.mmG[px]) {
-          row.mmG[px] = gTotal;
-          row.mmGFwd[px] = c[2];
-          row.mmGRev[px] = c[6];
-        }
-        if (tTotal > row.mmT[px]) {
-          row.mmT[px] = tTotal;
-          row.mmTFwd[px] = c[3];
-          row.mmTRev[px] = c[7];
-        }
+      if (posMM[px] != null) {
+        anyMismatch = true;
+        break;
       }
-      posMM[px] = null; // release for GC
+    }
+    if (anyMismatch) {
+      row.ensureStrandMismatches();
+      for (int px = 0; px < numColumns; px++) {
+        if (posMM[px] == null) continue;
+        for (int[] c : posMM[px].values()) {
+          int aTotal = c[0] + c[4];
+          int cTotal = c[1] + c[5];
+          int gTotal = c[2] + c[6];
+          int tTotal = c[3] + c[7];
+          if (aTotal > row.mmA[px]) {
+            row.mmA[px] = aTotal;
+            row.mmAFwd[px] = c[0];
+            row.mmARev[px] = c[4];
+          }
+          if (cTotal > row.mmC[px]) {
+            row.mmC[px] = cTotal;
+            row.mmCFwd[px] = c[1];
+            row.mmCRev[px] = c[5];
+          }
+          if (gTotal > row.mmG[px]) {
+            row.mmG[px] = gTotal;
+            row.mmGFwd[px] = c[2];
+            row.mmGRev[px] = c[6];
+          }
+          if (tTotal > row.mmT[px]) {
+            row.mmT[px] = tTotal;
+            row.mmTFwd[px] = c[3];
+            row.mmTRev[px] = c[7];
+          }
+        }
+        posMM[px] = null; // release for GC
+      }
     }
 
     // Convert pixel events → running coverage
@@ -438,6 +482,7 @@ public class CoverageDrawer {
     int running = 0;
     int runningFwd = 0;
     int runningRev = 0;
+    row.ensureStrandCoverage();
     for (int px = 0; px < numColumns; px++) {
       running += pixEvents[px];
       runningFwd += pixEventsFwd[px];

@@ -77,6 +77,12 @@ public class AlignmentFile implements Closeable {
   /** Maximum view length for BAM queries — now read from Settings. */
   private static int getMaxBamViewLength() { return Settings.get().getMaxCoverageViewLength(); }
 
+  /** True when sample rows are tall enough to fetch/pack individual reads. */
+  private static boolean isSampleHeightEnoughForReads() {
+    double sampleH = ServiceRegistry.getInstance().getSampleRegistry().getSampleHeight();
+    return Settings.get().isSampleHeightEnoughForReads(sampleH);
+  }
+
   // Per-file fetch executor — each file gets its own thread so BAM and CRAM don't block each other
   private final ExecutorService fetchPool;
   
@@ -196,6 +202,11 @@ public class AlignmentFile implements Closeable {
                                             DrawStack stack, boolean blockDuringNavigation,
                                             boolean isMethyl, int numColumns) {
     if (suspended || numColumns <= 0 || end <= start) return null;
+
+    if (!isSampleHeightEnoughForReads()) {
+      clearCoverageCache(stack);
+      return null;
+    }
 
     int viewLength = end - start;
     if (viewLength > getMaxBamViewLength()) {
@@ -567,23 +578,16 @@ public class AlignmentFile implements Closeable {
     if (stack.nav.lineZoomerActive) {
       return sc.cachedReads.get();
     }
+
+    // Sample rows too short for read piles — keep coverage path; drop any packed reads.
+    if (!isSampleHeightEnoughForReads()) {
+      clearReadCache(stack);
+      return Collections.emptyList();
+    }
     
     // Clear cache and cancel in-flight fetches if view is too wide
     if (viewLength > getMaxBamViewLength()) {
-      Future<?> prev = sc.pendingFetch;
-      if (prev != null && !prev.isDone()) {
-        prev.cancel(true);
-      }
-      if (!sc.cachedReads.get().isEmpty() || sc.fetchingStart >= 0) {
-        sc.cachedReads.set(Collections.emptyList());
-        sc.cachedChrom = "";
-        sc.cachedStart = -1;
-        sc.cachedEnd = -1;
-        sc.fetchingChrom = "";
-        sc.fetchingStart = -1;
-        sc.fetchingEnd = -1;
-      }
-      sc.loading = false;
+      clearReadCache(stack);
       return Collections.emptyList();
     }
     

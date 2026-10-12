@@ -114,6 +114,15 @@ public class VariantDrawer {
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
         List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
+        // trackIndex → visible slot for inverted sample walks (samples ≪ displayed tracks).
+        int[] trackIndexToSlot = new int[allTracks.size()];
+        java.util.Arrays.fill(trackIndexToSlot, -1);
+        for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
+            int ti = visibleTrackIndices[slot];
+            if (ti >= 0 && ti < trackIndexToSlot.length) {
+                trackIndexToSlot[ti] = slot;
+            }
+        }
 
         // Track last drawn X pixel per sample to avoid overdraw of point variants when zoomed out
         // (SV spans are exempt from this deduplication as they span multiple pixels)
@@ -147,7 +156,8 @@ public class VariantDrawer {
             drawNodeForVisibleSamples(
                 gc, variantList, node, filter, true, drawClickableRects, chromPosToScreenPos,
                 canvasWidth, chromPosToScreenPos.apply((double) node.position),
-                visibleTrackIndices, yPositions, allTracks, sampleHeight, lastDrawnPixelX);
+                visibleTrackIndices, trackIndexToSlot, yPositions, allTracks, sampleHeight,
+                lastDrawnPixelX);
         }
 
         // Synthetic LOH AA/BB regions: arc from first→last marker (not a solid bar).
@@ -163,7 +173,8 @@ public class VariantDrawer {
             }
             drawLohRegionForVisibleSamples(
                 gc, variantList, node, filter, drawClickableRects, chromPosToScreenPos,
-                canvasWidth, visibleTrackIndices, yPositions, allTracks, sampleHeight);
+                canvasWidth, visibleTrackIndices, trackIndexToSlot, yPositions, allTracks,
+                sampleHeight);
         }
 
         // Point variants and in-window SV starts via nextVisible skip chain.
@@ -179,7 +190,8 @@ public class VariantDrawer {
                     drawNodeForVisibleSamples(
                         gc, variantList, node, filter, isSvSpan, drawClickableRects,
                         chromPosToScreenPos, canvasWidth, x,
-                        visibleTrackIndices, yPositions, allTracks, sampleHeight, lastDrawnPixelX);
+                        visibleTrackIndices, trackIndexToSlot, yPositions, allTracks, sampleHeight,
+                        lastDrawnPixelX);
                 }
             }
 
@@ -213,6 +225,7 @@ public class VariantDrawer {
             double canvasWidth,
             double x,
             int[] visibleTrackIndices,
+            int[] trackIndexToSlot,
             double[] yPositions,
             List<SampleTrack> allTracks,
             double sampleHeight,
@@ -221,40 +234,88 @@ public class VariantDrawer {
         int chainGen = variantList.getVisibleChainGeneration();
         boolean useCache = node.hasDisplayCache(chainGen);
 
-        for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
-            int trackIndex = visibleTrackIndices[slot];
-            if (trackIndex < 0 || trackIndex >= allTracks.size()) {
-                continue;
+        if (useCache) {
+            // Display map is keyed by track — walk visible slots.
+            for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
+                int trackIndex = visibleTrackIndices[slot];
+                if (trackIndex < 0 || trackIndex >= allTracks.size()) {
+                    continue;
+                }
+                SampleTrack track = allTracks.get(trackIndex);
+                if (track == null) {
+                    continue;
+                }
+                VariantNode.SampleCall call = node.getDisplayCall(track, chainGen);
+                paintSampleSlot(
+                    gc, node, call, isSvSpan, drawClickableRects, chromPosToScreenPos,
+                    canvasWidth, x, xPixel, slot, yPositions, sampleHeight, lastDrawnPixelX);
             }
-            SampleTrack track = allTracks.get(trackIndex);
-            if (track == null) {
-                continue;
-            }
+            return;
+        }
 
-            VariantNode.SampleCall call;
-            if (useCache) {
-                call = node.getDisplayCall(track, chainGen);
-            } else {
-                call = variantList.getDisplayCall(node, trackIndex, track, filter);
+        // Inverted: one sample walk, paint only visible slots (samples ≪ displayed tracks).
+        // Prefer solid over overlay when several VCFs share a track.
+        VariantNode.SampleCall[] slotCall = new VariantNode.SampleCall[visibleTrackIndices.length];
+        boolean[] slotSolid = new boolean[visibleTrackIndices.length];
+        java.util.Set<Integer> failed = variantList.displayFailedLineages(node, filter);
+        node.forEachSample(candidate -> {
+            if (candidate == null || candidate.getTrack() == null) {
+                return;
             }
-            if (call == null || !call.isUiVisible()) {
-                continue;
+            int trackIndex = candidate.getTrackIndex();
+            if (trackIndex < 0 || trackIndex >= trackIndexToSlot.length) {
+                return;
             }
+            int slot = trackIndexToSlot[trackIndex];
+            if (slot < 0 || slotSolid[slot]) {
+                return;
+            }
+            if (!VariantList.isDisplayEligible(node, candidate, filter, failed)) {
+                return;
+            }
+            if (!candidate.isUiOverlay()) {
+                slotCall[slot] = candidate;
+                slotSolid[slot] = true;
+            } else if (slotCall[slot] == null) {
+                slotCall[slot] = candidate;
+            }
+        });
+        for (int slot = 0; slot < slotCall.length; slot++) {
+            paintSampleSlot(
+                gc, node, slotCall[slot], isSvSpan, drawClickableRects, chromPosToScreenPos,
+                canvasWidth, x, xPixel, slot, yPositions, sampleHeight, lastDrawnPixelX);
+        }
+    }
 
-            if (!isSvSpan && !drawClickableRects && xPixel == lastDrawnPixelX[slot]) {
-                continue;
-            }
-
-            double y = yPositions[slot];
-            if (isSvSpan) {
-                drawSvSpan(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight,
-                    drawClickableRects);
-            } else if (drawClickableRects) {
-                drawVariantRect(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
-            } else {
-                drawVariantLine(gc, node, call, x, y, sampleHeight);
-                lastDrawnPixelX[slot] = xPixel;
-            }
+    private void paintSampleSlot(
+            GraphicsContext gc,
+            VariantNode node,
+            VariantNode.SampleCall call,
+            boolean isSvSpan,
+            boolean drawClickableRects,
+            Function<Double, Double> chromPosToScreenPos,
+            double canvasWidth,
+            double x,
+            int xPixel,
+            int slot,
+            double[] yPositions,
+            double sampleHeight,
+            int[] lastDrawnPixelX) {
+        if (call == null || !call.isUiVisible()) {
+            return;
+        }
+        if (!isSvSpan && !drawClickableRects && xPixel == lastDrawnPixelX[slot]) {
+            return;
+        }
+        double y = yPositions[slot];
+        if (isSvSpan) {
+            drawSvSpan(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight,
+                drawClickableRects);
+        } else if (drawClickableRects) {
+            drawVariantRect(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
+        } else {
+            drawVariantLine(gc, node, call, x, y, sampleHeight);
+            lastDrawnPixelX[slot] = xPixel;
         }
     }
 
@@ -271,6 +332,7 @@ public class VariantDrawer {
             Function<Double, Double> chromPosToScreenPos,
             double canvasWidth,
             int[] visibleTrackIndices,
+            int[] trackIndexToSlot,
             double[] yPositions,
             List<SampleTrack> allTracks,
             double sampleHeight) {
@@ -280,21 +342,53 @@ public class VariantDrawer {
         double endPos = node.svEnd >= node.position ? node.svEnd : node.position;
         double endX = chromPosToScreenPos.apply(endPos);
 
-        for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
-            int trackIndex = visibleTrackIndices[slot];
-            if (trackIndex < 0 || trackIndex >= allTracks.size()) {
-                continue;
+        if (useCache) {
+            for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
+                int trackIndex = visibleTrackIndices[slot];
+                if (trackIndex < 0 || trackIndex >= allTracks.size()) {
+                    continue;
+                }
+                SampleTrack track = allTracks.get(trackIndex);
+                if (track == null) {
+                    continue;
+                }
+                VariantNode.SampleCall call = node.getDisplayCall(track, chainGen);
+                if (call == null || !call.isUiVisible()) {
+                    continue;
+                }
+                drawLohArc(gc, node, call, startX, endX, canvasWidth, yPositions[slot], sampleHeight,
+                    recordHit);
             }
-            SampleTrack track = allTracks.get(trackIndex);
-            if (track == null) {
-                continue;
+            return;
+        }
+
+        VariantNode.SampleCall[] slotCall = new VariantNode.SampleCall[visibleTrackIndices.length];
+        boolean[] slotSolid = new boolean[visibleTrackIndices.length];
+        java.util.Set<Integer> failed = variantList.displayFailedLineages(node, filter);
+        node.forEachSample(candidate -> {
+            if (candidate == null || candidate.getTrack() == null) {
+                return;
             }
-            VariantNode.SampleCall call;
-            if (useCache) {
-                call = node.getDisplayCall(track, chainGen);
-            } else {
-                call = variantList.getDisplayCall(node, track, filter);
+            int trackIndex = candidate.getTrackIndex();
+            if (trackIndex < 0 || trackIndex >= trackIndexToSlot.length) {
+                return;
             }
+            int slot = trackIndexToSlot[trackIndex];
+            if (slot < 0 || slotSolid[slot]) {
+                return;
+            }
+            if (!VariantList.isDisplayEligible(node, candidate, filter, failed)) {
+                return;
+            }
+            if (!candidate.isUiOverlay()) {
+                slotCall[slot] = candidate;
+                slotSolid[slot] = true;
+            } else if (slotCall[slot] == null) {
+                slotCall[slot] = candidate;
+            }
+        });
+        for (int slot = 0; slot < slotCall.length; slot++) {
+            VariantNode.SampleCall call = slotCall[slot];
             if (call == null || !call.isUiVisible()) {
                 continue;
             }

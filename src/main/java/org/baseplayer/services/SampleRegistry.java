@@ -42,6 +42,12 @@ public class SampleRegistry extends TrackViewportRegistry {
         GENE_FOCUS
     }
 
+    /**
+     * Prefix for {@link #getFocusedGeneName()} when focus came from a comparison
+     * cluster click (aggregate band). Banner / sidebar detect cluster mode via this.
+     */
+    public static final String CLUSTER_FOCUS_PREFIX = "Cluster · ";
+
     private final ObservableList<SampleTrack> sampleTracks = FXCollections.observableArrayList();
     private final List<String> sampleList = new ArrayList<>();
     private String activeSampleFilterQuery = "";
@@ -70,6 +76,8 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     public SampleRegistry() {
         sampleTracks.addListener((ListChangeListener<SampleTrack>) change -> {
+            // Keep O(1) track indices current even during batch adds (load calls getTrackIndex).
+            reindexSampleTracks();
             if (batchTrackMutationDepth > 0) {
                 batchTrackMutationDirty = true;
                 invalidateDisplayedTrackIndicesCache();
@@ -77,6 +85,16 @@ public class SampleRegistry extends TrackViewportRegistry {
             }
             applyTrackListMutationSideEffects();
         });
+    }
+
+    /** Refresh {@link SampleTrack#getRegistryIndex()} for every track in list order. */
+    private void reindexSampleTracks() {
+        for (int i = 0; i < sampleTracks.size(); i++) {
+            SampleTrack track = sampleTracks.get(i);
+            if (track != null) {
+                track.setRegistryIndex(i);
+            }
+        }
     }
 
     /**
@@ -138,7 +156,17 @@ public class SampleRegistry extends TrackViewportRegistry {
         if (track == null) {
             return -1;
         }
-        return sampleTracks.indexOf(track);
+        int idx = track.getRegistryIndex();
+        if (idx >= 0 && idx < sampleTracks.size() && sampleTracks.get(idx) == track) {
+            return idx;
+        }
+        // Stale after an unsynced mutation — repair once, then trust the cache.
+        reindexSampleTracks();
+        idx = track.getRegistryIndex();
+        if (idx >= 0 && idx < sampleTracks.size() && sampleTracks.get(idx) == track) {
+            return idx;
+        }
+        return -1;
     }
 
     /**
@@ -252,11 +280,19 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     public void removeSampleTrack(SampleTrack track) {
+        if (track != null) {
+            track.setRegistryIndex(-1);
+        }
         sampleTracks.remove(track);
         invalidateDisplayedTrackIndicesCache();
     }
 
     public void clearSampleTracks() {
+        for (SampleTrack track : sampleTracks) {
+            if (track != null) {
+                track.setRegistryIndex(-1);
+            }
+        }
         sampleTracks.clear();
         sampleList.clear();
         activeSampleFilterQuery = "";
@@ -612,14 +648,47 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     /**
-     * True when a named gene (not a position click) currently restricts the sample list.
-     * False when focus includes every sample — nothing is filtered, so no banner/UI.
+     * True when a named gene (not a position click / cluster) currently restricts
+     * the sample list. False when focus includes every sample — nothing is filtered.
      */
     public boolean hasGeneFocusBanner() {
         return hasRestrictingFocusedTracks()
             && focusedGeneName != null
             && !focusedGeneName.isBlank()
-            && !focusedGeneName.startsWith("Position:");
+            && !focusedGeneName.startsWith("Position:")
+            && !isClusterFocusName(focusedGeneName);
+    }
+
+    /** True when focus came from a comparison-cluster click on the aggregate band. */
+    public boolean hasClusterFocusBanner() {
+        return hasRestrictingFocusedTracks() && isClusterFocusName(focusedGeneName);
+    }
+
+    /** Gene or cluster focus card should be shown. */
+    public boolean hasNamedFocusBanner() {
+        return hasGeneFocusBanner() || hasClusterFocusBanner();
+    }
+
+    public static boolean isClusterFocusName(String name) {
+        return name != null && name.startsWith(CLUSTER_FOCUS_PREFIX);
+    }
+
+    /** Detail after {@link #CLUSTER_FOCUS_PREFIX}, or the full name if not a cluster focus. */
+    public static String clusterFocusDetail(String name) {
+        if (!isClusterFocusName(name)) {
+            return name == null ? "" : name;
+        }
+        return name.substring(CLUSTER_FOCUS_PREFIX.length()).trim();
+    }
+
+    /**
+     * Restrict displayed samples to cluster contributors and show the cluster-focus banner.
+     */
+    public void applyClusterSubset(List<SampleTrack> tracks, String detail) {
+        String label = detail == null || detail.isBlank()
+            ? CLUSTER_FOCUS_PREFIX + "cluster"
+            : (isClusterFocusName(detail) ? detail : CLUSTER_FOCUS_PREFIX + detail.trim());
+        applyGeneSubset(tracks, label);
     }
 
     /** Focus set that actually hides at least one sample. */

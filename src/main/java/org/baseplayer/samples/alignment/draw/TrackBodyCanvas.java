@@ -176,6 +176,11 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private BAMRecord hoveredRead  = null;
   private BAMRecord selectedRead = null;  // currently selected read (kept after popup closes)
   private VariantDrawer.VariantHit hoveredVariant = null;
+  /**
+   * Coverage hover identity: {@code (sampleIndex << 32) | px}, or {@code -1} when none.
+   * Used to skip reactive redraws when the mouse moves without changing the hovered base.
+   */
+  private long lastCoverageHoverKey = -1L;
   // Read-name highlight propagated from another stack when a cross-stack connector is active.
   private String externalLinkedReadName = null;
   private TrackBodyCanvas externalLinkedOwner = null;
@@ -593,9 +598,13 @@ public class TrackBodyCanvas extends GenomicCanvas {
       boolean scrollbarHoverChanged = readScrollbarComponent.handleMove(lastMouseX, lastMouseY);
       if (readScrollbarComponent.isOver(lastMouseX, lastMouseY)) {
         reactiveCanvas.setCursor(readScrollbarComponent.cursorFor(lastMouseX, lastMouseY));
+        boolean cleared = hoveredRead != null || hoveredVariant != null || lastCoverageHoverKey != -1L;
         hoveredRead = null;
         hoveredVariant = null;
-        drawReadHighlight();
+        lastCoverageHoverKey = -1L;
+        if (cleared) {
+          drawReadHighlight();
+        }
         if (scrollbarHoverChanged) {
           update.set(!update.get());
         }
@@ -612,7 +621,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
         int slot = (int) ((lastMouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
         List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
         if (slot >= 0 && slot < displayed.size()) {
-          sampleRegistry.hoverSampleProperty().set(displayed.get(slot));
+          int trackIndex = displayed.get(slot);
+          if (sampleRegistry.hoverSampleProperty().get() != trackIndex) {
+            sampleRegistry.hoverSampleProperty().set(trackIndex);
+          }
         }
       }
 
@@ -626,17 +638,18 @@ public class TrackBodyCanvas extends GenomicCanvas {
       reactiveCanvas.setCursor(hand ? Cursor.HAND : Cursor.DEFAULT);
 
       boolean variantChanged = !java.util.Objects.equals(variantHit, hoveredVariant);
-      hoveredVariant = variantHit;
+      boolean readChanged = hit != hoveredRead;
+      long coverageKey = coverageHoverKey(lastMouseX, lastMouseY);
+      boolean coverageChanged = coverageKey != lastCoverageHoverKey;
+      // Base/read tooltips follow the cursor along the same read at close zoom.
+      boolean alongReadTooltip = hit != null
+          && (hit == selectedRead || drawStack.getPixelSize() >= 6);
 
-      boolean hoveringSelected = selectedRead != null && hit == selectedRead;
-      if (hit != hoveredRead || variantChanged) {
-        hoveredRead = hit;
-        drawReadHighlight();
-      } else if (hoveringSelected || (hit != null && drawStack.getPixelSize() >= 6)) {
-        // refresh tooltip as cursor moves along the read
-        drawReadHighlight();
-      } else if (hit == null) {
-        // Refresh coverage hover overlay/tooltip even when no read is under cursor.
+      hoveredRead = hit;
+      hoveredVariant = variantHit;
+      lastCoverageHoverKey = coverageKey;
+
+      if (readChanged || variantChanged || coverageChanged || alongReadTooltip) {
         drawReadHighlight();
       }
     });
@@ -698,14 +711,17 @@ public class TrackBodyCanvas extends GenomicCanvas {
       if (readScrollbarComponent.clearHover()) {
         update.set(!update.get());
       }
-      if (hoveredRead != null || hoveredVariant != null) {
+      if (hoveredRead != null || hoveredVariant != null || lastCoverageHoverKey != -1L) {
         hoveredRead = null;
         hoveredVariant = null;
+        lastCoverageHoverKey = -1L;
         reactiveCanvas.setCursor(Cursor.DEFAULT);
         drawReadHighlight(); // keeps selectedRead highlighted if popup is still open
       }
       // Clear sidebar highlighting when mouse leaves the sample tracks
-      sampleRegistry.hoverSampleProperty().set(-1);
+      if (sampleRegistry.hoverSampleProperty().get() != -1) {
+        sampleRegistry.hoverSampleProperty().set(-1);
+      }
     });
   }
 
@@ -765,12 +781,13 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private boolean canDrawCoverageData() {
     return isSampleBody()
         && !sampleRegistry.getSampleTracks().isEmpty()
-        && !isBeyondCoverageZoom();
+        && !isBeyondCoverageZoom()
+        && isSampleHeightEnoughForReads();
   }
 
   private void drawCoverageData() {
     double sampleH = sampleRegistry.getSampleHeight();
-    boolean coverageOnly = !isWithinReadZoom();
+    boolean coverageOnly = isCoverageOnlyLayout();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
     try {
@@ -788,6 +805,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     return isSampleBody()
         && isBeyondCoverageZoom()
         && isSampledCoverageEnabled()
+        && isSampleHeightEnoughForReads()
         && hasAnyVisibleSample(slot);
   }
 
@@ -816,18 +834,18 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return false;
     }
     if (isBeyondCoverageZoom()) {
-      return !isSampledCoverageEnabled();
+      return false;
     }
-    return isWithinReadZoom();
+    // Coverage still draws when rows are short; read piles need enough vertical room.
+    return isWithinReadZoom() && isSampleHeightEnoughForReads();
+  }
+
+  private boolean isSampleHeightEnoughForReads() {
+    return Settings.get().isSampleHeightEnoughForReads(sampleRegistry.getSampleHeight());
   }
 
   private void drawReadData(
       TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
-    if (isBeyondCoverageZoom()) {
-      DrawReads.drawZoomMessage(gc, rowTopY, rowHeight, "Zoom in closer to view BAM/CRAM data");
-      return;
-    }
-
     SampleTrack track = resolveSampleTrack(slot);
     if (track == null) {
       return;
@@ -983,6 +1001,11 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private boolean isWithinReadZoom() {
     return drawStack != null
         && drawStack.getViewLength() <= Settings.get().getMaxReadViewLength();
+  }
+
+  /** Full-band coverage layout when zoomed out past read view (height gate is separate). */
+  private boolean isCoverageOnlyLayout() {
+    return !isWithinReadZoom();
   }
 
   private boolean isSampledCoverageEnabled() {
@@ -1467,7 +1490,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
     double sampleH = sampleRegistry.getSampleHeight();
     if (sampleH <= 0) return false;
-    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
+    boolean coverageOnly = isCoverageOnlyLayout();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
     double covH = coverageOnly ? sampleH : coverageFractionH;
@@ -1495,6 +1518,74 @@ public class TrackBodyCanvas extends GenomicCanvas {
     return false;
   }
 
+  /**
+   * Stable coverage-hover identity for mouse-move short-circuiting.
+   * Does not allocate tooltip payloads — only sample index + pixel column.
+   */
+  private long coverageHoverKey(double mx, double my) {
+    if (isScrollbarOverrideActive() || mx < 0 || my < 0) {
+      return -1L;
+    }
+    if (!coverageDrawer.hasData()) {
+      return -1L;
+    }
+    if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) {
+      return -1L;
+    }
+    int genomicPos = (int) Math.floor(drawStack.getViewStart() + mx * drawStack.scale);
+    int px = (int) Math.floor(chromPosToScreenPos.apply((double) genomicPos));
+    if (px < 0 || px >= (int) Math.ceil(getWidth())) {
+      return -1L;
+    }
+
+    double sampleH = sampleRegistry.getSampleHeight();
+    boolean coverageOnly = isCoverageOnlyLayout();
+    double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
+        Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
+    double covH = coverageOnly ? sampleH : coverageFractionH;
+
+    List<TrackViewportRegistry.VisibleTrackSlot> visibleSlots =
+        sampleRegistry.getVisibleTrackSlotsForChecks();
+    for (TrackViewportRegistry.VisibleTrackSlot visibleSlot : visibleSlots) {
+      int slot = visibleSlot.slot();
+      int i = visibleSlot.trackIndex();
+      SampleTrack track = sampleRegistry.getSampleTracks().get(i);
+      if (!track.isVisible()) {
+        continue;
+      }
+      double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
+      if (my < sampleY || my >= sampleY + covH) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) {
+          continue;
+        }
+        CoverageDrawer.SampleRow row = coverageDrawer.getRow(sample);
+        if (row == null || px >= row.coverage.length) {
+          continue;
+        }
+        double cov = row.coverage[px];
+        if (cov < 0.5) {
+          continue;
+        }
+        double scale = row.maxCoverage > 0 ? (covH - 14) / row.maxCoverage : 0;
+        if (scale <= 0) {
+          continue;
+        }
+        double covBarH = Math.max(1.5, cov * scale);
+        double covBottom = sampleY + covH - 1;
+        double covBarTop = covBottom - covBarH;
+        if (my < covBarTop || my > covBottom) {
+          continue;
+        }
+        int sampleIndex = row.sampleIndex;
+        return (((long) sampleIndex) << 32) | (px & 0xffffffffL);
+      }
+    }
+    return -1L;
+  }
+
   private CoverageHoverInfo findCoverageHoverInfo(double mx, double my) {
     if (isScrollbarOverrideActive()) return null;
     if (mx < 0 || my < 0) return null;
@@ -1506,7 +1597,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (px < 0 || px >= (int) Math.ceil(getWidth())) return null;
 
     double sampleH = sampleRegistry.getSampleHeight();
-    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
+    boolean coverageOnly = isCoverageOnlyLayout();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, sampleH * Settings.get().getCoverageFraction()));
     double covH = coverageOnly ? sampleH : coverageFractionH;
@@ -1570,20 +1661,20 @@ public class TrackBodyCanvas extends GenomicCanvas {
             genomicPos,
             px,
             cov,
-            row.coverageFwd[px],
-            row.coverageRev[px],
+            row.strandCovFwd(px),
+            row.strandCovRev(px),
             row.mmA[px],
             row.mmC[px],
             row.mmG[px],
             row.mmT[px],
-            row.mmAFwd[px],
-            row.mmARev[px],
-            row.mmCFwd[px],
-            row.mmCRev[px],
-            row.mmGFwd[px],
-            row.mmGRev[px],
-            row.mmTFwd[px],
-            row.mmTRev[px],
+            row.strandMm(row.mmAFwd, px),
+            row.strandMm(row.mmARev, px),
+            row.strandMm(row.mmCFwd, px),
+            row.strandMm(row.mmCRev, px),
+            row.strandMm(row.mmGFwd, px),
+            row.strandMm(row.mmGRev, px),
+            row.strandMm(row.mmTFwd, px),
+            row.strandMm(row.mmTRev, px),
             signalAvg,
             signalMin,
             signalMax,

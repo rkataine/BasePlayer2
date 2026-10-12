@@ -66,15 +66,16 @@ public class VariantFilter {
      */
     private boolean geneLevel = false;
     /**
-     * Soft-match window in bp for Sample Comparison. Variants of the same type family
-     * within this window (or with overlapping SV spans expanded by this amount) share
-     * sample counts. Ignored when {@link #geneLevel} is on. {@code 0} = exact allele only.
+     * Cluster window in bp for Sample Comparison. Compatible alleles are gap-chained
+     * when consecutive distance (or SV span soft-overlap) is within this window; the
+     * cluster’s distinct samples drive shared-sample min/max. Singletons are not clusters.
+     * Ignored when {@link #geneLevel} is on. {@code 0} = exact allele only.
      */
     private int comparisonWindowBp = 0;
     /**
      * Explicit LOH region merge gap in bp. When {@code > 0}, used by
      * {@link #lohRegionGapBp()} instead of {@link #comparisonWindowBp}, so setting a
-     * LOH gap does not turn on soft-match cluster indexing.
+     * LOH gap does not turn on comparison-window cluster indexing.
      */
     private int lohRegionGapOverrideBp = 0;
     /**
@@ -196,7 +197,35 @@ public class VariantFilter {
     }
     public void setGeneLevel(boolean geneLevel) { this.geneLevel = geneLevel; }
 
-    public int getComparisonWindowBp() { return comparisonWindowBp; }
+    /**
+     * Effective comparison window. With class slices, returns the max window among
+     * non-gene-level point/SV slices (parent field alone is often unset after merge).
+     */
+    public int getComparisonWindowBp() {
+        if (hasClassSlices()) {
+            int w = 0;
+            if (pointSlice != null && !pointSlice.geneLevel) {
+                w = Math.max(w, pointSlice.comparisonWindowBp);
+            }
+            if (svSlice != null && !svSlice.geneLevel) {
+                w = Math.max(w, svSlice.comparisonWindowBp);
+            }
+            return w;
+        }
+        return comparisonWindowBp;
+    }
+
+    /** Window for clustering a node of this type (0 = exact allele / no cluster mode). */
+    public int comparisonWindowBpFor(VcfVariantType type) {
+        if (type != null && hasClassSlices()) {
+            if (VariantTypeVisuals.isStructural(type)) {
+                return svSlice != null && !svSlice.geneLevel ? svSlice.comparisonWindowBp : 0;
+            }
+            return pointSlice != null && !pointSlice.geneLevel ? pointSlice.comparisonWindowBp : 0;
+        }
+        return isGeneLevel() ? 0 : comparisonWindowBp;
+    }
+
     public void setComparisonWindowBp(int comparisonWindowBp) {
         this.comparisonWindowBp = Math.max(0, comparisonWindowBp);
     }
@@ -683,6 +712,53 @@ public class VariantFilter {
     
     public boolean isFilterFieldsActive() { return filterFieldsActive; }
 
+    /** INFO keys needed to draw CNV magnitude (FACETS / similar) — not user filter rules. */
+    public static final Set<String> CANVAS_CNV_INFO_KEYS = Set.of(
+        "CNLR_MEDIAN", "CNLR_MEDIAN_CLUST", "TCN_EM", "TCN", "CN");
+
+    /**
+     * INFO keys that must be copied onto nodes at load. Header definitions live in
+     * {@link org.baseplayer.io.VcfManager} (one union list per session) — values are
+     * per-allele and only kept when a filter rule needs them, plus a tiny CNV draw set.
+     */
+    public Set<String> infoKeysToPersist() {
+        if (hasClassSlices()) {
+            Set<String> keys = new HashSet<>();
+            if (pointSlice != null) {
+                keys.addAll(pointSlice.infoKeysToPersistLocal());
+            }
+            if (svSlice != null) {
+                keys.addAll(svSlice.infoKeysToPersistLocal());
+            }
+            return keys;
+        }
+        return infoKeysToPersistLocal();
+    }
+
+    private Set<String> infoKeysToPersistLocal() {
+        Set<String> keys = new HashSet<>();
+        if (infoFieldFilters != null && !infoFieldFilters.isEmpty()) {
+            keys.addAll(infoFieldFilters.keySet());
+        }
+        // Canvas CNV metrics — not user filters, but needed to draw.
+        for (VcfVariantType type : allowedTypes) {
+            if (VariantTypeVisuals.isCnv(type)) {
+                keys.addAll(CANVAS_CNV_INFO_KEYS);
+                break;
+            }
+        }
+        return keys;
+    }
+
+    /** Whether VCF FILTER column strings should be stored on nodes (FILTER= rules active). */
+    public boolean shouldPersistVcfFilter() {
+        if (hasClassSlices()) {
+            return (pointSlice != null && pointSlice.filterFieldsActive)
+                || (svSlice != null && svSlice.filterFieldsActive);
+        }
+        return filterFieldsActive;
+    }
+
     public long getMinSvLengthBp() { return minSvLengthBp; }
     public void setMinSvLengthBp(long minSvLengthBp) {
         this.minSvLengthBp = Math.max(0, minSvLengthBp);
@@ -1083,6 +1159,37 @@ public class VariantFilter {
             return false;
         }
 
+        if (!f.infoFieldFilters.isEmpty()) {
+            for (Map.Entry<String, String> entry : f.infoFieldFilters.entrySet()) {
+                String actual = node.getInfoValue(entry.getKey());
+                String expected = entry.getValue();
+                if (expected == null) {
+                    continue;
+                }
+                if (actual == null || !expected.equals(actual)) {
+                    return false;
+                }
+            }
+        }
+
+        if (f.filterFieldsActive && !f.allowedFilterValues.isEmpty()) {
+            String filterCol = node.vcfFilter;
+            if (filterCol == null || filterCol.isBlank()) {
+                return false;
+            }
+            // VCF FILTER may be semicolon-joined; keep if any token is allowed.
+            boolean any = false;
+            for (String token : filterCol.split(";")) {
+                if (f.allowedFilterValues.contains(token)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) {
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -1313,22 +1420,25 @@ public class VariantFilter {
         if (node == null || excludedTracks == null) {
             return false;
         }
-        for (VariantNode.SampleCall call : node.getSamples()) {
+        final boolean[] found = { false };
+        node.forEachSampleUntil(call -> {
             if (call == null) {
-                continue;
+                return false;
             }
             int trackIndex = call.getTrackIndex();
             if (excludedTracks.contains(trackIndex)) {
-                continue;
+                return false;
             }
             if (!passesSampleThresholds(node, call)) {
-                continue;
+                return false;
             }
             if (node.isAltCarrier(call)) {
+                found[0] = true;
                 return true;
             }
-        }
-        return false;
+            return false;
+        });
+        return found[0];
     }
 
     private static boolean hasSampleOutside(Set<Integer> samples, Set<Integer> excludedTracks) {
@@ -1486,13 +1596,13 @@ public class VariantFilter {
      */
     public int countPassingSamples(VariantNode node) {
         if (node == null) return 0;
-        int count = 0;
-        for (VariantNode.SampleCall call : node.getSamples()) {
+        final int[] count = { 0 };
+        node.forEachSample(call -> {
             if (passesSampleThresholds(node, call) && node.isAltCarrier(call)) {
-                count++;
+                count[0]++;
             }
-        }
-        return count;
+        });
+        return count[0];
     }
 
     /**
@@ -1771,34 +1881,34 @@ public class VariantFilter {
             return classSlice(node.type).countDisplaySamples(node);
         }
         if (VariantTypeVisuals.isLohRegion(node.type)) {
-            int count = 0;
-            for (VariantNode.SampleCall call : node.getSamples()) {
+            final int[] count = { 0 };
+            node.forEachSample(call -> {
                 if (call != null && passesSampleThresholds(node, call)) {
-                    count++;
+                    count[0]++;
                 }
-            }
-            return count;
+            });
+            return count[0];
         }
         Set<Integer> failed = hasActiveGroupComparison()
             ? failedLineagesForNode(node)
             : Set.of();
-        int count = 0;
-        for (VariantNode.SampleCall call : node.getSamples()) {
+        final int[] count = { 0 };
+        node.forEachSample(call -> {
             if (call == null) {
-                continue;
+                return;
             }
             if (!passesSampleThresholds(node, call)) {
-                continue;
+                return;
             }
             if (node.isHomozygousRef(call)) {
-                continue;
+                return;
             }
             if (!passesSampleGroupConstraint(node, call, failed)) {
-                continue;
+                return;
             }
-            count++;
-        }
-        return count;
+            count[0]++;
+        });
+        return count[0];
     }
 
     public boolean passes(VariantNode node, VariantNode.SampleCall call) {
@@ -1817,12 +1927,15 @@ public class VariantFilter {
         if (!passesBaseNodeLevel(node)) {
             return false;
         }
-        for (VariantNode.SampleCall call : node.getSamples()) {
+        final boolean[] any = { false };
+        node.forEachSampleUntil(call -> {
             if (passesSampleThresholds(node, call)) {
+                any[0] = true;
                 return true;
             }
-        }
-        return false;
+            return false;
+        });
+        return any[0];
     }
 
     /** Returns true if all filters are at default (pass-all) state. */

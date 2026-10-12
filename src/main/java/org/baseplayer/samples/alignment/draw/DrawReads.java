@@ -49,12 +49,6 @@ class DrawReads {
     gc.fillText("Loading" + ".".repeat(dots), 10, sampleY + sampleH / 2 + 4);
   }
 
-  static void drawZoomMessage(GraphicsContext gc, double sampleY, double sampleH, String message) {
-    gc.setFill(Color.web("#888888"));
-    gc.setFont(AppFonts.getFont("Segoe UI", 11));
-    gc.fillText(message, 10, sampleY + sampleH / 2 + 4);
-  }
-
   // ── Read drawing ─────────────────────────────────────────────────────────────
 
   /**

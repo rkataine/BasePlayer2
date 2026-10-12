@@ -197,29 +197,26 @@ public class CRAMDecoder {
   }
 
   /**
-   * Build substitution lookup table from the 5-byte SM matrix.
-   * Each byte encodes a permutation of 4 alternative bases using Lehmer code (2-bit fields).
-   * subLookup[refBaseIdx][bsCode] = substituted base character.
+   * Build substitution lookup from the 5-byte SM matrix (htslib / CRAM spec).
+   * For each reference base, the four alternatives in ACGTN order (excluding the
+   * reference) are assigned BS codes from the four 2-bit fields (MSB→LSB):
+   * {@code lookup[refIdx][code] = alt}. Not a Lehmer code.
    */
-  private static char[][] buildSubstitutionLookup(byte[] sm) {
+  static char[][] buildSubstitutionLookup(byte[] sm) {
     char[] bases = {'A', 'C', 'G', 'T', 'N'};
     char[][] lookup = new char[5][4];
     for (int r = 0; r < 5; r++) {
-      // Build list of 4 alternative bases (all except bases[r])
       char[] alts = new char[4];
       int ai = 0;
       for (int j = 0; j < 5; j++) {
-        if (j != r) alts[ai++] = bases[j];
+        if (j != r) {
+          alts[ai++] = bases[j];
+        }
       }
       int b = sm[r] & 0xFF;
-      // Lehmer decode: 4 x 2-bit fields from MSB to LSB
-      List<Character> remaining = new ArrayList<>(4);
-      for (char c : alts) remaining.add(c);
-      for (int code = 0; code < 4; code++) {
-        int shift = (3 - code) * 2;
-        int idx = (b >> shift) & 0x3;
-        if (idx >= remaining.size()) idx = remaining.size() - 1;
-        lookup[r][code] = remaining.remove(idx);
+      for (int i = 0; i < 4; i++) {
+        int code = (b >> ((3 - i) * 2)) & 0x3;
+        lookup[r][code] = alts[i];
       }
     }
     return lookup;
@@ -423,16 +420,21 @@ public class CRAMDecoder {
         }
       }
 
-      // Read features → compute reference span, collect mismatches, and build CIGAR
-      boolean unmappedSeq = (cramFlags & 0x08) != 0;
+      // Mapped vs unmapped must follow BAM FLAG (htsjdk), not CF unknown-bases.
+      // Placed-unmapped reads store BA(+QS), never FN/FC features / MQ.
+      boolean unmapped = (bamFlags & 0x4) != 0;
+      boolean unknownBases = (cramFlags & 0x08) != 0;
+      boolean forcePreserveQs = (cramFlags & 0x01) != 0;
       int refSpan = readLen;
-      List<int[]> mmList = null; // collected as [genomicPos, readBase, refBase]
+      char[] seq = (!unmapped && !unknownBases && readLen > 0) ? new char[readLen] : null;
       byte[] featureQualities = readLen > 0 ? new byte[readLen] : null;
       boolean hasFeatureQualities = false;
       // CIGAR reconstruction: collect events as [readPos (1-based), cigarOp, length]
       List<int[]> cigarEvents = null;
+      int mapq = 0;
+      byte[] readQualities = null;
 
-      if (!unmappedSeq && fnDec != null) {
+      if (!unmapped && fnDec != null) {
         int numFeatures = fnDec.decode();
         int prevFeaturePos = 0;
         int refOffset = 0; // tracks ref offset adjustments from indels/clips
@@ -447,10 +449,7 @@ public class CRAMDecoder {
               int base = baDec != null ? baDec.decode() : 'N';
               char readBase = normalizeReadBase(base);
               int qual = qsDec != null ? qsDec.decode() : -1;
-              int genomicPos = alignStart + (featurePos - 1) + refOffset;
-              int refBaseChar = getRefBaseAt(refBases, refBasesStart, genomicPos);
-              if (mmList == null) mmList = new ArrayList<>();
-              mmList.add(new int[]{genomicPos, readBase, refBaseChar});
+              setSeqBase(seq, featurePos - 1, readBase);
               if (qual >= 0 && featureQualities != null) {
                 int qIdx = featurePos - 1;
                 if (qIdx >= 0 && qIdx < featureQualities.length) {
@@ -462,32 +461,31 @@ public class CRAMDecoder {
             case 'X' -> { // substitution
               int bsCode = bsDec != null ? bsDec.decode() : 0;
               int genomicPos = alignStart + (featurePos - 1) + refOffset;
-              char readBase = '?';
-              int refBaseX = 0;
               if (ch.subLookup != null && refBases != null) {
                 int refIdx = genomicPos - refBasesStart;
-                if (refIdx >= 0 && refIdx < refBases.length()) {
-                  char refBase = refBases.charAt(refIdx);
-                  refBaseX = Character.toUpperCase(refBase);
-                  int ri = switch (Character.toUpperCase(refBase)) {
+                if (refIdx >= 0 && refIdx < refBases.length() && bsCode >= 0 && bsCode < 4) {
+                  char refBase = Character.toUpperCase(refBases.charAt(refIdx));
+                  int ri = switch (refBase) {
                     case 'A' -> 0; case 'C' -> 1; case 'G' -> 2; case 'T' -> 3; default -> 4;
                   };
-                  if (bsCode >= 0 && bsCode < 4) readBase = ch.subLookup[ri][bsCode];
+                  setSeqBase(seq, featurePos - 1, ch.subLookup[ri][bsCode]);
                 }
               }
-              if (mmList == null) mmList = new ArrayList<>();
-              mmList.add(new int[]{genomicPos, readBase, refBaseX});
             }
             case 'I' -> { // insertion
               byte[] ins = inDec != null ? inDec.decode() : null;
               if (ins != null) {
                 refSpan -= ins.length; refOffset -= ins.length;
+                for (int bi = 0; bi < ins.length; bi++) {
+                  setSeqBase(seq, featurePos - 1 + bi, normalizeReadBase(ins[bi] & 0xFF));
+                }
                 if (cigarEvents == null) cigarEvents = new ArrayList<>();
                 cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_I, ins.length});
               }
             }
             case 'i' -> { // single base insertion
-              if (baDec != null) baDec.decode();
+              int base = baDec != null ? baDec.decode() : 'N';
+              setSeqBase(seq, featurePos - 1, normalizeReadBase(base));
               refSpan -= 1;
               refOffset -= 1;
               if (cigarEvents == null) cigarEvents = new ArrayList<>();
@@ -515,6 +513,9 @@ public class CRAMDecoder {
               byte[] sc = scDec != null ? scDec.decode() : null;
               if (sc != null) {
                 refSpan -= sc.length; refOffset -= sc.length;
+                for (int bi = 0; bi < sc.length; bi++) {
+                  setSeqBase(seq, featurePos - 1 + bi, normalizeReadBase(sc[bi] & 0xFF));
+                }
                 if (cigarEvents == null) cigarEvents = new ArrayList<>();
                 cigarEvents.add(new int[]{featurePos, BAMRecord.CIGAR_S, sc.length});
               }
@@ -551,47 +552,40 @@ public class CRAMDecoder {
                 }
               }
             }
-            case 'b' -> { // bases + qualities
+            case 'b' -> { // Bases (BB only). Qualities use separate feature 'q' (QQ).
               byte[] bases = bbDec != null ? bbDec.decode() : null;
-              byte[] qrun = qqDec != null ? qqDec.decode() : null;
               if (bases != null) {
                 int startIdx = featurePos - 1;
                 for (int bi = 0; bi < bases.length; bi++) {
-                  int readIdx = startIdx + bi;
-                  if (readIdx < 0) continue;
-                  int genomicPos = alignStart + readIdx + refOffset;
-                  char readBase = normalizeReadBase(bases[bi] & 0xFF);
-                  int refBase = getRefBaseAt(refBases, refBasesStart, genomicPos);
-                  if (mmList == null) mmList = new ArrayList<>();
-                  mmList.add(new int[]{genomicPos, readBase, refBase});
-                }
-              }
-              if (qrun != null && featureQualities != null) {
-                int startIdx = featurePos - 1;
-                for (int qi = 0; qi < qrun.length; qi++) {
-                  int qIdx = startIdx + qi;
-                  if (qIdx < 0 || qIdx >= featureQualities.length) break;
-                  featureQualities[qIdx] = qrun[qi];
-                  hasFeatureQualities = true;
+                  setSeqBase(seq, startIdx + bi, normalizeReadBase(bases[bi] & 0xFF));
                 }
               }
             }
             default -> {
-              // Unknown feature code—skip
+              // Unknown feature code — payload not consumed; stream may desync.
             }
           }
         }
-      }
 
-      // Mapping quality
-      int mapq = mqDec != null ? mqDec.decode() : 0;
-
-      // Quality scores (if preserved as array)
-      byte[] readQualities = null;
-      if ((cramFlags & 0x01) != 0 && qsDec != null) {
-        readQualities = new byte[Math.max(0, readLen)];
-        for (int q = 0; q < readLen; q++) {
-          readQualities[q] = (byte) qsDec.decode();
+        mapq = mqDec != null ? mqDec.decode() : 0;
+        if (forcePreserveQs && qsDec != null) {
+          readQualities = new byte[Math.max(0, readLen)];
+          for (int q = 0; q < readLen; q++) {
+            readQualities[q] = (byte) qsDec.decode();
+          }
+        }
+      } else if (!unknownBases) {
+        // Unmapped with explicit bases: consume BA (+ optional QS). Do not touch FN/MQ.
+        if (baDec != null) {
+          for (int b = 0; b < readLen; b++) {
+            baDec.decode();
+          }
+        }
+        if (forcePreserveQs && qsDec != null) {
+          readQualities = new byte[Math.max(0, readLen)];
+          for (int q = 0; q < readLen; q++) {
+            readQualities[q] = (byte) qsDec.decode();
+          }
         }
       }
       if (readQualities == null && hasFeatureQualities) {
@@ -640,7 +634,7 @@ public class CRAMDecoder {
         }
         rec.cigarOps = new int[cigarList.size()];
         for (int c = 0; c < cigarList.size(); c++) rec.cigarOps[c] = cigarList.get(c)[0];
-      } else if (!unmappedSeq) {
+      } else if (!unmapped) {
         // Simple M-only alignment
         rec.cigarOps = new int[]{readLen << 4};
       }
@@ -658,14 +652,11 @@ public class CRAMDecoder {
       rec.signalTag = tagRec.signalTag;
       rec.urTag = tagRec.urTag;
 
-      // Pack mismatches: [pos0, readBase0, refBase0, pos1, readBase1, refBase1, ...]
-      if (mmList != null && !mmList.isEmpty()) {
-        rec.mismatches = new int[mmList.size() * 3];
-        for (int m = 0; m < mmList.size(); m++) {
-          rec.mismatches[m * 3] = mmList.get(m)[0];
-          rec.mismatches[m * 3 + 1] = mmList.get(m)[1];
-          rec.mismatches[m * 3 + 2] = mmList.get(m).length > 2 ? mmList.get(m)[2] : 0;
-        }
+      // Same as BAM without MD: fill conserved SEQ from ref, then compare SEQ+CIGAR.
+      if (seq != null && rec.cigarOps != null && refBases != null) {
+        fillMissingSeqFromRef(seq, rec.cigarOps, alignStart, refBases, refBasesStart);
+        rec.mismatches = BAMFileReader.computeSeqMismatches(
+            seq, rec.cigarOps, alignStart, refBases, refBasesStart);
       }
 
       records.add(rec);
@@ -673,11 +664,45 @@ public class CRAMDecoder {
     return records;
   }
 
-  private static int getRefBaseAt(String refBases, int refBasesStart, int genomicPos) {
-    if (refBases == null) return 0;
-    int refIdx = genomicPos - refBasesStart;
-    if (refIdx < 0 || refIdx >= refBases.length()) return 0;
-    return Character.toUpperCase(refBases.charAt(refIdx));
+  private static void setSeqBase(char[] seq, int index, char base) {
+    if (seq != null && index >= 0 && index < seq.length) {
+      seq[index] = base;
+    }
+  }
+
+  private static void fillMissingSeqFromRef(
+      char[] seq, int[] cigarOps, int alignStart, String refBases, int refStart) {
+    int readPos = 0;
+    int refPos = alignStart;
+    for (int op : cigarOps) {
+      int opLen = op >>> 4;
+      int opCode = op & 0xF;
+      switch (opCode) {
+        case BAMRecord.CIGAR_M, BAMRecord.CIGAR_EQ, BAMRecord.CIGAR_X -> {
+          for (int j = 0; j < opLen; j++) {
+            if (readPos < seq.length && seq[readPos] == '\0') {
+              int ri = refPos - refStart;
+              seq[readPos] = (ri >= 0 && ri < refBases.length())
+                  ? Character.toUpperCase(refBases.charAt(ri))
+                  : 'N';
+            }
+            readPos++;
+            refPos++;
+          }
+        }
+        case BAMRecord.CIGAR_I, BAMRecord.CIGAR_S -> {
+          for (int j = 0; j < opLen; j++) {
+            if (readPos < seq.length && seq[readPos] == '\0') {
+              seq[readPos] = 'N';
+            }
+            readPos++;
+          }
+        }
+        case BAMRecord.CIGAR_D, BAMRecord.CIGAR_N -> refPos += opLen;
+        default -> {
+        }
+      }
+    }
   }
 
   private static char normalizeReadBase(int baseVal) {

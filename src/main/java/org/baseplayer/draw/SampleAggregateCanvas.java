@@ -58,6 +58,7 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
       return;
     }
     Cursor cursor = painter.isOverLegend(event.getX(), event.getY())
+            || painter.isOverCluster(event.getX(), event.getY())
         ? Cursor.HAND
         : Cursor.DEFAULT;
     applyCursor(cursor);
@@ -101,6 +102,10 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
 
   private void onLegendClick(MouseEvent event) {
     if (mouseDragged || resizingBand) {
+      return;
+    }
+    if (painter.handleClusterClick(event.getX(), event.getY())) {
+      event.consume();
       return;
     }
     if (painter.handleLegendClick(event.getX(), event.getY())) {

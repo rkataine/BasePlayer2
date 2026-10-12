@@ -479,6 +479,15 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     graphics.setFont(Font.font("Segoe UI", 10));
     graphics.setFill(Color.web("#9ea7b3"));
 
+    if (sampleRegistry.hasClusterFocusBanner()) {
+      String detail = SampleRegistry.clusterFocusDetail(sampleRegistry.getFocusedGeneName());
+      graphics.fillText(
+          detail.isBlank() ? "Cluster focus" : "Cluster focus: " + detail,
+          8, headerBarHeight + 14);
+      graphics.setFill(Color.web("#ffa500"));
+      graphics.fillText("[clear x]", panelWidth - 70, headerBarHeight + 14);
+      return new HitBox(panelWidth - 72, headerBarHeight + 1, 70, 18);
+    }
     if (sampleRegistry.hasGeneFocusBanner()) {
       String focusedGene = sampleRegistry.getFocusedGeneName();
       graphics.fillText("Gene focus: " + focusedGene, 8, headerBarHeight + 14);

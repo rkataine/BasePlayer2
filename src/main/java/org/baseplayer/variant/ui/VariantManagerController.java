@@ -119,6 +119,7 @@ public class VariantManagerController implements Initializable {
     @FXML private IntegerRangeSlider sharedSampleRangeSlider;
     @FXML private CheckBox geneLevelComparisonCheckBox;
     @FXML private TextField comparisonWindowField;
+    @FXML private Button comparisonWindowApplyButton;
     @FXML private Label commonVariantsHelpLabel;
     @FXML private VBox comparisonGroupsContainer;
     @FXML private Label groupComparisonSummaryLabel;
@@ -242,6 +243,7 @@ public class VariantManagerController implements Initializable {
                 sharedSampleRangeSlider,
                 geneLevelComparisonCheckBox,
                 comparisonWindowField,
+                comparisonWindowApplyButton,
                 commonVariantsHelpLabel,
                 comparisonGroupsContainer,
                 groupComparisonSummaryLabel,

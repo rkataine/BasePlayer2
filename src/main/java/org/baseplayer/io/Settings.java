@@ -68,6 +68,11 @@ public final class Settings {
   public static final double DEF_COVERAGE_FRACTION        = 0.30;
   public static final double DEF_READ_GAP                 = 2.5;
   public static final double DEF_READ_HEIGHT              = 10.0;
+  /**
+   * Sample row must be at least this many × {@link #getReadHeight()} tall before
+   * BAM coverage or individual reads are fetched for visible samples.
+   */
+  public static final double MIN_SAMPLE_HEIGHT_FOR_READS_MULTIPLIER = 5.0;
   public static final boolean DEF_SMOOTH_SMALL_FILES      = false;
   public static final double DEF_MISMATCH_MIN_FRACTION    = 0.10;
   public static final int    DEF_MISMATCH_MIN_COUNT       = 2;
@@ -163,6 +168,13 @@ public final class Settings {
 
   /** Read height in pixels. */
   public double getReadHeight() { return readHeight; }
+
+  /**
+   * True when a sample row is tall enough to fetch BAM coverage / read piles.
+   */
+  public boolean isSampleHeightEnoughForReads(double sampleHeightPx) {
+    return sampleHeightPx >= MIN_SAMPLE_HEIGHT_FOR_READS_MULTIPLIER * getReadHeight();
+  }
 
   /** Whether to apply smoothing to small-file sampled coverage. */
   public boolean isSmoothSmallFiles() { return smoothSmallFiles; }

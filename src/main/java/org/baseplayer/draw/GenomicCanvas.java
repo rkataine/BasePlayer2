@@ -258,62 +258,68 @@ public class GenomicCanvas extends Canvas {
           double mouseY = event.getY();
           double sampleH = sampleRegistry.getSampleHeight();
           if (sampleH > 0 && mouseY >= 0) {
-            int sampleIdx = (int)((mouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
-            if (sampleIdx >= 0 && sampleIdx < sampleRegistry.getSampleTracks().size()) {
-              org.baseplayer.samples.SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIdx);
-              org.baseplayer.samples.alignment.AlignmentFile sf = track.getFirstBam();
-              if (sf != null) {
-                double readGap = org.baseplayer.io.Settings.get().getReadGap();
-                double readHeight = org.baseplayer.io.Settings.get().getReadHeight();
-                double rowPitch = Math.max(1.0, readHeight + readGap);
-                int totalRows = Math.max(0, sf.getMaxRow(drawStack) + 1);
-                double coverageH = Math.max(30,
-                    Math.min(60, sampleH * org.baseplayer.io.Settings.get().getCoverageFraction()));
-                double readsH = Math.max(1.0, sampleH - coverageH);
+            // Slot is into the displayed (filtered) list — not raw sampleTracks index.
+            int slot = (int) ((mouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
+            java.util.List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+            if (slot >= 0 && slot < displayed.size()) {
+              int trackIndex = displayed.get(slot);
+              if (trackIndex >= 0 && trackIndex < sampleRegistry.getSampleTracks().size()) {
+                org.baseplayer.samples.SampleTrack track =
+                    sampleRegistry.getSampleTracks().get(trackIndex);
+                org.baseplayer.samples.alignment.AlignmentFile sf = track.getFirstBam();
+                if (sf != null) {
+                  double readGap = org.baseplayer.io.Settings.get().getReadGap();
+                  double readHeight = org.baseplayer.io.Settings.get().getReadHeight();
+                  double rowPitch = Math.max(1.0, readHeight + readGap);
+                  int totalRows = Math.max(0, sf.getMaxRow(drawStack) + 1);
+                  double coverageH = Math.max(30,
+                      Math.min(60, sampleH * org.baseplayer.io.Settings.get().getCoverageFraction()));
+                  double readsH = Math.max(1.0, sampleH - coverageH);
 
-                // Check if in butterfly layout and which half the mouse is in
-                double sampleY = sampleIdx * sampleH - sampleRegistry.getScrollBarPosition();
-                double middleY = sampleY + sampleH / 2;
-                int hp2Start = sf.getHP2StartRow(drawStack);
-                int strandStart = sf.getStrandSplitStartRow(drawStack);
-                int discStart = sf.getDiscordantSplitStartRow(drawStack);
-                boolean isButterfly = (hp2Start >= 0 && track.getSamples().stream().anyMatch(s -> s.isHaplotypeData()))
-                    || (strandStart >= 0 && sf.isSplitByStrand())
-                    || (discStart >= 0 && sf.isSplitByDiscordant());
+                  // Check if in butterfly layout and which half the mouse is in
+                  double sampleY = slot * sampleH - sampleRegistry.getScrollBarPosition();
+                  double middleY = sampleY + sampleH / 2;
+                  int hp2Start = sf.getHP2StartRow(drawStack);
+                  int strandStart = sf.getStrandSplitStartRow(drawStack);
+                  int discStart = sf.getDiscordantSplitStartRow(drawStack);
+                  boolean isButterfly = (hp2Start >= 0 && track.getSamples().stream().anyMatch(s -> s.isHaplotypeData()))
+                      || (strandStart >= 0 && sf.isSplitByStrand())
+                      || (discStart >= 0 && sf.isSplitByDiscordant());
 
-                int splitRow;
-                if (discStart >= 0 && sf.isSplitByDiscordant()) {
-                  splitRow = discStart;
-                } else if (strandStart >= 0 && sf.isSplitByStrand()) {
-                  splitRow = strandStart;
-                } else {
-                  splitRow = hp2Start;
-                }
-
-                if (isButterfly) {
-                  double halfReadsH = Math.max(1.0, readsH / 2.0);
-                  int topRows = Math.max(0, Math.min(totalRows, splitRow));
-                  int bottomRows = Math.max(0, totalRows - topRows);
-                  double maxTop = Math.max(0, topRows * rowPitch - halfReadsH);
-                  double maxBottom = Math.max(0, bottomRows * rowPitch - halfReadsH);
-                  if (mouseY < middleY) {
-                    // Top half (forward / HP1): scroll up reveals more rows
-                    double next = Math.max(0, Math.min(maxTop, sf.getReadScrollOffsetTop(drawStack) + deltaY));
-                    sf.setReadScrollOffsetTop(drawStack, next);
+                  int splitRow;
+                  if (discStart >= 0 && sf.isSplitByDiscordant()) {
+                    splitRow = discStart;
+                  } else if (strandStart >= 0 && sf.isSplitByStrand()) {
+                    splitRow = strandStart;
                   } else {
-                    // Bottom half (reverse / HP2): scroll down reveals more rows
-                    double next = Math.max(0, Math.min(maxBottom, sf.getReadScrollOffsetBottom(drawStack) - deltaY));
-                    sf.setReadScrollOffsetBottom(drawStack, next);
+                    splitRow = hp2Start;
                   }
-                } else {
-                  double maxScroll = Math.max(0, totalRows * rowPitch - readsH);
-                  double next = Math.max(0, Math.min(maxScroll, sf.getReadScrollOffset(drawStack) - deltaY));
-                  sf.setReadScrollOffset(drawStack, next);
+
+                  if (isButterfly) {
+                    double halfReadsH = Math.max(1.0, readsH / 2.0);
+                    int topRows = Math.max(0, Math.min(totalRows, splitRow));
+                    int bottomRows = Math.max(0, totalRows - topRows);
+                    double maxTop = Math.max(0, topRows * rowPitch - halfReadsH);
+                    double maxBottom = Math.max(0, bottomRows * rowPitch - halfReadsH);
+                    if (mouseY < middleY) {
+                      // Top half (forward / HP1): scroll up reveals more rows
+                      double next = Math.max(0, Math.min(maxTop, sf.getReadScrollOffsetTop(drawStack) + deltaY));
+                      sf.setReadScrollOffsetTop(drawStack, next);
+                    } else {
+                      // Bottom half (reverse / HP2): scroll down reveals more rows
+                      double next = Math.max(0, Math.min(maxBottom, sf.getReadScrollOffsetBottom(drawStack) - deltaY));
+                      sf.setReadScrollOffsetBottom(drawStack, next);
+                    }
+                  } else {
+                    double maxScroll = Math.max(0, totalRows * rowPitch - readsH);
+                    double next = Math.max(0, Math.min(maxScroll, sf.getReadScrollOffset(drawStack) - deltaY));
+                    sf.setReadScrollOffset(drawStack, next);
+                  }
                 }
+                // Trigger redraw
+                update.set(!update.get());
+                resetScrollIdleTimer();
               }
-              // Trigger redraw
-              update.set(!update.get());
-              resetScrollIdleTimer();
             }
           }
         }

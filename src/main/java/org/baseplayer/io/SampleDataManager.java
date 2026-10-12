@@ -1883,16 +1883,10 @@ public class SampleDataManager {
     // and must survive new project / clear / project switch.
     ProjectSessionState.get().resetDocument();
 
-    var stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-    for (var stack : stackManager.getStacks()) {
-      if (stack.featureTrackCanvas != null) {
-        for (var t : new ArrayList<>(stack.featureTrackCanvas.getTracks())) {
-          if (t instanceof BedTrack || t instanceof BigWigTrack) {
-            stack.featureTrackCanvas.removeTrack(t);
-          }
-        }
-      }
-    }
+    // Feature tracks + visible-window slider live in FeatureTrackViewportRegistry
+    // (same clear as project open). The old per-canvas Bed/BigWig-only loop left
+    // Motif/UCSC/gnomAD tracks and the viewport slider behind.
+    ServiceRegistry.getInstance().getFeatureTrackViewportRegistry().clearFeatureTracks();
 
     ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());

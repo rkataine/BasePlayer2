@@ -202,9 +202,11 @@ public abstract class TrackListPanel extends SidebarContentPanel {
         trackViewportRegistry.lockAndKeepTrackRowHeight(dragScrollbarLockedRowHeight);
         reactiveCanvas.setCursor(Cursor.CLOSED_HAND);
       } else {
-        int nextFirstSlot =
-            firstSlotFromScrollbarThumbTop(event.getY() - trackScrollbarThumbHeight * 0.5);
-        applyIntervalAtFirstSlot(nextFirstSlot, true);
+        // Track click: page by one visible window toward the click (no jump-to).
+        int[] baseRange = getBaseRange();
+        int windowSize = Math.max(1, baseRange[1] - baseRange[0] + 1);
+        int stepDirection = event.getY() < trackScrollbarThumbY ? -1 : 1;
+        applyIntervalAtFirstSlot(baseRange[0] + stepDirection * windowSize, true);
       }
     });
 
@@ -601,10 +603,6 @@ public abstract class TrackListPanel extends SidebarContentPanel {
         && x <= trackScrollbarX + TRACK_SCROLLBAR_WIDTH + TRACK_SCROLLBAR_MARGIN
         && y >= trackScrollbarThumbY
         && y <= trackScrollbarThumbY + trackScrollbarThumbHeight;
-  }
-
-  private int firstSlotFromScrollbarThumbTop(double thumbTopY) {
-    return (int) Math.round(firstSlotPositionFromScrollbarThumbTop(thumbTopY));
   }
 
   private double firstSlotPositionFromScrollbarThumbTop(double thumbTopY) {

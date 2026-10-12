@@ -338,7 +338,10 @@ public class GeneFocusBanner extends StackPane {
       return;
     }
     String suggested;
-    if (sampleRegistry.hasGeneFocusBanner()) {
+    if (sampleRegistry.hasClusterFocusBanner()) {
+      String detail = SampleRegistry.clusterFocusDetail(sampleRegistry.getFocusedGeneName());
+      suggested = detail.isBlank() ? sampleRegistry.suggestNextGroupName() : detail;
+    } else if (sampleRegistry.hasGeneFocusBanner()) {
       String gene = sampleRegistry.getFocusedGeneName();
       suggested = (gene != null && !gene.isBlank())
           ? gene.trim()
@@ -384,7 +387,7 @@ public class GeneFocusBanner extends StackPane {
 
   private void clearActiveSubset() {
     boolean hadSubset = sampleRegistry.hasActiveSubset();
-    if (sampleRegistry.hasGeneFocusBanner() || sampleRegistry.hasFocusedTracks()) {
+    if (sampleRegistry.hasNamedFocusBanner() || sampleRegistry.hasFocusedTracks()) {
       sampleRegistry.clearSubsetSource(SampleRegistry.SubsetSource.GENE_FOCUS);
     }
     if (sampleRegistry.hasActiveSampleFilterQuery()) {
@@ -412,8 +415,9 @@ public class GeneFocusBanner extends StackPane {
 
   private void refresh() {
     boolean geneFocus = sampleRegistry.hasGeneFocusBanner();
+    boolean clusterFocus = sampleRegistry.hasClusterFocusBanner();
     boolean textFilter = sampleRegistry.hasActiveSampleFilterQuery();
-    if (!geneFocus && !textFilter) {
+    if (!geneFocus && !clusterFocus && !textFilter) {
       userDismissed = false;
       dismissedForQuery = "";
       dismissedForGene = "";
@@ -436,7 +440,25 @@ public class GeneFocusBanner extends StackPane {
 
     boolean wasHidden = !isVisible();
     int sampleCount = sampleRegistry.getDisplayedTrackCount();
-    if (geneFocus) {
+    if (clusterFocus) {
+      setStyle(ROOT_STYLE_GENE);
+      titleLabel.setStyle(LABEL_STYLE);
+      detailLabel.setStyle(META_STYLE);
+      tagsHeading.setStyle(META_STYLE);
+      titleLabel.setText("Cluster focus");
+      String clusterDetail = SampleRegistry.clusterFocusDetail(gene);
+      StringBuilder detail = new StringBuilder();
+      if (!clusterDetail.isBlank()) {
+        detail.append(clusterDetail).append(" · ");
+      }
+      detail.append("Showing ").append(sampleCount)
+          .append(sampleCount == 1 ? " sample" : " samples");
+      if (textFilter) {
+        detail.append(" · filter \"").append(query).append('"');
+      }
+      detailLabel.setText(detail.toString());
+      clearButton.setText(textFilter ? "Clear focus & filter" : "Clear focus");
+    } else if (geneFocus) {
       setStyle(ROOT_STYLE_GENE);
       titleLabel.setStyle(LABEL_STYLE);
       detailLabel.setStyle(META_STYLE);
