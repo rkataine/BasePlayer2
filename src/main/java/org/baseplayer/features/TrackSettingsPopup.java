@@ -1,11 +1,13 @@
 package org.baseplayer.features;
 
+import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
+import org.baseplayer.io.readers.BedFeatureNameCatalog;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.utils.AppFonts;
@@ -62,6 +64,22 @@ public final class TrackSettingsPopup {
           bed.setShowScores(Boolean.TRUE.equals(on));
           notifyChanged(onApply);
         });
+      }
+
+      if (bed.supportsFeatureNameFilterDialog()) {
+        Optional<BedFeatureNameCatalog.Catalog> featureCatalog = scanBedFeatureCatalog(bed);
+        if (featureCatalog.isPresent()) {
+          Set<String> keys = bed.getSelectedNameKeys();
+          int total = featureCatalog.get().entries().size();
+          String status = keys == null
+              ? total + " / " + total + " selected"
+              : keys.size() + " / " + total + " selected";
+          c.row("Features", status);
+          c.actions(new PopupContent.ActionButton(
+              "Select features…",
+              true,
+              () -> openFeaturePicker(bed, featureCatalog.get(), onApply)));
+        }
       }
       c.separator();
 
@@ -216,6 +234,42 @@ public final class TrackSettingsPopup {
     pendingMax = null;
     pendingAutoScale = null;
     pendingOnApply = null;
+  }
+
+  private static Optional<BedFeatureNameCatalog.Catalog> scanBedFeatureCatalog(BedTrack bed) {
+    if (bed == null || bed.getSourcePath() == null) {
+      return Optional.empty();
+    }
+    try {
+      return BedFeatureNameCatalog.scanForDialog(bed.getSourcePath());
+    } catch (IOException ex) {
+      System.err.println("Failed to scan BED feature names: " + ex.getMessage());
+      return Optional.empty();
+    }
+  }
+
+  private static void openFeaturePicker(
+      BedTrack bed, BedFeatureNameCatalog.Catalog catalog, Runnable onApply) {
+    if (bed == null || catalog == null) {
+      return;
+    }
+    Optional<BedFeatureFilterDialog.Outcome> choice = BedFeatureFilterDialog.show(
+        MainApp.stage,
+        bed.getName(),
+        catalog,
+        bed.getSelectedNameKeys(),
+        "Apply");
+    if (choice.isEmpty()) {
+      return;
+    }
+    BedFeatureFilterDialog.Outcome outcome = choice.get();
+    if (outcome.loadAll()) {
+      bed.setNameFilter(null, null);
+    } else {
+      bed.setNameFilter(outcome.selectedKeys(), outcome.listedNames());
+    }
+    persistFeatureTracks();
+    notifyChanged(onApply);
   }
 
   private static void openMotifPicker(MotifTrack motif, Runnable onApply) {
