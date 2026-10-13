@@ -2,15 +2,10 @@ package org.baseplayer.components.sidebars;
 
 import java.io.File;
 
-import org.baseplayer.components.AppDialog;
 import org.baseplayer.draw.GenomicCanvas;
-import org.baseplayer.features.BedSetOperationDialog;
-import org.baseplayer.features.BedSetOperations;
-import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BedTrackOpen;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.features.MotifTrackOpen;
-import org.baseplayer.features.Track;
 import org.baseplayer.features.UcscTracksBrowser;
 import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.UserPreferences;
@@ -38,9 +33,6 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
-import javafx.stage.Window;
-
-import java.util.List;
 
 public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
 
@@ -152,13 +144,6 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     ContextMenu menu = new ContextMenu();
     menu.setStyle("-fx-background-color: #2B2B2B; -fx-border-color: #555; -fx-border-width: 1;");
 
-    MenuItem unionItem = new MenuItem("Union…");
-    unionItem.setOnAction(e -> runBedSetOperation(BedSetOperations.Op.UNION));
-    MenuItem intersectItem = new MenuItem("Intersect…");
-    intersectItem.setOnAction(e -> runBedSetOperation(BedSetOperations.Op.INTERSECT));
-    MenuItem subtractItem = new MenuItem("Subtract…");
-    subtractItem.setOnAction(e -> runBedSetOperation(BedSetOperations.Op.SUBTRACT));
-
     MenuItem removeAll = new MenuItem("Remove all feature tracks");
     removeAll.setOnAction(e -> {
       featureTrackViewportRegistry.clearFeatureTracks();
@@ -171,59 +156,8 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
       featureSearchField.clear();
       applyFeatureSearchFilter();
     });
-    menu.getItems().addAll(
-        unionItem,
-        intersectItem,
-        subtractItem,
-        new SeparatorMenuItem(),
-        removeAll,
-        new SeparatorMenuItem(),
-        clearFilter);
+    menu.getItems().addAll(removeAll, new SeparatorMenuItem(), clearFilter);
     return menu;
-  }
-
-  private void runBedSetOperation(BedSetOperations.Op op) {
-    Window owner = headerPane.getScene() != null ? headerPane.getScene().getWindow() : null;
-    List<BedTrack> candidates = BedSetOperationDialog.bedTracks(
-        featureTrackViewportRegistry.getFeatureTracks());
-    if (candidates.size() < 2) {
-      AppDialog.info(
-          owner,
-          op.label(),
-          "Need at least two BED tracks.",
-          "Open another BED track, then run " + op.label() + " again.");
-      return;
-    }
-    java.util.Set<BedTrack> preselected = new java.util.LinkedHashSet<>();
-    for (Track track : featureTrackViewportRegistry.getSelectedTracks()) {
-      if (track instanceof BedTrack bed) {
-        preselected.add(bed);
-      }
-    }
-    BedSetOperationDialog.show(owner, op, candidates, preselected).ifPresent(selected -> {
-      try {
-        BedTrack result = BedSetOperations.apply(op, selected);
-        result.setVisible(true);
-        for (BedTrack source : selected) {
-          featureTrackViewportRegistry.setAggregateDisabled(source, true);
-        }
-        if (featureTrackCanvas != null) {
-          featureTrackCanvas.addTrack(result);
-        } else {
-          featureTrackViewportRegistry.addFeatureTrack(result);
-          featureTrackViewportRegistry.includeNewTracksAtEndAndResetRowHeight();
-        }
-        int newIndex = featureTrackViewportRegistry.getFeatureTrackIndex(result);
-        if (newIndex >= 0) {
-          featureTrackViewportRegistry.setSelectedTrackIndices(java.util.Set.of(newIndex));
-        }
-        draw();
-        redrawAfterVisibleTrackRangeChange();
-        GenomicCanvas.update.set(!GenomicCanvas.update.get());
-      } catch (RuntimeException ex) {
-        AppDialog.info(owner, op.label() + " failed", ex.getMessage(), null);
-      }
-    });
   }
 
   private void installFeatureSearchBar() {

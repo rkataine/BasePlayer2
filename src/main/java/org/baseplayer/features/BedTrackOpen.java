@@ -28,7 +28,7 @@ public final class BedTrackOpen {
     Optional<BedFeatureNameCatalog.Catalog> catalog =
         BedFeatureNameCatalog.scanForDialog(filePath);
     BedFeatureFilterDialog.Outcome filter = null;
-    if (catalog.isPresent()) {
+    if (catalog.isPresent() && catalog.get().shouldPromptTypeSelection()) {
       Optional<BedFeatureFilterDialog.Outcome> choice = BedFeatureFilterDialog.show(
           owner,
           filePath.getFileName().toString(),

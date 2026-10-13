@@ -1,15 +1,22 @@
 package org.baseplayer.components.sidebars;
 
+import java.io.File;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.baseplayer.components.AppDialog;
 import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.features.BedSetOperationDialog;
+import org.baseplayer.features.BedSetOperations;
+import org.baseplayer.features.BedSetOperations.OverlayChoice;
 import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BedTrackOpen;
 import org.baseplayer.features.BedVariantAnnotation;
 import org.baseplayer.features.Track;
 import org.baseplayer.features.TrackSettingsPopup;
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -22,6 +29,8 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
+import javafx.stage.FileChooser;
+import javafx.stage.Window;
 
 public class FeatureTrackListPanel extends TrackListPanel {
 
@@ -182,10 +191,117 @@ public class FeatureTrackListPanel extends TrackListPanel {
       return true;
     }
     if ("add".equals(iconId)) {
-      // Master add menu covers file open; per-row add is a no-op for features.
+      if (track instanceof BedTrack bed && !bed.isDerived()) {
+        startBedOverlay(bed);
+      }
       return true;
     }
     return false;
+  }
+
+  /**
+   * Per-row +: pick a second BED from disk, choose operation, replace this row
+   * with the overlay result.
+   */
+  private void startBedOverlay(BedTrack base) {
+    Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Add BED to overlay on " + base.getName());
+    File lastDirectory = UserPreferences.getLastDirectory("BED");
+    if (lastDirectory != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDirectory);
+      } catch (IllegalArgumentException ignored) {
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new FileChooser.ExtensionFilter("BED files", "*.bed", "*.bed.gz"),
+        new FileChooser.ExtensionFilter("All files", "*.*"));
+    File file = fileChooser.showOpenDialog(owner);
+    if (file == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("BED", file.getParentFile());
+    try {
+      BedTrackOpen.openInteractive(file.toPath(), owner).ifPresent(overlay -> {
+        BedSetOperationDialog.show(owner, base.getName(), overlay.getName(), null)
+            .ifPresent(choice -> applyBedOverlay(base, overlay, choice, owner));
+      });
+    } catch (java.io.IOException ex) {
+      AppDialog.info(owner, "Overlay failed", ex.getMessage(), null);
+    }
+  }
+
+  private void applyBedOverlay(
+      BedTrack base, BedTrack overlay, OverlayChoice choice, Window owner) {
+    try {
+      prepareOverlayViewport(base, overlay);
+      BedTrack result = BedSetOperations.apply(
+          choice.op(), base, overlay, choice.attributeSource());
+      result.copyAppearanceFrom(base);
+      featureTrackViewportRegistry.replaceFeatureTrack(base, result);
+      org.baseplayer.project.ProjectSessionState.get().markDirty();
+      redrawAfterOverlayChange();
+    } catch (RuntimeException ex) {
+      AppDialog.info(owner, "Overlay failed", ex.getMessage(), null);
+    }
+  }
+
+  /** Tabix overlay has no canvas yet — mirror base / current view caches. */
+  private static void prepareOverlayViewport(BedTrack base, BedTrack overlay) {
+    if (overlay == null || !overlay.isIndexed()) {
+      return;
+    }
+    overlay.syncViewportCacheFrom(base);
+    if (!overlay.getLoadedChromosomes().isEmpty()) {
+      return;
+    }
+    DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
+    for (org.baseplayer.draw.DrawStack stack : stacks.getStacks()) {
+      if (stack == null) {
+        continue;
+      }
+      String chrom = stack.getChromosome();
+      long start = (long) stack.getViewStart();
+      long end = (long) stack.getViewEnd();
+      if (chrom != null && end > start) {
+        overlay.prepareRegionSync(chrom, start, end);
+      }
+    }
+  }
+
+  /**
+   * Re-run overlay op on an existing derived track (from track settings).
+   */
+  void changeBedOverlayOperation(BedTrack derived) {
+    if (derived == null || !derived.isOverlayDerived()) {
+      return;
+    }
+    List<BedTrack> sources = derived.getDerivedSources();
+    BedTrack first = sources.get(0);
+    BedTrack second = sources.get(1);
+    Window owner = canvas.getScene() != null ? canvas.getScene().getWindow() : null;
+    BedSetOperationDialog.show(
+            owner, first.getName(), second.getName(), derived.getOverlayChoice())
+        .ifPresent(choice -> {
+          try {
+            BedTrack result = BedSetOperations.apply(
+                choice.op(), first, second, choice.attributeSource());
+            result.copyAppearanceFrom(derived);
+            featureTrackViewportRegistry.replaceFeatureTrack(derived, result);
+            org.baseplayer.project.ProjectSessionState.get().markDirty();
+            redrawAfterOverlayChange();
+          } catch (RuntimeException ex) {
+            AppDialog.info(owner, "Overlay failed", ex.getMessage(), null);
+          }
+        });
+  }
+
+  private void redrawAfterOverlayChange() {
+    draw();
+    drawReactive();
+    onAfterVisibleTrackRangeChanged();
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
   @Override
@@ -429,15 +545,24 @@ public class FeatureTrackListPanel extends TrackListPanel {
     if (settingsPopup.isShowing()) {
       settingsPopup.hide();
     }
+    Runnable onApply = () -> {
+      featureTrackViewportRegistry.bumpAggregateRevision();
+      draw();
+      drawReactive();
+      onAfterVisibleTrackRangeChanged();
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    };
+    Runnable onChangeOverlay = null;
+    if (track instanceof BedTrack bed && bed.isOverlayDerived()) {
+      onChangeOverlay = () -> {
+        settingsPopup.hide();
+        changeBedOverlayOperation(bed);
+      };
+    }
     settingsPopup.show(
         track,
-        () -> {
-          featureTrackViewportRegistry.bumpAggregateRevision();
-          draw();
-          drawReactive();
-          onAfterVisibleTrackRangeChanged();
-          GenomicCanvas.update.set(!GenomicCanvas.update.get());
-        },
+        onApply,
+        onChangeOverlay,
         canvas.getScene().getWindow(),
         screenX,
         screenY);

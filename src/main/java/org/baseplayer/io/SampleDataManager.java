@@ -1290,7 +1290,9 @@ public class SampleDataManager {
         },
         catalogOpt -> {
           org.baseplayer.features.BedFeatureFilterDialog.Outcome filter = null;
-          if (catalogOpt != null && catalogOpt.isPresent()) {
+          if (catalogOpt != null
+              && catalogOpt.isPresent()
+              && catalogOpt.get().shouldPromptTypeSelection()) {
             var choice = org.baseplayer.features.BedFeatureFilterDialog.show(
                 MainApp.stage,
                 file.getName(),

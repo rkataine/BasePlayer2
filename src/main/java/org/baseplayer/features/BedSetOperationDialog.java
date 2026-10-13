@@ -1,12 +1,11 @@
 package org.baseplayer.features;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import org.baseplayer.components.AppDialog;
+import org.baseplayer.features.BedSetOperations.AttributeSource;
+import org.baseplayer.features.BedSetOperations.Op;
+import org.baseplayer.features.BedSetOperations.OverlayChoice;
 import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.geometry.Insets;
@@ -14,9 +13,9 @@ import javafx.geometry.Pos;
 import javafx.scene.Cursor;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.ScrollPane;
+import javafx.scene.control.RadioButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -27,126 +26,98 @@ import javafx.stage.StageStyle;
 import javafx.stage.Window;
 
 /**
- * Pick BED tracks for Union / Intersect / Subtract. Creates no tracks itself —
- * returns the ordered selection for {@link BedSetOperations#apply}.
+ * Choose Union / Intersect / Subtract and which track’s attributes to keep
+ * when overlaying one BED onto another.
  */
 public final class BedSetOperationDialog {
 
   private BedSetOperationDialog() {}
 
   /**
-   * @param candidates fully materialized BED tracks (order preserved)
-   * @param preselected tracks to check initially (may be empty)
-   * @return ordered selected tracks, or empty if cancelled
+   * @param baseName existing track display name
+   * @param overlayName added file / second track display name
+   * @param initial optional previous choice when changing operation
+   * @return choice, or empty if cancelled
    */
-  public static Optional<List<BedTrack>> show(
+  public static Optional<OverlayChoice> show(
       Window owner,
-      BedSetOperations.Op op,
-      List<BedTrack> candidates,
-      Set<BedTrack> preselected) {
-    if (candidates == null || candidates.isEmpty()) {
-      return Optional.empty();
-    }
-    Set<BedTrack> initial = preselected != null ? preselected : Set.of();
+      String baseName,
+      String overlayName,
+      OverlayChoice initial) {
+    String a = displayName(baseName, "This track");
+    String b = displayName(overlayName, "Added BED");
+    Op initialOp = initial != null && initial.op() != null ? initial.op() : Op.INTERSECT;
+    AttributeSource initialAttrs =
+        initial != null && initial.attributeSource() != null
+            ? initial.attributeSource()
+            : AttributeSource.FIRST;
 
     Stage dialog = new Stage(StageStyle.UTILITY);
     dialog.initModality(Modality.WINDOW_MODAL);
     if (owner != null) {
       dialog.initOwner(owner);
     }
-    dialog.setTitle(op.label());
-    dialog.setResizable(true);
+    dialog.setTitle("BED overlay");
+    dialog.setResizable(false);
 
-    Label title = AppDialog.titleLabel(op.label() + " tracks");
-    String hintText = switch (op) {
-      case UNION ->
-          "Select at least two BED tracks. Uses currently loaded features "
-              + "(full file if in memory, otherwise the loaded viewport).";
-      case INTERSECT ->
-          "Select at least two BED tracks. Result is overlap of currently loaded features.";
-      case SUBTRACT ->
-          "Select at least two tracks. First checked is the base (A − B − C…). "
-              + "Uses currently loaded features only.";
+    Label title = AppDialog.titleLabel("Overlay BED tracks");
+    Label hint = AppDialog.hintLabel(
+        "Uses currently loaded features (full file if in memory, otherwise the loaded viewport). "
+            + "Subtract is always " + a + " − " + b + ".");
+
+    Label opLabel = sectionLabel("Operation");
+    ToggleGroup opGroup = new ToggleGroup();
+    RadioButton union = radio("Union", opGroup);
+    RadioButton intersect = radio("Intersect", opGroup);
+    RadioButton subtract = radio("Subtract", opGroup);
+    switch (initialOp) {
+      case UNION -> union.setSelected(true);
+      case SUBTRACT -> subtract.setSelected(true);
+      default -> intersect.setSelected(true);
+    }
+    VBox opBox = new VBox(4, union, intersect, subtract);
+
+    Label attrLabel = sectionLabel("Annotation attributes (name / strand / color)");
+    ToggleGroup attrGroup = new ToggleGroup();
+    RadioButton fromFirst = radio("From: " + a, attrGroup);
+    RadioButton fromSecond = radio("From: " + b, attrGroup);
+    if (initialAttrs == AttributeSource.SECOND) {
+      fromSecond.setSelected(true);
+    } else {
+      fromFirst.setSelected(true);
+    }
+    VBox attrBox = new VBox(4, fromFirst, fromSecond);
+
+    Runnable syncAttrEnabled = () -> {
+      boolean subtractSelected = subtract.isSelected();
+      fromFirst.setDisable(subtractSelected);
+      fromSecond.setDisable(subtractSelected);
+      if (subtractSelected) {
+        fromFirst.setSelected(true);
+      }
     };
-    Label hint = AppDialog.hintLabel(hintText);
-
-    VBox list = new VBox(4);
-    list.setPadding(new Insets(0, 4, 4, 2));
-    List<CheckBox> boxes = new ArrayList<>(candidates.size());
-    for (BedTrack bed : candidates) {
-      CheckBox box = new CheckBox(bed.getName());
-      box.setSelected(initial.contains(bed));
-      box.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11px;");
-      box.setUserData(bed);
-      box.setCursor(Cursor.HAND);
-      boxes.add(box);
-      list.getChildren().add(box);
-    }
-
-    // For subtract, put preselected tracks first in display order if present.
-    if (op == BedSetOperations.Op.SUBTRACT && !initial.isEmpty()) {
-      list.getChildren().clear();
-      List<CheckBox> ordered = new ArrayList<>();
-      for (BedTrack bed : candidates) {
-        if (initial.contains(bed)) {
-          for (CheckBox box : boxes) {
-            if (box.getUserData() == bed) {
-              ordered.add(box);
-              break;
-            }
-          }
-        }
-      }
-      for (CheckBox box : boxes) {
-        if (!ordered.contains(box)) {
-          ordered.add(box);
-        }
-      }
-      boxes.clear();
-      boxes.addAll(ordered);
-      list.getChildren().addAll(boxes);
-    }
+    opGroup.selectedToggleProperty().addListener((obs, o, n) -> syncAttrEnabled.run());
+    syncAttrEnabled.run();
 
     Button cancel = AppDialog.secondaryButton("Cancel");
     cancel.setCancelButton(true);
-    Button run = AppDialog.primaryButton(op.label());
+    Button run = AppDialog.primaryButton("Apply");
     run.setDefaultButton(true);
 
-    Runnable sync = () -> {
-      int n = 0;
-      for (CheckBox box : boxes) {
-        if (box.isSelected()) {
-          n++;
-        }
-      }
-      run.setDisable(n < 2);
-    };
-    for (CheckBox box : boxes) {
-      box.selectedProperty().addListener((obs, o, n) -> sync.run());
-    }
-    sync.run();
-
-    ScrollPane scroll = new ScrollPane(list);
-    scroll.setFitToWidth(true);
-    scroll.setPrefHeight(Math.min(320, 28 + candidates.size() * 26));
-    scroll.setStyle(
-        "-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
-    VBox.setVgrow(scroll, Priority.ALWAYS);
-
-    @SuppressWarnings("unchecked")
-    final List<BedTrack>[] chosen = new List[1];
+    final OverlayChoice[] chosen = new OverlayChoice[1];
     cancel.setOnAction(e -> dialog.close());
     run.setOnAction(e -> {
-      List<BedTrack> selected = new ArrayList<>();
-      for (CheckBox box : boxes) {
-        if (box.isSelected() && box.getUserData() instanceof BedTrack bed) {
-          selected.add(bed);
-        }
+      Op op;
+      if (union.isSelected()) {
+        op = Op.UNION;
+      } else if (subtract.isSelected()) {
+        op = Op.SUBTRACT;
+      } else {
+        op = Op.INTERSECT;
       }
-      if (selected.size() < 2) {
-        return;
-      }
-      chosen[0] = selected;
+      AttributeSource attrs =
+          fromSecond.isSelected() ? AttributeSource.SECOND : AttributeSource.FIRST;
+      chosen[0] = new OverlayChoice(op, attrs);
       dialog.close();
     });
 
@@ -155,26 +126,34 @@ public final class BedSetOperationDialog {
     HBox buttons = new HBox(8, spacer, cancel, run);
     buttons.setAlignment(Pos.CENTER_RIGHT);
 
-    VBox root = new VBox(12, title, hint, scroll, buttons);
+    VBox root = new VBox(12, title, hint, opLabel, opBox, attrLabel, attrBox, buttons);
     root.setPadding(new Insets(16));
     root.setStyle(AppDialog.PANEL_STYLE);
-    dialog.setScene(new Scene(root, 420, Math.min(480, 160 + candidates.size() * 26)));
+    dialog.setScene(new Scene(root, 420, 360));
     dialog.showAndWait();
-    return Optional.ofNullable(chosen[0]).map(List::copyOf);
+    return Optional.ofNullable(chosen[0]);
   }
 
-  /** Collect all BED tracks from a list (displayed order). */
-  public static List<BedTrack> bedTracks(Iterable<? extends Track> tracks) {
-    List<BedTrack> out = new ArrayList<>();
-    if (tracks == null) {
-      return out;
+  private static String displayName(String name, String fallback) {
+    if (name == null || name.isBlank()) {
+      return fallback;
     }
-    Set<BedTrack> seen = new LinkedHashSet<>();
-    for (Track track : tracks) {
-      if (track instanceof BedTrack bed && seen.add(bed)) {
-        out.add(bed);
-      }
-    }
-    return out;
+    return name.length() > 40 ? name.substring(0, 38) + "…" : name;
+  }
+
+  private static Label sectionLabel(String text) {
+    Label label = new Label(text);
+    label.setStyle(
+        "-fx-text-fill: " + AppTheme.chrome().textHex()
+            + "; -fx-font-size: 12px; -fx-font-weight: bold;");
+    return label;
+  }
+
+  private static RadioButton radio(String text, ToggleGroup group) {
+    RadioButton button = new RadioButton(text);
+    button.setToggleGroup(group);
+    button.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 11px;");
+    button.setCursor(Cursor.HAND);
+    return button;
   }
 }

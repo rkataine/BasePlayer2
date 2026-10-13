@@ -100,6 +100,8 @@ public class BedTrack extends AbstractTrack {
   private final IndexedBedReader indexedReader;
   private final List<BedTrack> derivedSources;
   private final boolean fullyMaterialized;
+  /** Set on overlay-derived tracks so settings can re-run the same dialog. */
+  private BedSetOperations.OverlayChoice overlayChoice;
 
   /**
    * Per-chromosome viewport caches. A single shared cache ping-ponged between
@@ -295,6 +297,33 @@ public class BedTrack extends AbstractTrack {
 
   public List<BedTrack> getDerivedSources() {
     return derivedSources;
+  }
+
+  public boolean isOverlayDerived() {
+    return isDerived() && derivedSources.size() >= 2;
+  }
+
+  public BedSetOperations.OverlayChoice getOverlayChoice() {
+    return overlayChoice;
+  }
+
+  public void setOverlayChoice(BedSetOperations.OverlayChoice overlayChoice) {
+    this.overlayChoice = overlayChoice;
+  }
+
+  /** Copy display / annotation settings when replacing a track with an overlay result. */
+  public void copyAppearanceFrom(BedTrack other) {
+    if (other == null) {
+      return;
+    }
+    setVisible(other.isVisible());
+    setBarHeightPixels(other.getBarHeightPixels());
+    setShowScores(other.isShowScores());
+    setVariantAnnotationMode(other.getVariantAnnotationMode());
+    setColor(other.getColor());
+    setMinValue(other.getMinValue());
+    setMaxValue(other.getMaxValue());
+    setAggregateDisabled(other.isAggregateDisabled());
   }
 
   public void setOnDataLoaded(Runnable callback) {
@@ -577,6 +606,35 @@ public class BedTrack extends AbstractTrack {
       return;
     }
     requestRegion(chromosome, start, end, true);
+  }
+
+  /**
+   * Synchronously fill this tabix track's viewport cache to match {@code source}'s
+   * currently loaded windows (for in-place overlay set-ops before the overlay
+   * track has been drawn).
+   */
+  public void syncViewportCacheFrom(BedTrack source) {
+    if (indexedReader == null || source == null) {
+      return;
+    }
+    if (source.indexedReader != null) {
+      for (Map.Entry<String, RegionSlot> e : source.regionSlots.entrySet()) {
+        RegionSlot slot = e.getValue();
+        if (slot != null && slot.start >= 0 && slot.end > slot.start) {
+          requestRegion(e.getKey(), slot.start, slot.end, false);
+        }
+      }
+      return;
+    }
+    // Materialized source: nothing to copy; caller may prepareRegionSync for nav.
+  }
+
+  /** Blocking tabix load for overlay set-ops. */
+  public void prepareRegionSync(String chromosome, long start, long end) {
+    if (indexedReader == null) {
+      return;
+    }
+    requestRegion(chromosome, start, end, false);
   }
 
   private void requestRegion(String chromosome, long start, long end, boolean async) {

@@ -26,7 +26,8 @@ import javafx.scene.text.TextAlignment;
 
 /**
  * Feature-column aggregate band: feature-name density and clickable name legends.
- * Region set-ops (union / intersect / subtract) live in feature master settings.
+ * Region set-ops (union / intersect / subtract) are in-place overlays via the
+ * feature BED row + control.
  */
 public class FeatureAggregateCanvas extends AggregateBandCanvas {
 

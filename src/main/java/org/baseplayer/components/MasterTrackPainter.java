@@ -407,8 +407,12 @@ public class MasterTrackPainter {
     double densH = areaH - svH;
 
     VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
-    List<ClusterHit> pendingClusterTags = drawClusterBackgrounds(
-        gc, drawStack, canvasWidth, 2, densH, variants, activeFilter);
+    // Cluster bands only at close zoom (same gate as precise density bars) —
+    // at chrom / gene-far zoom they clutter the pyramid overview.
+    List<ClusterHit> pendingClusterTags = zoomedInPrecise
+        ? drawClusterBackgrounds(
+            gc, drawStack, canvasWidth, 2, densH, variants, activeFilter)
+        : List.of();
 
     int scaleMax = 1;
     if (zoomedInPrecise) {
@@ -430,6 +434,7 @@ public class MasterTrackPainter {
 
   /**
    * Faint genomic bands for comparison-window clusters overlapping the view.
+   * Caller should only invoke at close zoom ({@code zoomedInPrecise}).
    * Returns placeholder hits (full highlight rects) for tag painting / click targets.
    */
   private List<ClusterHit> drawClusterBackgrounds(

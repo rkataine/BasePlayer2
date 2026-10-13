@@ -31,8 +31,22 @@ public final class TrackSettingsPopup {
   private Runnable pendingOnApply;
 
   public void show(Track track, Runnable onApply, Window owner, double x, double y) {
+    show(track, onApply, null, owner, x, y);
+  }
+
+  /**
+   * @param onChangeOverlay when non-null and track is an overlay-derived BED,
+   *     shows a "Change operation…" action that invokes this runnable
+   */
+  public void show(
+      Track track,
+      Runnable onApply,
+      Runnable onChangeOverlay,
+      Window owner,
+      double x,
+      double y) {
     pendingOnApply = onApply;
-    PopupContent content = buildContent(track, onApply);
+    PopupContent content = buildContent(track, onApply, onChangeOverlay);
     infoPopup.setOnHidden(() -> flushTextFields());
     infoPopup.show(content, owner, x, y);
   }
@@ -40,8 +54,9 @@ public final class TrackSettingsPopup {
   public void hide() { infoPopup.hide(); }
   public boolean isShowing() { return infoPopup.isShowing(); }
 
-  private PopupContent buildContent(Track track, Runnable onApply) {
+  private PopupContent buildContent(Track track, Runnable onApply, Runnable onChangeOverlay) {
     PopupContent c = new PopupContent()
+        .withoutSelectableText()
         .title(track.getName() + " Settings", Color.LIGHTGRAY);
 
     pendingTrack = track;
@@ -79,6 +94,16 @@ public final class TrackSettingsPopup {
               true,
               () -> openFeaturePicker(bed, onApply)));
         }
+      }
+      if (bed.isOverlayDerived() && onChangeOverlay != null) {
+        String opLabel = bed.getOverlayChoice() != null
+            ? bed.getOverlayChoice().op().label()
+            : bed.getType();
+        c.row("Overlay", opLabel != null ? opLabel : "set operation");
+        c.actions(new PopupContent.ActionButton(
+            "Change operation…",
+            true,
+            onChangeOverlay));
       }
       c.separator();
 

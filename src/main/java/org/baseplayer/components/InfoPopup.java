@@ -8,6 +8,7 @@ import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.StringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
@@ -180,27 +181,32 @@ public class InfoPopup {
         }
 
         // ── Selectable TextArea for copyable body text (excludes headers) ───
-        String text = popupContent.toSelectablePlainText();
-        if (!text.isEmpty()) {
-            TextArea ta = new TextArea(text);
-            ta.setEditable(false);
-            ta.setWrapText(true);
-            ta.setFont(AppFonts.getMonoFont(11));
-            int lineCount = (int) text.chars().filter(c -> c == '\n').count() + 1;
-            ta.setPrefRowCount(Math.min(lineCount, 22));
-            ta.setMaxWidth(maxWidth - 24);
-            ta.setStyle(
-                    "-fx-control-inner-background: #1a1a1a;" +
-                    "-fx-text-fill: #d3d3d3;"                +
-                    "-fx-highlight-fill: #4477aa;"           +
-                    "-fx-highlight-text-fill: white;"        +
-                    "-fx-focus-color: #4477aa;"              +
-                    "-fx-faint-focus-color: transparent;"    +
-                    "-fx-background-color: #1a1a1a;"         +
-                    "-fx-background-radius: 4;"              +
-                    "-fx-border-color: #444;"                +
-                    "-fx-border-radius: 4;");
-            content.getChildren().add(ta);
+        boolean useSelectableText = popupContent.isSelectableTextEnabled();
+        boolean addedTextArea = false;
+        if (useSelectableText) {
+            String text = popupContent.toSelectablePlainText();
+            if (!text.isEmpty()) {
+                TextArea ta = new TextArea(text);
+                ta.setEditable(false);
+                ta.setWrapText(true);
+                ta.setFont(AppFonts.getMonoFont(11));
+                int lineCount = (int) text.chars().filter(c -> c == '\n').count() + 1;
+                ta.setPrefRowCount(Math.min(lineCount, 22));
+                ta.setMaxWidth(maxWidth - 24);
+                ta.setStyle(
+                        "-fx-control-inner-background: #1a1a1a;" +
+                        "-fx-text-fill: #d3d3d3;"                +
+                        "-fx-highlight-fill: #4477aa;"           +
+                        "-fx-highlight-text-fill: white;"        +
+                        "-fx-focus-color: #4477aa;"              +
+                        "-fx-faint-focus-color: transparent;"    +
+                        "-fx-background-color: #1a1a1a;"         +
+                        "-fx-background-radius: 4;"              +
+                        "-fx-border-color: #444;"                +
+                        "-fx-border-radius: 4;");
+                content.getChildren().add(ta);
+                addedTextArea = true;
+            }
         }
 
         // ── Interactive items (navigation links, buttons, inputs) ────────────
@@ -209,9 +215,18 @@ public class InfoPopup {
                      i instanceof PopupContent.CustomNodeItem    ||
                      i instanceof PopupContent.ActionButtonsItem ||
                      i instanceof PopupContent.CheckboxItem      ||
-                     i instanceof PopupContent.InputRowItem);
+                     i instanceof PopupContent.InputRowItem ||
+                     i instanceof PopupContent.ScrollListItem ||
+                     (!useSelectableText && (
+                         i instanceof PopupContent.InfoRowItem
+                             || i instanceof PopupContent.SeparatorItem
+                             || i instanceof PopupContent.TextItem
+                             || i instanceof PopupContent.SectionTitleItem
+                             || i instanceof PopupContent.BadgeRowItem)));
         if (hasInteractive) {
-            content.getChildren().add(new Separator());
+            if (addedTextArea) {
+                content.getChildren().add(new Separator());
+            }
             for (PopupContent.Item item : popupContent.items()) {
                 switch (item) {
                     case PopupContent.ClickableRowItem c ->
@@ -224,7 +239,19 @@ public class InfoPopup {
                         renderCheckbox(cb.label(), cb.selected());
                     case PopupContent.InputRowItem ir ->
                         renderInputRow(ir.label(), ir.value(), ir.disabled());
-                    default -> { /* text items already in TextArea */ }
+                    case PopupContent.ScrollListItem sl ->
+                        renderScrollList(sl.nodes(), sl.maxHeight());
+                    case PopupContent.InfoRowItem r when !useSelectableText ->
+                        renderInfoRow(r.label(), r.value(), r.valueColor());
+                    case PopupContent.SeparatorItem _ when !useSelectableText ->
+                        content.getChildren().add(new Separator());
+                    case PopupContent.TextItem t when !useSelectableText ->
+                        renderPlainText(t.text());
+                    case PopupContent.SectionTitleItem s when !useSelectableText ->
+                        renderSectionTitle(s.title());
+                    case PopupContent.BadgeRowItem b when !useSelectableText ->
+                        renderBadges(b.badges());
+                    default -> { /* headers already rendered; text items in TextArea */ }
                 }
             }
         }
@@ -269,6 +296,79 @@ public class InfoPopup {
     /** Returns {@code true} if the popup is currently visible. */
     public boolean isShowing() {
         return popup.isShowing();
+    }
+
+    private void renderInfoRow(String label, String value, Color valueColor) {
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_LEFT);
+
+        Label labelNode = new Label(label + ":");
+        labelNode.setFont(AppFonts.getUIFont());
+        labelNode.setTextFill(Color.GRAY);
+        labelNode.setMinWidth(LABEL_MIN_WIDTH);
+
+        Label valueNode = new Label(value != null ? value : "");
+        valueNode.setFont(AppFonts.getUIFont());
+        valueNode.setTextFill(valueColor != null ? valueColor : Color.LIGHTGRAY);
+        valueNode.setWrapText(true);
+        valueNode.setMaxWidth(maxWidth - LABEL_MIN_WIDTH - 40);
+
+        row.getChildren().addAll(labelNode, valueNode);
+        content.getChildren().add(row);
+    }
+
+    private void renderPlainText(String text) {
+        Label label = new Label(text != null ? text : "");
+        label.setFont(AppFonts.getUIFont(11));
+        label.setTextFill(Color.LIGHTGRAY);
+        label.setWrapText(true);
+        label.setMaxWidth(maxWidth - 28);
+        content.getChildren().add(label);
+    }
+
+    private void renderSectionTitle(String title) {
+        Label label = new Label(title != null ? title : "");
+        label.setFont(AppFonts.getBoldFont(12));
+        label.setTextFill(Color.GRAY);
+        label.setMaxWidth(maxWidth - 28);
+        content.getChildren().add(label);
+    }
+
+    private void renderBadges(List<PopupContent.Badge> badges) {
+        if (badges == null || badges.isEmpty()) {
+            return;
+        }
+        HBox row = new HBox(6);
+        row.setAlignment(Pos.CENTER_LEFT);
+        for (PopupContent.Badge badge : badges) {
+            Label pill = new Label(badge.text() != null ? badge.text() : "");
+            pill.setFont(AppFonts.getUIFont(10));
+            pill.setTextFill(badge.textColor() != null ? badge.textColor() : Color.WHITE);
+            Color bg = badge.bgColor() != null ? badge.bgColor() : Color.web("#555");
+            String hex = String.format("#%02X%02X%02X",
+                (int) Math.round(bg.getRed() * 255),
+                (int) Math.round(bg.getGreen() * 255),
+                (int) Math.round(bg.getBlue() * 255));
+            pill.setStyle(
+                "-fx-background-color: " + hex + ";"
+                    + "-fx-background-radius: 8;"
+                    + "-fx-padding: 1 7 1 7;");
+            row.getChildren().add(pill);
+        }
+        content.getChildren().add(row);
+    }
+
+    private void renderScrollList(List<Node> nodes, double maxHeight) {
+        VBox list = new VBox(4);
+        if (nodes != null) {
+            list.getChildren().addAll(nodes);
+        }
+        ScrollPane scroll = new ScrollPane(list);
+        scroll.setFitToWidth(true);
+        scroll.setPrefHeight(Math.max(40, maxHeight));
+        scroll.setMaxHeight(Math.max(40, maxHeight));
+        scroll.setStyle(SCROLL_STYLE);
+        content.getChildren().add(scroll);
     }
 
     private void renderClickableRow(String label, String value, Runnable action) {

@@ -96,6 +96,51 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
     featureTracks.add(track);
   }
 
+  /**
+   * Replace {@code old} with {@code replacement} at the same backing index.
+   * Does not dispose {@code old} when it is retained as a derived source of
+   * {@code replacement} (in-place BED overlay).
+   */
+  public void replaceFeatureTrack(Track old, Track replacement) {
+    if (old == null || replacement == null) {
+      throw new IllegalArgumentException("old and replacement tracks are required");
+    }
+    int index = featureTracks.indexOf(old);
+    if (index < 0) {
+      throw new IllegalArgumentException("Track is not in the feature track list");
+    }
+    boolean oldWasAnnotating =
+        old instanceof org.baseplayer.features.BedTrack oldBed
+            && oldBed.getVariantAnnotationMode().isActive();
+    boolean replacementAnnotates =
+        replacement instanceof org.baseplayer.features.BedTrack newBed
+            && newBed.getVariantAnnotationMode().isActive();
+    if (oldWasAnnotating) {
+      // Drop old from annotation without a full refresh yet — replacement may
+      // keep the same mode and we refresh once after the swap.
+      ((org.baseplayer.features.BedTrack) old).setVariantAnnotationMode(
+          org.baseplayer.features.BedVariantAnnotation.Mode.OFF);
+    }
+    featureTracks.set(index, replacement);
+    boolean disposeOld = true;
+    if (replacement instanceof org.baseplayer.features.BedTrack bed) {
+      for (org.baseplayer.features.BedTrack source : bed.getDerivedSources()) {
+        if (source == old) {
+          disposeOld = false;
+          break;
+        }
+      }
+    }
+    if (disposeOld) {
+      old.dispose();
+    }
+    if (oldWasAnnotating || replacementAnnotates) {
+      org.baseplayer.features.BedVariantAnnotation.bumpAndRefreshVariants();
+    }
+    bumpSelectionRevision();
+    bumpAggregateRevision();
+  }
+
   public void removeFeatureTrack(Track track) {
     if (track == null) {
       return;

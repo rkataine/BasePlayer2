@@ -3,7 +3,6 @@ package org.baseplayer.features;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -13,7 +12,7 @@ import org.baseplayer.io.readers.BedFileReader.BedFeature;
 import javafx.scene.paint.Color;
 
 /**
- * Chromosome-wise BED interval set operations for feature-track aggregate ops.
+ * Chromosome-wise BED interval set operations for overlaying one BED onto another.
  */
 public final class BedSetOperations {
 
@@ -33,29 +32,54 @@ public final class BedSetOperations {
     }
   }
 
+  /**
+   * Which input track supplies name / strand / color on result intervals
+   * (Intersect and Union). Subtract always keeps the base (first) track attrs.
+   */
+  public enum AttributeSource {
+    FIRST,
+    SECOND
+  }
+
+  /** Result of the overlay dialog: operation + which side’s attrs to keep. */
+  public record OverlayChoice(Op op, AttributeSource attributeSource) {
+    public OverlayChoice {
+      if (op == null) {
+        throw new IllegalArgumentException("op is null");
+      }
+      if (attributeSource == null) {
+        attributeSource = AttributeSource.FIRST;
+      }
+    }
+  }
+
   private BedSetOperations() {}
 
   /**
-   * Apply a set operation using each track's <em>currently loaded</em> features
+   * Overlay {@code second} onto {@code first} using currently loaded features
    * (full genome for materialized tracks; viewport cache for tabix tracks).
    */
-  public static BedTrack apply(Op op, List<BedTrack> sources) {
-    if (sources == null || sources.size() < 2) {
-      throw new IllegalArgumentException("Need at least two BED tracks");
+  public static BedTrack apply(
+      Op op, BedTrack first, BedTrack second, AttributeSource attributeSource) {
+    if (op == null) {
+      throw new IllegalArgumentException("op is null");
     }
-    for (BedTrack source : sources) {
-      if (source == null) {
-        throw new IllegalArgumentException("BED track is null");
-      }
+    if (first == null || second == null) {
+      throw new IllegalArgumentException("Need two BED tracks");
     }
+    AttributeSource attrs =
+        attributeSource != null ? attributeSource : AttributeSource.FIRST;
+    List<BedTrack> sources = List.of(first, second);
     Map<String, List<BedFeature>> result = switch (op) {
-      case UNION -> union(sources);
-      case INTERSECT -> intersect(sources);
-      case SUBTRACT -> subtract(sources);
+      case UNION -> union(first, second, attrs);
+      case INTERSECT -> intersect(first, second, attrs);
+      case SUBTRACT -> subtract(first, second);
     };
-    String chromPrefix = sources.get(0).getChromPrefix();
+    String chromPrefix = first.getChromPrefix();
     String name = buildResultName(op, sources);
-    return BedTrack.derived(name, op.label(), result, chromPrefix, sources);
+    BedTrack derived = BedTrack.derived(name, op.label(), result, chromPrefix, sources);
+    derived.setOverlayChoice(new OverlayChoice(op, attrs));
+    return derived;
   }
 
   public static String buildResultName(Op op, List<BedTrack> sources) {
@@ -81,55 +105,48 @@ public final class BedSetOperations {
     return sb.toString();
   }
 
-  static Map<String, List<BedFeature>> union(List<BedTrack> sources) {
-    Set<String> chroms = collectLoadedChromosomes(sources);
+  static Map<String, List<BedFeature>> union(
+      BedTrack first, BedTrack second, AttributeSource attrs) {
+    Set<String> chroms = collectLoadedChromosomes(List.of(first, second));
     Map<String, List<BedFeature>> out = new HashMap<>();
     for (String chrom : chroms) {
       List<Interval> intervals = new ArrayList<>();
-      for (BedTrack track : sources) {
-        for (BedFeature f : track.getLoadedFeatures(chrom)) {
-          intervals.add(Interval.from(f));
-        }
+      for (BedFeature f : first.getLoadedFeatures(chrom)) {
+        intervals.add(Interval.from(f, 0));
       }
-      out.put(chrom, mergeOverlapping(chrom, intervals));
+      for (BedFeature f : second.getLoadedFeatures(chrom)) {
+        intervals.add(Interval.from(f, 1));
+      }
+      out.put(chrom, toFeatures(chrom, mergeOverlappingIntervals(intervals, attrs)));
     }
     return out;
   }
 
-  static Map<String, List<BedFeature>> intersect(List<BedTrack> sources) {
-    Set<String> chroms = collectLoadedChromosomes(sources);
+  static Map<String, List<BedFeature>> intersect(
+      BedTrack first, BedTrack second, AttributeSource attrs) {
+    Set<String> chroms = collectLoadedChromosomes(List.of(first, second));
     Map<String, List<BedFeature>> out = new HashMap<>();
     for (String chrom : chroms) {
-      List<Interval> current = toIntervals(sources.get(0).getLoadedFeatures(chrom));
-      for (int t = 1; t < sources.size() && !current.isEmpty(); t++) {
-        current = intersectLists(current, toIntervals(sources.get(t).getLoadedFeatures(chrom)));
-      }
-      out.put(chrom, toFeatures(chrom, current));
+      List<Interval> a = toIntervals(first.getLoadedFeatures(chrom), 0);
+      List<Interval> b = toIntervals(second.getLoadedFeatures(chrom), 1);
+      out.put(chrom, toFeatures(chrom, intersectLists(a, b, attrs)));
     }
     return out;
   }
 
-  /** First track minus union of the rest (loaded features only). */
-  static Map<String, List<BedFeature>> subtract(List<BedTrack> sources) {
-    Set<String> chroms = collectLoadedChromosomes(sources);
+  /** First track minus second (loaded features only). */
+  static Map<String, List<BedFeature>> subtract(BedTrack first, BedTrack second) {
+    Set<String> chroms = collectLoadedChromosomes(List.of(first, second));
     Map<String, List<BedFeature>> out = new HashMap<>();
-    BedTrack base = sources.get(0);
-    List<BedTrack> others = sources.subList(1, sources.size());
     for (String chrom : chroms) {
-      List<Interval> baseIntervals = toIntervals(base.getLoadedFeatures(chrom));
-      List<Interval> subtractors = new ArrayList<>();
-      for (BedTrack track : others) {
-        for (BedFeature f : track.getLoadedFeatures(chrom)) {
-          subtractors.add(Interval.from(f));
-        }
-      }
-      List<Interval> mergedSub = mergeOverlappingIntervals(subtractors);
+      List<Interval> baseIntervals = toIntervals(first.getLoadedFeatures(chrom), 0);
+      List<Interval> subtractors = toIntervals(second.getLoadedFeatures(chrom), 1);
+      List<Interval> mergedSub = mergeOverlappingIntervals(subtractors, AttributeSource.FIRST);
       out.put(chrom, toFeatures(chrom, subtractLists(baseIntervals, mergedSub)));
     }
     return out;
   }
 
-  /** Chromosomes that have at least one loaded feature in any source track. */
   private static Set<String> collectLoadedChromosomes(List<BedTrack> sources) {
     Set<String> chroms = new TreeSet<>();
     for (BedTrack track : sources) {
@@ -138,20 +155,17 @@ public final class BedSetOperations {
     return chroms;
   }
 
-  private static List<Interval> toIntervals(List<BedFeature> features) {
+  private static List<Interval> toIntervals(List<BedFeature> features, int sourceIndex) {
     List<Interval> list = new ArrayList<>(features.size());
     for (BedFeature f : features) {
-      list.add(Interval.from(f));
+      list.add(Interval.from(f, sourceIndex));
     }
     list.sort(Comparator.comparingLong((Interval i) -> i.start).thenComparingLong(i -> i.end));
     return list;
   }
 
-  private static List<BedFeature> mergeOverlapping(String chrom, List<Interval> intervals) {
-    return toFeatures(chrom, mergeOverlappingIntervals(intervals));
-  }
-
-  private static List<Interval> mergeOverlappingIntervals(List<Interval> intervals) {
+  private static List<Interval> mergeOverlappingIntervals(
+      List<Interval> intervals, AttributeSource attrs) {
     if (intervals.isEmpty()) {
       return List.of();
     }
@@ -162,7 +176,7 @@ public final class BedSetOperations {
     for (int i = 1; i < sorted.size(); i++) {
       Interval next = sorted.get(i);
       if (next.start <= cur.end) {
-        cur = cur.merge(next);
+        cur = cur.merge(next, attrs);
       } else {
         merged.add(cur);
         cur = next;
@@ -172,7 +186,8 @@ public final class BedSetOperations {
     return merged;
   }
 
-  private static List<Interval> intersectLists(List<Interval> a, List<Interval> b) {
+  private static List<Interval> intersectLists(
+      List<Interval> a, List<Interval> b, AttributeSource attrs) {
     List<Interval> out = new ArrayList<>();
     int i = 0;
     int j = 0;
@@ -182,9 +197,9 @@ public final class BedSetOperations {
       long start = Math.max(x.start, y.start);
       long end = Math.min(x.end, y.end);
       if (start < end) {
-        Color color = x.color != null ? x.color : y.color;
+        Interval preferred = attrs == AttributeSource.SECOND ? y : x;
         out.add(new Interval(
-            start, end, joinNames(x.name, y.name), joinStrands(x.strand, y.strand), color));
+            start, end, preferred.name, preferred.strand, preferred.color, preferred.sourceIndex));
       }
       if (x.end < y.end) {
         i++;
@@ -217,7 +232,7 @@ public final class BedSetOperations {
         Interval c = cutters.get(k);
         if (c.start > cursor) {
           out.add(new Interval(
-              cursor, Math.min(c.start, b.end), b.name, b.strand, b.color));
+              cursor, Math.min(c.start, b.end), b.name, b.strand, b.color, b.sourceIndex));
         }
         cursor = Math.max(cursor, c.end);
         if (cursor >= b.end) {
@@ -226,7 +241,7 @@ public final class BedSetOperations {
         k++;
       }
       if (cursor < b.end) {
-        out.add(new Interval(cursor, b.end, b.name, b.strand, b.color));
+        out.add(new Interval(cursor, b.end, b.name, b.strand, b.color, b.sourceIndex));
       }
     }
     return out;
@@ -236,41 +251,9 @@ public final class BedSetOperations {
     List<BedFeature> features = new ArrayList<>(intervals.size());
     for (Interval i : intervals) {
       // Keep source itemRgb when present; otherwise leave null for name-hash fallback.
-      Color color = i.color;
-      features.add(new BedFeature(chrom, i.start, i.end, i.name, 0, i.strand, color));
+      features.add(new BedFeature(chrom, i.start, i.end, i.name, 0, i.strand, i.color));
     }
     return features;
-  }
-
-  private static String joinNames(String a, String b) {
-    if (a == null || a.isEmpty()) {
-      return b == null ? "" : b;
-    }
-    if (b == null || b.isEmpty() || a.equals(b)) {
-      return a;
-    }
-    Set<String> parts = new LinkedHashSet<>();
-    for (String p : a.split(";")) {
-      if (!p.isBlank()) {
-        parts.add(p.trim());
-      }
-    }
-    for (String p : b.split(";")) {
-      if (!p.isBlank()) {
-        parts.add(p.trim());
-      }
-    }
-    return String.join(";", parts);
-  }
-
-  private static String joinStrands(String a, String b) {
-    if (a == null || a.isEmpty() || ".".equals(a)) {
-      return b == null || b.isEmpty() ? "." : b;
-    }
-    if (b == null || b.isEmpty() || ".".equals(b) || a.equals(b)) {
-      return a;
-    }
-    return ".";
   }
 
   private static final class Interval {
@@ -279,27 +262,35 @@ public final class BedSetOperations {
     final String name;
     final String strand;
     final Color color;
+    final int sourceIndex;
 
-    Interval(long start, long end, String name, String strand, Color color) {
+    Interval(long start, long end, String name, String strand, Color color, int sourceIndex) {
       this.start = start;
       this.end = end;
       this.name = name == null ? "" : name;
       this.strand = strand == null || strand.isEmpty() ? "." : strand;
       this.color = color;
+      this.sourceIndex = sourceIndex;
     }
 
-    static Interval from(BedFeature f) {
-      return new Interval(f.start(), f.end(), f.name(), f.strand(), f.color());
+    static Interval from(BedFeature f, int sourceIndex) {
+      return new Interval(f.start(), f.end(), f.name(), f.strand(), f.color(), sourceIndex);
     }
 
-    Interval merge(Interval other) {
-      Color mergedColor = color != null ? color : other.color;
+    Interval merge(Interval other, AttributeSource attrs) {
+      Interval preferred;
+      if (attrs == AttributeSource.SECOND) {
+        preferred = other.sourceIndex == 1 ? other : (sourceIndex == 1 ? this : other);
+      } else {
+        preferred = sourceIndex == 0 ? this : (other.sourceIndex == 0 ? other : this);
+      }
       return new Interval(
           Math.min(start, other.start),
           Math.max(end, other.end),
-          joinNames(name, other.name),
-          joinStrands(strand, other.strand),
-          mergedColor);
+          preferred.name,
+          preferred.strand,
+          preferred.color,
+          preferred.sourceIndex);
     }
   }
 }

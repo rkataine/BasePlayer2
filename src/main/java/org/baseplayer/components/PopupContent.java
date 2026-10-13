@@ -36,6 +36,12 @@ import javafx.scene.paint.Color;
  */
 public class PopupContent {
 
+    /**
+     * When false, {@link InfoPopup} skips the selectable body {@code TextArea}
+     * (used by settings UIs that are checkbox/input driven).
+     */
+    private boolean selectableText = true;
+
     // ── Item type hierarchy ──────────────────────────────────────────────────
 
     /**
@@ -153,6 +159,19 @@ public class PopupContent {
     private final List<Item> items = new ArrayList<>();
 
     // ── Fluent builder methods ───────────────────────────────────────────────
+
+    /**
+     * Disable the copyable body text box under the header. Status rows are then
+     * rendered as normal labels alongside controls (for settings popups).
+     */
+    public PopupContent withoutSelectableText() {
+        this.selectableText = false;
+        return this;
+    }
+
+    public boolean isSelectableTextEnabled() {
+        return selectableText;
+    }
 
     /**
      * Add a large coloured title.
