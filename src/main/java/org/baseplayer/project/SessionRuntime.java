@@ -595,15 +595,31 @@ public final class SessionRuntime {
 
     if (document.sampleViewport != null) {
       applyViewport(samples, document.sampleViewport);
-      if (document.sampleViewport.masterBandHeight > 0) {
-        samples.setMasterTrackHeight(document.sampleViewport.masterBandHeight);
-      }
+      restoreMasterBand(samples, document.sampleViewport, true);
     }
     if (document.featureViewport != null) {
       applyViewport(features, document.featureViewport);
-      if (document.featureViewport.masterBandHeight > 0) {
-        features.setMasterBandHeightPixels(document.featureViewport.masterBandHeight);
-      }
+      restoreMasterBand(features, document.featureViewport, false);
+    }
+  }
+
+  private static void restoreMasterBand(
+      org.baseplayer.services.TrackViewportRegistry registry,
+      ProjectDocument.ViewportSpec spec,
+      boolean defaultAggregatesEnabled) {
+    if (spec == null || registry == null) {
+      return;
+    }
+    boolean aggregatesOn = spec.masterAggregatesEnabled != null
+        ? spec.masterAggregatesEnabled
+        : defaultAggregatesEnabled;
+    // Set property first so height restore is not snapped away by sync logic.
+    registry.masterAggregatesEnabledProperty().set(aggregatesOn);
+    if (aggregatesOn && spec.masterBandHeight > 0) {
+      registry.setMasterBandHeightPixels(spec.masterBandHeight);
+    } else if (!aggregatesOn) {
+      registry.setMasterBandHeightPixels(
+          org.baseplayer.services.TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
     }
   }
 

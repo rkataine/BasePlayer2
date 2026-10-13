@@ -320,6 +320,17 @@ VBox {
   -fx-background-color: -bp-text;
 }
 
+/* Context-menu checkmarks — keep light on dark chrome */
+.check-menu-item:checked > .left-container > .check,
+.check-menu-item:checked > .left-container > .mark {
+  -fx-background-color: -bp-text;
+}
+
+.check-menu-item > .left-container > .check,
+.check-menu-item > .left-container > .mark {
+  -fx-background-color: transparent;
+}
+
 .dark-checkbox:hover .box {
   -fx-border-color: -bp-muted;
 }

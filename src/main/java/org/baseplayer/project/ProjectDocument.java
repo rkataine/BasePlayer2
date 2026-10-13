@@ -167,6 +167,11 @@ public class ProjectDocument {
     public double rowHeight;
     public double scroll;
     public double masterBandHeight;
+    /**
+     * Master aggregate band (density + visible-range slider). Null = legacy default
+     * (samples on, features off).
+     */
+    public Boolean masterAggregatesEnabled;
   }
 
   public static class SampleFilterSpec {

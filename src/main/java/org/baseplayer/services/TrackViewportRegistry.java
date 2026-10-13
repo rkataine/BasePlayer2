@@ -23,6 +23,10 @@ public abstract class TrackViewportRegistry {
   }
 
   public static final double DEFAULT_MASTER_BAND_HEIGHT_PIXELS = 28;
+  /** Tall enough for title bar + visible-range slider chrome. */
+  public static final double EXPANDED_MASTER_BAND_HEIGHT_PIXELS = 82;
+  /** Comfortable height for aggregate density when the slider is not needed. */
+  public static final double AGGREGATE_MASTER_BAND_HEIGHT_PIXELS = 60;
   public static final double DEFAULT_TRACK_ROW_HEIGHT_PIXELS = 20;
   public static final double MINIMUM_TRACK_ROW_HEIGHT_PIXELS = 1;
   /**
@@ -35,6 +39,11 @@ public abstract class TrackViewportRegistry {
   private final BooleanProperty listPointerInside = new SimpleBooleanProperty(false);
   private final DoubleProperty masterBandHeightPixels =
       new SimpleDoubleProperty(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+  /**
+   * When false: title bar only (Add / settings), no visible-range slider, no filter strip,
+   * and no aggregate density work. Height stays at {@link #DEFAULT_MASTER_BAND_HEIGHT_PIXELS}.
+   */
+  private final BooleanProperty masterAggregatesEnabled = new SimpleBooleanProperty(true);
   private final IntegerProperty visibleWindowRevision = new SimpleIntegerProperty(0);
 
   private int firstVisibleTrackSlot = -1;
@@ -383,6 +392,37 @@ public abstract class TrackViewportRegistry {
   public void setMasterBandHeightPixels(double heightPixels) {
     masterBandHeightPixels.set(Math.max(0, heightPixels));
     onVisibleTrackRangeOrRowHeightChanged();
+  }
+
+  public boolean isMasterAggregatesEnabled() {
+    return masterAggregatesEnabled.get();
+  }
+
+  public BooleanProperty masterAggregatesEnabledProperty() {
+    return masterAggregatesEnabled;
+  }
+
+  /**
+   * Enable/disable the master aggregate band (density + visible-range slider + filter strip).
+   * Disabling keeps the Add/settings title bar only; enabling restores a usable height.
+   */
+  public void setMasterAggregatesEnabled(boolean enabled) {
+    if (masterAggregatesEnabled.get() == enabled) {
+      return;
+    }
+    masterAggregatesEnabled.set(enabled);
+    if (!enabled) {
+      setMasterBandHeightPixels(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+    } else if (getDisplayedTrackCount() > 1) {
+      setMasterBandHeightPixels(EXPANDED_MASTER_BAND_HEIGHT_PIXELS);
+    } else {
+      setMasterBandHeightPixels(AGGREGATE_MASTER_BAND_HEIGHT_PIXELS);
+    }
+  }
+
+  /** True when aggregate density / cohort summaries should run and paint. */
+  public boolean shouldPaintMasterAggregates() {
+    return isMasterAggregatesEnabled();
   }
 
   public List<VisibleTrackSlot> buildVisibleTrackSlotList(List<Integer> displayedBackingTrackIndices) {

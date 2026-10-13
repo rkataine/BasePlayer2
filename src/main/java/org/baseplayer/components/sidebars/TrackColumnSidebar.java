@@ -52,7 +52,8 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     }
   }
 
-  protected static final double EXPANDED_MASTER_HEIGHT = 82;
+  protected static final double EXPANDED_MASTER_HEIGHT =
+      TrackViewportRegistry.EXPANDED_MASTER_BAND_HEIGHT_PIXELS;
 
   protected final TrackViewportRegistry trackViewportRegistry;
   protected final Canvas masterHeaderCanvas;
@@ -240,6 +241,9 @@ public abstract class TrackColumnSidebar extends SidebarBase {
    * must not imply slider controls (that used to snap height back to default).
    */
   protected final boolean isControlsExpanded() {
+    if (!trackViewportRegistry.isMasterAggregatesEnabled()) {
+      return false;
+    }
     int trackCount = trackViewportRegistry.getDisplayedTrackCount();
     if (!shouldAutoExpandMasterHeader(trackCount)) {
       return false;
@@ -267,18 +271,27 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     int trackCount = trackViewportRegistry.getDisplayedTrackCount();
     double masterH = trackViewportRegistry.getMasterBandHeightPixels();
 
-    // Multi-track: ensure room for the visible-range slider. Collapse when
-    // tracks drop to 0/1 (New Project / clear) so the empty slider chrome
-    // does not linger. Never snap a user-resized band while still multi-track.
-    if (shouldAutoExpandMasterHeader(trackCount)) {
+    if (!trackViewportRegistry.isMasterAggregatesEnabled()) {
+      // Aggregates off: Add/settings title bar only (no slider / density).
+      if (Math.abs(masterH - TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS) > 0.5) {
+        trackViewportRegistry.setMasterBandHeightPixels(
+            TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+        masterH = TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
+      }
+    } else if (shouldAutoExpandMasterHeader(trackCount)) {
+      // Multi-track: ensure room for the visible-range slider.
       if (masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
         trackViewportRegistry.setMasterBandHeightPixels(EXPANDED_MASTER_HEIGHT);
         masterH = EXPANDED_MASTER_HEIGHT;
       }
-    } else if (masterH > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
-      trackViewportRegistry.setMasterBandHeightPixels(
-          TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
-      masterH = TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
+    } else {
+      // Aggregates on, ≤1 track: keep density band, drop slider-only extra height.
+      double aggregateH = TrackViewportRegistry.AGGREGATE_MASTER_BAND_HEIGHT_PIXELS;
+      if (masterH > EXPANDED_MASTER_HEIGHT - 1
+          || masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+        trackViewportRegistry.setMasterBandHeightPixels(aggregateH);
+        masterH = aggregateH;
+      }
     }
 
     int firstVisible = 0;
@@ -290,7 +303,8 @@ public abstract class TrackColumnSidebar extends SidebarBase {
           trackViewportRegistry.getLastVisibleTrackSlot()));
     }
 
-    boolean rangeControlsVisible = shouldAutoExpandMasterHeader(trackCount)
+    boolean rangeControlsVisible = trackViewportRegistry.isMasterAggregatesEnabled()
+        && shouldAutoExpandMasterHeader(trackCount)
         && masterH > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1;
 
     masterHeaderRenderState = new MasterHeaderRenderState(
@@ -337,8 +351,18 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       return;
     }
     double delta = screenY - dragStartScreenY;
-    trackViewportRegistry.setMasterBandHeightPixels(
-        Math.max(20, Math.min(200, dragStartHeight + delta)));
+    double newHeight = Math.max(
+        TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
+        Math.min(200, dragStartHeight + delta));
+    trackViewportRegistry.setMasterBandHeightPixels(newHeight);
+    // Dragging above title height turns aggregates on; snapping back to title turns them off.
+    if (newHeight > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+      if (!trackViewportRegistry.isMasterAggregatesEnabled()) {
+        trackViewportRegistry.masterAggregatesEnabledProperty().set(true);
+      }
+    } else if (trackViewportRegistry.isMasterAggregatesEnabled()) {
+      trackViewportRegistry.masterAggregatesEnabledProperty().set(false);
+    }
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 

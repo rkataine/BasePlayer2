@@ -152,6 +152,17 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     ContextMenu menu = new ContextMenu();
     menu.setStyle("-fx-background-color: #2B2B2B; -fx-border-color: #555; -fx-border-width: 1;");
 
+    javafx.scene.control.CheckMenuItem showMaster = new javafx.scene.control.CheckMenuItem(
+        "Show master / aggregate band");
+    showMaster.setSelected(featureTrackViewportRegistry.isMasterAggregatesEnabled());
+    showMaster.setOnAction(e -> {
+      featureTrackViewportRegistry.setMasterAggregatesEnabled(showMaster.isSelected());
+      updateFeatureSearchBarVisibility();
+      draw();
+      redrawAfterVisibleTrackRangeChange();
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    });
+
     MenuItem unionItem = new MenuItem("Union…");
     unionItem.setOnAction(e -> runBedSetOperation(BedSetOperations.Op.UNION));
     MenuItem intersectItem = new MenuItem("Intersect…");
@@ -172,6 +183,8 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
       applyFeatureSearchFilter();
     });
     menu.getItems().addAll(
+        showMaster,
+        new SeparatorMenuItem(),
         unionItem,
         intersectItem,
         subtractItem,
@@ -265,6 +278,8 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     featureTrackViewportRegistry.getFeatureTracks().addListener(
         (ListChangeListener<org.baseplayer.features.Track>) change ->
             Platform.runLater(this::updateFeatureSearchBarVisibility));
+    featureTrackViewportRegistry.masterAggregatesEnabledProperty().addListener(
+        (obs, o, n) -> Platform.runLater(this::updateFeatureSearchBarVisibility));
     featureSearchBar.heightProperty().addListener(
         (obs, o, n) -> syncFilterStripHeightToRegistry());
     masterChromeResizeGrip.heightProperty().addListener(
@@ -309,9 +324,15 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     if (featureSearchBar == null) {
       return;
     }
-    boolean show = !featureTrackViewportRegistry.getFeatureTracks().isEmpty();
+    // Filter strip is part of the master/aggregate chrome — hide when aggregates are off.
+    boolean show = featureTrackViewportRegistry.isMasterAggregatesEnabled()
+        && !featureTrackViewportRegistry.getFeatureTracks().isEmpty();
     featureSearchBar.setVisible(show);
     featureSearchBar.setManaged(show);
+    if (masterChromeResizeGrip != null) {
+      masterChromeResizeGrip.setVisible(show);
+      masterChromeResizeGrip.setManaged(show);
+    }
     if (!show) {
       setFeatureReplaceExpanded(false);
     }
@@ -323,7 +344,9 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     if (featureSearchBar != null && featureSearchBar.isManaged() && featureSearchBar.isVisible()) {
       h += featureSearchBar.getHeight();
     }
-    if (masterChromeResizeGrip != null) {
+    if (masterChromeResizeGrip != null
+        && masterChromeResizeGrip.isManaged()
+        && masterChromeResizeGrip.isVisible()) {
       h += masterChromeResizeGrip.getHeight();
     }
     featureTrackViewportRegistry.setFilterStripHeightPixels(h);

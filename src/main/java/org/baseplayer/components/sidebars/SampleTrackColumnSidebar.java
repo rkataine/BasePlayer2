@@ -133,6 +133,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     sampleRegistry.getSampleTracks().addListener(
         (ListChangeListener<SampleTrack>) change ->
             Platform.runLater(this::updateSampleSearchBarVisibility));
+    sampleRegistry.masterAggregatesEnabledProperty().addListener(
+        (obs, o, n) -> Platform.runLater(this::updateSampleSearchBarVisibility));
     sampleSearchBar.heightProperty().addListener((obs, o, n) -> syncFilterStripHeightToRegistry());
     masterChromeResizeGrip.heightProperty().addListener((obs, o, n) -> syncFilterStripHeightToRegistry());
     syncSearchFieldFromRegistry();
@@ -179,14 +181,19 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     return grip;
   }
 
-  /** Hide the filter strip when there are no samples; keep canvas/sidebar rows aligned. */
+  /** Hide the filter strip when no samples, or when master aggregates are off. */
   private void updateSampleSearchBarVisibility() {
     if (sampleSearchBar == null) {
       return;
     }
-    boolean show = !sampleRegistry.getSampleTracks().isEmpty();
+    boolean show = sampleRegistry.isMasterAggregatesEnabled()
+        && !sampleRegistry.getSampleTracks().isEmpty();
     sampleSearchBar.setVisible(show);
     sampleSearchBar.setManaged(show);
+    if (masterChromeResizeGrip != null) {
+      masterChromeResizeGrip.setVisible(show);
+      masterChromeResizeGrip.setManaged(show);
+    }
     if (!show) {
       setSampleReplaceExpanded(false);
       if (sampleSearchField != null && hasSearchText()) {
@@ -206,7 +213,9 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     if (sampleSearchBar != null && sampleSearchBar.isManaged() && sampleSearchBar.isVisible()) {
       h += sampleSearchBar.getHeight();
     }
-    if (masterChromeResizeGrip != null) {
+    if (masterChromeResizeGrip != null
+        && masterChromeResizeGrip.isManaged()
+        && masterChromeResizeGrip.isVisible()) {
       h += masterChromeResizeGrip.getHeight();
     }
     sampleRegistry.setSampleFilterStripHeightPixels(h);
@@ -666,7 +675,21 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
     Label titleLabel = new Label("Global Settings");
     titleLabel.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 13; -fx-font-weight: bold; -fx-padding: 4 8 2 8;");
-    settingsMenu.getItems().addAll(new CustomMenuItem(titleLabel, false), new SeparatorMenuItem());
+    javafx.scene.control.CheckMenuItem showMaster = new javafx.scene.control.CheckMenuItem(
+        "Show master / aggregate band");
+    showMaster.setSelected(sampleRegistry.isMasterAggregatesEnabled());
+    showMaster.setOnAction(e -> {
+      sampleRegistry.setMasterAggregatesEnabled(showMaster.isSelected());
+      updateSampleSearchBarVisibility();
+      draw();
+      redrawAfterVisibleTrackRangeChange();
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    });
+    settingsMenu.getItems().addAll(
+        new CustomMenuItem(titleLabel, false),
+        new SeparatorMenuItem(),
+        showMaster,
+        new SeparatorMenuItem());
 
     // Gather BAM files once for global controls.
     List<AlignmentFile> bamFiles = new ArrayList<>();

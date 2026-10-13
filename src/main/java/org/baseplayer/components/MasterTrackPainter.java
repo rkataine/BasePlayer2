@@ -116,6 +116,13 @@ public class MasterTrackPainter {
   }
 
   public void forceCalculateDensity(DrawStack drawStack) {
+    if (!sampleRegistry.shouldPaintMasterAggregates()) {
+      pyramid = null;
+      pyramidGeneration++;
+      pyramidBusy = false;
+      pyramidRebuildPending = false;
+      return;
+    }
     pyramid = null;
     ensurePyramidAsync(drawStack, true);
   }
@@ -517,6 +524,9 @@ public class MasterTrackPainter {
   }
 
   private void ensurePyramidAsync(DrawStack drawStack, boolean force) {
+    if (!sampleRegistry.shouldPaintMasterAggregates()) {
+      return;
+    }
     VariantList variants = this.variantList;
     if (variants == null || variants.isEmpty() || drawStack == null) {
       return;

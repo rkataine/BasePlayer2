@@ -91,8 +91,17 @@ public class FeatureAggregateCanvas extends AggregateBandCanvas {
       return;
     }
     double delta = event.getScreenY() - resizeStartScreenY;
-    registry.setMasterTrackHeight(
-        Math.max(20, Math.min(200, resizeStartMasterHeight + delta)));
+    double newHeight = Math.max(
+        FeatureTrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
+        Math.min(200, resizeStartMasterHeight + delta));
+    registry.setMasterTrackHeight(newHeight);
+    if (newHeight > FeatureTrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+      if (!registry.isMasterAggregatesEnabled()) {
+        registry.masterAggregatesEnabledProperty().set(true);
+      }
+    } else if (registry.isMasterAggregatesEnabled()) {
+      registry.masterAggregatesEnabledProperty().set(false);
+    }
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
     event.consume();
   }
@@ -158,6 +167,9 @@ public class FeatureAggregateCanvas extends AggregateBandCanvas {
     gc.fillRect(0, 0, w, h);
 
     colorLegend.clear();
+    if (!registry.shouldPaintMasterAggregates()) {
+      return;
+    }
     double contentTop = 4;
 
     String chrom = drawStack.getChromosome();

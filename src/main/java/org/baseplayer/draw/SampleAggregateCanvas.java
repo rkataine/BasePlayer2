@@ -80,8 +80,17 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
       return;
     }
     double delta = event.getScreenY() - resizeStartScreenY;
-    sampleRegistry.setMasterTrackHeight(
-        Math.max(20, Math.min(200, resizeStartMasterHeight + delta)));
+    double newHeight = Math.max(
+        SampleRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
+        Math.min(200, resizeStartMasterHeight + delta));
+    sampleRegistry.setMasterTrackHeight(newHeight);
+    if (newHeight > SampleRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+      if (!sampleRegistry.isMasterAggregatesEnabled()) {
+        sampleRegistry.masterAggregatesEnabledProperty().set(true);
+      }
+    } else if (sampleRegistry.isMasterAggregatesEnabled()) {
+      sampleRegistry.masterAggregatesEnabledProperty().set(false);
+    }
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
     event.consume();
   }
@@ -135,6 +144,9 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
   }
 
   public void forceCalculateDensity() {
+    if (!sampleRegistry.shouldPaintMasterAggregates()) {
+      return;
+    }
     painter.forceCalculateDensity(drawStack);
   }
 
@@ -142,6 +154,9 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
   protected void drawBand() {
     double h = getHeight();
     if (h <= 0 || getWidth() <= 0) {
+      return;
+    }
+    if (!sampleRegistry.shouldPaintMasterAggregates()) {
       return;
     }
     painter.drawMasterAggregates(getGraphicsContext2D(), drawStack, getWidth(), h);

@@ -44,15 +44,28 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
   private TrackIconActionHandler trackIconActionHandler;
 
   public FeatureTrackViewportRegistry() {
+    // Feature master band off until the user opts in (no slider / density by default).
+    masterAggregatesEnabledProperty().set(false);
     featureTracks.addListener((ListChangeListener<Track>) change -> {
       invalidateDisplayedTrackIndicesCache();
       pruneSelectionAfterListChange();
       normalizeVisibleRangeAfterDisplayedTrackCountChange();
+      syncMasterHeightToTrackPresence();
       bumpAggregateRevision();
       if (!ProjectSessionState.get().isSuppressingDirty()) {
         SessionDocumentSync.writeFeatureTracksFromRuntime(ProjectSessionState.get().getFile());
       }
     });
+  }
+
+  /** Title bar only while aggregates are off (Add / settings stay reachable). */
+  private void syncMasterHeightToTrackPresence() {
+    if (isMasterAggregatesEnabled()) {
+      return;
+    }
+    if (Math.abs(getMasterBandHeightPixels() - DEFAULT_MASTER_BAND_HEIGHT_PIXELS) > 0.5) {
+      setMasterBandHeightPixels(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+    }
   }
 
   @Override
@@ -115,6 +128,7 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
     selectedTrackIndices.clear();
     legendHiddenFeatureNames.clear();
     clearVisibleTrackRange();
+    setMasterAggregatesEnabled(false);
     setMasterBandHeightPixels(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
     setFilterStripHeightPixels(0);
     setHoveredTrackIndex(-1);

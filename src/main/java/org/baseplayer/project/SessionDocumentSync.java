@@ -307,13 +307,15 @@ public final class SessionDocumentSync {
         samples.getLastVisibleTrackSlot(),
         samples.getTrackRowHeightPixels(),
         samples.getVerticalScrollOffsetPixels(),
-        samples.getMasterTrackHeight());
+        samples.getMasterTrackHeight(),
+        samples.isMasterAggregatesEnabled());
     doc.featureViewport = captureViewport(
         features.getFirstVisibleTrackSlot(),
         features.getLastVisibleTrackSlot(),
         features.getTrackRowHeightPixels(),
         features.getVerticalScrollOffsetPixels(),
-        features.getMasterBandHeightPixels());
+        features.getMasterBandHeightPixels(),
+        features.isMasterAggregatesEnabled());
   }
 
   public static void writeSampleTracksFromRuntime(Path projectFile) {
@@ -419,13 +421,15 @@ public final class SessionDocumentSync {
   // ── private capture helpers (document field writers) ─────────────────────
 
   private static ProjectDocument.ViewportSpec captureViewport(
-      int first, int last, double rowHeight, double scroll, double masterBand) {
+      int first, int last, double rowHeight, double scroll, double masterBand,
+      boolean masterAggregatesEnabled) {
     ProjectDocument.ViewportSpec spec = new ProjectDocument.ViewportSpec();
     spec.first = first;
     spec.last = last;
     spec.rowHeight = rowHeight;
     spec.scroll = scroll;
     spec.masterBandHeight = masterBand;
+    spec.masterAggregatesEnabled = masterAggregatesEnabled;
     return spec;
   }
 

@@ -34,6 +34,16 @@
   -fx-background-color: #094771;
 }
 
+.check-menu-item:checked > .left-container > .check,
+.check-menu-item:checked > .left-container > .mark {
+  -fx-background-color: #cccccc;
+}
+
+.check-menu-item > .left-container > .check,
+.check-menu-item > .left-container > .mark {
+  -fx-background-color: transparent;
+}
+
 .context-menu {
   -fx-background-color: #252526;
   -fx-border-color: #3c3c3c;
