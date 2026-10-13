@@ -1161,12 +1161,12 @@ public class VariantFilter {
 
         if (!f.infoFieldFilters.isEmpty()) {
             for (Map.Entry<String, String> entry : f.infoFieldFilters.entrySet()) {
-                String actual = node.getInfoValue(entry.getKey());
                 String expected = entry.getValue();
                 if (expected == null) {
                     continue;
                 }
-                if (actual == null || !expected.equals(actual)) {
+                InfoFieldRule rule = InfoFieldRule.decode(entry.getKey(), expected);
+                if (!rule.matches(node.getInfoValue(entry.getKey()))) {
                     return false;
                 }
             }

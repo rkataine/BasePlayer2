@@ -12,7 +12,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
 /**
- * Dual-thumb integer range control: low and high ends on a shared track.
+ * Dual-thumb integer range control: {@code [track] [low] – [high]} plus a compact summary.
  * Values are inclusive (e.g. 3–7 keeps variants shared by 3 to 7 samples).
  */
 public class IntegerRangeSlider extends VBox {
@@ -34,7 +34,7 @@ public class IntegerRangeSlider extends VBox {
 
     public IntegerRangeSlider() {
         getStyleClass().addAll("dual-range-slider", "integer-range-slider");
-        setSpacing(6);
+        setSpacing(2);
 
         summaryLabel.getStyleClass().add("value-label");
 
@@ -46,27 +46,24 @@ public class IntegerRangeSlider extends VBox {
         highSlider.setMin(1);
         highSlider.setMax(1);
         highSlider.setValue(1);
-        highSlider.setMinorTickCount(0);
-        highSlider.setShowTickMarks(true);
-        highSlider.setShowTickLabels(true);
         highSlider.setBlockIncrement(1);
         lowSlider.setBlockIncrement(1);
 
         StackPane track = DualThumbSliderSupport.buildStack(lowSlider, highSlider);
+        HBox.setHgrow(track, Priority.ALWAYS);
 
         lowField.getStyleClass().add("filter-field");
         highField.getStyleClass().add("filter-field");
-        lowField.setPrefWidth(52);
-        highField.setPrefWidth(52);
+        lowField.setPrefWidth(48);
+        highField.setPrefWidth(48);
 
         Label toLabel = new Label("–");
         toLabel.getStyleClass().add("subsection-label");
 
-        HBox controls = new HBox(8, lowField, toLabel, highField, track);
+        HBox controls = new HBox(6, track, lowField, toLabel, highField);
         controls.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(track, Priority.ALWAYS);
 
-        getChildren().addAll(summaryLabel, controls);
+        getChildren().addAll(controls, summaryLabel);
 
         lowSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             if (adjusting) return;
@@ -130,7 +127,6 @@ public class IntegerRangeSlider extends VBox {
         adjusting = true;
         lowSlider.setMax(capped);
         highSlider.setMax(capped);
-        // Sparse labels when many samples; values still snap to every integer below.
         double labelTick = capped <= 10 ? 1 : Math.max(1, Math.ceil(capped / 5.0));
         highSlider.setMajorTickUnit(labelTick);
 

@@ -168,6 +168,18 @@ public class VcfReader implements AutoCloseable {
         return extractCompoundDefs(header.getInfoHeaderLines(), VcfHeaderFieldDef.Kind.INFO);
     }
 
+    /**
+     * Full-file iterator in file order. Caller must close the returned iterator.
+     * Used for light sampling (e.g. control-file AN peek), not for full loads.
+     */
+    public htsjdk.tribble.CloseableTribbleIterator<VariantContext> rawIterator() throws IOException {
+        try {
+            return reader.iterator();
+        } catch (Exception e) {
+            throw new IOException("Failed to open VCF iterator: " + e.getMessage(), e);
+        }
+    }
+
     /** Immutable ##FILTER definitions from the header (ID-sorted). */
     public List<VcfHeaderFieldDef> getFilterHeaderDefs() {
         Collection<VCFFilterHeaderLine> lines = header.getFilterLines();

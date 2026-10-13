@@ -128,6 +128,11 @@ public class ProjectDocument {
     public String controlVcfPath;
     public boolean filterByControlAf;
     public double maxControlAf = 0.01;
+    /**
+     * Population INFO suffix (e.g. {@code fin} for {@code AF_fin}), or blank/null for global
+     * {@code AF}/{@code AC}/{@code AN}.
+     */
+    public String controlPopulation;
   }
 
   /**

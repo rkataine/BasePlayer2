@@ -1,6 +1,7 @@
 package org.baseplayer.variant.ui;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
@@ -23,8 +24,8 @@ import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.VariantTypeVisuals;
-import org.baseplayer.variant.ui.components.AgentPanel;
 import org.baseplayer.variant.ui.components.ControlFilesPanel;
+import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationOption;
 import org.baseplayer.variant.ui.components.IntegerRangeSlider;
 import org.baseplayer.variant.ui.components.SampleComparisonPanel;
 import org.baseplayer.variant.ui.components.LohVariantTable;
@@ -56,7 +57,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
-import javafx.scene.layout.GridPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
@@ -69,7 +70,7 @@ import org.kordamp.ikonli.javafx.FontIcon;
 
 /**
  * Controller for the FXML-based Variant Manager dialog.
- * Composes filter/comparison/control/agent/table panels and runs data orchestration.
+ * Composes filter/comparison/control/table panels and runs data orchestration.
  */
 public class VariantManagerController implements Initializable {
 
@@ -78,17 +79,18 @@ public class VariantManagerController implements Initializable {
     // ── FXML Components ───────────────────────────────────────────────────────
 
     // Filter Tab: Variant Filters
-    @FXML private GridPane variantTypesContainer;  // Container for dynamic type checkboxes
-    @FXML private GridPane effectCategoriesContainer;  // Container for dynamic effect checkboxes
-    @FXML private CheckBox selectAllTypesCheckBox;
-    @FXML private CheckBox selectAllEffectsCheckBox;
+    @FXML private FlowPane variantTypesContainer;
+    @FXML private FlowPane effectCategoriesContainer;
+    @FXML private ColoredToggle selectAllTypesCheckBox;
+    @FXML private ColoredToggle selectAllEffectsCheckBox;
     @FXML private Slider qualitySlider, coverageSlider;
     @FXML private TextField qualityField, coverageField;
     @FXML private Label qualityValueLabel, coverageValueLabel;
     @FXML private org.baseplayer.variant.ui.components.DualRangeSlider alleleFreqRangeSlider;
-    @FXML private CheckBox cancerOnlyCheckBox;
+    @FXML private ColoredToggle cancerOnlyCheckBox;
     @FXML private VBox advancedFiltersContainer;
-    @FXML private Button addInfoFilterButton, addFilterFieldButton;
+    @FXML private Button addInfoFilterButton;
+    @FXML private Button addFilterFieldButton; // optional legacy; custom filter uses addInfoFilterButton
     @FXML private HBox reloadBanner;
     @FXML private Label reloadBannerLabel;
     @FXML private Button reloadBannerButton;
@@ -117,7 +119,7 @@ public class VariantManagerController implements Initializable {
 
     // Filter Tab: Sample Comparison
     @FXML private IntegerRangeSlider sharedSampleRangeSlider;
-    @FXML private CheckBox geneLevelComparisonCheckBox;
+    @FXML private ColoredToggle geneLevelComparisonCheckBox;
     @FXML private TextField comparisonWindowField;
     @FXML private Button comparisonWindowApplyButton;
     @FXML private Label commonVariantsHelpLabel;
@@ -126,7 +128,6 @@ public class VariantManagerController implements Initializable {
     @FXML private Button refreshComparisonGroupsButton;
     @FXML private RadioButton presentMatchAllRadio, presentMatchAnyRadio;
     @FXML private Button calculateLohButton;
-    private AgentPanel agentPanel;
     private VariantBusyOverlay busyOverlay;
 
     /** Point and SV mode bundles (filters + comparison + control + tools + results). */
@@ -143,14 +144,15 @@ public class VariantManagerController implements Initializable {
     private Tab svControlTab;
 
     // Filter Tab: Control Files
-    @FXML private CheckBox filterByPopFreqCheckBox, useGnomadCheckBox, use1000GenomesCheckBox, useExacCheckBox;
+    @FXML private Label controlFilePathLabel;
+    @FXML private Button addControlVcfButton;
+    @FXML private Button removeControlFileButton;
+    @FXML private ColoredToggle filterByPopFreqCheckBox;
     @FXML private TextField maxPopFreqField;
-    @FXML private CheckBox showPathogenicCheckBox, hideBenignCheckBox;
-    @FXML private TableView<ControlFilesPanel.ControlFileEntry> controlFilesTable;
-    @FXML private TableColumn<ControlFilesPanel.ControlFileEntry, Boolean> controlFileEnabledColumn;
-    @FXML private TableColumn<ControlFilesPanel.ControlFileEntry, String> controlFileNameColumn;
-    @FXML private TableColumn<ControlFilesPanel.ControlFileEntry, String> controlFileTypeColumn;
-    @FXML private TableColumn<ControlFilesPanel.ControlFileEntry, String> controlFileActionsColumn;
+    @FXML private ComboBox<PopulationOption> controlPopulationCombo;
+    @FXML private Label controlFileStatsLabel;
+    @FXML private VBox controlFilesRoot;
+    @FXML private SplitPane controlFilesSplitPane;
 
     // Results Tables
     @FXML private TableView<VariantNode> codingTable, intronicTable, intergenicTable;
@@ -175,7 +177,6 @@ public class VariantManagerController implements Initializable {
     // Filter & Results tab panes
     @FXML private SplitPane variantFiltersSplitPane;
     @FXML private SplitPane sampleComparisonSplitPane;
-    @FXML private SplitPane controlFilesSplitPane;
     @FXML private TabPane filterTabPane, resultsTabPane;
     // filterTabPane is the outer mode pane (Point | SV). Kept name for FXML compatibility.
     @FXML private Button annotateAllChromosomesButton;
@@ -184,14 +185,6 @@ public class VariantManagerController implements Initializable {
     private Button svAnnotateAllChromosomesButton;
     private TextField svTableSearchField;
     private Button svExcelExportButton;
-
-    // Agent Tab
-    @FXML private Tab agentTab;
-    @FXML private PasswordField apiKeyField;
-    @FXML private TextField agentModelField;
-    @FXML private TextArea agentPromptArea, agentResponseArea;
-    @FXML private Label agentStatusLabel;
-    @FXML private Button agentSubmitButton;
 
     private VcfManager vcfManager;
     private Stage stage;
@@ -288,36 +281,17 @@ public class VariantManagerController implements Initializable {
         ControlFilesPanel controlFilesPanel = new ControlFilesPanel();
         controlFilesPanel.install(
             new ControlFilesPanel.Nodes(
+                controlFilePathLabel,
+                addControlVcfButton,
+                removeControlFileButton,
                 filterByPopFreqCheckBox,
-                useGnomadCheckBox,
-                use1000GenomesCheckBox,
-                useExacCheckBox,
                 maxPopFreqField,
-                showPathogenicCheckBox,
-                hideBenignCheckBox,
-                controlFilesTable,
-                controlFileEnabledColumn,
-                controlFileNameColumn,
-                controlFileTypeColumn,
-                controlFileActionsColumn));
+                controlPopulationCombo,
+                controlFileStatsLabel));
         wireControlFilesPanel(controlFilesPanel);
         pointWorkspace.setControl(controlFilesPanel);
         // Early restore for Point; SV is restored after restructureModeWorkspaces().
         restoreControlFilesFromSession(controlFilesPanel);
-
-        agentPanel = new AgentPanel();
-        agentPanel.install(
-            new AgentPanel.Nodes(
-                filterTabPane,
-                null,
-                agentTab,
-                apiKeyField,
-                agentModelField,
-                agentPromptArea,
-                agentResponseArea,
-                agentStatusLabel,
-                agentSubmitButton),
-            this::buildVariantContext);
 
         busyOverlay = new VariantBusyOverlay();
         busyOverlay.install(new VariantBusyOverlay.Nodes(loadingModal));
@@ -340,22 +314,6 @@ public class VariantManagerController implements Initializable {
         setupExcelExportButton(excelExportButton, false);
 
         restructureModeWorkspaces();
-
-        // Agent tab now lives under the Point tool pane.
-        if (agentPanel != null && pointToolTabPane != null) {
-            agentPanel.install(
-                new AgentPanel.Nodes(
-                    pointToolTabPane,
-                    null,
-                    agentTab,
-                    apiKeyField,
-                    agentModelField,
-                    agentPromptArea,
-                    agentResponseArea,
-                    agentStatusLabel,
-                    agentSubmitButton),
-                this::buildVariantContext);
-        }
     }
 
     /** Ordered Point then SV workspaces that have been assembled. */
@@ -371,11 +329,8 @@ public class VariantManagerController implements Initializable {
     }
 
     /**
-     * Nest Filters / Sample Comparison / Control / Agent under each mode workspace.
-     * Outer {@link #filterTabPane} becomes Point | SV only (Agent moves into Point tools;
-     * SV gets its own Comparison/Control; Agent shared via Point for now and duplicated
-     * under SV as a second agent tab binding to the same prefs-backed panel is deferred —
-     * Agent stays under Point tools and is also linked into SV tools by reusing the tab).
+     * Nest Filters / Sample Comparison / Control under each mode workspace.
+     * Outer {@link #filterTabPane} becomes Point | SV only.
      */
     private void restructureModeWorkspaces() {
         if (filterTabPane == null || pointMainSplitPane == null || svMainSplitPane == null) {
@@ -385,15 +340,11 @@ public class VariantManagerController implements Initializable {
         // Capture shared sibling tabs before removing them from the mode pane.
         Tab comparisonTab = findTabByText(filterTabPane, "Sample Comparison");
         Tab controlTab = findTabByText(filterTabPane, "Control Files");
-        Tab agent = agentTab;
 
         filterTabPane.getTabs().removeAll(
             comparisonTab != null ? List.of(comparisonTab) : List.of());
         if (controlTab != null) {
             filterTabPane.getTabs().remove(controlTab);
-        }
-        if (agent != null) {
-            filterTabPane.getTabs().remove(agent);
         }
 
         // ── Point workspace: tool tabs above results ─────────────────────────
@@ -416,16 +367,10 @@ public class VariantManagerController implements Initializable {
         pointControlTab = controlTab != null ? controlTab : new Tab("Control Files");
         pointControlTab.setClosable(false);
         pointControlTab.setText("Control Files");
-        if (agent != null) {
-            agent.setClosable(false);
-        }
 
         pointToolTabPane.getTabs().add(pointFiltersTab);
         pointToolTabPane.getTabs().add(pointComparisonTab);
         pointToolTabPane.getTabs().add(pointControlTab);
-        if (agent != null) {
-            pointToolTabPane.getTabs().add(agent);
-        }
 
         if (pointFilters != null && pointResults != null) {
             pointToolTabPane.setMinHeight(48);
@@ -488,26 +433,7 @@ public class VariantManagerController implements Initializable {
         svControlTab = new Tab("Control Files", svCtrl.getKey());
         svControlTab.setClosable(false);
 
-        // Reuse the same Agent tab instance — selecting it under SV shows the same agent UI.
-        // When both modes are shown, Agent lives under Point tools; SV gets a lightweight note tab
-        // that selects Point's agent (avoid dual ownership of one Node).
-        Tab svAgentTab = new Tab("Agent");
-        svAgentTab.setClosable(false);
-        Label agentHint = new Label(
-            "Open the Point mutations → Agent tab to run AI analysis on loaded variants.");
-        agentHint.setWrapText(true);
-        agentHint.setStyle("-fx-text-fill: #bbbbbb; -fx-padding: 16;");
-        svAgentTab.setContent(agentHint);
-        if (agent != null) {
-            // Prefer putting Agent under SV tools as well by cloning the selection action:
-            svAgentTab.setOnSelectionChanged(e -> {
-                if (svAgentTab.isSelected() && pointToolTabPane != null && agent != null) {
-                    // Keep hint; full dual Agent UI can be added later.
-                }
-            });
-        }
-
-        svToolTabPane.getTabs().addAll(svFiltersTab, svComparisonTab, svControlTab, svAgentTab);
+        svToolTabPane.getTabs().addAll(svFiltersTab, svComparisonTab, svControlTab);
 
         if (svResults != null) {
             svToolTabPane.setMinHeight(48);
@@ -865,7 +791,7 @@ public class VariantManagerController implements Initializable {
                 sampleComparisonSplitPane.setDividerPositions(0.5);
             }
             if (controlFilesSplitPane != null) {
-                controlFilesSplitPane.setDividerPositions(0.5);
+                controlFilesSplitPane.setDividerPositions(0.55);
             }
             handleHostWindowStateChanged();
         });
@@ -2091,7 +2017,9 @@ public class VariantManagerController implements Initializable {
             return;
         }
         panel.setWindowSupplier(() -> {
-            Node anchor = controlFilesTable != null ? controlFilesTable : pointMainSplitPane;
+            Node anchor = controlFilesRoot != null
+                ? controlFilesRoot
+                : (controlFilePathLabel != null ? controlFilePathLabel : pointMainSplitPane);
             if (anchor != null && anchor.getScene() != null) {
                 return anchor.getScene().getWindow();
             }
@@ -2282,13 +2210,6 @@ public class VariantManagerController implements Initializable {
     }
 
     @FXML
-    private void handleAddControlBed() {
-        if (pointWorkspace != null && pointWorkspace.control() != null) {
-            pointWorkspace.control().handleAddControlBed();
-        }
-    }
-
-    @FXML
     private void handleRemoveControlFile() {
         if (pointWorkspace != null && pointWorkspace.control() != null) {
             pointWorkspace.control().handleRemoveControlFile();
@@ -2296,88 +2217,20 @@ public class VariantManagerController implements Initializable {
     }
 
     @FXML
-    private void handleAddInfoFilter() {
+    private void handleAddCustomFilter() {
         if (pointWorkspace != null && pointWorkspace.filters() != null) {
-            pointWorkspace.filters().showInfoFilterDialog();
+            pointWorkspace.filters().showCustomFilterDialog();
         }
+    }
+
+    @FXML
+    private void handleAddInfoFilter() {
+        handleAddCustomFilter();
     }
 
     @FXML
     private void handleAddFilterField() {
-        if (pointWorkspace != null && pointWorkspace.filters() != null) {
-            pointWorkspace.filters().showFilterFieldDialog();
-        }
-    }
-
-    @FXML
-    private void handleAgentSubmit() {
-        if (agentPanel != null) {
-            agentPanel.handleAgentSubmit();
-        }
-    }
-
-    // ── Agent (AI Analysis) ───────────────────────────────────────────────────
-
-    private String buildVariantContext() {
-        List<VcfManager.CachedChromosomeVariants> cachedSources = getCachedVariantSources();
-        if (cachedSources.isEmpty()) {
-            return "No variants currently loaded.";
-        }
-
-        int totalVariants = 0;
-        for (VcfManager.CachedChromosomeVariants cached : cachedSources) {
-            VariantList variants = cached.variants();
-            if (variants != null) {
-                totalVariants += variants.size();
-            }
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("Cached chromosomes: ").append(cachedSources.size()).append("\n");
-        sb.append("Total variants: ").append(totalVariants).append("\n\n");
-        sb.append("Variant list (chromosome:position, ref→alt, type, gene, effect, maxGQ):\n");
-
-        VariantFilter filter = vcfManager.getCurrentFilter();
-        int count = 0;
-        for (VcfManager.CachedChromosomeVariants cached : cachedSources) {
-            if (count >= 300) {
-                break;
-            }
-            String sourceChromosome = cached.chromosome();
-            VariantList variants = cached.variants();
-            if (variants == null || variants.isEmpty()) {
-                continue;
-            }
-
-            VariantNode node = variants.getFirst();
-            while (node != null && count < 300) {
-                double maxGq = -1;
-                boolean passes = false;
-                for (VariantNode.SampleCall call : node.getSamples()) {
-                    if (filter.passes(node, call)) {
-                        passes = true;
-                        if (call.quality > maxGq) maxGq = call.quality;
-                    }
-                }
-
-                if (passes) {
-                    VariantAnnotation ann = node.annotation;
-                    String gene = (ann != null && ann.geneName() != null) ? ann.geneName() : "-";
-                    String effect = ann != null ? ann.effect().displayName() : "intergenic";
-                    sb.append(sourceChromosome).append(":").append(node.position)
-                        .append("\t").append(node.ref).append("→").append(node.alt.isEmpty() ? "." : node.alt)
-                        .append("\t").append(typeLabel(node.type))
-                        .append("\tgene=").append(gene)
-                        .append("\teffect=").append(effect)
-                        .append("\tGQ=").append(maxGq >= 0 ? String.format("%.0f", maxGq) : "-")
-                        .append("\n");
-                    count++;
-                }
-                node = node.next;
-            }
-        }
-        if (count == 300) sb.append("... (truncated to 300 variants)\n");
-        return sb.toString();
+        handleAddCustomFilter();
     }
 
     // ── Data Loading ──────────────────────────────────────────────────────────
@@ -3430,15 +3283,5 @@ public class VariantManagerController implements Initializable {
             FXCollections.<VariantTable.TableRow>observableArrayList(),
             FXCollections.<VariantTable.TableRow>observableArrayList(),
             FXCollections.<VariantTable.TableRow>observableArrayList());
-    }
-
-    private static String typeLabel(VcfVariantType type) {
-        return switch (type) {
-            case SNV -> "SNV";
-            case INSERTION -> "Ins";
-            case DELETION -> "Del";
-            case MNV -> "MNV";
-            default -> "Other";
-        };
     }
 }

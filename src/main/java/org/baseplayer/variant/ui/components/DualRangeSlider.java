@@ -6,16 +6,16 @@ import javafx.geometry.Pos;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
-import javafx.scene.layout.VBox;
 
 /**
- * Dual-thumb continuous range control (same layout as {@link IntegerRangeSlider}).
- * Defaults to the unit interval [0, 1] (e.g. allele fraction).
+ * Dual-thumb continuous range control matching single-slider filter row layout:
+ * {@code [track] [low] – [high]}. Defaults to the unit interval [0, 1] (allele fraction).
  */
-public class DualRangeSlider extends VBox {
+public class DualRangeSlider extends HBox {
 
     private static final double EPSILON = 1e-9;
 
@@ -23,7 +23,6 @@ public class DualRangeSlider extends VBox {
     private final Slider highSlider = new Slider();
     private final TextField lowField = new TextField();
     private final TextField highField = new TextField();
-    private final Label summaryLabel = new Label();
 
     private final DoubleProperty lowValue = new SimpleDoubleProperty(0);
     private final DoubleProperty highValue = new SimpleDoubleProperty(1);
@@ -36,8 +35,7 @@ public class DualRangeSlider extends VBox {
     public DualRangeSlider() {
         getStyleClass().add("dual-range-slider");
         setSpacing(6);
-
-        summaryLabel.getStyleClass().add("value-label");
+        setAlignment(Pos.CENTER_LEFT);
 
         DualThumbSliderSupport.configureBaseSlider(lowSlider);
         DualThumbSliderSupport.configureBaseSlider(highSlider);
@@ -47,28 +45,21 @@ public class DualRangeSlider extends VBox {
         highSlider.setMin(0);
         highSlider.setMax(1);
         highSlider.setValue(1);
-        highSlider.setMajorTickUnit(0.25);
-        highSlider.setMinorTickCount(4);
-        highSlider.setShowTickMarks(true);
-        highSlider.setShowTickLabels(true);
         highSlider.setBlockIncrement(0.05);
         lowSlider.setBlockIncrement(0.05);
 
         StackPane track = DualThumbSliderSupport.buildStack(lowSlider, highSlider);
+        HBox.setHgrow(track, Priority.ALWAYS);
 
         lowField.getStyleClass().add("filter-field");
         highField.getStyleClass().add("filter-field");
-        lowField.setPrefWidth(60);
-        highField.setPrefWidth(60);
+        lowField.setPrefWidth(52);
+        highField.setPrefWidth(52);
 
         Label toLabel = new Label("–");
         toLabel.getStyleClass().add("subsection-label");
 
-        HBox controls = new HBox(8, lowField, toLabel, highField, track);
-        controls.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(track, Priority.ALWAYS);
-
-        getChildren().addAll(summaryLabel, controls);
+        getChildren().setAll(track, lowField, toLabel, highField);
 
         lowSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             if (adjusting) return;
@@ -134,9 +125,6 @@ public class DualRangeSlider extends VBox {
         highSlider.setMin(loBound);
         highSlider.setMax(hiBound);
 
-        double span = hiBound - loBound;
-        highSlider.setMajorTickUnit(span <= 1.0 + EPSILON ? 0.25 : span / 4.0);
-
         double low = clamp(lowValue.get(), loBound, hiBound);
         double high = clamp(highValue.get(), low, hiBound);
         lowValue.set(low);
@@ -183,12 +171,11 @@ public class DualRangeSlider extends VBox {
         }
         boolean full = low <= absoluteMin.get() + EPSILON
             && high >= absoluteMax.get() - EPSILON;
-        if (full) {
-            summaryLabel.setText("All " + summaryNoun + "s ("
-                + format(absoluteMin.get()) + "–" + format(absoluteMax.get()) + ")");
-        } else {
-            summaryLabel.setText(capitalize(summaryNoun) + " " + format(low) + "–" + format(high));
-        }
+        String tip = full
+            ? "All " + summaryNoun + "s ("
+                + format(absoluteMin.get()) + "–" + format(absoluteMax.get()) + ")"
+            : capitalize(summaryNoun) + " " + format(low) + "–" + format(high);
+        Tooltip.install(this, new Tooltip(tip));
     }
 
     private static String format(double v) {

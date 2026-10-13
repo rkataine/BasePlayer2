@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
+import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
@@ -19,7 +20,6 @@ import javafx.beans.value.ChangeListener;
 import javafx.geometry.Pos;
 import javafx.geometry.Insets;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
@@ -42,7 +42,7 @@ public class SampleComparisonPanel {
 
   public record Nodes(
       IntegerRangeSlider sharedSampleRangeSlider,
-      CheckBox geneLevelComparisonCheckBox,
+      ColoredToggle geneLevelComparisonCheckBox,
       TextField comparisonWindowField,
       Button comparisonWindowApplyButton,
       Label commonVariantsHelpLabel,
@@ -591,8 +591,7 @@ public class SampleComparisonPanel {
     help.getStyleClass().add("subsection-label");
     help.setWrapText(true);
 
-    CheckBox geneLevel = new CheckBox("Gene level");
-    geneLevel.getStyleClass().add("filter-checkbox");
+    ColoredToggle geneLevel = new ColoredToggle("Gene level");
 
     TextField windowField = new TextField("0");
     windowField.setPrefWidth(72);
@@ -604,7 +603,7 @@ public class SampleComparisonPanel {
 
     IntegerRangeSlider rangeSlider = new IntegerRangeSlider();
 
-    VBox left = new VBox(12);
+    VBox left = new VBox(8);
     left.getStyleClass().add("filter-panel");
     left.setPadding(new Insets(16));
     Label commonTitle = new Label("Common variants");

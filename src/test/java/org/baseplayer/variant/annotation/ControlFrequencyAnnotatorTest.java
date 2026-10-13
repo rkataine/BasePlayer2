@@ -50,4 +50,29 @@ class ControlFrequencyAnnotatorTest {
             ControlFrequencyAnnotator.alleleKey(100, "g", "a"),
             ControlFrequencyAnnotator.alleleKey(100, "G", "A"));
     }
+
+    @Test
+    void resolveAfUsesPopulationFields() {
+        Map<String, Object> info = new HashMap<>();
+        info.put("AF", 0.5);
+        info.put("AF_fin", 0.01);
+        info.put("AC_fin", 2);
+        info.put("AN_fin", 200);
+        assertEquals(0.01, ControlFrequencyAnnotator.resolveAf(info, 0, 1, "fin"), 1e-12);
+        assertEquals(0.5, ControlFrequencyAnnotator.resolveAf(info, 0, 1, ""), 1e-12);
+    }
+
+    @Test
+    void resolveAfFallsBackToGlobalWhenPopMissing() {
+        Map<String, Object> info = new HashMap<>();
+        info.put("AC", 1);
+        info.put("AN", 100);
+        assertEquals(0.01, ControlFrequencyAnnotator.resolveAf(info, 0, 1, "fin"), 1e-12);
+    }
+
+    @Test
+    void normalizePopulationIdAcceptsAfPrefix() {
+        assertEquals("fin", ControlFrequencyAnnotator.normalizePopulationId("AF_fin"));
+        assertEquals("", ControlFrequencyAnnotator.normalizePopulationId("global"));
+    }
 }

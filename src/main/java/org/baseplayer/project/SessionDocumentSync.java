@@ -180,12 +180,20 @@ public final class SessionDocumentSync {
    * Call from UI listeners so save does not depend on filter-apply debounce.
    */
   public static void writeControlFilterSettings(boolean filterByControlAf, double maxControlAf) {
+    writeControlFilterSettings(filterByControlAf, maxControlAf, null);
+  }
+
+  public static void writeControlFilterSettings(
+      boolean filterByControlAf, double maxControlAf, String controlPopulation) {
     ProjectDocument doc = live();
     if (doc.controlFiles == null) {
       doc.controlFiles = new ProjectDocument.ControlFilesSpec();
     }
     doc.controlFiles.filterByControlAf = filterByControlAf;
     doc.controlFiles.maxControlAf = maxControlAf < 0 ? 0.01 : Math.min(1.0, maxControlAf);
+    if (controlPopulation != null) {
+      doc.controlFiles.controlPopulation = controlPopulation.isBlank() ? null : controlPopulation;
+    }
     syncControlAfIntoVariantFilter(doc);
     ProjectSessionState.get().markDirty();
   }
@@ -197,6 +205,16 @@ public final class SessionDocumentSync {
       doc.controlFiles = new ProjectDocument.ControlFilesSpec();
     }
     doc.controlFiles.controlVcfPath = controlVcfPath;
+    ProjectSessionState.get().markDirty();
+  }
+
+  public static void writeControlPopulation(String controlPopulation) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.controlPopulation =
+        controlPopulation == null || controlPopulation.isBlank() ? null : controlPopulation;
     ProjectSessionState.get().markDirty();
   }
 
