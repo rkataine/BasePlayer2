@@ -31,6 +31,7 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.sanger.SangerTrace;
 import org.baseplayer.services.DrawStackManager;
+import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
@@ -1291,7 +1292,12 @@ public class SampleDataManager {
           org.baseplayer.features.BedFeatureFilterDialog.Outcome filter = null;
           if (catalogOpt != null && catalogOpt.isPresent()) {
             var choice = org.baseplayer.features.BedFeatureFilterDialog.show(
-                MainApp.stage, file.getName(), catalogOpt.get());
+                MainApp.stage,
+                file.getName(),
+                catalogOpt.get(),
+                null,
+                "Load",
+                bedPath);
             if (choice.isEmpty()) {
               return;
             }
@@ -1303,6 +1309,11 @@ public class SampleDataManager {
               () -> {
                 try {
                   BedTrack track = new BedTrack(bedPath);
+                  if (finalFilter != null && finalFilter.catalog() != null) {
+                    track.setFeatureNameCatalog(finalFilter.catalog());
+                  } else if (catalogOpt != null && catalogOpt.isPresent()) {
+                    track.setFeatureNameCatalog(catalogOpt.get());
+                  }
                   if (finalFilter != null && !finalFilter.loadAll()) {
                     track.setNameFilter(
                         finalFilter.selectedKeys(), finalFilter.listedNames());
@@ -1857,6 +1868,8 @@ public class SampleDataManager {
 
   public static void clearAllData() {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    FeatureTrackViewportRegistry featureRegistry =
+        ServiceRegistry.getInstance().getFeatureTrackViewportRegistry();
 
     ThreadRunner.get().cancelAll();
 
@@ -1869,13 +1882,12 @@ public class SampleDataManager {
         System.err.println("Error closing track: " + e.getMessage());
       }
     }
-    registry.getSampleTracks().clear();
-    registry.getSampleList().clear();
-    registry.clearSampleGroups();
-
+    // Full registry wipe (list, focus/filter subset, groups, visible-range slider).
+    // Do not only clear() the ObservableList — that left focus refs + slider state.
+    registry.clearSampleTracks();
     registry.clearAllSubsetSources();
-    registry.clearVisibleRange();
     registry.setMasterTrackHeight(SampleRegistry.DEFAULT_MASTER_TRACK_HEIGHT);
+    registry.setSampleFilterStripHeightPixels(0);
     registry.setHoverSample(-1);
 
     VcfManager.getInstance().closeCurrentVcf();
@@ -1883,10 +1895,8 @@ public class SampleDataManager {
     // and must survive new project / clear / project switch.
     ProjectSessionState.get().resetDocument();
 
-    // Feature tracks + visible-window slider live in FeatureTrackViewportRegistry
-    // (same clear as project open). The old per-canvas Bed/BigWig-only loop left
-    // Motif/UCSC/gnomAD tracks and the viewport slider behind.
-    ServiceRegistry.getInstance().getFeatureTrackViewportRegistry().clearFeatureTracks();
+    // Feature tracks + visible-window slider (master band / filter strip).
+    featureRegistry.clearFeatureTracks();
 
     ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());

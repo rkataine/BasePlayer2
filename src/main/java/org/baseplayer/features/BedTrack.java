@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -19,6 +20,7 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.Settings;
 import org.baseplayer.io.readers.BedFeatureNameCatalog;
+import org.baseplayer.io.readers.BedFeatureNameDiscovery;
 import org.baseplayer.io.readers.BedFileReader;
 import org.baseplayer.io.readers.BedFileReader.BedFeature;
 import org.baseplayer.io.readers.IndexedBedReader;
@@ -36,14 +38,16 @@ import javafx.stage.Window;
 
 /**
  * BED feature track. Small / unindexed files are fully loaded into memory.
- * bgzip + {@code .tbi} files use tabix region queries and only keep the
- * current viewport cache in RAM.
+ * bgzip + {@code .tbi} files use tabix region queries and keep a small
+ * per-chromosome viewport cache (needed for split views on different chroms).
  */
 public class BedTrack extends AbstractTrack {
 
   public static final double DEFAULT_BAR_HEIGHT_PX = 10;
   /** Shared name label size for BED bars and motif logos. */
   public static final double FEATURE_NAME_FONT_SIZE = 12;
+  /** Max concurrent chrom viewport caches (split views + recent chroms). */
+  private static final int MAX_REGION_SLOTS = 8;
   private static final double MIN_BAR_HEIGHT_PX = 2;
   private static final double MAX_BAR_HEIGHT_PX = 48;
   private static final double ROW_TOP_PAD = 2;
@@ -97,13 +101,20 @@ public class BedTrack extends AbstractTrack {
   private final List<BedTrack> derivedSources;
   private final boolean fullyMaterialized;
 
-  private volatile List<BedFeature> regionCache = List.of();
-  private volatile String cacheChrom = "";
-  private volatile long cacheStart = -1;
-  private volatile long cacheEnd = -1;
-  private volatile boolean loading;
-  private final AtomicInteger fetchGeneration = new AtomicInteger();
+  /**
+   * Per-chromosome viewport caches. A single shared cache ping-ponged between
+   * split DrawStacks on different chroms (fetch → redraw all → fetch other…).
+   */
+  private final ConcurrentHashMap<String, RegionSlot> regionSlots = new ConcurrentHashMap<>();
   private Runnable onDataLoaded;
+
+  private static final class RegionSlot {
+    volatile List<BedFeature> features = List.of();
+    volatile long start = -1;
+    volatile long end = -1;
+    volatile boolean loading;
+    final AtomicInteger generation = new AtomicInteger();
+  }
   private final InfoPopup featurePopup = new InfoPopup(300, 260, false);
   /**
    * {@code null} = all names. Otherwise selected keys from the filter dialog
@@ -112,6 +123,12 @@ public class BedTrack extends AbstractTrack {
   private Set<String> selectedNameKeys;
   /** Names that appeared as individual rows in the filter dialog (excludes Other). */
   private Set<String> listedDialogNames;
+  /**
+   * Live feature-type catalog (initial sample + background discovery).
+   * Volatile: updated from the discovery worker thread.
+   */
+  private volatile BedFeatureNameCatalog.Catalog featureNameCatalog;
+  private BedFeatureNameDiscovery featureNameDiscovery;
 
   /** Fixed interval-bar height (px); adjustable in track settings. */
   private double barHeightPixels = DEFAULT_BAR_HEIGHT_PX;
@@ -207,10 +224,13 @@ public class BedTrack extends AbstractTrack {
     if (hasScores != null) {
       return hasScores;
     }
-    if (!regionCache.isEmpty()) {
-      hasScores = detectScoresInList(regionCache);
-      if (Boolean.TRUE.equals(hasScores)) {
-        return true;
+    for (RegionSlot slot : regionSlots.values()) {
+      List<BedFeature> cached = slot.features;
+      if (cached != null && !cached.isEmpty()) {
+        hasScores = detectScoresInList(cached);
+        if (Boolean.TRUE.equals(hasScores)) {
+          return true;
+        }
       }
     }
     return false;
@@ -311,9 +331,108 @@ public class BedTrack extends AbstractTrack {
     return selectedNameKeys;
   }
 
+  /** Names listed when the filter was last applied ({@code null} if load-all). */
+  public Set<String> getListedDialogNames() {
+    return listedDialogNames;
+  }
+
   /** Whether this track can reopen the file-based feature-type dialog. */
   public boolean supportsFeatureNameFilterDialog() {
     return sourcePath != null;
+  }
+
+  /** Current feature-type catalog, if known. */
+  public java.util.Optional<BedFeatureNameCatalog.Catalog> getFeatureNameCatalog() {
+    return java.util.Optional.ofNullable(featureNameCatalog);
+  }
+
+  /**
+   * Seed catalog from the open dialog and start background discovery when the
+   * sample did not cover the whole file.
+   */
+  public void setFeatureNameCatalog(BedFeatureNameCatalog.Catalog catalog) {
+    synchronized (this) {
+      if (featureNameDiscovery != null) {
+        featureNameDiscovery.cancel();
+        featureNameDiscovery = null;
+      }
+      this.featureNameCatalog = catalog;
+    }
+    startFeatureNameDiscovery();
+  }
+
+  /**
+   * Ensure a catalog exists (scanning the sample if needed) and continue
+   * collecting novel names in the background when appropriate.
+   */
+  public java.util.Optional<BedFeatureNameCatalog.Catalog> ensureFeatureNameCatalog() {
+    if (featureNameCatalog != null) {
+      startFeatureNameDiscovery();
+      return java.util.Optional.of(featureNameCatalog);
+    }
+    if (sourcePath == null) {
+      return java.util.Optional.empty();
+    }
+    try {
+      java.util.Optional<BedFeatureNameCatalog.Catalog> scanned =
+          BedFeatureNameCatalog.scanForDialog(sourcePath);
+      if (scanned.isPresent()) {
+        featureNameCatalog = scanned.get();
+        startFeatureNameDiscovery();
+      }
+      return scanned;
+    } catch (IOException ex) {
+      System.err.println("Failed to scan BED feature names: " + ex.getMessage());
+      return java.util.Optional.empty();
+    }
+  }
+
+  /**
+   * Selection keys for reopening the filter dialog: expands newly discovered
+   * types that were previously covered by {@link BedFeatureNameCatalog#OTHER_NAME}.
+   */
+  public Set<String> selectionKeysForFeatureDialog() {
+    Set<String> selected = selectedNameKeys;
+    BedFeatureNameCatalog.Catalog catalog = featureNameCatalog;
+    if (selected == null || catalog == null) {
+      return selected;
+    }
+    if (!selected.contains(BedFeatureNameCatalog.OTHER_NAME) || listedDialogNames == null) {
+      return selected;
+    }
+    LinkedHashSet<String> expanded = new LinkedHashSet<>(selected);
+    for (BedFeatureNameCatalog.Entry entry : catalog.entries()) {
+      if (entry.otherBucket()) {
+        continue;
+      }
+      if (!listedDialogNames.contains(entry.name())) {
+        expanded.add(entry.name());
+      }
+    }
+    return expanded;
+  }
+
+  /**
+   * Start background collection of feature-type names past the first sample.
+   * No-op when already running, finished with a complete catalog, or no file.
+   */
+  public synchronized void startFeatureNameDiscovery() {
+    if (sourcePath == null || featureNameDiscovery != null) {
+      return;
+    }
+    BedFeatureNameCatalog.Catalog current = featureNameCatalog;
+    if (current != null && !current.hasOtherBucket()) {
+      return;
+    }
+    featureNameDiscovery = BedFeatureNameDiscovery.start(
+        sourcePath,
+        current,
+        catalog -> featureNameCatalog = catalog,
+        () -> {
+          synchronized (BedTrack.this) {
+            featureNameDiscovery = null;
+          }
+        });
   }
 
   public boolean acceptsFeatureName(String name) {
@@ -332,12 +451,53 @@ public class BedTrack extends AbstractTrack {
   }
 
   private void clearRegionCache() {
-    fetchGeneration.incrementAndGet();
-    cacheChrom = "";
-    cacheStart = -1;
-    cacheEnd = -1;
-    regionCache = List.of();
-    loading = false;
+    for (RegionSlot slot : regionSlots.values()) {
+      slot.generation.incrementAndGet();
+      slot.features = List.of();
+      slot.start = -1;
+      slot.end = -1;
+      slot.loading = false;
+    }
+    regionSlots.clear();
+  }
+
+  private void clearRegionSlot(String bareChrom) {
+    if (bareChrom == null) {
+      return;
+    }
+    RegionSlot slot = regionSlots.get(bareChrom);
+    if (slot == null) {
+      return;
+    }
+    slot.generation.incrementAndGet();
+    slot.features = List.of();
+    slot.start = -1;
+    slot.end = -1;
+    slot.loading = false;
+  }
+
+  private RegionSlot slotFor(String bareChrom) {
+    RegionSlot slot = regionSlots.computeIfAbsent(bareChrom, k -> new RegionSlot());
+    pruneRegionSlots(bareChrom);
+    return slot;
+  }
+
+  private void pruneRegionSlots(String keepChrom) {
+    if (regionSlots.size() <= MAX_REGION_SLOTS) {
+      return;
+    }
+    for (String key : List.copyOf(regionSlots.keySet())) {
+      if (key.equals(keepChrom)) {
+        continue;
+      }
+      RegionSlot slot = regionSlots.get(key);
+      if (slot != null && !slot.loading) {
+        regionSlots.remove(key, slot);
+      }
+      if (regionSlots.size() <= MAX_REGION_SLOTS) {
+        return;
+      }
+    }
   }
 
   /**
@@ -369,17 +529,32 @@ public class BedTrack extends AbstractTrack {
 
   @Override
   public boolean isLoading() {
-    return loading;
+    for (RegionSlot slot : regionSlots.values()) {
+      if (slot.loading) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean isLoading(String bareChrom) {
+    RegionSlot slot = regionSlots.get(bareChrom);
+    return slot != null && slot.loading;
   }
 
   @Override
   public void dispose() {
     featurePopup.hide();
-    fetchGeneration.incrementAndGet();
+    clearRegionCache();
+    synchronized (this) {
+      if (featureNameDiscovery != null) {
+        featureNameDiscovery.cancel();
+        featureNameDiscovery = null;
+      }
+    }
     if (indexedReader != null) {
       indexedReader.close();
     }
-    regionCache = List.of();
   }
 
   @Override
@@ -409,25 +584,20 @@ public class BedTrack extends AbstractTrack {
       return;
     }
     String bare = ChromosomeNames.strip(chromosome);
+    RegionSlot slot = slotFor(bare);
     if (isViewTooLargeForIndexed(start, end)) {
-      // Drop any prior huge cache so zoom-out cannot retain millions of features.
-      if (!regionCache.isEmpty() || cacheStart >= 0) {
-        clearRegionCache();
-        Platform.runLater(() -> {
-          if (onDataLoaded != null) {
-            onDataLoaded.run();
-          } else {
-            GenomicCanvas.update.set(!GenomicCanvas.update.get());
-          }
-        });
+      // Drop this chrom's cache so zoom-out cannot retain millions of features.
+      if (!slot.features.isEmpty() || slot.start >= 0) {
+        clearRegionSlot(bare);
+        Platform.runLater(this::notifyDataLoaded);
       }
       return;
     }
-    if (cacheCovers(bare, start, end)) {
+    if (cacheCovers(slot, start, end)) {
       return;
     }
-    if (loading) {
-      // Coalesce: an in-flight fetch is already running; next draw will refresh.
+    if (slot.loading) {
+      // Coalesce per chrom: in-flight fetch for this chrom; other chroms may fetch.
       return;
     }
     long paddedStart = Math.max(0, start - QUERY_PADDING_BP);
@@ -446,8 +616,8 @@ public class BedTrack extends AbstractTrack {
     if (!fm.canFetch(FetchManager.FetchType.FEATURE_TRACK, regionBp)) {
       return;
     }
-    int generation = fetchGeneration.incrementAndGet();
-    loading = true;
+    int generation = slot.generation.incrementAndGet();
+    slot.loading = true;
 
     Runnable fetch = () -> {
       FetchManager.FetchTicket ticket = fm.acquire(
@@ -463,29 +633,22 @@ public class BedTrack extends AbstractTrack {
             : Integer.MAX_VALUE;
         List<BedFeature> features = filterByIncludedNames(
             indexedReader.query(bare, start0, end0, maxFeatures));
-        if (generation != fetchGeneration.get() || ticket.isCancelled()) {
+        if (generation != slot.generation.get() || ticket.isCancelled()) {
           return;
         }
-        regionCache = features;
-        cacheChrom = bare;
-        cacheStart = padStart;
-        cacheEnd = padEnd;
+        slot.features = features;
+        slot.start = padStart;
+        slot.end = padEnd;
       } catch (IOException ex) {
-        if (generation == fetchGeneration.get()) {
+        if (generation == slot.generation.get()) {
           System.err.println("BED tabix query failed: " + ex.getMessage());
-          regionCache = List.of();
+          slot.features = List.of();
         }
       } finally {
         fm.release(ticket);
-        if (generation == fetchGeneration.get()) {
-          loading = false;
-          Platform.runLater(() -> {
-            if (onDataLoaded != null) {
-              onDataLoaded.run();
-            } else {
-              GenomicCanvas.update.set(!GenomicCanvas.update.get());
-            }
-          });
+        if (generation == slot.generation.get()) {
+          slot.loading = false;
+          Platform.runLater(this::notifyDataLoaded);
         }
       }
     };
@@ -497,12 +660,19 @@ public class BedTrack extends AbstractTrack {
     }
   }
 
-  private boolean cacheCovers(String bareChrom, long start, long end) {
-    return bareChrom != null
-        && bareChrom.equals(cacheChrom)
-        && start >= cacheStart
-        && end <= cacheEnd
-        && cacheStart >= 0;
+  private void notifyDataLoaded() {
+    if (onDataLoaded != null) {
+      onDataLoaded.run();
+    } else {
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    }
+  }
+
+  private static boolean cacheCovers(RegionSlot slot, long start, long end) {
+    return slot != null
+        && slot.start >= 0
+        && start >= slot.start
+        && end <= slot.end;
   }
 
   @Override
@@ -524,12 +694,13 @@ public class BedTrack extends AbstractTrack {
 
     List<BedFeature> features = getFeaturesOverlapping(chromosome, (long) start, (long) end);
     if (features.isEmpty()) {
-      if (isIndexed() && loading) {
+      String bare = ChromosomeNames.strip(chromosome);
+      if (isIndexed() && isLoading(bare)) {
         gc.setFill(Color.rgb(120, 120, 120));
         gc.setFont(AppFonts.getUIFont(8));
         gc.setTextAlign(TextAlignment.LEFT);
         gc.fillText("Loading…", x + 4, y + height / 2 + 3);
-      } else if (isIndexed() && !loading) {
+      } else if (isIndexed() && !isLoading(bare)) {
         gc.setFill(Color.rgb(120, 120, 120));
         gc.setFont(AppFonts.getUIFont(8));
         gc.setTextAlign(TextAlignment.LEFT);
@@ -1026,13 +1197,15 @@ public class BedTrack extends AbstractTrack {
       if (isViewTooLargeForIndexed(viewStart, viewEnd)) {
         return List.of();
       }
-      if (!cacheCovers(bare, viewStart, viewEnd)) {
+      RegionSlot slot = slotFor(bare);
+      if (!cacheCovers(slot, viewStart, viewEnd)) {
         requestRegion(bare, viewStart, viewEnd, true);
+        // Stale/partial cache for another region of this chrom — wait for fetch.
+        if (!cacheCovers(slot, viewStart, viewEnd)) {
+          return List.of();
+        }
       }
-      if (!bare.equals(cacheChrom)) {
-        return List.of();
-      }
-      return regionCache;
+      return slot.features != null ? slot.features : List.of();
     }
     List<BedFeature> all = featuresByChrom.getOrDefault(bare, List.of());
     if (all.isEmpty()) {
@@ -1080,7 +1253,8 @@ public class BedTrack extends AbstractTrack {
     }
     String bare = ChromosomeNames.strip(chromosome);
     if (indexedReader != null) {
-      return bare.equals(cacheChrom) ? regionCache : List.of();
+      RegionSlot slot = regionSlots.get(bare);
+      return slot != null && slot.features != null ? slot.features : List.of();
     }
     return filterByIncludedNames(featuresByChrom.getOrDefault(bare, List.of()));
   }
@@ -1091,10 +1265,14 @@ public class BedTrack extends AbstractTrack {
    */
   public Set<String> getLoadedChromosomes() {
     if (indexedReader != null) {
-      if (cacheChrom != null && !cacheChrom.isEmpty() && !regionCache.isEmpty()) {
-        return Set.of(cacheChrom);
+      Set<String> chroms = new LinkedHashSet<>();
+      for (Map.Entry<String, RegionSlot> e : regionSlots.entrySet()) {
+        RegionSlot slot = e.getValue();
+        if (slot != null && slot.features != null && !slot.features.isEmpty()) {
+          chroms.add(e.getKey());
+        }
       }
-      return Set.of();
+      return chroms;
     }
     Set<String> chroms = new LinkedHashSet<>();
     for (Map.Entry<String, List<BedFeature>> e : featuresByChrom.entrySet()) {

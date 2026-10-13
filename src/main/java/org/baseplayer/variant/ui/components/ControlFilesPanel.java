@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.project.ProjectDocument;
 import org.baseplayer.project.SessionDocumentSync;
@@ -263,11 +264,25 @@ public class ControlFilesPanel {
         chooser.getExtensionFilters().addAll(
             new FileChooser.ExtensionFilter("Compressed VCF", "*.vcf.gz"),
             new FileChooser.ExtensionFilter("VCF", "*.vcf", "*.vcf.gz"));
+        File initialDir = UserPreferences.getLastDirectory("CONTROL_VCF");
+        if (initialDir == null) {
+            Path open = annotator.path();
+            if (open != null && open.getParent() != null) {
+                initialDir = open.getParent().toFile();
+            }
+        }
+        if (initialDir == null) {
+            initialDir = UserPreferences.getLastDirectory("VCF");
+        }
+        if (initialDir != null) {
+            chooser.setInitialDirectory(initialDir);
+        }
         Window window = windowSupplier.get();
         File chosen = window != null ? chooser.showOpenDialog(window) : chooser.showOpenDialog(null);
         if (chosen == null) {
             return;
         }
+        UserPreferences.setLastDirectory("CONTROL_VCF", chosen.getParentFile());
         Path path = chosen.toPath();
         try {
             annotator.open(path);

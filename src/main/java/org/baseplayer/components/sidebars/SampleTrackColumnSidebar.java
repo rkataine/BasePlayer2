@@ -189,6 +189,14 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     sampleSearchBar.setManaged(show);
     if (!show) {
       setSampleReplaceExpanded(false);
+      if (sampleSearchField != null && hasSearchText()) {
+        suppressSearchFieldSync = true;
+        sampleSearchField.clear();
+        suppressSearchFieldSync = false;
+      }
+      if (sampleReplaceField != null) {
+        sampleReplaceField.clear();
+      }
     }
     syncFilterStripHeightToRegistry();
   }

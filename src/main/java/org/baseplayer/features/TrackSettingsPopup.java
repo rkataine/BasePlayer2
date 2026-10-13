@@ -1,6 +1,5 @@
 package org.baseplayer.features;
 
-import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
 
@@ -67,9 +66,9 @@ public final class TrackSettingsPopup {
       }
 
       if (bed.supportsFeatureNameFilterDialog()) {
-        Optional<BedFeatureNameCatalog.Catalog> featureCatalog = scanBedFeatureCatalog(bed);
+        Optional<BedFeatureNameCatalog.Catalog> featureCatalog = bed.ensureFeatureNameCatalog();
         if (featureCatalog.isPresent()) {
-          Set<String> keys = bed.getSelectedNameKeys();
+          Set<String> keys = bed.selectionKeysForFeatureDialog();
           int total = featureCatalog.get().entries().size();
           String status = keys == null
               ? total + " / " + total + " selected"
@@ -78,7 +77,7 @@ public final class TrackSettingsPopup {
           c.actions(new PopupContent.ActionButton(
               "Select features…",
               true,
-              () -> openFeaturePicker(bed, featureCatalog.get(), onApply)));
+              () -> openFeaturePicker(bed, onApply)));
         }
       }
       c.separator();
@@ -236,33 +235,28 @@ public final class TrackSettingsPopup {
     pendingOnApply = null;
   }
 
-  private static Optional<BedFeatureNameCatalog.Catalog> scanBedFeatureCatalog(BedTrack bed) {
-    if (bed == null || bed.getSourcePath() == null) {
-      return Optional.empty();
+  private static void openFeaturePicker(BedTrack bed, Runnable onApply) {
+    if (bed == null) {
+      return;
     }
-    try {
-      return BedFeatureNameCatalog.scanForDialog(bed.getSourcePath());
-    } catch (IOException ex) {
-      System.err.println("Failed to scan BED feature names: " + ex.getMessage());
-      return Optional.empty();
-    }
-  }
-
-  private static void openFeaturePicker(
-      BedTrack bed, BedFeatureNameCatalog.Catalog catalog, Runnable onApply) {
-    if (bed == null || catalog == null) {
+    Optional<BedFeatureNameCatalog.Catalog> catalog = bed.ensureFeatureNameCatalog();
+    if (catalog.isEmpty()) {
       return;
     }
     Optional<BedFeatureFilterDialog.Outcome> choice = BedFeatureFilterDialog.show(
         MainApp.stage,
         bed.getName(),
-        catalog,
-        bed.getSelectedNameKeys(),
-        "Apply");
+        catalog.get(),
+        bed.selectionKeysForFeatureDialog(),
+        "Apply",
+        bed.getSourcePath());
     if (choice.isEmpty()) {
       return;
     }
     BedFeatureFilterDialog.Outcome outcome = choice.get();
+    if (outcome.catalog() != null) {
+      bed.setFeatureNameCatalog(outcome.catalog());
+    }
     if (outcome.loadAll()) {
       bed.setNameFilter(null, null);
     } else {

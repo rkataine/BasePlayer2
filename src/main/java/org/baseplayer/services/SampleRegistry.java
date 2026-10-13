@@ -822,7 +822,9 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     public List<Integer> getDisplayedTrackIndices() {
-        return List.copyOf(getDisplayedTrackIndicesCached());
+        // Do not use List.copyOf on the live cache: concurrent clear/rebuild can
+        // surface null slots (NPE) or structural changes (CME).
+        return copyNonNullIntegers(getDisplayedTrackIndicesCached());
     }
 
     @Override
@@ -1144,12 +1146,62 @@ public class SampleRegistry extends TrackViewportRegistry {
         if (!sampleGroups.isEmpty()) {
             return true;
         }
-        for (SampleTrack track : sampleTracks) {
-            if (track != null && track.hasAnyTag()) {
+        // sampleTracks is mutated during load/clear while revision listeners run.
+        // Index walk + retries; avoid List.copyOf (CME / null-hostile).
+        for (SampleTrack track : snapshotSampleTracks()) {
+            if (track.hasAnyTag()) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Best-effort snapshot of {@link #sampleTracks} safe against concurrent mutation. */
+    private List<SampleTrack> snapshotSampleTracks() {
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                int n = sampleTracks.size();
+                ArrayList<SampleTrack> out = new ArrayList<>(Math.max(0, n));
+                for (int i = 0; i < n; i++) {
+                    if (i >= sampleTracks.size()) {
+                        break;
+                    }
+                    SampleTrack track = sampleTracks.get(i);
+                    if (track != null) {
+                        out.add(track);
+                    }
+                }
+                return out;
+            } catch (RuntimeException ignored) {
+                // IndexOutOfBounds / CME-like races while list shrinks; retry.
+            }
+        }
+        return List.of();
+    }
+
+    private static List<Integer> copyNonNullIntegers(List<Integer> live) {
+        if (live == null || live.isEmpty()) {
+            return List.of();
+        }
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                int n = live.size();
+                ArrayList<Integer> out = new ArrayList<>(Math.max(0, n));
+                for (int i = 0; i < n; i++) {
+                    if (i >= live.size()) {
+                        break;
+                    }
+                    Integer value = live.get(i);
+                    if (value != null) {
+                        out.add(value);
+                    }
+                }
+                return out;
+            } catch (RuntimeException ignored) {
+                // Concurrent clear/rebuild of the displayed-index cache.
+            }
+        }
+        return List.of();
     }
 
     public void setTrackTags(SampleTrack track, Set<SampleTag> tags) {

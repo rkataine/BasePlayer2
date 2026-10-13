@@ -32,13 +32,21 @@ public final class BedTrackOpen {
       Optional<BedFeatureFilterDialog.Outcome> choice = BedFeatureFilterDialog.show(
           owner,
           filePath.getFileName().toString(),
-          catalog.get());
+          catalog.get(),
+          null,
+          "Load",
+          filePath);
       if (choice.isEmpty()) {
         return Optional.empty();
       }
       filter = choice.get();
     }
     BedTrack track = new BedTrack(filePath);
+    if (filter != null && filter.catalog() != null) {
+      track.setFeatureNameCatalog(filter.catalog());
+    } else if (catalog.isPresent()) {
+      track.setFeatureNameCatalog(catalog.get());
+    }
     if (filter != null && !filter.loadAll()) {
       track.setNameFilter(filter.selectedKeys(), filter.listedNames());
     }

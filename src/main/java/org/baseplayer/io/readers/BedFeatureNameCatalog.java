@@ -24,6 +24,8 @@ import javafx.scene.paint.Color;
  * Scans the first {@link #SAMPLE_DATA_LINES} data rows and lists every unique
  * name found there (covers most types for files like RepeatMasker). An
  * {@link #OTHER_NAME} bucket covers names that appear only later in the file.
+ * After open, {@link BedFeatureNameDiscovery} continues collecting novel names
+ * until EOF or a long idle stretch with no new types.
  */
 public final class BedFeatureNameCatalog {
 

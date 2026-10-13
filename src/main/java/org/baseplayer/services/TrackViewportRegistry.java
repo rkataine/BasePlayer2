@@ -360,7 +360,9 @@ public abstract class TrackViewportRegistry {
   protected void normalizeVisibleRangeAfterDisplayedTrackCountChange() {
     int displayed = getDisplayedTrackCount();
     if (displayed <= 0) {
-      setVisibleTrackRange(-1, -1, trackRowHeightPixels, 0, trackViewportHeightPixels);
+      // Full reset (unlocks row-height lock / pending fit) — not a partial clear
+      // that leaves viewport/slider state for New Project remnants.
+      clearVisibleTrackRange();
       return;
     }
 

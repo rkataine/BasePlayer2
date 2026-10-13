@@ -115,6 +115,8 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
     selectedTrackIndices.clear();
     legendHiddenFeatureNames.clear();
     clearVisibleTrackRange();
+    setMasterBandHeightPixels(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+    setFilterStripHeightPixels(0);
     setHoveredTrackIndex(-1);
     bumpSelectionRevision();
     bumpAggregateRevision();

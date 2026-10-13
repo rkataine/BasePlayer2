@@ -474,6 +474,7 @@ public final class SessionRuntime {
             }
             BedTrack bed = new BedTrack(path);
             applyFeatureAppearance(bed, spec);
+            bed.startFeatureNameDiscovery();
             features.addFeatureTrack(bed);
           }
           case "bigwig" -> {

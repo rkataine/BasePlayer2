@@ -267,12 +267,18 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     int trackCount = trackViewportRegistry.getDisplayedTrackCount();
     double masterH = trackViewportRegistry.getMasterBandHeightPixels();
 
-    // Multi-track: ensure room for the visible-range slider. Never snap a
-    // user-resized aggregate/density band back down — that fought drag-resize.
-    if (shouldAutoExpandMasterHeader(trackCount)
-        && masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
-      trackViewportRegistry.setMasterBandHeightPixels(EXPANDED_MASTER_HEIGHT);
-      masterH = EXPANDED_MASTER_HEIGHT;
+    // Multi-track: ensure room for the visible-range slider. Collapse when
+    // tracks drop to 0/1 (New Project / clear) so the empty slider chrome
+    // does not linger. Never snap a user-resized band while still multi-track.
+    if (shouldAutoExpandMasterHeader(trackCount)) {
+      if (masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+        trackViewportRegistry.setMasterBandHeightPixels(EXPANDED_MASTER_HEIGHT);
+        masterH = EXPANDED_MASTER_HEIGHT;
+      }
+    } else if (masterH > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+      trackViewportRegistry.setMasterBandHeightPixels(
+          TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
+      masterH = TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
     }
 
     int firstVisible = 0;

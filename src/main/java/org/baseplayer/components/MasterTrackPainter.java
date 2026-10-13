@@ -376,14 +376,12 @@ public class MasterTrackPainter {
       return;
     }
 
-    // Pyramid finest level is 1kb. Once those bins are ≥2px wide, the screen can
-    // resolve finer than the pyramid — paint live allele bars (same as before the
-    // pyramid, but without waiting for pixelSize > 1 / base-letter zoom).
+    // Live per-allele bars only at base-level zoom. Gene/SV zoom must keep the
+    // pyramid so overlapping SVs accumulate unique samples (otherwise scale
+    // collapses to ~1–2 when each sample has its own VariantNode).
     double viewLength = Math.max(1.0, drawStack.getViewLength());
     double pxPerBp = canvasWidth / viewLength;
-    long finestBin = VariantDensityPyramid.BIN_SIZES_BP[
-        VariantDensityPyramid.BIN_SIZES_BP.length - 1];
-    boolean zoomedInPrecise = pxPerBp * finestBin >= 2.0 || pxPerBp > 1.0;
+    boolean zoomedInPrecise = pxPerBp > 1.0;
     if (!zoomedInPrecise) {
       ensurePyramidAsync(drawStack, false);
     }
@@ -664,8 +662,10 @@ public class MasterTrackPainter {
       maxC = Math.max(1, preciseBarsMaxC);
     } else {
       bars = new ArrayList<>();
-      int windowMax = 1;
-      BitSet passing = new BitSet(Math.max(64, allTracks.size() + 1));
+      final int[] windowMax = { 1 };
+      int trackBits = Math.max(64, allTracks.size() + 1);
+      BitSet passing = new BitSet(trackBits);
+      BitSet windowSamples = new BitSet(trackBits);
       VcfManager vcfManager = VcfManager.getInstance();
       Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
       java.util.function.Consumer<VariantNode> collect = node -> {
@@ -702,6 +702,8 @@ public class MasterTrackPainter {
           w = 1;
         }
 
+        windowSamples.or(passing);
+        windowMax[0] = Math.max(windowMax[0], count);
         bars.add(new PreciseBar(x, w, count, node.type));
       };
 
@@ -732,11 +734,11 @@ public class MasterTrackPainter {
         node = node.nextVisible;
       }
 
-      for (PreciseBar bar : bars) {
-        windowMax = Math.max(windowMax, bar.count());
-      }
-      // 2× window peak so tallest bars only reach half the band.
-      maxC = Math.max(1, windowMax * 2);
+      // Cohort-relative scale: floor on displayed samples so overlapping
+      // per-sample SVs don't collapse the axis to 1–2.
+      int cohort = Math.max(1, displayedTrackToIndex.size());
+      int uniqueInView = Math.max(windowMax[0], windowSamples.cardinality());
+      maxC = Math.max(cohort, uniqueInView);
 
       preciseBarsCache = List.copyOf(bars);
       preciseBarsMaxC = maxC;
