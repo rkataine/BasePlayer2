@@ -99,6 +99,14 @@ class ControlFrequencyAnnotatorTest {
     }
 
     @Test
+    void parseVcfPosFromBytes() {
+        byte[] line = "1\t12345\t.\tA\tG\t.\t.\tAC=1;AN=100".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertEquals(12345L, ControlFrequencyAnnotator.parseVcfPos(line, 0, line.length));
+        byte[] bad = "#CHROM\tPOS".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertEquals(-1L, ControlFrequencyAnnotator.parseVcfPos(bad, 0, bad.length));
+    }
+
+    @Test
     void resolveAfFromInfoStringUsesAcAnAndPops() {
         String info = "AC=3;AN=135096;AF_fin=0.01;AC_nfe=5;AN_nfe=100";
         assertEquals(
@@ -120,6 +128,15 @@ class ControlFrequencyAnnotatorTest {
         assertEquals(
             2.0,
             ControlFrequencyAnnotator.infoNumber("AC=1,2,3;AN=10", "AC", 1),
+            1e-12);
+    }
+
+    @Test
+    void infoNumberFromBytesPicksAltIndex() {
+        byte[] info = "AC=1,2,3;AN=10".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertEquals(
+            2.0,
+            ControlFrequencyAnnotator.infoNumber(info, 0, info.length, "AC", 1),
             1e-12);
     }
 }

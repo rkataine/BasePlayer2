@@ -279,8 +279,10 @@ public abstract class TrackColumnSidebar extends SidebarBase {
         masterH = TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
       }
     } else if (shouldAutoExpandMasterHeader(trackCount)) {
-      // Multi-track: ensure room for the visible-range slider.
-      if (masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
+      // Multi-track: title + range slider needs ~82px. Single-track aggregate
+      // settles at 60px, which clips the slider when a second sample is opened.
+      // Skip while the user is dragging the band edge so resize stays interactive.
+      if (!isDraggingResize && masterH < EXPANDED_MASTER_HEIGHT - 1) {
         trackViewportRegistry.setMasterBandHeightPixels(EXPANDED_MASTER_HEIGHT);
         masterH = EXPANDED_MASTER_HEIGHT;
       }

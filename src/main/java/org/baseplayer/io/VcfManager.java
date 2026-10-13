@@ -899,9 +899,24 @@ public class VcfManager {
 
     public ThreadRunner.RunnerTask annotateAllReferenceChromosomes(
         VariantFilter filter,
-				List<String> chromosomes,
+        List<String> chromosomes,
         Consumer<AllChromosomeProgress> onProgress,
         Consumer<AllChromosomeAnnotationResult> onComplete) {
+        return annotateAllReferenceChromosomes(
+            filter, chromosomes, onProgress, onComplete, null);
+    }
+
+    /**
+     * @param afterChromosomeReady optional hook after each chromosome is loaded/gene-annotated
+     *        (and on cache reuse). Used to apply control AF per chrom — same order as manual
+     *        chromosome switching — instead of a second pass after all chroms finish.
+     */
+    public ThreadRunner.RunnerTask annotateAllReferenceChromosomes(
+        VariantFilter filter,
+        List<String> chromosomes,
+        Consumer<AllChromosomeProgress> onProgress,
+        Consumer<AllChromosomeAnnotationResult> onComplete,
+        Consumer<VariantList> afterChromosomeReady) {
 
         final VariantFilter filterSnapshot = loadTimeFilterSnapshot(filter);
         final List<File> filesSnapshot = getLoadedVcfFiles();
@@ -966,6 +981,23 @@ public class VcfManager {
                             }
                         });
 
+                    // Per-chrom control AF (same as switching chroms manually) — before next chrom.
+                    if (afterChromosomeReady != null && !Thread.currentThread().isInterrupted()) {
+                        VariantList built = findCachedVariantList(chromosome);
+                        if (built != null) {
+                            updateAnnotateAllTaskSuffix(taskRef[0],
+                                chromLabel
+                                    + " (" + (progressState[0] + 1) + "/" + totalChromosomes + ")"
+                                    + " controlling…");
+                            try {
+                                afterChromosomeReady.accept(built);
+                            } catch (Throwable t) {
+                                warnings.add("Control AF failed for " + chromosome + ": "
+                                    + t.getMessage());
+                            }
+                        }
+                    }
+
                     completedChromosomes++;
                     totalRows += chromosomeRows;
                     progressState[0] = completedChromosomes;
@@ -1015,6 +1047,18 @@ public class VcfManager {
                                 annotator,
                                 warnings,
                                 null);
+                            if (afterChromosomeReady != null
+                                    && !Thread.currentThread().isInterrupted()) {
+                                VariantList rebuilt = findCachedVariantList(active);
+                                if (rebuilt != null) {
+                                    try {
+                                        afterChromosomeReady.accept(rebuilt);
+                                    } catch (Throwable t) {
+                                        warnings.add("Control AF failed for " + active + ": "
+                                            + t.getMessage());
+                                    }
+                                }
+                            }
                         } else {
                             variantsRevision.incrementAndGet();
                         }

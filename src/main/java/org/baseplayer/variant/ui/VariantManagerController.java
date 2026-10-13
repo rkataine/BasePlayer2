@@ -1758,13 +1758,16 @@ public class VariantManagerController implements Initializable {
         busyOverlay.lockFilterControls(true);
         busyOverlay.syncBusyOverlay();
 
+        // Capture before background work — same per-chrom control AF as manual chrom switch.
+        final ControlFilesPanel controlPanel = activeControlPanelWithOpenFile();
         Platform.runLater(() -> {
             VariantFilter filterSnapshot = buildFilterFromUI();
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
                 filterSnapshot,
                 chromosomes,
                 progress -> busyOverlay.updateProgress(progress),
-                this::completeAllChromosomeAnnotation);
+                this::completeAllChromosomeAnnotation,
+                controlAfAfterChromosomeHook(controlPanel));
             busyOverlay.setAllChromosomeAnnotationTask(task);
 
             if (task != null) {
@@ -1842,12 +1845,14 @@ public class VariantManagerController implements Initializable {
 
         final VariantFilter filterSnapshot = target.copy();
         final List<String> cachedChroms = List.copyOf(chromosomes);
+        final ControlFilesPanel controlPanel = activeControlPanelWithOpenFile();
         Platform.runLater(() -> {
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
                 filterSnapshot,
                 cachedChroms,
                 progress -> busyOverlay.updateProgress(progress),
-                this::completeAllChromosomeAnnotation);
+                this::completeAllChromosomeAnnotation,
+                controlAfAfterChromosomeHook(controlPanel));
             busyOverlay.setAllChromosomeAnnotationTask(task);
 
             if (task != null) {
@@ -2178,6 +2183,31 @@ public class VariantManagerController implements Initializable {
             return;
         }
         runControlAnnotationAsync(progress -> panel.annotateIfOpen(list, progress));
+    }
+
+    /**
+     * Per-chromosome control AF during annotate-all / reload-all — same step as when
+     * switching chromosomes manually. No LoadingManager bar updates (annotate-all owns progress).
+     */
+    private java.util.function.Consumer<VariantList> controlAfAfterChromosomeHook(
+            ControlFilesPanel panel) {
+        if (panel == null) {
+            return null;
+        }
+        return list -> {
+            if (list == null || !panel.annotator().isOpen()) {
+                return;
+            }
+            if (!panel.annotator().needsAnnotation(list)) {
+                return;
+            }
+            try {
+                panel.annotator().annotate(list);
+            } catch (java.io.IOException e) {
+                System.err.println("Control AF annotation failed for "
+                    + list.getChromosome() + ": " + e.getMessage());
+            }
+        };
     }
 
     private ControlFilesPanel activeControlPanel() {
