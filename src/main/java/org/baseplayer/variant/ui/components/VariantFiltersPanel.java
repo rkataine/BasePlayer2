@@ -300,6 +300,7 @@ public class VariantFiltersPanel {
                 qualitySlider, qualityField),
             labeledFields("SV length (bp)",
                 new Label("Min"), minSvLen, new Label("Max"), maxSvLen),
+            new javafx.scene.control.Separator(),
             section("Custom filters", advanced, new HBox(8, addCustom)));
 
         VBox right = new VBox(8);
@@ -315,7 +316,9 @@ public class VariantFiltersPanel {
         effectsHeader.setAlignment(Pos.CENTER_LEFT);
         right.getChildren().addAll(
             new VBox(6, typesHeader, typesContainer),
+            new javafx.scene.control.Separator(),
             new VBox(6, effectsHeader, effectsContainer),
+            new javafx.scene.control.Separator(),
             new VBox(6, new Label("Special Filters") {{ getStyleClass().add("section-header"); }}, cancerOnly));
 
         // Annotate / search / Excel live in the variant-table toolbar (above results tabs).

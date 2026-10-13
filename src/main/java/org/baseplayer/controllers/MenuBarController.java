@@ -1,6 +1,7 @@
 package org.baseplayer.controllers;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.List;
 
 import org.baseplayer.components.GeneSearchComponent;
@@ -12,12 +13,14 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.MainApp;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.alignment.FetchManager;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ViewportState;
 import org.baseplayer.utils.BaseUtils;
+import org.baseplayer.ui.MenuIcons;
 import org.baseplayer.ui.theme.AppTheme;
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
@@ -62,7 +65,18 @@ public class MenuBarController {
   @FXML private HBox positionBox;
   @FXML private Label viewLengthLabel;
   @FXML private MenuBar menuBar;
+  @FXML private MenuItem newProjectMenuItem;
+  @FXML private MenuItem openProjectMenuItem;
+  @FXML private MenuItem openVcfMenuItem;
+  @FXML private MenuItem openBamMenuItem;
+  @FXML private MenuItem openAb1MenuItem;
+  @FXML private MenuItem openBedMenuItem;
+  @FXML private MenuItem openBigwigMenuItem;
+  @FXML private MenuItem openDirMenuItem;
   @FXML private Menu recentFilesMenu;
+  @FXML private MenuItem saveProjectMenuItem;
+  @FXML private MenuItem saveProjectAsMenuItem;
+  @FXML private MenuItem closeMenuItem;
   @FXML private Pane memoryBar;
   @FXML private Button undoButton;
   @FXML private Button redoButton;
@@ -126,6 +140,10 @@ public class MenuBarController {
     setupVariantManagerButton();
     setupSampleGroupsButton();
     setupThemeToggleButton();
+    setupFileMenuIcons();
+    for (Menu menu : menuBar.getMenus()) {
+      ensureMenuIconColumns(menu.getItems());
+    }
     refreshRecentFilesMenu();
     
     GenomicCanvas.update.addListener((observable, oldValue, newValue) -> {
@@ -271,6 +289,7 @@ public class MenuBarController {
     for (String chrom : chroms) {
       String label = org.baseplayer.utils.ChromosomeNames.forDisplay(chrom);
       MenuItem item = new MenuItem(label);
+      MenuIcons.spacer(item);
       item.setOnAction(event -> onChromosomeSelected(chrom));
       chromosomeLabelMenu.getItems().add(item);
     }
@@ -534,6 +553,32 @@ public class MenuBarController {
     snackbarHideTimer.playFromStart();
   }
   
+  private void setupFileMenuIcons() {
+    MenuIcons.apply(newProjectMenuItem, FontAwesomeSolid.FOLDER_PLUS, "#5b9bd5");
+    MenuIcons.apply(openProjectMenuItem, FontAwesomeSolid.FOLDER_OPEN, "#e2b04a");
+    MenuIcons.vcf(openVcfMenuItem);
+    MenuIcons.bam(openBamMenuItem);
+    MenuIcons.ab1(openAb1MenuItem);
+    MenuIcons.bed(openBedMenuItem);
+    MenuIcons.bigwig(openBigwigMenuItem);
+    MenuIcons.directory(openDirMenuItem);
+    MenuIcons.apply(recentFilesMenu, FontAwesomeSolid.HISTORY, "#8a94a6");
+    MenuIcons.apply(saveProjectMenuItem, FontAwesomeSolid.SAVE, "#6aab73");
+    MenuIcons.apply(saveProjectAsMenuItem, FontAwesomeSolid.FILE_EXPORT, "#5b9bd5");
+    MenuIcons.apply(closeMenuItem, FontAwesomeSolid.TIMES, "#c07070");
+  }
+
+  private static void ensureMenuIconColumns(Iterable<? extends MenuItem> items) {
+    if (items == null) return;
+    for (MenuItem item : items) {
+      if (item instanceof SeparatorMenuItem) continue;
+      MenuIcons.spacer(item);
+      if (item instanceof Menu submenu) {
+        ensureMenuIconColumns(submenu.getItems());
+      }
+    }
+  }
+
   private void setupZoomButtons() {
     // Set magnifying glass icons for zoom buttons
     zoomInIcon = new FontIcon(FontAwesomeSolid.SEARCH_PLUS);
@@ -776,6 +821,7 @@ public class MenuBarController {
     if (recentFiles.isEmpty()) {
       MenuItem emptyItem = new MenuItem("No recent sample files");
       emptyItem.setDisable(true);
+      MenuIcons.spacer(emptyItem);
       recentFilesMenu.getItems().add(emptyItem);
       return;
     }
@@ -788,6 +834,7 @@ public class MenuBarController {
       String type = rf.fileType() != null ? rf.fileType() : "FILE";
       String itemText = shown + ". " + file.getName() + " [" + type + "]";
       MenuItem item = new MenuItem(itemText);
+      MenuIcons.spacer(item);
       item.setOnAction(e -> {
         if (!file.exists() || !file.isFile()) {
           UserPreferences.removeRecentSampleFile(rf.path());
@@ -803,12 +850,14 @@ public class MenuBarController {
     if (shown == 0) {
       MenuItem emptyItem = new MenuItem("No recent sample files");
       emptyItem.setDisable(true);
+      MenuIcons.spacer(emptyItem);
       recentFilesMenu.getItems().add(emptyItem);
       return;
     }
 
     recentFilesMenu.getItems().add(new SeparatorMenuItem());
     MenuItem clear = new MenuItem("Clear Recent Samples");
+    MenuIcons.spacer(clear);
     clear.setOnAction(e -> {
       UserPreferences.clearRecentSampleFiles();
       refreshRecentFilesMenu();
@@ -823,6 +872,69 @@ public class MenuBarController {
   @FXML
   public void openSampleOpenErrors(ActionEvent event) {
     org.baseplayer.components.SampleOpenFailuresDialog.openFromTools();
+  }
+
+  @FXML
+  public void clearVariantCache(ActionEvent event) {
+    Window owner = MainApp.stage;
+    Path projectFile = ProjectSessionState.get().getFile();
+    boolean hasDiskCache = projectFile != null
+        && org.baseplayer.project.VariantCacheStore.exists(projectFile);
+    boolean hasVcfs = org.baseplayer.io.VcfManager.getInstance().hasLoadedVcf();
+
+    if (!hasDiskCache && !hasVcfs) {
+      org.baseplayer.components.AppDialog.info(
+          owner,
+          "Clear variant cache",
+          "Nothing to clear.",
+          "No project variant cache on disk and no VCFs loaded.");
+      return;
+    }
+
+    String where = hasDiskCache
+        ? ("Deletes "
+            + org.baseplayer.project.VariantCacheStore.cacheDirectory(projectFile).getFileName()
+            + " next to the project, and drops in-memory chromosome lists.")
+        : "No saved project cache on disk. Clears in-memory chromosome lists only.";
+    boolean ok = org.baseplayer.components.AppDialog.confirm(
+        owner,
+        "Clear variant cache",
+        "Empty variant cache?",
+        where + " Variants for the current view will reload from the VCF(s).",
+        "Clear",
+        "Cancel");
+    if (!ok) {
+      return;
+    }
+
+    int deleted = 0;
+    String diskError = null;
+    if (projectFile != null) {
+      try {
+        deleted = org.baseplayer.project.VariantCacheStore.clearSessionCache(projectFile);
+      } catch (java.io.IOException ex) {
+        diskError = ex.getMessage();
+      }
+    }
+
+    org.baseplayer.io.VcfManager vcf = org.baseplayer.io.VcfManager.getInstance();
+    vcf.clearAllVariantCaches();
+    if (vcf.hasLoadedVcf()) {
+      vcf.loadVariantsForCurrentView();
+    }
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+
+    StringBuilder detail = new StringBuilder();
+    if (diskError != null) {
+      detail.append("Disk cache: failed — ").append(diskError);
+    } else if (projectFile == null) {
+      detail.append("Disk cache: none (project not saved).");
+    } else {
+      detail.append("Disk cache: removed ").append(deleted).append(" file(s).");
+    }
+    detail.append(" In-memory lists cleared.");
+    org.baseplayer.components.AppDialog.info(
+        owner, "Clear variant cache", "Variant cache emptied.", detail.toString());
   }
 
   public void clearAllData(ActionEvent event) { FileCommands.newProject(); }

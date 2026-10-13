@@ -267,8 +267,11 @@ public class VcfManager {
                     }
                 }
 
+                Path attachedVcfPath = vcfData.file.toPath();
                 SampleDataManager.attachVcfSamplesToMappedTracks(
-                    vcfData.loader, vcfData.file.toPath());
+                    vcfData.loader, attachedVcfPath);
+                SampleDataManager.attachMatchingBamsForMappedTracks(
+                    vcfData.loader, attachedVcfPath);
                 
                 if (vcfData.loader.getMappedSampleCount() == 0) {
                     System.err.println("Warning: Could not create or map any VCF samples.");

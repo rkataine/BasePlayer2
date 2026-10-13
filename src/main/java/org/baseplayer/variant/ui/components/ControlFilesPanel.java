@@ -796,6 +796,7 @@ public class ControlFilesPanel {
 
         left.getChildren().addAll(
             fileTitle, pathLabel, fileButtons,
+            new javafx.scene.control.Separator(),
             filterTitle, filterRow);
 
         VBox right = new VBox(12);
@@ -826,7 +827,7 @@ public class ControlFilesPanel {
         applyRow.getStyleClass().add("filter-panel");
         applyRow.setPadding(new Insets(8, 16, 12, 16));
 
-        VBox root = new VBox(split, applyRow);
+        VBox root = new VBox(split, new javafx.scene.control.Separator(), applyRow);
 
         Nodes built = new Nodes(
             pathLabel, addVcf, remove, filterByPop, maxFreq, selectAllPops, popBox);

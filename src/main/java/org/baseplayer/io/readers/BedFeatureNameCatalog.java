@@ -50,12 +50,14 @@ public final class BedFeatureNameCatalog {
       List<Entry> entries, Set<String> listedNames, boolean hasOtherBucket, int sampleRows) {
 
     /**
-     * True when the open dialog should ask which types to load (more than one
-     * name in the sample, or an Other bucket for names beyond the sample).
+     * True when the open dialog should ask which types to load.
+     * Only prompts when the sample already has two or more concrete names —
+     * a single type (even with a speculative Other bucket for unread rows)
+     * is not a real choice.
      */
     public boolean shouldPromptTypeSelection() {
       int types = listedNames != null ? listedNames.size() : 0;
-      return types > 1 || hasOtherBucket;
+      return types > 1;
     }
   }
 

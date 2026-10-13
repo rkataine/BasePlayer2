@@ -1,5 +1,6 @@
 package org.baseplayer.components.sidebars;
 
+import org.baseplayer.ui.MenuIcons;
 import org.baseplayer.ui.theme.AppTheme;
 
 import java.util.ArrayList;
@@ -647,25 +648,31 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     ContextMenu menu = new ContextMenu();
 
     MenuItem bamItem = new MenuItem("BAM/CRAM");
+    MenuIcons.bam(bamItem);
     bamItem.setOnAction(e -> SampleDataManager.addBamFiles());
 
     MenuItem vcfItem = new MenuItem("VCF");
+    MenuIcons.vcf(vcfItem);
     vcfItem.setOnAction(e -> SampleDataManager.addVcfFile());
 
     MenuItem directoryItem = new MenuItem("Directory…");
+    MenuIcons.directory(directoryItem);
     directoryItem.setOnAction(e -> SampleDataManager.openDirectorySamples());
 
     MenuItem bedItem = new MenuItem("BED");
+    MenuIcons.bed(bedItem);
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
 
     MenuItem bigwigItem = new MenuItem("BigWig");
+    MenuIcons.bigwig(bigwigItem);
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
 
     MenuItem ab1Item = new MenuItem("AB1 / Sanger");
+    MenuIcons.ab1(ab1Item);
     ab1Item.setOnAction(e -> SampleDataManager.addAb1Files());
 
     menu.getItems().addAll(
-        bamItem, vcfItem, directoryItem, new SeparatorMenuItem(), bedItem, bigwigItem, ab1Item);
+        vcfItem, bamItem, directoryItem, new SeparatorMenuItem(), bedItem, bigwigItem, ab1Item);
     return menu;
   }
 

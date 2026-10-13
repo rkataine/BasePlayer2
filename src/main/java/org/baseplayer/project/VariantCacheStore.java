@@ -66,6 +66,34 @@ public final class VariantCacheStore {
     return Files.isDirectory(dir) && Files.isRegularFile(dir.resolve(META_FILE));
   }
 
+  /**
+   * Delete the on-disk variant cache directory next to the project
+   * ({@code <stem>.bpcache/}). No-op when {@code projectFile} is null or the
+   * cache folder is missing.
+   *
+   * @return number of files deleted (0 if nothing to clear)
+   */
+  public static int clearSessionCache(Path projectFile) throws IOException {
+    if (projectFile == null) {
+      return 0;
+    }
+    Path dir = cacheDirectory(projectFile);
+    if (!Files.isDirectory(dir)) {
+      return 0;
+    }
+    int deleted = 0;
+    try (var stream = Files.walk(dir)) {
+      // Delete deepest paths first so directories empty before removal.
+      List<Path> paths = stream.sorted((a, b) -> b.compareTo(a)).toList();
+      for (Path path : paths) {
+        if (Files.deleteIfExists(path)) {
+          deleted++;
+        }
+      }
+    }
+    return deleted;
+  }
+
   /** Write all in-memory chromosome variant lists next to the project file. */
   public static void writeSessionCache(Path projectFile) throws IOException {
     Path dir = cacheDirectory(projectFile);
@@ -304,8 +332,25 @@ public final class VariantCacheStore {
           out.put(chrom, list);
         }
       } catch (Exception e) {
+        // Corrupt/truncated .bpv.zst (often after OOM mid-write) — drop it so the
+        // next load streams this chromosome from the VCF instead of failing forever.
+        boolean deleted = false;
+        try {
+          deleted = Files.deleteIfExists(file);
+        } catch (IOException deleteEx) {
+          // keep original warning below
+        }
         if (warnings != null) {
-          warnings.add("Failed to read variant cache for " + chrom + ": " + e.getMessage());
+          warnings.add(
+              "Failed to read variant cache for "
+                  + chrom
+                  + ": "
+                  + e.getMessage()
+                  + (deleted
+                      ? " (corrupt cache file removed; will reload from VCF)"
+                      : " (delete "
+                          + file.getFileName()
+                          + " under the .bpcache folder if variants stay missing)"));
         }
       }
       index++;

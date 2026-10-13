@@ -16,6 +16,7 @@ import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.ui.MenuIcons;
 import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.services.TrackViewportRegistry;
@@ -944,14 +945,18 @@ public class SampleTrackListPanel extends TrackListPanel {
     addMenu.setStyle(
         "-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
     MenuItem bamItem = new MenuItem("Add BAM/CRAM");
+    MenuIcons.bam(bamItem);
     bamItem.setOnAction(event -> SampleDataManager.addBamToTrack(sampleIndex));
     MenuItem bedItem = new MenuItem("Add BED");
+    MenuIcons.bed(bedItem);
     bedItem.setOnAction(event -> SampleDataManager.addBedToTrack(sampleIndex));
     MenuItem vcfItem = new MenuItem("Add VCF");
+    MenuIcons.vcf(vcfItem);
     vcfItem.setOnAction(event -> SampleDataManager.addVcfToTrack(sampleIndex));
     MenuItem ab1Item = new MenuItem("Add AB1 / Sanger");
+    MenuIcons.ab1(ab1Item);
     ab1Item.setOnAction(event -> SampleDataManager.addAb1ToTrack(sampleIndex));
-    addMenu.getItems().addAll(bamItem, bedItem, vcfItem, ab1Item);
+    addMenu.getItems().addAll(vcfItem, bamItem, bedItem, ab1Item);
     addMenu.show(canvas, screenX, screenY);
   }
 

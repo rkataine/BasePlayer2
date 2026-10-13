@@ -385,8 +385,8 @@ public class MasterTrackPainter {
 
     // Live per-allele bars once the finest pyramid bins (~1kb) would stretch
     // wider than ~2px — otherwise close zoom stays as large blocks. Pyramid
-    // remains for chromosome / gene-far zoom. Precise path floors scale to
-    // cohort size so overlapping per-sample SVs don't collapse the axis.
+    // remains for chromosome / gene-far zoom. Precise path scales to the
+    // peak per-allele sample count in the current view.
     double viewLength = Math.max(1.0, drawStack.getViewLength());
     double pxPerBp = canvasWidth / viewLength;
     long finestBinBp = VariantDensityPyramid.BIN_SIZES_BP[
@@ -625,7 +625,7 @@ public class MasterTrackPainter {
   /**
    * Zoomed-in density: one bar per allele at exact genomic width (matches sample-track
    * variant rectangles). Avoids stretched 600-bin sampling which looks glitchy/laggy.
-   * @return scale max (sample count) used for the left axis
+   * @return scale max from the current view (peak per-allele sample count)
    */
   private int drawPreciseDensityBars(
       GraphicsContext gc,
@@ -683,7 +683,6 @@ public class MasterTrackPainter {
       final int[] windowMax = { 1 };
       int trackBits = Math.max(64, allTracks.size() + 1);
       BitSet passing = new BitSet(trackBits);
-      BitSet windowSamples = new BitSet(trackBits);
       VcfManager vcfManager = VcfManager.getInstance();
       Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
       java.util.function.Consumer<VariantNode> collect = node -> {
@@ -720,7 +719,6 @@ public class MasterTrackPainter {
           w = 1;
         }
 
-        windowSamples.or(passing);
         windowMax[0] = Math.max(windowMax[0], count);
         bars.add(new PreciseBar(x, w, count, node.type));
       };
@@ -754,11 +752,10 @@ public class MasterTrackPainter {
         }
       });
 
-      // Cohort-relative scale: floor on displayed samples so overlapping
-      // per-sample SVs don't collapse the axis to 1–2.
-      int cohort = Math.max(1, displayedTrackToIndex.size());
-      int uniqueInView = Math.max(windowMax[0], windowSamples.cardinality());
-      maxC = Math.max(cohort, uniqueInView);
+      // Scale to the tallest bar in this view (same units as bar.count).
+      // Do not use unique samples across all alleles — that inflates the
+      // axis and flattens every individual allele bar.
+      maxC = Math.max(1, windowMax[0]);
 
       preciseBarsCache = List.copyOf(bars);
       preciseBarsMaxC = maxC;

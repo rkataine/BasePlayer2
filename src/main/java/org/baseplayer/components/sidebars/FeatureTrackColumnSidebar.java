@@ -13,6 +13,7 @@ import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.ui.MenuIcons;
 import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.application.Platform;
@@ -127,12 +128,16 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
   protected ContextMenu buildAddTrackMenu() {
     ContextMenu menu = new ContextMenu();
     MenuItem bedItem = new MenuItem("BED file...");
+    MenuIcons.bed(bedItem);
     bedItem.setOnAction(e -> addBedTrack());
     MenuItem bigWigItem = new MenuItem("BigWig file...");
+    MenuIcons.bigwig(bigWigItem);
     bigWigItem.setOnAction(e -> addBigWigTrack());
     MenuItem jasparItem = new MenuItem("JASPAR / PFM file...");
+    MenuIcons.motif(jasparItem);
     jasparItem.setOnAction(e -> addMotifTrack());
     MenuItem ucscBrowserItem = new MenuItem("Browse UCSC Tracks...");
+    MenuIcons.ucsc(ucscBrowserItem);
     ucscBrowserItem.setOnAction(e -> showUcscTracksBrowser());
     menu.getItems().addAll(
         bedItem, bigWigItem, jasparItem, new SeparatorMenuItem(), ucscBrowserItem);

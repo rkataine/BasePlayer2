@@ -179,8 +179,8 @@ public class GenomeSidebar extends SidebarBase {
     referenceComboBox.setPromptText("Homo Sapiens GRCh38");
 
     genomeSettings = new VBox(4,
-        annotationLabel, annotationComboBox,
-        referenceLabel, referenceComboBox);
+        referenceLabel, referenceComboBox,
+        annotationLabel, annotationComboBox);
     genomeSettings.setMinHeight(Region.USE_PREF_SIZE);
     genomeSettings.setMaxHeight(Region.USE_PREF_SIZE);
     genomeSettings.setMaxWidth(Double.MAX_VALUE);

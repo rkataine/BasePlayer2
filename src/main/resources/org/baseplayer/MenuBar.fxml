@@ -23,21 +23,24 @@
     <menus>
       <Menu text="File">
         <items>
-            <MenuItem text="New Project" onAction="#newProject" />
-            <MenuItem id="LOAD_SES" onAction="#openFileMenu" text="Open Project…" />
+            <MenuItem fx:id="newProjectMenuItem" text="New Project" onAction="#newProject" />
+            <MenuItem fx:id="openProjectMenuItem" id="LOAD_SES" onAction="#openFileMenu" text="Open Project…" />
             <SeparatorMenuItem />
-            <MenuItem id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM/CRAM file(s)" />
-            <MenuItem id="LOAD_BED" onAction="#openFileMenu" text="Open BED track file(s)" />
-            <MenuItem id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig track file(s)" />
-            <MenuItem id="LOAD_AB1" onAction="#openFileMenu" text="Open AB1 / Sanger file(s)" />
-            <MenuItem id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF file(s)" />
-            <MenuItem id="LOAD_DIR" onAction="#openFileMenu" text="Open Directory…" />
+            <MenuItem fx:id="openVcfMenuItem" id="LOAD_VCF" onAction="#openFileMenu" text="Open VCF" />
+            <MenuItem fx:id="openBamMenuItem" id="LOAD_BAM" onAction="#openFileMenu" text="Open BAM/CRAM" />
+            <MenuItem fx:id="openAb1MenuItem" id="LOAD_AB1" onAction="#openFileMenu" text="Open AB1 / Sanger" />
+            <SeparatorMenuItem />
+            <MenuItem fx:id="openBedMenuItem" id="LOAD_BED" onAction="#openFileMenu" text="Open BED" />
+            <MenuItem fx:id="openBigwigMenuItem" id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig" />
+            <SeparatorMenuItem />
+            <MenuItem fx:id="openDirMenuItem" id="LOAD_DIR" onAction="#openFileMenu" text="Open Directory…" />
+            <SeparatorMenuItem />
             <Menu fx:id="recentFilesMenu" text="Open Recent Samples" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />
-            <MenuItem id="SAVE_SES" onAction="#openFileMenu" text="Save Project" />
-            <MenuItem id="SAVEAS_SES" onAction="#openFileMenu" text="Save Project as…" />
+            <MenuItem fx:id="saveProjectMenuItem" id="SAVE_SES" onAction="#openFileMenu" text="Save Project" />
+            <MenuItem fx:id="saveProjectAsMenuItem" id="SAVEAS_SES" onAction="#openFileMenu" text="Save Project as…" />
             <SeparatorMenuItem />
-          <MenuItem text="Close" onAction="#closeApplication" />
+          <MenuItem fx:id="closeMenuItem" text="Close" onAction="#closeApplication" />
         </items>
       </Menu>
       <Menu text="Tools">
@@ -47,6 +50,7 @@
           <MenuItem text="Sample Groups…" onAction="#openSampleGroups" />
           <SeparatorMenuItem />
           <MenuItem text="Sample open errors…" onAction="#openSampleOpenErrors" />
+          <MenuItem text="Clear variant cache…" onAction="#clearVariantCache" />
           <MenuItem text="Clean memory" onAction="#cleanMemory" />
         </items>
       </Menu>

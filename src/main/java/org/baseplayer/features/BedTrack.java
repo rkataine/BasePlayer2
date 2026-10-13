@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -195,7 +196,9 @@ public class BedTrack extends AbstractTrack {
     this.indexedReader = null;
     this.preferredHeight = 25;
     this.color = Color.rgb(70, 130, 180);
-    this.featuresByChrom = featuresByChrom != null ? featuresByChrom : Map.of();
+    // Mutable: overlay results gain chromosomes lazily on navigation.
+    this.featuresByChrom = new HashMap<>(
+        featuresByChrom != null ? featuresByChrom : Map.of());
     this.chromPrefix = chromPrefix != null ? chromPrefix : "";
     this.derivedSources = derivedSources != null
         ? List.copyOf(derivedSources)
@@ -588,13 +591,78 @@ public class BedTrack extends AbstractTrack {
 
   @Override
   public void onRegionChanged(String chromosome, long start, long end, DrawStack drawStack) {
-    if (!visible || indexedReader == null) {
+    if (!visible) {
       return;
     }
     if (drawStack != null && drawStack.nav != null && drawStack.nav.animationRunning) {
       return;
     }
+    if (isOverlayDerived()) {
+      BedSetOperations.ensureOverlayChromosome(this, chromosome);
+      return;
+    }
+    if (indexedReader == null) {
+      return;
+    }
     requestRegion(chromosome, start, end, true);
+  }
+
+  /**
+   * Load all features for {@code chromosome} into memory for set-ops.
+   * Indexed tracks query the full contig (not the zoomed viewport); materialized
+   * tracks already hold whole-chromosome data.
+   */
+  public List<BedFeature> loadWholeChromosomeForSetOp(String chromosome) {
+    if (chromosome == null) {
+      return List.of();
+    }
+    String bare = ChromosomeNames.strip(chromosome);
+    if (indexedReader == null) {
+      return getLoadedFeatures(bare);
+    }
+    try {
+      List<BedFeature> features = filterByIncludedNames(
+          indexedReader.query(bare, 0L, Integer.MAX_VALUE, Integer.MAX_VALUE));
+      RegionSlot slot = slotFor(bare);
+      slot.generation.incrementAndGet();
+      slot.features = features;
+      slot.start = 1;
+      slot.end = Integer.MAX_VALUE;
+      slot.loading = false;
+      return features;
+    } catch (IOException ex) {
+      System.err.println(
+          "BED set-op chromosome load failed for " + getName() + ": " + ex.getMessage());
+      return List.of();
+    }
+  }
+
+  /** True when this overlay-derived track already has a result entry for {@code chromosome}. */
+  public boolean hasOverlayChromosome(String chromosome) {
+    if (chromosome == null || !isOverlayDerived()) {
+      return false;
+    }
+    return featuresByChrom.containsKey(ChromosomeNames.strip(chromosome));
+  }
+
+  /**
+   * Store set-op result features for one chromosome on an overlay-derived track
+   * (including an empty list when the operation yields nothing).
+   */
+  public void putOverlayChromosome(String chromosome, List<BedFeature> features) {
+    if (chromosome == null || !isOverlayDerived()) {
+      return;
+    }
+    String bare = ChromosomeNames.strip(chromosome);
+    featuresByChrom.put(bare, features != null ? List.copyOf(features) : List.of());
+    hasScores = null;
+    // Caller may be mid-draw (getFeaturesOverlapping); still nudge a refresh for
+    // sidebars / aggregates without waiting for another navigation.
+    if (Platform.isFxApplicationThread()) {
+      notifyDataLoaded();
+    } else {
+      Platform.runLater(this::notifyDataLoaded);
+    }
   }
 
   /**
@@ -1264,6 +1332,10 @@ public class BedTrack extends AbstractTrack {
         }
       }
       return slot.features != null ? slot.features : List.of();
+    }
+    // Overlay set-ops have no tabix fetch path — compute this chrom on demand.
+    if (isOverlayDerived() && !hasOverlayChromosome(bare)) {
+      BedSetOperations.ensureOverlayChromosome(this, bare);
     }
     List<BedFeature> all = featuresByChrom.getOrDefault(bare, List.of());
     if (all.isEmpty()) {

@@ -1,14 +1,17 @@
 package org.baseplayer.features;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
 import org.baseplayer.io.readers.BedFileReader.BedFeature;
+import org.baseplayer.utils.ChromosomeNames;
 import javafx.scene.paint.Color;
 
 /**
@@ -56,11 +59,16 @@ public final class BedSetOperations {
   private BedSetOperations() {}
 
   /**
-   * Overlay {@code second} onto {@code first} using currently loaded features
-   * (full genome for materialized tracks; viewport cache for tabix tracks).
+   * Overlay {@code second} onto {@code first} for the given chromosomes using
+   * features currently loaded for those chromosomes (callers should load whole
+   * chromosomes first via {@link BedTrack#loadWholeChromosomeForSetOp}).
    */
   public static BedTrack apply(
-      Op op, BedTrack first, BedTrack second, AttributeSource attributeSource) {
+      Op op,
+      BedTrack first,
+      BedTrack second,
+      AttributeSource attributeSource,
+      Collection<String> chromosomes) {
     if (op == null) {
       throw new IllegalArgumentException("op is null");
     }
@@ -69,17 +77,71 @@ public final class BedSetOperations {
     }
     AttributeSource attrs =
         attributeSource != null ? attributeSource : AttributeSource.FIRST;
+    Set<String> chroms = normalizeChromosomes(chromosomes);
+    if (chroms.isEmpty()) {
+      chroms = collectLoadedChromosomes(List.of(first, second));
+    }
     List<BedTrack> sources = List.of(first, second);
     Map<String, List<BedFeature>> result = switch (op) {
-      case UNION -> union(first, second, attrs);
-      case INTERSECT -> intersect(first, second, attrs);
-      case SUBTRACT -> subtract(first, second);
+      case UNION -> union(first, second, attrs, chroms);
+      case INTERSECT -> intersect(first, second, attrs, chroms);
+      case SUBTRACT -> subtract(first, second, chroms);
     };
     String chromPrefix = first.getChromPrefix();
     String name = buildResultName(op, sources);
     BedTrack derived = BedTrack.derived(name, op.label(), result, chromPrefix, sources);
     derived.setOverlayChoice(new OverlayChoice(op, attrs));
     return derived;
+  }
+
+  /**
+   * Load both overlay sources for {@code chromosome} and store the set-op result
+   * on {@code derived} when that chromosome has not been computed yet.
+   */
+  public static void ensureOverlayChromosome(BedTrack derived, String chromosome) {
+    if (derived == null || !derived.isOverlayDerived() || chromosome == null) {
+      return;
+    }
+    String bare = ChromosomeNames.strip(chromosome);
+    if (bare == null || bare.isEmpty() || derived.hasOverlayChromosome(bare)) {
+      return;
+    }
+    OverlayChoice choice = derived.getOverlayChoice();
+    if (choice == null || choice.op() == null) {
+      return;
+    }
+    List<BedTrack> sources = derived.getDerivedSources();
+    if (sources.size() < 2) {
+      return;
+    }
+    BedTrack first = sources.get(0);
+    BedTrack second = sources.get(1);
+    first.loadWholeChromosomeForSetOp(bare);
+    second.loadWholeChromosomeForSetOp(bare);
+    Set<String> chroms = Set.of(bare);
+    Map<String, List<BedFeature>> piece = switch (choice.op()) {
+      case UNION -> union(first, second, choice.attributeSource(), chroms);
+      case INTERSECT -> intersect(first, second, choice.attributeSource(), chroms);
+      case SUBTRACT -> subtract(first, second, chroms);
+    };
+    derived.putOverlayChromosome(bare, piece.getOrDefault(bare, List.of()));
+  }
+
+  private static Set<String> normalizeChromosomes(Collection<String> chromosomes) {
+    if (chromosomes == null || chromosomes.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> out = new LinkedHashSet<>();
+    for (String chrom : chromosomes) {
+      if (chrom == null || chrom.isBlank()) {
+        continue;
+      }
+      String bare = ChromosomeNames.strip(chrom);
+      if (bare != null && !bare.isEmpty()) {
+        out.add(bare);
+      }
+    }
+    return out;
   }
 
   public static String buildResultName(Op op, List<BedTrack> sources) {
@@ -106,8 +168,7 @@ public final class BedSetOperations {
   }
 
   static Map<String, List<BedFeature>> union(
-      BedTrack first, BedTrack second, AttributeSource attrs) {
-    Set<String> chroms = collectLoadedChromosomes(List.of(first, second));
+      BedTrack first, BedTrack second, AttributeSource attrs, Set<String> chroms) {
     Map<String, List<BedFeature>> out = new HashMap<>();
     for (String chrom : chroms) {
       List<Interval> intervals = new ArrayList<>();
@@ -123,8 +184,7 @@ public final class BedSetOperations {
   }
 
   static Map<String, List<BedFeature>> intersect(
-      BedTrack first, BedTrack second, AttributeSource attrs) {
-    Set<String> chroms = collectLoadedChromosomes(List.of(first, second));
+      BedTrack first, BedTrack second, AttributeSource attrs, Set<String> chroms) {
     Map<String, List<BedFeature>> out = new HashMap<>();
     for (String chrom : chroms) {
       List<Interval> a = toIntervals(first.getLoadedFeatures(chrom), 0);
@@ -135,8 +195,8 @@ public final class BedSetOperations {
   }
 
   /** First track minus second (loaded features only). */
-  static Map<String, List<BedFeature>> subtract(BedTrack first, BedTrack second) {
-    Set<String> chroms = collectLoadedChromosomes(List.of(first, second));
+  static Map<String, List<BedFeature>> subtract(
+      BedTrack first, BedTrack second, Set<String> chroms) {
     Map<String, List<BedFeature>> out = new HashMap<>();
     for (String chrom : chroms) {
       List<Interval> baseIntervals = toIntervals(first.getLoadedFeatures(chrom), 0);

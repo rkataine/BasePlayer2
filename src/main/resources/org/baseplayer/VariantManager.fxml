@@ -79,6 +79,8 @@
                                 <DualRangeSlider fx:id="alleleFreqRangeSlider" HBox.hgrow="ALWAYS"/>
                             </HBox>
 
+                            <Separator/>
+
                             <VBox spacing="6">
                                 <Label text="Custom filters" styleClass="section-header"/>
                                 <VBox fx:id="advancedFiltersContainer" spacing="4"/>
@@ -105,6 +107,8 @@
                                           styleClass="filter-toggle-flow"/>
                             </VBox>
 
+                            <Separator/>
+
                             <VBox spacing="6" fillWidth="true">
                                 <HBox spacing="6" alignment="CENTER_LEFT">
                                     <ColoredToggle fx:id="selectAllEffectsCheckBox" selected="true"/>
@@ -113,6 +117,8 @@
                                 <FlowPane fx:id="effectCategoriesContainer" hgap="10" vgap="2" prefWrapLength="320"
                                           styleClass="filter-toggle-flow"/>
                             </VBox>
+
+                            <Separator/>
 
                             <VBox spacing="6">
                                 <Label text="Special Filters" styleClass="section-header"/>
@@ -323,6 +329,7 @@
                             <VBox fx:id="comparisonGroupsContainer" spacing="6" VBox.vgrow="ALWAYS"/>
                             <Label fx:id="groupComparisonSummaryLabel" text="No tag constraints" styleClass="value-label" wrapText="true"/>
                         </VBox>
+                        <Separator/>
                         <VBox spacing="6">
                             <Label text="Multi-tag match" styleClass="section-header"/>
                             <HBox spacing="16" alignment="CENTER_LEFT">
@@ -330,9 +337,10 @@
                                 <RadioButton fx:id="presentMatchAnyRadio" text="Any (OR)" styleClass="filter-radio"/>
                             </HBox>
                         </VBox>
+                        <Separator/>
                         <HBox spacing="12" alignment="CENTER_RIGHT">
                             <padding>
-                                <Insets top="12"/>
+                                <Insets top="4"/>
                             </padding>
                             <Button fx:id="calculateLohButton" text="Calculate LOH"
                                     styleClass="secondary-button" disable="true" minWidth="110"
@@ -365,6 +373,8 @@
                                         disable="true" onAction="#handleRemoveControlFile"/>
                             </HBox>
 
+                            <Separator/>
+
                             <Label text="Allele frequency filter" styleClass="section-header"/>
                             <HBox spacing="8" alignment="CENTER_LEFT">
                                 <ColoredToggle fx:id="filterByPopFreqCheckBox" text="Filter by control allele frequency"/>
@@ -389,6 +399,7 @@
                         </VBox>
                     </ScrollPane>
                 </SplitPane>
+                <Separator/>
                 <HBox spacing="12" alignment="CENTER_RIGHT" styleClass="filter-panel">
                     <padding>
                         <Insets top="8" right="16" bottom="12" left="16"/>

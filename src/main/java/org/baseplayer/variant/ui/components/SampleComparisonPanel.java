@@ -657,8 +657,10 @@ public class SampleComparisonPanel {
         groupsHeader,
         groupsContainer,
         summary,
+        new javafx.scene.control.Separator(),
         presentTitle,
         presentRow,
+        new javafx.scene.control.Separator(),
         applyRow);
 
     ScrollPane leftScroll = new ScrollPane(left);

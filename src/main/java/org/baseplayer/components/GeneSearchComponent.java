@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.annotation.CosmicCensusEntry;
+import org.baseplayer.annotation.CosmicGenes;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.controllers.commands.SearchCommands;
 import org.baseplayer.genome.gene.GeneLocation;
@@ -11,6 +13,8 @@ import org.baseplayer.services.ViewportState;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.utils.GeneColors;
 
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.geometry.Side;
 import javafx.scene.Cursor;
 import javafx.scene.control.ContextMenu;
@@ -29,6 +33,9 @@ import javafx.scene.paint.Color;
  * Extracted from {@link MenuBarController#setupGeneSearch()}.
  */
 public class GeneSearchComponent {
+
+  /** Matches `.context-menu` left strip width in application.css. */
+  private static final int MENU_STRIP_WIDTH = 22;
 
   private final TextField geneSearchField;
   private final ViewportState viewportState;
@@ -160,13 +167,18 @@ public class GeneSearchComponent {
       for (String geneName : suggestions) {
         GeneLocation loc = AnnotationData.getGeneLocation(geneName);
 
+        // Cosmic tier sits in the dark left strip; gene name starts after it.
+        Label stripLabel = buildCosmicStripLabel(geneName);
+
         Label nameLabel = new Label(geneName);
         Color geneColor = GeneColors.getGeneColor(geneName, AnnotationData.getGeneBiotype(geneName));
         nameLabel.setStyle("-fx-text-fill: " + GeneColors.toHexString(geneColor) + ";");
 
-        HBox container = new HBox(5);
+        HBox container = new HBox(6);
+        container.setAlignment(Pos.CENTER_LEFT);
         container.setCursor(Cursor.HAND);
         container.setPrefWidth(300);
+        container.setPadding(new Insets(1, 8, 1, 0));
         container.setStyle("-fx-background-color: transparent;");
         suggestionContainers.add(container);
 
@@ -176,9 +188,9 @@ public class GeneSearchComponent {
           locLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #666666;");
           Region spacer = new Region();
           HBox.setHgrow(spacer, Priority.ALWAYS);
-          container.getChildren().addAll(nameLabel, spacer, locLabel);
+          container.getChildren().addAll(stripLabel, nameLabel, spacer, locLabel);
         } else {
-          container.getChildren().add(nameLabel);
+          container.getChildren().addAll(stripLabel, nameLabel);
         }
 
         container.setOnMouseEntered(e -> {
@@ -227,6 +239,26 @@ public class GeneSearchComponent {
         submitQuery(geneSearchField.getText());
       }
     });
+  }
+
+  /** Fixed-width label that sits in the CSS left strip (tier number or blank). */
+  private static Label buildCosmicStripLabel(String geneName) {
+    Label stripLabel = new Label();
+    stripLabel.setMinWidth(MENU_STRIP_WIDTH);
+    stripLabel.setPrefWidth(MENU_STRIP_WIDTH);
+    stripLabel.setMaxWidth(MENU_STRIP_WIDTH);
+    stripLabel.setAlignment(Pos.CENTER);
+    CosmicCensusEntry cosmic = CosmicGenes.getEntry(geneName);
+    if (cosmic != null && cosmic.tier() != null && !cosmic.tier().isBlank()) {
+      stripLabel.setText(cosmic.tier().trim());
+      String tierColor = cosmic.isTier1() ? "#ef9a9a" : "#ffb74d";
+      stripLabel.setStyle(
+          "-fx-font-size: 10px; -fx-font-weight: bold; -fx-text-fill: " + tierColor + ";");
+    } else {
+      stripLabel.setText("");
+      stripLabel.setStyle("-fx-font-size: 10px;");
+    }
+    return stripLabel;
   }
 
   private void acceptGeneSuggestion(String geneName) {

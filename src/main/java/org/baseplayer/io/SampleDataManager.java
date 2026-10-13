@@ -2,12 +2,17 @@ package org.baseplayer.io;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -846,38 +851,43 @@ public class SampleDataManager {
         "Opening VCF: " + file.getName() + "\u2026",
         () -> {
           try {
-            if (VcfManager.getInstance().isVcfFileLoaded(file)) {
-              // Already open — still attach a sidebar entry on this track if missing.
-              return file.toPath();
-            }
             Path vcfPath = file.toPath();
-            VcfReader reader = new VcfReader(vcfPath);
-            if (!reader.hasTbiOrCsiIndex()) {
-              try {
-                reader.close();
-              } catch (IOException ignored) {
+            if (!VcfManager.getInstance().isVcfFileLoaded(file)) {
+              VcfReader reader = new VcfReader(vcfPath);
+              if (!reader.hasTbiOrCsiIndex()) {
+                try {
+                  reader.close();
+                } catch (IOException ignored) {
+                }
+                throw new IOException("Tabix/CSI index (.tbi/.csi) not found for: " + vcfPath);
               }
-              throw new IOException("Tabix/CSI index (.tbi/.csi) not found for: " + vcfPath);
-            }
-            VariantLoader loader = new VariantLoader(reader);
-            loader.mapAllEligibleToTrack(trackIndex);
-            VcfManager.VcfData vcfData =
-                VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
-            if (vcfData == null) {
-              try {
-                reader.close();
-              } catch (IOException ignored) {
+              VariantLoader loader = new VariantLoader(reader);
+              loader.mapAllEligibleToTrack(trackIndex);
+              VcfManager.VcfData vcfData =
+                  VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
+              if (vcfData == null) {
+                try {
+                  reader.close();
+                } catch (IOException ignored) {
+                }
+                loader.setVcfReader(null);
+              } else {
+                try {
+                  reader.close();
+                } catch (IOException ignored) {
+                }
+                vcfData.reader = null;
+                loader.setVcfReader(null);
+                UserPreferences.addRecentFile("VCF", file);
               }
-              loader.setVcfReader(null);
-              return vcfPath;
             }
-            try {
-              reader.close();
-            } catch (IOException ignored) {
+            // Sidebar entry + co-located BAM (worker thread, same as batch VCF open).
+            if (sampleIndex >= 0
+                && sampleIndex < sampleRegistry.getSampleTracks().size()
+                && sampleRegistry.getSampleTracks().get(sampleIndex) == track) {
+              addVcfSampleIfMissing(track, vcfPath);
+              attachMatchingBamToTrack(track, vcfPath, failures);
             }
-            vcfData.reader = null;
-            loader.setVcfReader(null);
-            UserPreferences.addRecentFile("VCF", file);
             return vcfPath;
           } catch (Exception e) {
             System.err.println("Failed to open VCF: " + file + " - " + e.getMessage());
@@ -888,12 +898,6 @@ public class SampleDataManager {
         },
         vcfPath -> {
           failures.commitToSessionLog();
-          if (vcfPath != null
-              && sampleIndex >= 0
-              && sampleIndex < sampleRegistry.getSampleTracks().size()
-              && sampleRegistry.getSampleTracks().get(sampleIndex) == track) {
-            addVcfSampleIfMissing(track, vcfPath);
-          }
           Platform.runLater(() -> {
             ProjectSessionState.get().markDirty();
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -1501,7 +1505,7 @@ public class SampleDataManager {
         org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
 
         try {
-          if (loadVcfFileSynchronously(file, true)) {
+          if (loadVcfFileSynchronously(file, true, failures)) {
             addedTracks = true;
           }
         } catch (Exception e) {
@@ -1606,6 +1610,11 @@ public class SampleDataManager {
    * @return true if new sample tracks were created for this file
    */
   private static boolean loadVcfFileSynchronously(File file, boolean deferUi) throws IOException {
+    return loadVcfFileSynchronously(file, deferUi, null);
+  }
+
+  private static boolean loadVcfFileSynchronously(
+      File file, boolean deferUi, SampleOpenFailuresDialog failures) throws IOException {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
     }
@@ -1650,6 +1659,8 @@ public class SampleDataManager {
 
     // Sidebar VCF entries — safe on the worker thread; no canvas resize.
     attachVcfSamplesToMappedTracks(loader, vcfPath);
+    // Co-located BAM/CRAM with a matching sample or file stem → same track.
+    attachMatchingBamsForMappedTracks(loader, vcfPath, failures);
 
     if (loader.getMappedSampleCount() == 0) {
       System.err.println("Warning: Could not create or map any VCF samples from: " + file);
@@ -1696,6 +1707,265 @@ public class SampleDataManager {
       addVcfSampleIfMissing(track, vcfPath);
       preferShorterTrackName(track, entry.getKey());
     }
+  }
+
+  /**
+   * When a VCF is opened, attach any co-located BAM/CRAM whose name matches a
+   * mapped sample ID (or the VCF file stem for single-sample VCFs) onto that
+   * sample's track. Skips tracks that already have alignment data and paths
+   * already open elsewhere. Not used during session restore (BAMs come from
+   * the project).
+   */
+  public static void attachMatchingBamsForMappedTracks(
+      VariantLoader loader, Path vcfPath) {
+    attachMatchingBamsForMappedTracks(loader, vcfPath, null);
+  }
+
+  public static void attachMatchingBamsForMappedTracks(
+      VariantLoader loader, Path vcfPath, SampleOpenFailuresDialog failures) {
+    if (loader == null || vcfPath == null) {
+      return;
+    }
+    Map<String, Integer> mapping = loader.getSampleMapping();
+    if (mapping == null || mapping.isEmpty()) {
+      return;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    boolean allowVcfStemMatch = mapping.size() == 1;
+    Set<String> claimedBamPaths = new HashSet<>();
+
+    for (Map.Entry<String, Integer> entry : mapping.entrySet()) {
+      Integer trackIndex = entry.getValue();
+      if (trackIndex == null || trackIndex < 0
+          || trackIndex >= registry.getSampleTracks().size()) {
+        continue;
+      }
+      SampleTrack track = registry.getSampleTracks().get(trackIndex);
+      if (track == null || trackHasBam(track)) {
+        continue;
+      }
+      Path bamPath = findMatchingBamBesideVcf(vcfPath, entry.getKey(), allowVcfStemMatch);
+      if (bamPath == null) {
+        continue;
+      }
+      String pathKey = bamPath.toAbsolutePath().normalize().toString();
+      if (!claimedBamPaths.add(pathKey) || isBamPathAlreadyOpen(registry, bamPath)) {
+        continue;
+      }
+      try {
+        track.addSample(new Sample(bamPath));
+        preferShorterTrackName(track, SampleRegistry.normalizeNameKey(bamPath.getFileName().toString()));
+        UserPreferences.addRecentFile("BAM", bamPath.toFile());
+      } catch (IOException e) {
+        System.err.println("Failed to auto-open matching BAM: " + bamPath + " - " + e.getMessage());
+        if (failures != null) {
+          failures.add(bamPath, e.getMessage());
+        } else {
+          SampleOpenFailuresDialog.create().add(bamPath, e.getMessage()).commitAndShowLater();
+        }
+      }
+    }
+  }
+
+  /**
+   * Attach a co-located matching BAM/CRAM onto a single track (track "+" → Add VCF).
+   */
+  public static void attachMatchingBamToTrack(
+      SampleTrack track, Path vcfPath, SampleOpenFailuresDialog failures) {
+    if (track == null || vcfPath == null || trackHasBam(track)) {
+      return;
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    Path bamPath = findMatchingBamBesideVcf(vcfPath, track.getDisplayName(), true);
+    if (bamPath == null) {
+      bamPath = findMatchingBamBesideVcf(vcfPath, track.getName(), true);
+    }
+    if (bamPath == null || isBamPathAlreadyOpen(registry, bamPath)) {
+      return;
+    }
+    try {
+      track.addSample(new Sample(bamPath));
+      preferShorterTrackName(track, SampleRegistry.normalizeNameKey(bamPath.getFileName().toString()));
+      UserPreferences.addRecentFile("BAM", bamPath.toFile());
+    } catch (IOException e) {
+      System.err.println("Failed to auto-open matching BAM: " + bamPath + " - " + e.getMessage());
+      if (failures != null) {
+        failures.add(bamPath, e.getMessage());
+      } else {
+        SampleOpenFailuresDialog.create().add(bamPath, e.getMessage()).commitAndShowLater();
+      }
+    }
+  }
+
+  private static boolean trackHasBam(SampleTrack track) {
+    return track != null && track.getFirstBam() != null;
+  }
+
+  private static boolean isBamPathAlreadyOpen(SampleRegistry registry, Path bamPath) {
+    if (registry == null || bamPath == null) {
+      return false;
+    }
+    String pathKey = bamPath.toAbsolutePath().normalize().toString();
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null || sample.getDataType() != Sample.DataType.BAM || sample.getPath() == null) {
+          continue;
+        }
+        if (pathKey.equals(sample.getPath().toAbsolutePath().normalize().toString())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Minimum shared prefix length when matching VCF sample/file stems to BAM/CRAM
+   * names that continue with pipeline suffixes (e.g. {@code .final_chr6_…}).
+   */
+  private static final int MIN_BAM_NAME_PREFIX_MATCH = 12;
+
+  /**
+   * Look beside the VCF for {@code <stem>.bam} / {@code .cram} where stem is the
+   * VCF sample ID and, when {@code allowVcfStemMatch}, the VCF filename stem.
+   * Also accepts BAM/CRAM names that continue after the stem with {@code .},
+   * {@code _}, or {@code -} (or share a long delimiter-bounded prefix), so
+   * {@code Sample.final_chr6_….cram} joins {@code Sample_Mutect2_….vcf.gz}.
+   */
+  private static Path findMatchingBamBesideVcf(
+      Path vcfPath, String sampleOrTrackName, boolean allowVcfStemMatch) {
+    if (vcfPath == null) {
+      return null;
+    }
+    Path dir = vcfPath.getParent();
+    if (dir == null || !Files.isDirectory(dir)) {
+      return null;
+    }
+
+    LinkedHashSet<String> stems = new LinkedHashSet<>();
+    String sampleStem = SampleRegistry.normalizeNameKey(sampleOrTrackName);
+    if (!sampleStem.isEmpty()) {
+      stems.add(sampleStem);
+    }
+    if (allowVcfStemMatch && vcfPath.getFileName() != null) {
+      String vcfStem = SampleRegistry.normalizeNameKey(vcfPath.getFileName().toString());
+      if (!vcfStem.isEmpty()) {
+        stems.add(vcfStem);
+      }
+    }
+    if (stems.isEmpty()) {
+      return null;
+    }
+
+    for (String stem : stems) {
+      for (String ext : List.of(".bam", ".cram")) {
+        Path candidate = dir.resolve(stem + ext);
+        if (Files.isRegularFile(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    // Fuzzy scan: exact (case-insensitive), stem-as-prefix, or shared prefix.
+    Path best = null;
+    int bestScore = -1;
+    boolean bestTied = false;
+    try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+      for (Path entry : stream) {
+        if (entry == null || entry.getFileName() == null || !Files.isRegularFile(entry)) {
+          continue;
+        }
+        String fileName = entry.getFileName().toString();
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        if (!lower.endsWith(".bam") && !lower.endsWith(".cram")) {
+          continue;
+        }
+        String key = SampleRegistry.normalizeNameKey(fileName);
+        int score = -1;
+        for (String stem : stems) {
+          score = Math.max(score, scoreBamNameAgainstStem(stem, key));
+        }
+        if (score < 0) {
+          continue;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = entry;
+          bestTied = false;
+        } else if (score == bestScore && best != null && !best.equals(entry)) {
+          bestTied = true;
+        }
+      }
+    } catch (IOException e) {
+      System.err.println("Could not scan for matching BAM beside " + vcfPath + ": " + e.getMessage());
+    }
+    return bestTied ? null : best;
+  }
+
+  /**
+   * Score how well a BAM/CRAM basename (extensions stripped) matches a VCF
+   * sample or file stem. Higher is better; {@code -1} means no match.
+   */
+  static int scoreBamNameAgainstStem(String stem, String bamKey) {
+    if (stem == null || bamKey == null) {
+      return -1;
+    }
+    String a = stem.trim().toLowerCase(Locale.ROOT);
+    String b = bamKey.trim().toLowerCase(Locale.ROOT);
+    if (a.isEmpty() || b.isEmpty()) {
+      return -1;
+    }
+    if (a.equals(b)) {
+      return 1_000_000 + a.length();
+    }
+    // Sample.cram ↔ Sample.final_chr6_….cram (or stem continues with pipeline tags).
+    if (b.startsWith(a) && isNameBoundary(b, a.length())) {
+      return 500_000 + a.length();
+    }
+    if (a.startsWith(b) && isNameBoundary(a, b.length())) {
+      return 500_000 + b.length();
+    }
+    // Sample_Mutect2_….vcf ↔ Sample.final_….cram — shared sample-id prefix.
+    int lcp = commonPrefixLength(a, b);
+    if (lcp < MIN_BAM_NAME_PREFIX_MATCH) {
+      return -1;
+    }
+    if (!isNameBoundary(a, lcp) || !isNameBoundary(b, lcp)) {
+      // Walk back to the last shared delimiter so we don't cut mid-token.
+      int cut = lcp;
+      while (cut >= MIN_BAM_NAME_PREFIX_MATCH && !isNameBoundary(a, cut)) {
+        cut--;
+      }
+      if (cut < MIN_BAM_NAME_PREFIX_MATCH || !isNameBoundary(b, cut)) {
+        return -1;
+      }
+      lcp = cut;
+    }
+    return lcp;
+  }
+
+  /** {@code index} is end-of-string or sits on {@code .} / {@code _} / {@code -}. */
+  private static boolean isNameBoundary(String name, int index) {
+    if (name == null || index <= 0) {
+      return false;
+    }
+    if (index >= name.length()) {
+      return true;
+    }
+    char c = name.charAt(index);
+    return c == '.' || c == '_' || c == '-';
+  }
+
+  private static int commonPrefixLength(String a, String b) {
+    int n = Math.min(a.length(), b.length());
+    int i = 0;
+    while (i < n && a.charAt(i) == b.charAt(i)) {
+      i++;
+    }
+    return i;
   }
 
   private static void addVcfSampleIfMissing(SampleTrack track, Path vcfPath) {
@@ -1864,8 +2134,7 @@ public class SampleDataManager {
   public static void addVcfFile(File file) {
     if (file == null) return;
     UserPreferences.setLastDirectory("VCF", file.getParentFile());
-    
-    VcfManager.getInstance().loadVcfFile(file);
+    addVcfFiles(Collections.singletonList(file));
   }
 
   public static void clearAllData() {

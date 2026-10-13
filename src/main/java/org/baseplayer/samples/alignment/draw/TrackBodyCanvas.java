@@ -2498,6 +2498,12 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return;
     }
 
+    // During zoom/chrom-switch animation tracks ignore onRegionChanged. Do not
+    // advance lastNotified* here or the post-animation draw will skip the retry.
+    if (drawStack.nav != null && drawStack.nav.animationRunning) {
+      return;
+    }
+
     String chrom = drawStack.getChromosome();
     long start = (long) drawStack.getViewStart();
     long end = (long) drawStack.getViewEnd();

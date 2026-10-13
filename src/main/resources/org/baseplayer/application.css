@@ -26,6 +26,53 @@
   -fx-background-color: -bp-elevated;
 }
 
+/* Dropdown menus: body = top bar (-bp-elevated); darker left icon strip.
+   JavaFX wraps every MenuItem graphic in .graphic-container (see ContextMenuContent)
+   and Modena adds right padding there — that padding was making the icon column
+   wider than our strip. Keep graphic-container padding 0 / transparent so the
+   column is only as wide as the icon (~14–16px). Strip = 22px content. */
+.context-menu {
+  -fx-background-color: -bp-surface, -bp-elevated;
+  -fx-background-insets: 1, 1 1 1 23;
+  -fx-border-color: -bp-border;
+  -fx-border-width: 1;
+  -fx-padding: 4 0 4 0;
+  -fx-background-radius: 0;
+  -fx-effect: null;
+}
+
+.menu-item {
+  -fx-background-color: transparent;
+  -fx-padding: 0.4em 1.1em 0.4em 0;
+}
+
+.menu-item:focused,
+.menu-item:hover {
+  -fx-background-color: -fx-selection-bar;
+  -fx-background-insets: 0;
+}
+
+/* JavaFX skin wrapper around item.getGraphic() — do not pad/widen or paint a chip. */
+.menu-item > .graphic-container {
+  -fx-padding: 0 4 0 4;
+  -fx-background-color: transparent;
+  -fx-background-insets: 0;
+}
+
+/* Gap is strip → text (label). */
+.menu-item > .label {
+  -fx-padding: 0 0 0 8;
+}
+
+.menu-item-icon {
+  -fx-background-color: transparent;
+}
+
+.separator-menu-item .line {
+  -fx-border-color: -bp-border transparent transparent transparent;
+  -fx-border-insets: 0 0 0 22;
+}
+
 .flat-combo-box .list-cell {
   -fx-padding: 4px;
   padding: 4px;
@@ -373,9 +420,34 @@ VBox {
   -fx-padding: 0;
 }
 
+/* Horizontal split between side-by-side filter panels: slim hairline + grab zone. */
 .tab-content-split > .split-pane-divider {
-  -fx-background-color: -bp-control;
-  -fx-padding: 0 0 1 0;
+  -fx-padding: 0;
+  -fx-min-width: 7;
+  -fx-pref-width: 7;
+  -fx-max-width: 7;
+  -fx-background-color: -bp-panel, -bp-border;
+  -fx-background-insets: 0, 0 3 0 3;
+  -fx-background-radius: 0;
+  -fx-border-color: transparent;
+  -fx-cursor: h-resize;
+}
+
+.tab-content-split > .split-pane-divider:hover {
+  -fx-background-color: -bp-panel, -bp-focus;
+  -fx-background-insets: 0, 0 2 0 2;
+}
+
+/* Soft section rules inside Variant Manager panels. */
+.root-pane .separator {
+  -fx-padding: 6 0 2 0;
+}
+
+.root-pane .separator .line {
+  -fx-border-color: -bp-border transparent transparent transparent;
+  -fx-border-width: 1 0 0 0;
+  -fx-border-insets: 0;
+  -fx-opacity: 0.7;
 }
 
 .root-pane .label {

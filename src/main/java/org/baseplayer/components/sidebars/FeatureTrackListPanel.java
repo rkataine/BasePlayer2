@@ -23,6 +23,7 @@ import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.utils.AppFonts;
+import org.baseplayer.utils.ChromosomeNames;
 
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.StackPane;
@@ -235,9 +236,10 @@ public class FeatureTrackListPanel extends TrackListPanel {
   private void applyBedOverlay(
       BedTrack base, BedTrack overlay, OverlayChoice choice, Window owner) {
     try {
-      prepareOverlayViewport(base, overlay);
+      Set<String> chroms = currentStackChromosomes();
+      prepareOverlayChromosomes(base, overlay, chroms);
       BedTrack result = BedSetOperations.apply(
-          choice.op(), base, overlay, choice.attributeSource());
+          choice.op(), base, overlay, choice.attributeSource(), chroms);
       result.copyAppearanceFrom(base);
       featureTrackViewportRegistry.replaceFeatureTrack(base, result);
       org.baseplayer.project.ProjectSessionState.get().markDirty();
@@ -247,27 +249,35 @@ public class FeatureTrackListPanel extends TrackListPanel {
     }
   }
 
-  /** Tabix overlay has no canvas yet — mirror base / current view caches. */
-  private static void prepareOverlayViewport(BedTrack base, BedTrack overlay) {
-    if (overlay == null || !overlay.isIndexed()) {
+  /** Whole-chromosome load for both sides before a set-op (not the zoomed viewport). */
+  private static void prepareOverlayChromosomes(
+      BedTrack base, BedTrack overlay, Set<String> chroms) {
+    if (chroms == null || chroms.isEmpty()) {
       return;
     }
-    overlay.syncViewportCacheFrom(base);
-    if (!overlay.getLoadedChromosomes().isEmpty()) {
-      return;
+    for (String chrom : chroms) {
+      if (base != null) {
+        base.loadWholeChromosomeForSetOp(chrom);
+      }
+      if (overlay != null) {
+        overlay.loadWholeChromosomeForSetOp(chrom);
+      }
     }
+  }
+
+  private static Set<String> currentStackChromosomes() {
+    Set<String> chroms = new LinkedHashSet<>();
     DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
     for (org.baseplayer.draw.DrawStack stack : stacks.getStacks()) {
-      if (stack == null) {
+      if (stack == null || stack.getChromosome() == null) {
         continue;
       }
-      String chrom = stack.getChromosome();
-      long start = (long) stack.getViewStart();
-      long end = (long) stack.getViewEnd();
-      if (chrom != null && end > start) {
-        overlay.prepareRegionSync(chrom, start, end);
+      String bare = ChromosomeNames.strip(stack.getChromosome());
+      if (bare != null && !bare.isEmpty()) {
+        chroms.add(bare);
       }
     }
+    return chroms;
   }
 
   /**
@@ -285,8 +295,15 @@ public class FeatureTrackListPanel extends TrackListPanel {
             owner, first.getName(), second.getName(), derived.getOverlayChoice())
         .ifPresent(choice -> {
           try {
+            Set<String> chroms = new LinkedHashSet<>(derived.getLoadedChromosomes());
+            chroms.addAll(currentStackChromosomes());
+            // Empty results are stored as empty lists — include those chroms too.
+            for (String chrom : derived.getChromosomes()) {
+              chroms.add(chrom);
+            }
+            prepareOverlayChromosomes(first, second, chroms);
             BedTrack result = BedSetOperations.apply(
-                choice.op(), first, second, choice.attributeSource());
+                choice.op(), first, second, choice.attributeSource(), chroms);
             result.copyAppearanceFrom(derived);
             featureTrackViewportRegistry.replaceFeatureTrack(derived, result);
             org.baseplayer.project.ProjectSessionState.get().markDirty();
