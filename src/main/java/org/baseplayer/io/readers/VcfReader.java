@@ -2,6 +2,7 @@ package org.baseplayer.io.readers;
 
 import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.readers.LineIterator;
+import htsjdk.tribble.readers.TabixReader;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFCodec;
@@ -358,6 +359,52 @@ public class VcfReader implements AutoCloseable {
                 consumer.accept(parseSnvIndel(ctx, classifySnvIndel(ctx)));
             }
         });
+    }
+
+    /**
+     * Stream raw VCF body lines overlapping {@code [start, end]} (1-based inclusive)
+     * via tabix — no {@link VariantContext} decode. Caller parses POS/alleles/INFO.
+     * No-op (does not invoke consumer) when no {@code .tbi} is available.
+     */
+    public void visitRawVariantLines(
+            String chromosome, long start, long end, Consumer<String> consumer)
+            throws IOException {
+        if (consumer == null || !canTabixQuery) {
+            return;
+        }
+        Path tabixIndex = findSiblingIndex(vcfPath, ".tbi");
+        if (tabixIndex == null) {
+            return;
+        }
+        String dataChrom = toDataChromosome(chromosome);
+        // TabixReader.query is 0-based half-open; VCF coordinates are 1-based inclusive.
+        int beg = (int) Math.max(0, start - 1);
+        int queryEnd = (int) Math.min(Integer.MAX_VALUE, Math.max(start, end));
+        try (TabixReader tabix = new TabixReader(vcfPath.toString(), tabixIndex.toString())) {
+            TabixReader.Iterator it = tabix.query(dataChrom, beg, queryEnd);
+            if (it == null) {
+                return;
+            }
+            String line;
+            while ((line = it.next()) != null) {
+                consumer.accept(line);
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed to query VCF lines: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Stream raw overlapping {@link VariantContext}s (tabix when available).
+     * Prefer this for control-AF merge-joins — avoids allocating SNV/INFO/genotype wrappers.
+     */
+    public void visitVariantContexts(
+            String chromosome, long start, long end, Consumer<VariantContext> consumer)
+            throws IOException {
+        if (consumer == null) {
+            return;
+        }
+        visitOverlappingVariants(chromosome, start, end, consumer);
     }
 
     public List<VcfStructuralVariant> queryStructuralVariantsForChromosome(String chromosome) 

@@ -118,23 +118,27 @@
                                 <Label text="Special Filters" styleClass="section-header"/>
                                 <ColoredToggle fx:id="cancerOnlyCheckBox" text="Cancer genes only (COSMIC Census)"/>
                             </VBox>
-
-                            <HBox spacing="8" alignment="CENTER_LEFT">
-                                <Button fx:id="annotateAllChromosomesButton" text="Annotate All Chromosomes"
-                                        styleClass="secondary-button"
-                                        onAction="#handleAnnotateAllChromosomes"/>
-                                <TextField fx:id="tableSearchField" promptText="Search genes, effects…"
-                                           styleClass="filter-field table-search-field"
-                                           HBox.hgrow="ALWAYS"/>
-                                <Button fx:id="excelExportButton" styleClass="icon-button"
-                                        visible="false" managed="false"
-                                        onAction="#handleExportExcel"/>
-                            </HBox>
                         </VBox>
                     </ScrollPane>
                 </SplitPane>
 
-                <TabPane fx:id="resultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs">
+                <VBox spacing="0" styleClass="variant-table-area">
+                <HBox spacing="8" alignment="CENTER_LEFT" styleClass="variant-table-toolbar">
+                    <padding>
+                        <Insets top="4" right="8" bottom="4" left="8"/>
+                    </padding>
+                    <Button fx:id="annotateAllChromosomesButton" text="Annotate All Chromosomes"
+                            styleClass="primary-button"
+                            onAction="#handleAnnotateAllChromosomes"/>
+                    <TextField fx:id="tableSearchField" promptText="Search genes, effects…"
+                               styleClass="filter-field table-search-field"
+                               prefWidth="180" maxWidth="180"/>
+                    <Button fx:id="excelExportButton" styleClass="icon-button"
+                            visible="false" managed="false"
+                            onAction="#handleExportExcel"/>
+                </HBox>
+                <TabPane fx:id="resultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs"
+                         VBox.vgrow="ALWAYS">
                     <Tab fx:id="codingTab" text="Coding">
                         <StackPane styleClass="table-container">
                             <TableView fx:id="codingTable" styleClass="variant-table">
@@ -201,6 +205,7 @@
                         </TabPane>
                     </Tab>
                 </TabPane>
+                </VBox>
             </SplitPane>
         </Tab>
 
@@ -209,7 +214,22 @@
             <SplitPane fx:id="svMainSplitPane" orientation="VERTICAL" dividerPositions="0.45"
                        styleClass="variant-manager-split">
                 <VBox fx:id="svFiltersHost" spacing="0" styleClass="filter-panel"/>
-                <TabPane fx:id="svResultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs">
+                <VBox spacing="0" styleClass="variant-table-area">
+                <HBox spacing="8" alignment="CENTER_LEFT" styleClass="variant-table-toolbar">
+                    <padding>
+                        <Insets top="4" right="8" bottom="4" left="8"/>
+                    </padding>
+                    <Button fx:id="svAnnotateAllChromosomesButton" text="Annotate All Chromosomes"
+                            styleClass="primary-button"
+                            onAction="#handleAnnotateAllChromosomes"/>
+                    <TextField fx:id="svTableSearchField" promptText="Search genes, positions, mates…"
+                               styleClass="filter-field table-search-field"
+                               prefWidth="180" maxWidth="180"/>
+                    <Button fx:id="svExcelExportButton" styleClass="icon-button"
+                            visible="false" managed="false"/>
+                </HBox>
+                <TabPane fx:id="svResultsTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="results-tabs"
+                         VBox.vgrow="ALWAYS">
                     <Tab fx:id="svAllTab" text="All">
                         <StackPane styleClass="table-container">
                             <TableView fx:id="svAllTable" styleClass="variant-table"/>
@@ -261,6 +281,7 @@
                         </StackPane>
                     </Tab>
                 </TabPane>
+                </VBox>
             </SplitPane>
         </Tab>
 
@@ -350,12 +371,6 @@
                                 <Label text="Max AF:" styleClass="subsection-label"/>
                                 <TextField fx:id="maxPopFreqField" text="0.01" prefWidth="80" styleClass="filter-field"/>
                             </HBox>
-
-                            <Label text="Population" styleClass="section-header"/>
-                            <Label text="Uses AF / AC+AN, or population fields such as AF_fin when present."
-                                   styleClass="subsection-label" wrapText="true"/>
-                            <ComboBox fx:id="controlPopulationCombo" prefWidth="260" disable="true"
-                                      styleClass="filter-field"/>
                         </VBox>
                     </ScrollPane>
                     <ScrollPane fitToWidth="true" styleClass="filter-scroll"
@@ -364,9 +379,13 @@
                             <padding>
                                 <Insets top="16" right="16" bottom="16" left="16"/>
                             </padding>
-                            <Label text="File statistics" styleClass="section-header"/>
-                            <Label fx:id="controlFileStatsLabel" text="No control file loaded."
-                                   styleClass="value-label" wrapText="true"/>
+                            <HBox spacing="6" alignment="CENTER_LEFT">
+                                <ColoredToggle fx:id="selectAllPopulationsCheckBox" selected="true" disable="true"/>
+                                <Label text="Populations" styleClass="section-header"/>
+                            </HBox>
+                            <Label text="Only checked populations contribute AF. Apply to annotate with their max AF."
+                                   styleClass="subsection-label" wrapText="true"/>
+                            <VBox fx:id="controlPopulationBox" spacing="4" disable="true"/>
                         </VBox>
                     </ScrollPane>
                 </SplitPane>

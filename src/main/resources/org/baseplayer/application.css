@@ -391,6 +391,11 @@ VBox {
   -fx-background-radius: 0;
 }
 
+/* Standalone dialog roots (not inside .root-pane) need an opaque surface. */
+.dialog-surface {
+  -fx-background-color: -bp-panel;
+}
+
 .filter-panel .label {
   -fx-text-fill: -bp-text;
 }
@@ -441,8 +446,14 @@ VBox {
 .root-pane .table-container,
 .root-pane .results-tabs,
 .root-pane .variant-table,
-.root-pane .variant-table .filler {
+.root-pane .variant-table .filler,
+.root-pane .variant-table-area {
   -fx-background-color: -bp-surface;
+}
+
+/* Keep toolbar darker than the transparent HBox reset above. */
+.root-pane .variant-table-toolbar {
+  -fx-background-color: -bp-elevated;
 }
 
 .root-pane .variant-table {
@@ -473,50 +484,139 @@ VBox {
   -fx-font-size: 11px;
 }
 
-/* Filter tabs */
-.filter-tabs .tab-pane {
-    -fx-background-color: -bp-panel;
+/* Filter tabs (Point | Structural variants) */
+.filter-tabs {
+  -fx-background-color: -bp-panel;
 }
 
-.filter-tabs .tab-pane .tab-header-area {
-    -fx-background-color: -bp-control;
+.filter-tabs > .tab-header-area {
+  -fx-padding: 4 6 0 6;
+  -fx-background-color: -bp-panel;
 }
 
-.filter-tabs .tab {
-    -fx-background-color: -bp-control;
-    -fx-text-fill: -bp-text;
+.filter-tabs > .tab-header-area > .tab-header-background {
+  -fx-background-color: -bp-panel;
+  -fx-border-color: transparent transparent -bp-border transparent;
+  -fx-border-width: 0 0 1 0;
 }
 
-.filter-tabs .tab:selected {
-    -fx-background-color: -bp-panel;
-    -fx-text-fill: -bp-text;
+.filter-tabs > .tab-header-area > .headers-region > .tab {
+  -fx-background-color: -bp-elevated;
+  -fx-background-insets: 0;
+  -fx-background-radius: 4 4 0 0;
+  -fx-border-color: -bp-border;
+  -fx-border-width: 1 1 0 1;
+  -fx-border-radius: 4 4 0 0;
+  -fx-padding: 5 14 5 14;
+  -fx-cursor: hand;
+  -fx-focus-color: transparent;
+  -fx-faint-focus-color: transparent;
 }
 
-.filter-tabs .tab .tab-label {
-    -fx-text-fill: -bp-text;
+.filter-tabs > .tab-header-area > .headers-region > .tab:hover {
+  -fx-background-color: derive(-bp-elevated, 12%);
+}
+
+.filter-tabs > .tab-header-area > .headers-region > .tab:selected,
+.filter-tabs > .tab-header-area > .headers-region > .tab:selected:focused {
+  -fx-background-color: -bp-panel;
+  -fx-background-insets: 0;
+  -fx-border-color: -bp-border -bp-border -bp-panel -bp-border;
+  -fx-focus-color: transparent;
+  -fx-faint-focus-color: transparent;
+}
+
+.filter-tabs > .tab-header-area > .headers-region > .tab .tab-label {
+  -fx-text-fill: -bp-muted;
+  -fx-font-size: 12px;
+}
+
+.filter-tabs > .tab-header-area > .headers-region > .tab:selected .tab-label {
+  -fx-text-fill: -bp-text;
+  -fx-font-weight: bold;
 }
 
 /* Results tabs */
 .results-tabs {
-    -fx-background-color: -bp-surface;
+  -fx-background-color: -bp-surface;
+}
+
+/* Thin bar above Coding/SV/LOH tables: annotate, search, Excel (visible on every results tab). */
+.variant-table-area {
+  -fx-background-color: -bp-surface;
+}
+
+.variant-table-toolbar {
+  -fx-background-color: -bp-elevated;
+  -fx-border-color: transparent transparent -bp-control transparent;
+  -fx-border-width: 0 0 1 0;
+  -fx-alignment: CENTER_LEFT;
+}
+
+.variant-table-toolbar .primary-button {
+  -fx-padding: 3 10 3 10;
+  -fx-font-size: 11px;
+}
+
+.variant-table-toolbar .filter-field {
+  -fx-background-color: -bp-control;
+  -fx-text-fill: -bp-text;
+  -fx-border-color: -bp-border;
+  -fx-border-width: 1;
+  -fx-background-radius: 4;
+  -fx-border-radius: 4;
+  -fx-padding: 3 6 3 6;
 }
 
 .table-search-field {
-    -fx-prompt-text-fill: -bp-muted;
+  -fx-prompt-text-fill: -bp-muted;
 }
 
-.results-tabs .tab {
-    -fx-background-color: -bp-control;
-    -fx-text-fill: -bp-text;
+.results-tabs > .tab-header-area {
+  -fx-padding: 4 6 0 6;
+  -fx-background-color: -bp-panel;
 }
 
-.results-tabs .tab:selected {
-    -fx-background-color: -bp-surface;
-    -fx-text-fill: -bp-text;
+.results-tabs > .tab-header-area > .tab-header-background {
+  -fx-background-color: -bp-panel;
+  -fx-border-color: transparent transparent -bp-border transparent;
+  -fx-border-width: 0 0 1 0;
 }
 
-.results-tabs .tab .tab-label {
-    -fx-text-fill: -bp-text;
+.results-tabs > .tab-header-area > .headers-region > .tab {
+  -fx-background-color: -bp-elevated;
+  -fx-background-insets: 0;
+  -fx-background-radius: 4 4 0 0;
+  -fx-border-color: -bp-border;
+  -fx-border-width: 1 1 0 1;
+  -fx-border-radius: 4 4 0 0;
+  -fx-padding: 4 12 4 12;
+  -fx-cursor: hand;
+  -fx-focus-color: transparent;
+  -fx-faint-focus-color: transparent;
+}
+
+.results-tabs > .tab-header-area > .headers-region > .tab:hover {
+  -fx-background-color: derive(-bp-elevated, 12%);
+}
+
+.results-tabs > .tab-header-area > .headers-region > .tab:selected,
+.results-tabs > .tab-header-area > .headers-region > .tab:selected:focused {
+  -fx-background-color: -bp-surface;
+  -fx-background-insets: 0;
+  -fx-border-color: -bp-border -bp-border -bp-surface -bp-border;
+  -fx-focus-color: transparent;
+  -fx-faint-focus-color: transparent;
+}
+
+.results-tabs > .tab-header-area > .headers-region > .tab .tab-label {
+  -fx-text-fill: -bp-muted;
+  -fx-font-size: 11px;
+}
+
+.results-tabs > .tab-header-area > .headers-region > .tab:selected .tab-label {
+  -fx-text-fill: -bp-text;
+  -fx-font-weight: bold;
 }
 
 /* Filter checkboxes */

@@ -1099,6 +1099,24 @@ public class VariantList {
     }
 
     /**
+     * Ensure the visible chain matches {@code filter}, then run {@code action} while
+     * holding the list lock so a concurrent rebuild cannot clear {@code nextVisible}
+     * mid-paint (slider filter apply vs canvas draw race).
+     */
+    public void withVisibleChain(VariantFilter filter, Runnable action) {
+        if (action == null) {
+            return;
+        }
+        synchronized (this) {
+            String key = filterKeyOf(filter);
+            if (!key.equals(visibleFilterKey)) {
+                rebuildForComparisonUnlocked(filter, null);
+            }
+            action.run();
+        }
+    }
+
+    /**
      * First drawable node at or after {@code position}, via binary seek on the visible index.
      */
     public VariantNode findFirstVisibleAtOrAfter(long position) {

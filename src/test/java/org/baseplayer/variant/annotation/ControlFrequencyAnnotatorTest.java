@@ -63,16 +63,63 @@ class ControlFrequencyAnnotatorTest {
     }
 
     @Test
-    void resolveAfFallsBackToGlobalWhenPopMissing() {
+    void resolveAfDoesNotFallBackToGlobalWhenPopMissing() {
         Map<String, Object> info = new HashMap<>();
         info.put("AC", 1);
         info.put("AN", 100);
-        assertEquals(0.01, ControlFrequencyAnnotator.resolveAf(info, 0, 1, "fin"), 1e-12);
+        assertNull(ControlFrequencyAnnotator.resolveAf(info, 0, 1, "fin"));
+    }
+
+    @Test
+    void resolveAfMaxAcrossSelectedPopulations() {
+        Map<String, Object> info = new HashMap<>();
+        info.put("AF_fin", 0.01);
+        info.put("AF_nfe", 0.05);
+        info.put("AF", 0.2);
+        assertEquals(
+            0.05,
+            ControlFrequencyAnnotator.resolveAf(info, 0, 1, List.of("fin", "nfe")),
+            1e-12);
+        assertEquals(
+            0.2,
+            ControlFrequencyAnnotator.resolveAf(info, 0, 1, List.of("", "fin")),
+            1e-12);
     }
 
     @Test
     void normalizePopulationIdAcceptsAfPrefix() {
         assertEquals("fin", ControlFrequencyAnnotator.normalizePopulationId("AF_fin"));
         assertEquals("", ControlFrequencyAnnotator.normalizePopulationId("global"));
+    }
+
+    @Test
+    void parseVcfPosReadsSecondColumnOnly() {
+        assertEquals(12345L, ControlFrequencyAnnotator.parseVcfPos("1\t12345\t.\tA\tG\t.\t.\tAC=1;AN=100"));
+        assertEquals(-1L, ControlFrequencyAnnotator.parseVcfPos("#CHROM\tPOS\tID"));
+    }
+
+    @Test
+    void resolveAfFromInfoStringUsesAcAnAndPops() {
+        String info = "AC=3;AN=135096;AF_fin=0.01;AC_nfe=5;AN_nfe=100";
+        assertEquals(
+            3.0 / 135096.0,
+            ControlFrequencyAnnotator.resolveAfFromInfoString(info, 0, 1, List.of("")),
+            1e-12);
+        assertEquals(
+            0.01,
+            ControlFrequencyAnnotator.resolveAfFromInfoString(info, 0, 1, List.of("fin")),
+            1e-12);
+        assertEquals(
+            0.05,
+            ControlFrequencyAnnotator.resolveAfFromInfoString(info, 0, 1, List.of("nfe")),
+            1e-12);
+    }
+
+    @Test
+    void infoNumberPicksAltIndex() {
+        assertEquals(
+            2.0,
+            ControlFrequencyAnnotator.infoNumber("AC=1,2,3;AN=10", "AC", 1),
+            1e-12);
     }
 }

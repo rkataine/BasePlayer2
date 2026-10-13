@@ -143,10 +143,11 @@ public final class OpenDirectorySamplesDialog {
         applyToAll,
         buttons);
     root.setPadding(new Insets(16));
-    root.getStyleClass().add("filter-panel");
+    root.getStyleClass().addAll("filter-panel", "dialog-surface");
 
     Scene scene = new Scene(root, 400, directoryCount > 1 ? 340 : 300);
     applyTheme(scene);
+    scene.setFill(AppTheme.chrome().panel());
     dialog.setScene(scene);
     dialog.showAndWait();
     return Optional.ofNullable(chosen[0]);

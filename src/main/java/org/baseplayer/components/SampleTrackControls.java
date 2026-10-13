@@ -498,22 +498,77 @@ public final class SampleTrackControls {
   }
 
   /**
-   * Sample / feature master header: right-aligned strip (add, settings, optional reload).
+   * Sample / feature master header: right-aligned strip
+   * (eye visibility, add, settings, optional reload).
    * No close button — column-level chrome only.
+   *
+   * @param aggregatesVisible when true, eye is "open" (aggregate chrome shown)
    */
   public static List<Hit> drawMaster(
       GraphicsContext gc,
       double contentRight,
       double headerHeight,
       boolean showReload,
+      boolean aggregatesVisible,
       String hoveredId) {
     double buttonSize = MASTER_BUTTON_SIZE;
     double stripH = stripHeight(buttonSize);
     double topY = (headerHeight - stripH) / 2.0;
-    double leftX = contentRight - MASTER_RIGHT_MARGIN - width(showReload, false, false, buttonSize);
-    return draw(
-        gc, leftX, topY, buttonSize, true, showReload, false,
-        false, false, false, 0, hoveredId, false);
+    // Eye + add + settings (+ reload)
+    double totalW = width(showReload, false, false, buttonSize) + buttonSize + BUTTON_GAP;
+    double leftX = contentRight - MASTER_RIGHT_MARGIN - totalW;
+    List<Hit> hits = new ArrayList<>(5);
+    double y = topY + VERTICAL_PADDING;
+    double x = paintEyeButton(gc, hits, leftX, y, buttonSize, aggregatesVisible, hoveredId);
+    hits.addAll(draw(
+        gc, x, topY, buttonSize, aggregatesVisible, showReload, false,
+        false, false, false, 0, hoveredId, false));
+    return hits;
+  }
+
+  /** Geometric eye toggle — open when aggregates are visible, struck when hidden. */
+  private static double paintEyeButton(
+      GraphicsContext gc,
+      List<Hit> hits,
+      double x,
+      double y,
+      double buttonSize,
+      boolean visible,
+      String hoveredId) {
+    boolean hovered = "eye".equals(hoveredId);
+    boolean dark = org.baseplayer.ui.theme.AppTheme.isDark();
+    String bgHex = dark ? "#2f343a" : "#d5d5d5";
+    gc.setFill(Color.web(bgHex));
+    gc.fillRoundRect(x, y, buttonSize, buttonSize, 4, 4);
+    if (hovered) {
+      gc.setStroke(dark ? Color.rgb(180, 220, 255, 0.9) : Color.rgb(0, 90, 158, 0.85));
+      gc.setLineWidth(1.4);
+      gc.strokeRoundRect(x - 0.5, y - 0.5, buttonSize + 1, buttonSize + 1, 4, 4);
+    } else {
+      gc.setStroke(dark ? Color.rgb(255, 255, 255, 0.16) : Color.rgb(0, 0, 0, 0.18));
+      gc.setLineWidth(1);
+      gc.strokeRoundRect(x + 0.5, y + 0.5, buttonSize - 1, buttonSize - 1, 4, 4);
+    }
+
+    double cx = x + buttonSize * 0.5;
+    double cy = y + buttonSize * 0.5;
+    if (visible) {
+      Color ink = dark ? Color.rgb(100, 180, 240) : Color.rgb(0, 90, 158);
+      gc.setStroke(ink);
+      gc.setFill(ink);
+      gc.setLineWidth(1.3);
+      gc.strokeOval(cx - 5, cy - 2.6, 10, 5.2);
+      gc.fillOval(cx - 2, cy - 2, 4, 4);
+    } else {
+      Color ink = dark ? Color.rgb(120, 120, 120) : Color.rgb(100, 100, 100);
+      gc.setStroke(ink);
+      gc.setLineWidth(1.3);
+      gc.strokeOval(cx - 5, cy - 2.6, 10, 5.2);
+      gc.strokeLine(x + 3.5, y + buttonSize - 3.5, x + buttonSize - 3.5, y + 3.5);
+    }
+    gc.setLineWidth(1);
+    hits.add(new Hit("eye", x, y, buttonSize, buttonSize));
+    return x + buttonSize + BUTTON_GAP;
   }
 
   /**

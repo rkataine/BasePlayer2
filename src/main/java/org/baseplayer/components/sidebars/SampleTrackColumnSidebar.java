@@ -675,20 +675,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
     Label titleLabel = new Label("Global Settings");
     titleLabel.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 13; -fx-font-weight: bold; -fx-padding: 4 8 2 8;");
-    javafx.scene.control.CheckMenuItem showMaster = new javafx.scene.control.CheckMenuItem(
-        "Show master / aggregate band");
-    showMaster.setSelected(sampleRegistry.isMasterAggregatesEnabled());
-    showMaster.setOnAction(e -> {
-      sampleRegistry.setMasterAggregatesEnabled(showMaster.isSelected());
-      updateSampleSearchBarVisibility();
-      draw();
-      redrawAfterVisibleTrackRangeChange();
-      GenomicCanvas.update.set(!GenomicCanvas.update.get());
-    });
     settingsMenu.getItems().addAll(
         new CustomMenuItem(titleLabel, false),
-        new SeparatorMenuItem(),
-        showMaster,
         new SeparatorMenuItem());
 
     // Gather BAM files once for global controls.

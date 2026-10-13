@@ -25,7 +25,6 @@ import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.ui.components.ControlFilesPanel;
-import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationOption;
 import org.baseplayer.variant.ui.components.IntegerRangeSlider;
 import org.baseplayer.variant.ui.components.SampleComparisonPanel;
 import org.baseplayer.variant.ui.components.LohVariantTable;
@@ -149,8 +148,8 @@ public class VariantManagerController implements Initializable {
     @FXML private Button removeControlFileButton;
     @FXML private ColoredToggle filterByPopFreqCheckBox;
     @FXML private TextField maxPopFreqField;
-    @FXML private ComboBox<PopulationOption> controlPopulationCombo;
-    @FXML private Label controlFileStatsLabel;
+    @FXML private ColoredToggle selectAllPopulationsCheckBox;
+    @FXML private VBox controlPopulationBox;
     @FXML private VBox controlFilesRoot;
     @FXML private SplitPane controlFilesSplitPane;
 
@@ -182,9 +181,9 @@ public class VariantManagerController implements Initializable {
     @FXML private Button annotateAllChromosomesButton;
     @FXML private TextField tableSearchField;
     @FXML private Button excelExportButton;
-    private Button svAnnotateAllChromosomesButton;
-    private TextField svTableSearchField;
-    private Button svExcelExportButton;
+    @FXML private Button svAnnotateAllChromosomesButton;
+    @FXML private TextField svTableSearchField;
+    @FXML private Button svExcelExportButton;
 
     private VcfManager vcfManager;
     private Stage stage;
@@ -286,8 +285,8 @@ public class VariantManagerController implements Initializable {
                 removeControlFileButton,
                 filterByPopFreqCheckBox,
                 maxPopFreqField,
-                controlPopulationCombo,
-                controlFileStatsLabel));
+                selectAllPopulationsCheckBox,
+                controlPopulationBox));
         wireControlFilesPanel(controlFilesPanel);
         pointWorkspace.setControl(controlFilesPanel);
         // Early restore for Point; SV is restored after restructureModeWorkspaces().
@@ -553,22 +552,14 @@ public class VariantManagerController implements Initializable {
         if (svNodes.reloadBannerButton() != null) {
             svNodes.reloadBannerButton().setOnAction(e -> handleReloadFilteredVariants());
         }
-        if (svNodes.annotateAllChromosomesButton() != null) {
-            svAnnotateAllChromosomesButton = svNodes.annotateAllChromosomesButton();
-            svAnnotateAllChromosomesButton.setOnAction(e -> handleAnnotateAllChromosomes());
-        }
-        if (svNodes.tableSearchField() != null) {
-            svTableSearchField = svNodes.tableSearchField();
+        if (svTableSearchField != null) {
             svTableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (svVariantTable != null) {
                     svVariantTable.setSearchQuery(newVal);
                 }
             });
         }
-        if (svNodes.excelExportButton() != null) {
-            svExcelExportButton = svNodes.excelExportButton();
-            setupExcelExportButton(svExcelExportButton, true);
-        }
+        setupExcelExportButton(svExcelExportButton, true);
 
         VariantFiltersPanel svFiltersPanel = new VariantFiltersPanel();
         svFiltersPanel.install(
@@ -2059,8 +2050,10 @@ public class VariantManagerController implements Initializable {
     /**
      * Run control-file AF annotation via {@link ThreadRunner} so the app-wide
      * {@code LoadingPopup} shows progress. Variant Manager only dims (no text).
+     *
+     * @param work receives a progress-suffix updater for the active RunnerTask
      */
-    private void runControlAnnotationAsync(Runnable work) {
+    private void runControlAnnotationAsync(java.util.function.Consumer<java.util.function.Consumer<String>> work) {
         if (work == null) {
             return;
         }
@@ -2075,21 +2068,33 @@ public class VariantManagerController implements Initializable {
             busyOverlay.cancelDelayedLoadingModal();
             busyOverlay.lockFilterControls(true);
         }
+        final java.util.concurrent.atomic.AtomicReference<ThreadRunner.RunnerTask> taskRef =
+            new java.util.concurrent.atomic.AtomicReference<>();
         controlAnnotationTask = ThreadRunner.get().submit(
             "Annotating control AF…",
             () -> {
-                work.run();
+                work.accept(suffix -> {
+                    ThreadRunner.RunnerTask t = taskRef.get();
+                    if (t == null || t.isCancelled()) {
+                        return;
+                    }
+                    t.setProgressSuffix(suffix != null ? suffix : "");
+                    ThreadRunner.get().notifyDescriptionChanged();
+                });
                 return Boolean.TRUE;
             },
             result -> {
                 controlAnnotationRunning = false;
                 controlAnnotationTask = null;
                 if (busyOverlay != null) {
+                    busyOverlay.lockFilterControls(false);
                     busyOverlay.syncBusyOverlay();
                 }
                 if (disposed) {
                     return;
                 }
+                // null result = supplier threw (e.g. before FX-safe error marshalling);
+                // still refresh UI so the manager is not left dimmed/stale.
                 VariantFilter filter = buildFilterFromUI();
                 if (vcfManager != null) {
                     vcfManager.applyFilter(filter);
@@ -2097,6 +2102,7 @@ public class VariantManagerController implements Initializable {
                 scheduleRebuild(filter);
                 org.baseplayer.project.ProjectSessionState.get().markDirty();
             });
+        taskRef.set(controlAnnotationTask);
     }
 
     /**
@@ -2116,7 +2122,7 @@ public class VariantManagerController implements Initializable {
             scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
             return;
         }
-        runControlAnnotationAsync(() -> panel.annotateLoadedSources(false));
+        runControlAnnotationAsync(progress -> panel.annotateLoadedSources(false, progress));
     }
 
     /** Called from session save to persist control VCF path + pop-freq toggles. */
@@ -2171,7 +2177,7 @@ public class VariantManagerController implements Initializable {
             scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
             return;
         }
-        runControlAnnotationAsync(() -> panel.annotateIfOpen(list));
+        runControlAnnotationAsync(progress -> panel.annotateIfOpen(list, progress));
     }
 
     private ControlFilesPanel activeControlPanel() {
@@ -2700,6 +2706,11 @@ public class VariantManagerController implements Initializable {
         rebuildRunning = false;
         try {
             applyTableRebuildResultLight(result, null);
+            // Slider/filter light path used to skip canvas redraw; early applyFilter redraw
+            // can race the background chain rebuild and leave tracks stale until hover.
+            if (vcfManager != null) {
+                vcfManager.redrawSampleCanvases();
+            }
         } catch (Throwable t) {
             System.err.println("Variant table apply failed: " + t.getMessage());
             t.printStackTrace();

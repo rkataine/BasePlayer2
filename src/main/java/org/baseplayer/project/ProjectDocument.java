@@ -129,8 +129,9 @@ public class ProjectDocument {
     public boolean filterByControlAf;
     public double maxControlAf = 0.01;
     /**
-     * Population INFO suffix (e.g. {@code fin} for {@code AF_fin}), or blank/null for global
-     * {@code AF}/{@code AC}/{@code AN}.
+     * Selected control populations as a comma-separated list of INFO suffixes
+     * (e.g. {@code global,fin,nfe}). {@code global} = {@code AF}/{@code AC}/{@code AN}.
+     * Legacy single values such as {@code fin} are still accepted.
      */
     public String controlPopulation;
   }

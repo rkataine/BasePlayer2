@@ -383,12 +383,15 @@ public class MasterTrackPainter {
       return;
     }
 
-    // Live per-allele bars only at base-level zoom. Gene/SV zoom must keep the
-    // pyramid so overlapping SVs accumulate unique samples (otherwise scale
-    // collapses to ~1–2 when each sample has its own VariantNode).
+    // Live per-allele bars once the finest pyramid bins (~1kb) would stretch
+    // wider than ~2px — otherwise close zoom stays as large blocks. Pyramid
+    // remains for chromosome / gene-far zoom. Precise path floors scale to
+    // cohort size so overlapping per-sample SVs don't collapse the axis.
     double viewLength = Math.max(1.0, drawStack.getViewLength());
     double pxPerBp = canvasWidth / viewLength;
-    boolean zoomedInPrecise = pxPerBp > 1.0;
+    long finestBinBp = VariantDensityPyramid.BIN_SIZES_BP[
+        VariantDensityPyramid.BIN_SIZES_BP.length - 1];
+    boolean zoomedInPrecise = pxPerBp * finestBinBp > 2.0;
     if (!zoomedInPrecise) {
       ensurePyramidAsync(drawStack, false);
     }
@@ -717,32 +720,34 @@ public class MasterTrackPainter {
         bars.add(new PreciseBar(x, w, count, node.type));
       };
 
-      for (VariantNode node : variants.getVisibleSvByPosition()) {
-        if (node.position >= viewStart) {
-          break;
+      variants.withVisibleChain(activeFilter, () -> {
+        for (VariantNode node : variants.getVisibleSvByPosition()) {
+          if (node.position >= viewStart) {
+            break;
+          }
+          if (node.svEnd < viewStart || node.position > viewEnd) {
+            continue;
+          }
+          collect.accept(node);
         }
-        if (node.svEnd < viewStart || node.position > viewEnd) {
-          continue;
-        }
-        collect.accept(node);
-      }
 
-      for (VariantNode region : variants.getLohRegions()) {
-        if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
-          continue;
+        for (VariantNode region : variants.getLohRegions()) {
+          if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
+            continue;
+          }
+          if (region.svEnd < viewStart || region.position > viewEnd) {
+            continue;
+          }
+          collect.accept(region);
         }
-        if (region.svEnd < viewStart || region.position > viewEnd) {
-          continue;
-        }
-        collect.accept(region);
-      }
 
-      VariantDrawSeek seek = new VariantDrawSeek();
-      VariantNode node = seek.seek(variants, (long) viewStart);
-      while (node != null && node.position <= viewEnd) {
-        collect.accept(node);
-        node = node.nextVisible;
-      }
+        VariantDrawSeek seek = new VariantDrawSeek();
+        VariantNode node = seek.seek(variants, (long) viewStart);
+        while (node != null && node.position <= viewEnd) {
+          collect.accept(node);
+          node = node.nextVisible;
+        }
+      });
 
       // Cohort-relative scale: floor on displayed samples so overlapping
       // per-sample SVs don't collapse the axis to 1–2.
@@ -758,7 +763,7 @@ public class MasterTrackPainter {
       preciseBarsPixelSize = pixelSize;
       preciseBarsWidth = canvasWidth;
       preciseBarsFilterGen = filterGen;
-      preciseBarsChainGen = chainGen;
+      preciseBarsChainGen = variants.getVisibleChainGeneration();
     }
 
     double bottom = top + h;

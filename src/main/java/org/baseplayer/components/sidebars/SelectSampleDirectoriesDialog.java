@@ -245,10 +245,11 @@ public final class SelectSampleDirectoriesDialog {
     VBox root = new VBox(10, title, hint, pathLabel, list, navRow, buttons);
     VBox.setVgrow(list, Priority.ALWAYS);
     root.setPadding(new Insets(14));
-    root.getStyleClass().add("filter-panel");
+    root.getStyleClass().addAll("filter-panel", "dialog-surface");
 
     Scene scene = new Scene(root, 580, 460);
     applyTheme(scene);
+    scene.setFill(AppTheme.chrome().panel());
     dialog.setScene(scene);
 
     navigateTo(start, currentDir, pathLabel, rows, checkedPaths, list);

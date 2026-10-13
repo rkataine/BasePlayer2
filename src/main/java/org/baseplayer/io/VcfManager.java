@@ -1376,15 +1376,26 @@ public class VcfManager {
 
     /** Redraw sample tracks and aggregate density for the current filter. */
     public void redrawSampleCanvases() {
+        if (!Platform.isFxApplicationThread()) {
+            Platform.runLater(this::redrawSampleCanvases);
+            return;
+        }
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
             if (stack.sampleTrackCanvas != null) {
+                if (stack.sampleTrackCanvas.getVariantDrawer() != null) {
+                    stack.sampleTrackCanvas.getVariantDrawer().markIndexDirty();
+                }
                 stack.sampleTrackCanvas.draw();
             }
             if (stack.sampleAggregateCanvas != null) {
+                // Force density rebuild, then paint immediately (async pyramid also redraws).
                 stack.sampleAggregateCanvas.forceCalculateDensity();
+                stack.sampleAggregateCanvas.draw();
             }
         }
+        // Same path as hover/scroll so EventCoordinator flushes every stack canvas.
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
 
     /**

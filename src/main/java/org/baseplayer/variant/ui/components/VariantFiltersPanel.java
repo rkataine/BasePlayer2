@@ -318,20 +318,7 @@ public class VariantFiltersPanel {
             new VBox(6, effectsHeader, effectsContainer),
             new VBox(6, new Label("Special Filters") {{ getStyleClass().add("section-header"); }}, cancerOnly));
 
-        Button annotateAll = new Button("Annotate All Chromosomes");
-        annotateAll.getStyleClass().add("secondary-button");
-        TextField searchField = new TextField();
-        searchField.setPromptText("Search genes, positions, mates…");
-        searchField.getStyleClass().addAll("filter-field", "table-search-field");
-        HBox.setHgrow(searchField, javafx.scene.layout.Priority.ALWAYS);
-        Button excelExport = new Button();
-        excelExport.getStyleClass().add("icon-button");
-        excelExport.setTooltip(new Tooltip("Export to Excel"));
-        excelExport.setVisible(false);
-        excelExport.setManaged(false);
-        HBox annotateSearchRow = new HBox(8, annotateAll, searchField, excelExport);
-        annotateSearchRow.setAlignment(Pos.CENTER_LEFT);
-        right.getChildren().add(annotateSearchRow);
+        // Annotate / search / Excel live in the variant-table toolbar (above results tabs).
 
         javafx.scene.control.SplitPane split = new javafx.scene.control.SplitPane(left, right);
         split.setDividerPositions(0.5);
@@ -358,9 +345,9 @@ public class VariantFiltersPanel {
             reloadButton,
             minSvLen,
             maxSvLen,
-            annotateAll,
-            searchField,
-            excelExport);
+            null,
+            null,
+            null);
         return new Pair<>(split, nodes);
     }
 

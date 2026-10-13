@@ -3,7 +3,12 @@ package org.baseplayer.variant.ui.components;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -16,23 +21,25 @@ import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.ControlFileStats;
+import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationAnStats;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationOption;
 
 import javafx.application.Platform;
-import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
 import javafx.util.Pair;
@@ -40,10 +47,25 @@ import javafx.util.Pair;
 /**
  * Control Files tab: load a local gnomAD-style sites VCF, pick population AF fields,
  * and optionally filter sample variants by control allele frequency.
+ * Opening a file only loads metadata — click Apply to annotate.
  */
 public class ControlFilesPanel {
 
     private static final int STATS_SAMPLE_ROWS = 10_000;
+
+    /** Distinct swatches for population checkboxes (gene-type style). */
+    private static final Color[] POPULATION_COLORS = {
+        Color.web("#4A90E2"),
+        Color.web("#7ED321"),
+        Color.web("#F5A623"),
+        Color.web("#BD10E0"),
+        Color.web("#50E3C2"),
+        Color.web("#D0021B"),
+        Color.web("#9013FE"),
+        Color.web("#8B572A"),
+        Color.web("#417505"),
+        Color.web("#B8E986"),
+    };
 
     public record Nodes(
         Label controlFilePathLabel,
@@ -51,12 +73,14 @@ public class ControlFilesPanel {
         Button removeControlFileButton,
         ColoredToggle filterByPopFreqCheckBox,
         TextField maxPopFreqField,
-        ComboBox<PopulationOption> populationCombo,
-        Label controlFileStatsLabel
+        ColoredToggle selectAllPopulationsCheckBox,
+        VBox populationCheckBoxContainer
     ) {}
 
     private Nodes nodes;
     private final ControlFrequencyAnnotator annotator = new ControlFrequencyAnnotator();
+    private final Map<String, ColoredToggle> populationCheckBoxes = new LinkedHashMap<>();
+    private final Map<String, Label> populationStatsLabels = new LinkedHashMap<>();
 
     private Supplier<Window> windowSupplier = () -> null;
     private Supplier<List<VcfManager.CachedChromosomeVariants>> sourcesSupplier = List::of;
@@ -75,7 +99,11 @@ public class ControlFilesPanel {
      * When set, annotation work is handed to the controller (background + loading modal)
      * instead of running on the FX thread.
      */
-    private Consumer<Runnable> annotateExecutor;
+    /**
+     * Schedules annotation: {@code starter.accept(body)} where
+     * {@code body.accept(progressSuffix)} runs the blocking annotate work.
+     */
+    private Consumer<Consumer<Consumer<String>>> annotateExecutor;
 
     public void install(Nodes nodes) {
         this.nodes = nodes;
@@ -111,10 +139,10 @@ public class ControlFilesPanel {
     }
 
     /**
-     * Run heavy annotate work via {@code executor.accept(work)}. When null, annotate
-     * runs synchronously on the calling thread.
+     * Run heavy annotate off the FX thread. {@code starter.accept(body)} should submit
+     * {@code body} to a background executor; {@code body.accept(progress)} runs annotate.
      */
-    public void setAnnotateExecutor(Consumer<Runnable> annotateExecutor) {
+    public void setAnnotateExecutor(Consumer<Consumer<Consumer<String>>> annotateExecutor) {
         this.annotateExecutor = annotateExecutor;
     }
 
@@ -152,7 +180,7 @@ public class ControlFilesPanel {
         }
     }
 
-    /** Persist path + pop-freq toggles + population into the project document. */
+    /** Persist path + pop-freq toggles + populations into the project document. */
     public void writeToDocument(ProjectDocument.ControlFilesSpec spec) {
         if (spec == null) {
             return;
@@ -161,8 +189,8 @@ public class ControlFilesPanel {
         spec.controlVcfPath = open != null ? open.toAbsolutePath().normalize().toString() : null;
         spec.filterByControlAf = isFilterByPopFreqSelected();
         spec.maxControlAf = readMaxPopFreq();
-        String pop = annotator.populationId();
-        spec.controlPopulation = pop == null || pop.isBlank() ? null : pop;
+        String pops = annotator.selectedPopulationsPersistString();
+        spec.controlPopulation = pops == null || pops.isBlank() ? null : pops;
     }
 
     /**
@@ -188,11 +216,13 @@ public class ControlFilesPanel {
             }
             String pathText = spec.controlVcfPath;
             if (pathText == null || pathText.isBlank()) {
+                refreshPopulations(null, false);
                 refreshFileUi();
                 return false;
             }
             Path path = Path.of(pathText);
             if (!java.nio.file.Files.isRegularFile(path)) {
+                refreshPopulations(null, false);
                 refreshFileUi();
                 return false;
             }
@@ -203,7 +233,9 @@ public class ControlFilesPanel {
                 refreshFileUi();
                 return false;
             }
-            refreshPopulations(spec.controlPopulation);
+            List<String> preferred =
+                ControlFrequencyAnnotator.parsePopulationsPersistString(spec.controlPopulation);
+            refreshPopulations(preferred, false);
             refreshFileUi();
             refreshStatsAsync();
             return true;
@@ -212,7 +244,7 @@ public class ControlFilesPanel {
         }
     }
 
-    /** Copy pop-freq toggles and population from another panel without persisting. */
+    /** Copy pop-freq toggles and populations from another panel without persisting. */
     public void mirrorFilterSettingsFrom(ControlFilesPanel other) {
         if (other == null || other == this || nodes == null) {
             return;
@@ -226,9 +258,8 @@ public class ControlFilesPanel {
             if (nodes.maxPopFreqField() != null) {
                 nodes.maxPopFreqField().setText(String.valueOf(other.readMaxPopFreq()));
             }
-            String pop = other.annotator.populationId();
-            annotator.setPopulationId(pop);
-            refreshPopulations(pop);
+            Set<String> pops = other.annotator.selectedPopulations();
+            annotator.setSelectedPopulations(pops);
             if (other.annotator.isOpen() && other.annotator.path() != null) {
                 Path path = other.annotator.path();
                 if (!annotator.isOpen() || !path.equals(annotator.path())) {
@@ -241,13 +272,26 @@ public class ControlFilesPanel {
             } else if (!other.annotator.isOpen() && annotator.isOpen()) {
                 annotator.close();
             }
+            refreshPopulations(new ArrayList<>(pops), false);
             refreshFileUi();
-            if (nodes.controlFileStatsLabel() != null && other.nodes != null
-                    && other.nodes.controlFileStatsLabel() != null) {
-                nodes.controlFileStatsLabel().setText(other.nodes.controlFileStatsLabel().getText());
+            if (annotator.isOpen()) {
+                // Copy already-sampled counts from the sibling when available.
+                copyPopulationStatsFrom(other);
             }
         } finally {
             suppressSettingsPersist = previous;
+        }
+    }
+
+    private void copyPopulationStatsFrom(ControlFilesPanel other) {
+        if (other == null) {
+            return;
+        }
+        for (Map.Entry<String, Label> e : populationStatsLabels.entrySet()) {
+            Label src = other.populationStatsLabels.get(e.getKey());
+            if (src != null && e.getValue() != null) {
+                e.getValue().setText(src.getText());
+            }
         }
     }
 
@@ -273,6 +317,7 @@ public class ControlFilesPanel {
     }
 
     public void handleApplyControlSettings() {
+        syncSelectedPopulationsFromUi();
         runAnnotateLoadedSources(true);
     }
 
@@ -311,21 +356,20 @@ public class ControlFilesPanel {
             showError("Could not open control VCF", e.getMessage());
             return;
         }
-        refreshPopulations(annotator.populationId());
+        // Select all populations by default; do not annotate until Apply.
+        refreshPopulations(null, true);
         refreshFileUi();
         SessionDocumentSync.writeControlVcfPath(path.toAbsolutePath().normalize().toString());
         persistFilterSettingsToDocument();
         refreshStatsAsync();
         onSettingsMirrored.accept(this);
-        runAnnotateLoadedSources(true);
     }
 
     public void handleRemoveControlFile() {
         annotator.close();
         clearControlAfOnSources();
-        refreshPopulations(null);
+        refreshPopulations(null, false);
         refreshFileUi();
-        setStatsText("No control file loaded.");
         SessionDocumentSync.writeControlVcfPath(null);
         persistFilterSettingsToDocument();
         onSettingsMirrored.accept(this);
@@ -342,8 +386,23 @@ public class ControlFilesPanel {
         if (nodes.removeControlFileButton() != null) {
             nodes.removeControlFileButton().setOnAction(e -> handleRemoveControlFile());
         }
-        if (nodes.populationCombo() != null) {
-            nodes.populationCombo().setOnAction(e -> onPopulationChanged());
+        if (nodes.selectAllPopulationsCheckBox() != null) {
+            nodes.selectAllPopulationsCheckBox().setOnAction(e -> {
+                if (suppressSettingsPersist) {
+                    return;
+                }
+                boolean selectAll = nodes.selectAllPopulationsCheckBox().isSelected();
+                boolean previous = suppressSettingsPersist;
+                suppressSettingsPersist = true;
+                try {
+                    for (ColoredToggle cb : populationCheckBoxes.values()) {
+                        cb.setSelected(selectAll);
+                    }
+                } finally {
+                    suppressSettingsPersist = previous;
+                }
+                onPopulationSelectionChanged();
+            });
         }
     }
 
@@ -370,27 +429,44 @@ public class ControlFilesPanel {
         onFilterSettingsChanged.run();
     }
 
-    private void onPopulationChanged() {
-        if (suppressSettingsPersist || nodes == null || nodes.populationCombo() == null) {
+    private void onPopulationSelectionChanged() {
+        if (suppressSettingsPersist) {
             return;
         }
-        PopulationOption selected = nodes.populationCombo().getSelectionModel().getSelectedItem();
-        String popId = selected != null ? selected.id() : ControlFrequencyAnnotator.GLOBAL_POPULATION;
-        String previous = annotator.populationId();
-        annotator.setPopulationId(popId);
-        if (previous.equals(annotator.populationId())) {
-            return;
-        }
-        SessionDocumentSync.writeControlPopulation(annotator.populationId());
+        syncSelectedPopulationsFromUi();
+        syncSelectAllCheckbox();
+        SessionDocumentSync.writeControlPopulation(annotator.selectedPopulationsPersistString());
         persistFilterSettingsToDocument();
         onSettingsMirrored.accept(this);
-        refreshStatsAsync();
-        if (annotator.isOpen()) {
-            runAnnotateLoadedSources(true);
+        // Do not annotate here — Apply commits AF fields.
+    }
+
+    private void syncSelectedPopulationsFromUi() {
+        LinkedHashSet<String> selected = new LinkedHashSet<>();
+        for (Map.Entry<String, ColoredToggle> e : populationCheckBoxes.entrySet()) {
+            if (e.getValue() != null && e.getValue().isSelected()) {
+                selected.add(e.getKey());
+            }
+        }
+        annotator.setSelectedPopulations(selected);
+    }
+
+    private void syncSelectAllCheckbox() {
+        if (nodes == null || nodes.selectAllPopulationsCheckBox() == null) {
+            return;
+        }
+        boolean allSelected = !populationCheckBoxes.isEmpty()
+            && populationCheckBoxes.values().stream().allMatch(ColoredToggle::isSelected);
+        boolean previous = suppressSettingsPersist;
+        suppressSettingsPersist = true;
+        try {
+            nodes.selectAllPopulationsCheckBox().setSelected(allSelected);
+        } finally {
+            suppressSettingsPersist = previous;
         }
     }
 
-    /** Write pop-freq toggles + population into the live project document immediately. */
+    /** Write pop-freq toggles + populations into the live project document immediately. */
     public void persistFilterSettingsToDocument() {
         if (nodes == null) {
             return;
@@ -398,19 +474,26 @@ public class ControlFilesPanel {
         SessionDocumentSync.writeControlFilterSettings(
             isFilterByPopFreqSelected(),
             readMaxPopFreq(),
-            annotator.populationId());
+            annotator.selectedPopulationsPersistString());
     }
 
     private void runAnnotateLoadedSources(boolean notify) {
         if (annotateExecutor != null) {
-            annotateExecutor.accept(() -> annotateLoadedSources(false));
+            annotateExecutor.accept(progress -> annotateLoadedSources(false, progress));
         } else {
-            annotateLoadedSources(notify);
+            annotateLoadedSources(notify, null);
         }
     }
 
     /** Annotate every loaded chromosome list with the current control VCF. */
     public void annotateLoadedSources(boolean notify) {
+        annotateLoadedSources(notify, null);
+    }
+
+    /**
+     * @param progressSuffix optional UI updater (e.g. ThreadRunner task suffix); may be null
+     */
+    public void annotateLoadedSources(boolean notify, Consumer<String> progressSuffix) {
         if (!annotator.isOpen()) {
             if (notify) {
                 afterAnnotate.accept(true);
@@ -418,18 +501,40 @@ public class ControlFilesPanel {
             return;
         }
         List<VcfManager.CachedChromosomeVariants> sources = sourcesSupplier.get();
-        if (sources != null) {
-            for (VcfManager.CachedChromosomeVariants cached : sources) {
-                if (cached == null || cached.variants() == null) {
-                    continue;
-                }
-                try {
-                    annotator.annotate(cached.variants());
-                } catch (IOException e) {
-                    showError("Control annotation failed",
-                        cached.chromosome() + ": " + e.getMessage());
-                    break;
-                }
+        if (sources == null || sources.isEmpty()) {
+            if (notify) {
+                afterAnnotate.accept(true);
+            }
+            return;
+        }
+        int total = sources.size();
+        int index = 0;
+        for (VcfManager.CachedChromosomeVariants cached : sources) {
+            index++;
+            if (cached == null || cached.variants() == null) {
+                continue;
+            }
+            final int chromIndex = index;
+            final String chrom = cached.chromosome() != null ? cached.chromosome() : "?";
+            if (progressSuffix != null) {
+                progressSuffix.accept("(" + chromIndex + "/" + total + " chr" + chrom + ")");
+            }
+            try {
+                annotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
+                    org.baseplayer.services.LoadingManager.get()
+                        .setProgress(cur, Math.max(1, tot));
+                    if (progressSuffix == null) {
+                        return;
+                    }
+                    progressSuffix.accept(
+                        "(" + chromIndex + "/" + total
+                            + " chr" + c
+                            + ", " + matched + " AF)");
+                });
+            } catch (IOException e) {
+                // May run on ThreadRunner loader-pool — never build Alert here.
+                showError("Control annotation failed", chrom + ": " + e.getMessage());
+                break;
             }
         }
         if (notify) {
@@ -439,11 +544,23 @@ public class ControlFilesPanel {
 
     /** Annotate one list quietly (e.g. after gene annotation finishes). */
     public void annotateIfOpen(VariantList list) {
+        annotateIfOpen(list, null);
+    }
+
+    public void annotateIfOpen(VariantList list, Consumer<String> progressSuffix) {
         if (!annotator.isOpen() || list == null) {
             return;
         }
         try {
-            annotator.annotate(list);
+            annotator.annotate(list, (c, cur, tot, matched) -> {
+                org.baseplayer.services.LoadingManager.get()
+                    .setProgress(cur, Math.max(1, tot));
+                if (progressSuffix == null) {
+                    return;
+                }
+                progressSuffix.accept(
+                    "(chr" + c + ", " + matched + " AF)");
+            });
         } catch (IOException e) {
             System.err.println("Control AF annotation failed for "
                 + list.getChromosome() + ": " + e.getMessage());
@@ -477,35 +594,88 @@ public class ControlFilesPanel {
         if (nodes.removeControlFileButton() != null) {
             nodes.removeControlFileButton().setDisable(open == null);
         }
-        if (nodes.populationCombo() != null) {
-            nodes.populationCombo().setDisable(open == null);
+        boolean hasFile = open != null;
+        if (nodes.selectAllPopulationsCheckBox() != null) {
+            nodes.selectAllPopulationsCheckBox().setDisable(!hasFile || populationCheckBoxes.isEmpty());
+        }
+        if (nodes.populationCheckBoxContainer() != null) {
+            nodes.populationCheckBoxContainer().setDisable(!hasFile);
         }
     }
 
-    private void refreshPopulations(String preferredId) {
-        if (nodes == null || nodes.populationCombo() == null) {
+    /**
+     * Rebuild population rows (toggle + sample-count stats).
+     *
+     * @param preferredIds selected ids when non-null; when null and {@code selectAllDefault},
+     *        all populations are selected; when null and not select-all, keep annotator set
+     * @param selectAllDefault used only when {@code preferredIds} is null and a file is open
+     */
+    private void refreshPopulations(List<String> preferredIds, boolean selectAllDefault) {
+        if (nodes == null || nodes.populationCheckBoxContainer() == null) {
             return;
         }
         boolean previous = suppressSettingsPersist;
         suppressSettingsPersist = true;
         try {
+            populationCheckBoxes.clear();
+            populationStatsLabels.clear();
+            nodes.populationCheckBoxContainer().getChildren().clear();
+
+            if (!annotator.isOpen()) {
+                annotator.setSelectedPopulations(List.of(ControlFrequencyAnnotator.GLOBAL_POPULATION));
+                syncSelectAllCheckbox();
+                return;
+            }
+
             List<PopulationOption> options = annotator.listPopulations();
-            nodes.populationCombo().setItems(FXCollections.observableArrayList(options));
-            String want = ControlFrequencyAnnotator.normalizePopulationId(preferredId);
-            PopulationOption match = null;
-            for (PopulationOption opt : options) {
-                if (opt.id().equals(want)) {
-                    match = opt;
-                    break;
+            Set<String> want;
+            if (preferredIds != null) {
+                want = new LinkedHashSet<>(preferredIds);
+            } else if (selectAllDefault) {
+                want = new LinkedHashSet<>();
+                for (PopulationOption opt : options) {
+                    want.add(opt.id());
                 }
+            } else {
+                want = new LinkedHashSet<>(annotator.selectedPopulations());
             }
-            if (match == null && !options.isEmpty()) {
-                match = options.get(0);
+            if (want.isEmpty()) {
+                want.add(ControlFrequencyAnnotator.GLOBAL_POPULATION);
             }
-            if (match != null) {
-                nodes.populationCombo().getSelectionModel().select(match);
-                annotator.setPopulationId(match.id());
+
+            int colorIndex = 0;
+            for (PopulationOption opt : options) {
+                Color color = POPULATION_COLORS[colorIndex % POPULATION_COLORS.length];
+                colorIndex++;
+                ColoredToggle cb = new ColoredToggle(opt.label(), color);
+                cb.setSelected(want.contains(opt.id()));
+                cb.setTooltip(new Tooltip(ControlFrequencyAnnotator.populationFieldHint(opt.id())));
+                cb.setOnAction(e -> {
+                    if (!suppressSettingsPersist) {
+                        onPopulationSelectionChanged();
+                    }
+                });
+                // Keep the toggle from stretching; stats sit on the right.
+                cb.setMaxWidth(Region.USE_PREF_SIZE);
+                HBox.setHgrow(cb, Priority.NEVER);
+
+                Label stats = new Label("…");
+                stats.getStyleClass().add("subsection-label");
+                stats.setMinWidth(Region.USE_PREF_SIZE);
+
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
+
+                HBox row = new HBox(8, cb, spacer, stats);
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setMaxWidth(Double.MAX_VALUE);
+
+                populationCheckBoxes.put(opt.id(), cb);
+                populationStatsLabels.put(opt.id(), stats);
+                nodes.populationCheckBoxContainer().getChildren().add(row);
             }
+            syncSelectedPopulationsFromUi();
+            syncSelectAllCheckbox();
         } finally {
             suppressSettingsPersist = previous;
         }
@@ -513,20 +683,18 @@ public class ControlFilesPanel {
 
     private void refreshStatsAsync() {
         if (!annotator.isOpen()) {
-            setStatsText("No control file loaded.");
+            setAllPopulationStatsText("—");
             return;
         }
-        setStatsText("Sampling control file…");
+        setAllPopulationStatsText("…");
         Path path = annotator.path();
-        String pop = annotator.populationId();
         Thread t = new Thread(() -> {
             ControlFileStats stats;
             try (ControlFrequencyAnnotator peek = new ControlFrequencyAnnotator()) {
                 peek.open(path);
-                peek.setPopulationId(pop);
                 stats = peek.sampleStats(STATS_SAMPLE_ROWS);
             } catch (IOException e) {
-                Platform.runLater(() -> setStatsText("Could not sample control file: " + e.getMessage()));
+                Platform.runLater(() -> setAllPopulationStatsText("n/a"));
                 return;
             }
             ControlFileStats finalStats = stats;
@@ -534,29 +702,50 @@ public class ControlFilesPanel {
                 if (!annotator.isOpen() || path == null || !path.equals(annotator.path())) {
                     return;
                 }
-                setStatsText(finalStats.summaryText());
+                applyPopulationStats(finalStats);
             });
         }, "control-vcf-stats");
         t.setDaemon(true);
         t.start();
     }
 
-    private void setStatsText(String text) {
-        if (nodes != null && nodes.controlFileStatsLabel() != null) {
-            nodes.controlFileStatsLabel().setText(text != null ? text : "");
+    private void applyPopulationStats(ControlFileStats stats) {
+        if (stats == null) {
+            setAllPopulationStatsText("—");
+            return;
+        }
+        for (Map.Entry<String, Label> e : populationStatsLabels.entrySet()) {
+            PopulationAnStats pop = stats.forPopulation(e.getKey());
+            e.getValue().setText(pop != null ? pop.summaryBesideLabel() : "—");
+        }
+    }
+
+    private void setAllPopulationStatsText(String text) {
+        String value = text != null ? text : "";
+        for (Label label : populationStatsLabels.values()) {
+            if (label != null) {
+                label.setText(value);
+            }
         }
     }
 
     private void showError(String title, String detail) {
-        Alert alert = new Alert(Alert.AlertType.ERROR);
-        alert.setTitle(title);
-        alert.setHeaderText(title);
-        alert.setContentText(detail != null ? detail : "");
-        Window window = windowSupplier.get();
-        if (window != null) {
-            alert.initOwner(window);
+        Runnable show = () -> {
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle(title);
+            alert.setHeaderText(title);
+            alert.setContentText(detail != null ? detail : "");
+            Window window = windowSupplier.get();
+            if (window != null) {
+                alert.initOwner(window);
+            }
+            alert.showAndWait();
+        };
+        if (Platform.isFxApplicationThread()) {
+            show.run();
+        } else {
+            Platform.runLater(show);
         }
-        alert.showAndWait();
     }
 
     /**
@@ -578,14 +767,16 @@ public class ControlFilesPanel {
         maxFreq.setPrefWidth(80);
         maxFreq.getStyleClass().add("filter-field");
 
-        ComboBox<PopulationOption> populationCombo = new ComboBox<>();
-        populationCombo.setPrefWidth(260);
-        populationCombo.setDisable(true);
-        populationCombo.getStyleClass().add("filter-field");
+        ColoredToggle selectAllPops = new ColoredToggle();
+        selectAllPops.setSelected(true);
+        selectAllPops.setDisable(true);
+        Label popsLabel = new Label("Populations");
+        popsLabel.getStyleClass().add("section-header");
+        HBox popsHeader = new HBox(6, selectAllPops, popsLabel);
+        popsHeader.setAlignment(Pos.CENTER_LEFT);
 
-        Label statsLabel = new Label("No control file loaded.");
-        statsLabel.getStyleClass().add("value-label");
-        statsLabel.setWrapText(true);
+        VBox popBox = new VBox(4);
+        popBox.setDisable(true);
 
         VBox left = new VBox(12);
         left.getStyleClass().add("filter-panel");
@@ -603,23 +794,18 @@ public class ControlFilesPanel {
             maxFreq);
         filterRow.setAlignment(Pos.CENTER_LEFT);
 
-        Label popTitle = new Label("Population");
-        popTitle.getStyleClass().add("section-header");
-        Label popHint = new Label("Uses AF / AC+AN, or population fields such as AF_fin when present.");
-        popHint.getStyleClass().add("subsection-label");
-        popHint.setWrapText(true);
-
         left.getChildren().addAll(
             fileTitle, pathLabel, fileButtons,
-            filterTitle, filterRow,
-            popTitle, popHint, populationCombo);
+            filterTitle, filterRow);
 
         VBox right = new VBox(12);
         right.getStyleClass().add("filter-panel");
         right.setPadding(new Insets(16));
-        Label statsTitle = new Label("File statistics");
-        statsTitle.getStyleClass().add("section-header");
-        right.getChildren().addAll(statsTitle, statsLabel);
+        Label popHint = new Label(
+            "Only checked populations contribute AF. Apply to annotate with their max AF.");
+        popHint.getStyleClass().add("subsection-label");
+        popHint.setWrapText(true);
+        right.getChildren().addAll(popsHeader, popHint, popBox);
 
         ScrollPane leftScroll = new ScrollPane(left);
         leftScroll.setFitToWidth(true);
@@ -643,7 +829,7 @@ public class ControlFilesPanel {
         VBox root = new VBox(split, applyRow);
 
         Nodes built = new Nodes(
-            pathLabel, addVcf, remove, filterByPop, maxFreq, populationCombo, statsLabel);
+            pathLabel, addVcf, remove, filterByPop, maxFreq, selectAllPops, popBox);
 
         apply.setOnAction(e -> {
             Object panel = root.getUserData();

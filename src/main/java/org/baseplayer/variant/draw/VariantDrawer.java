@@ -109,8 +109,6 @@ public class VariantDrawer {
         double pixelSize = drawStack.getPixelSize();
         boolean drawClickableRects = pixelSize > 1.0;
 
-        variantList.ensureVisibleChain(filter);
-
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
         List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
@@ -139,64 +137,70 @@ public class VariantDrawer {
             drawCnvSampleGuides(gc, visibleTrackIndices.length, yPositions, sampleHeight);
         }
 
-        // Spanning SVs that start upstream of the view (no chromosome-start scan).
-        for (VariantNode node : variantList.getVisibleSvByPosition()) {
-            if (node.position >= screenStart) {
-                break;
-            }
-            if (node.svEnd < screenStart || node.position > screenEnd) {
-                continue;
-            }
-            if (!isSvWithSpan(node)) {
-                continue;
-            }
-            if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
-                continue;
-            }
-            drawNodeForVisibleSamples(
-                gc, variantList, node, filter, true, drawClickableRects, chromPosToScreenPos,
-                canvasWidth, chromPosToScreenPos.apply((double) node.position),
-                visibleTrackIndices, trackIndexToSlot, yPositions, allTracks, sampleHeight,
-                lastDrawnPixelX);
-        }
-
-        // Synthetic LOH AA/BB regions: arc from first→last marker (not a solid bar).
-        for (VariantNode node : variantList.getLohRegions()) {
-            if (node == null || !VariantTypeVisuals.isLohRegion(node.type)) {
-                continue;
-            }
-            if (node.svEnd < screenStart || node.position > screenEnd) {
-                continue;
-            }
-            if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
-                continue;
-            }
-            drawLohRegionForVisibleSamples(
-                gc, variantList, node, filter, drawClickableRects, chromPosToScreenPos,
-                canvasWidth, visibleTrackIndices, trackIndexToSlot, yPositions, allTracks,
-                sampleHeight);
-        }
-
-        // Point variants and in-window SV starts via nextVisible skip chain.
-        VariantNode node = drawSeek.seek(variantList, screenStart);
-        while (node != null && node.position <= screenEnd) {
-            double x = chromPosToScreenPos.apply((double) node.position);
-            boolean isSvSpan = isSvWithSpan(node);
-            boolean isVisible = (x >= 0 && x <= canvasWidth)
-                || (isSvSpan && node.svEnd >= screenStart && node.position <= screenEnd);
-
-            if (isVisible) {
-                if (vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
-                    drawNodeForVisibleSamples(
-                        gc, variantList, node, filter, isSvSpan, drawClickableRects,
-                        chromPosToScreenPos, canvasWidth, x,
-                        visibleTrackIndices, trackIndexToSlot, yPositions, allTracks, sampleHeight,
-                        lastDrawnPixelX);
+        // Hold the list lock for ensure + walk so a concurrent slider/filter rebuild
+        // cannot clear nextVisible mid-paint (left tracks stale until the next hover redraw).
+        final long viewStart = screenStart;
+        final long viewEnd = screenEnd;
+        variantList.withVisibleChain(filter, () -> {
+            // Spanning SVs that start upstream of the view (no chromosome-start scan).
+            for (VariantNode node : variantList.getVisibleSvByPosition()) {
+                if (node.position >= viewStart) {
+                    break;
                 }
+                if (node.svEnd < viewStart || node.position > viewEnd) {
+                    continue;
+                }
+                if (!isSvWithSpan(node)) {
+                    continue;
+                }
+                if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
+                    continue;
+                }
+                drawNodeForVisibleSamples(
+                    gc, variantList, node, filter, true, drawClickableRects, chromPosToScreenPos,
+                    canvasWidth, chromPosToScreenPos.apply((double) node.position),
+                    visibleTrackIndices, trackIndexToSlot, yPositions, allTracks, sampleHeight,
+                    lastDrawnPixelX);
             }
 
-            node = node.nextVisible;
-        }
+            // Synthetic LOH AA/BB regions: arc from first→last marker (not a solid bar).
+            for (VariantNode node : variantList.getLohRegions()) {
+                if (node == null || !VariantTypeVisuals.isLohRegion(node.type)) {
+                    continue;
+                }
+                if (node.svEnd < viewStart || node.position > viewEnd) {
+                    continue;
+                }
+                if (!vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
+                    continue;
+                }
+                drawLohRegionForVisibleSamples(
+                    gc, variantList, node, filter, drawClickableRects, chromPosToScreenPos,
+                    canvasWidth, visibleTrackIndices, trackIndexToSlot, yPositions, allTracks,
+                    sampleHeight);
+            }
+
+            // Point variants and in-window SV starts via nextVisible skip chain.
+            VariantNode node = drawSeek.seek(variantList, viewStart);
+            while (node != null && node.position <= viewEnd) {
+                double x = chromPosToScreenPos.apply((double) node.position);
+                boolean isSvSpan = isSvWithSpan(node);
+                boolean isVisible = (x >= 0 && x <= canvasWidth)
+                    || (isSvSpan && node.svEnd >= viewStart && node.position <= viewEnd);
+
+                if (isVisible) {
+                    if (vcfManager.isCanvasTypeDrawn(node.type, legendTypes)) {
+                        drawNodeForVisibleSamples(
+                            gc, variantList, node, filter, isSvSpan, drawClickableRects,
+                            chromPosToScreenPos, canvasWidth, x,
+                            visibleTrackIndices, trackIndexToSlot, yPositions, allTracks,
+                            sampleHeight, lastDrawnPixelX);
+                    }
+                }
+
+                node = node.nextVisible;
+            }
+        });
     }
 
     /** Topmost variant under canvas-local (x, y), or null. */

@@ -502,6 +502,7 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     SampleTrackControls.Hit controlHit = SampleTrackControls.findHit(masterControlHits, x, y);
     if (controlHit != null) {
       switch (controlHit.id()) {
+        case "eye" -> toggleMasterAggregates();
         case "settings" -> onSettingsClicked(screenX, screenY);
         case "add" -> onAddClicked(screenX, screenY);
         case "reload" -> onReloadButtonClicked();
@@ -516,6 +517,21 @@ public abstract class TrackColumnSidebar extends SidebarBase {
   }
 
   protected void onMasterHeaderBarClicked(double screenX, double screenY) {
+  }
+
+  /** Eye icon: show/hide aggregate density, visibility slider, and filter strip. */
+  private void toggleMasterAggregates() {
+    boolean next = !trackViewportRegistry.isMasterAggregatesEnabled();
+    trackViewportRegistry.setMasterAggregatesEnabled(next);
+    onMasterAggregatesToggled(next);
+    syncMasterHeaderRenderState();
+    drawMasterHeader();
+    redrawAfterVisibleTrackRangeChange();
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  /** Subclasses refresh filter-strip chrome after the eye toggle. */
+  protected void onMasterAggregatesToggled(boolean enabled) {
   }
 
   private boolean isOverRangeHandle(double x, double y) {
@@ -718,7 +734,9 @@ public abstract class TrackColumnSidebar extends SidebarBase {
 
     masterControlHits.clear();
     masterControlHits.addAll(SampleTrackControls.drawMaster(
-        gc, w, headerBarH, masterHeaderRenderState.canReload(), hoveredMasterControlId));
+        gc, w, headerBarH, masterHeaderRenderState.canReload(),
+        trackViewportRegistry.isMasterAggregatesEnabled(),
+        hoveredMasterControlId));
 
     ExpandedControlsRenderResult expandedResult =
         new ExpandedControlsRenderResult(null, null, null);

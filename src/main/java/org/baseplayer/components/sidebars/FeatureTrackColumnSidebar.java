@@ -152,17 +152,6 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
     ContextMenu menu = new ContextMenu();
     menu.setStyle("-fx-background-color: #2B2B2B; -fx-border-color: #555; -fx-border-width: 1;");
 
-    javafx.scene.control.CheckMenuItem showMaster = new javafx.scene.control.CheckMenuItem(
-        "Show master / aggregate band");
-    showMaster.setSelected(featureTrackViewportRegistry.isMasterAggregatesEnabled());
-    showMaster.setOnAction(e -> {
-      featureTrackViewportRegistry.setMasterAggregatesEnabled(showMaster.isSelected());
-      updateFeatureSearchBarVisibility();
-      draw();
-      redrawAfterVisibleTrackRangeChange();
-      GenomicCanvas.update.set(!GenomicCanvas.update.get());
-    });
-
     MenuItem unionItem = new MenuItem("Union…");
     unionItem.setOnAction(e -> runBedSetOperation(BedSetOperations.Op.UNION));
     MenuItem intersectItem = new MenuItem("Intersect…");
@@ -183,8 +172,6 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
       applyFeatureSearchFilter();
     });
     menu.getItems().addAll(
-        showMaster,
-        new SeparatorMenuItem(),
         unionItem,
         intersectItem,
         subtractItem,
