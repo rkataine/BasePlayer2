@@ -23,18 +23,39 @@ import org.baseplayer.variant.VariantNode;
 
 /**
  * Annotates sample variants with population AF from a local control VCF (e.g. gnomAD sites).
- * One chromosome = one tabix span of raw VCF bytes, then a sorted merge-join on POS only;
- * REF/ALT/INFO are parsed only on position hits — no htsjdk.
+ * When a filter-visible chain exists, builds small tabix search windows around those sites
+ * (merged up to ~exon length) and merge-joins each window. Otherwise falls back to one
+ * chromosome span sweep. REF/ALT/INFO are parsed only on position hits — no htsjdk.
  * Selected populations use {@code AF}/{@code AC}+{@code AN} (and {@code AF_fin}/…); when
  * several are selected, {@link VariantNode#controlAf} is the max among those fields.
  */
 public final class ControlFrequencyAnnotator implements AutoCloseable {
+
+    /**
+     * Max genomic span (bp) for a merged tabix window when nearby visible variants are
+     * clustered — roughly a typical coding exon.
+     */
+    public static final int MAX_SEARCH_WINDOW_BP = 200;
 
     private static final Pattern POP_FIELD =
         Pattern.compile("^(AF|AC|AN)(?:_(.+))?$", Pattern.CASE_INSENSITIVE);
 
     private static final Pattern INFO_ID =
         Pattern.compile("##INFO=<ID=([^,>]+)", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * One tabix query region covering a contiguous run of sample nodes.
+     * {@code nodeFrom} / {@code nodeToExclusive} index into the annotate node list.
+     */
+    public record SearchWindow(long start, long end, int nodeFrom, int nodeToExclusive) {
+        public int nodeCount() {
+            return nodeToExclusive - nodeFrom;
+        }
+
+        public long lengthBp() {
+            return Math.max(1L, end - start + 1);
+        }
+    }
 
     /** Optional progress: {@code chrom}, sample index, sample total, matches so far. */
     @FunctionalInterface
@@ -291,22 +312,31 @@ public final class ControlFrequencyAnnotator implements AutoCloseable {
     }
 
     /**
-     * Annotate all nodes in {@code list} for its chromosome using the open control VCF.
+     * Annotate nodes in {@code list} for its chromosome using the open control VCF.
      * No-op when no reader is open, the list is empty, or already annotated from this file.
      */
     public synchronized void annotate(VariantList list) throws IOException {
-        annotate(list, null);
+        annotate(list, null, false);
     }
 
     /**
      * Same as {@link #annotate(VariantList)} with optional progress callbacks.
-     * Progress {@code current}/{@code total} tracks genomic span scanned (bar-friendly).
      */
     public synchronized void annotate(VariantList list, ProgressListener progress) throws IOException {
+        annotate(list, progress, false);
+    }
+
+    /**
+     * Annotate {@code list}. When {@code force} is true, skips the fingerprint short-circuit
+     * (Apply path). Prefer filter-visible nodes + small tabix windows; otherwise one span sweep.
+     * Progress tracks windows completed (windowed) or genomic span (sweep).
+     */
+    public synchronized void annotate(VariantList list, ProgressListener progress, boolean force)
+            throws IOException {
         if (scanner == null || list == null || path == null) {
             return;
         }
-        if (!needsAnnotation(list)) {
+        if (!force && !needsAnnotation(list)) {
             return;
         }
         String chromosome = list.getChromosome();
@@ -314,23 +344,140 @@ public final class ControlFrequencyAnnotator implements AutoCloseable {
             return;
         }
 
-        List<VariantNode> nodes = new ArrayList<>();
+        // Clear every node; only the annotate set below gets new AFs.
         for (VariantNode node = list.getFirst(); node != null; node = node.next) {
             node.controlAf = null;
-            nodes.add(node);
         }
+
+        List<VariantNode> nodes = collectAnnotateNodes(list);
         if (nodes.isEmpty()) {
             list.setControlAfSourcePath(annotationFingerprint());
             return;
         }
 
+        Set<String> pops = selectedPopulations();
+        List<SearchWindow> windows = buildSearchWindows(nodes, MAX_SEARCH_WINDOW_BP);
+        boolean windowed = list.getVisibleNodeCount() > 0 && !windows.isEmpty();
+
+        final int[] matched = { 0 };
+        if (windowed) {
+            annotateWindows(chromosome, nodes, windows, pops, matched, progress);
+        } else {
+            annotateSpanSweep(chromosome, nodes, pops, matched, progress);
+        }
+
+        list.setControlAfSourcePath(annotationFingerprint());
+    }
+
+    /**
+     * Visible-chain snapshot when the list is filtered; otherwise every node (sweep path).
+     */
+    private static List<VariantNode> collectAnnotateNodes(VariantList list) {
+        List<VariantNode> nodes = new ArrayList<>();
+        synchronized (list) {
+            if (list.getVisibleNodeCount() > 0) {
+                for (VariantNode node = list.getVisibleHead(); node != null; node = node.nextVisible) {
+                    nodes.add(node);
+                }
+                return nodes;
+            }
+        }
+        for (VariantNode node = list.getFirst(); node != null; node = node.next) {
+            nodes.add(node);
+        }
+        return nodes;
+    }
+
+    /**
+     * Cluster sorted sample nodes into tabix windows. Adjacent sites merge while the
+     * resulting span stays within {@code maxWindowBp}; otherwise a new window starts.
+     * Isolated sites get a window of just their allele span.
+     */
+    public static List<SearchWindow> buildSearchWindows(List<VariantNode> nodes, int maxWindowBp) {
+        if (nodes == null || nodes.isEmpty()) {
+            return List.of();
+        }
+        int maxBp = Math.max(1, maxWindowBp);
+        List<SearchWindow> windows = new ArrayList<>();
+        int from = 0;
+        long start = nodes.get(0).position;
+        long end = alleleEnd(nodes.get(0));
+        for (int i = 1; i < nodes.size(); i++) {
+            VariantNode node = nodes.get(i);
+            long nextStart = node.position;
+            long nextEnd = alleleEnd(node);
+            long mergedEnd = Math.max(end, nextEnd);
+            long mergedLen = mergedEnd - start + 1;
+            long gap = nextStart - end;
+            // Merge when nearby and the cluster still fits in one exon-sized window.
+            if (gap >= 0 && gap <= maxBp && mergedLen <= maxBp) {
+                end = mergedEnd;
+                continue;
+            }
+            windows.add(new SearchWindow(start, end, from, i));
+            from = i;
+            start = nextStart;
+            end = nextEnd;
+        }
+        windows.add(new SearchWindow(start, end, from, nodes.size()));
+        return windows;
+    }
+
+    private void annotateWindows(
+            String chromosome,
+            List<VariantNode> nodes,
+            List<SearchWindow> windows,
+            Set<String> pops,
+            int[] matched,
+            ProgressListener progress) throws IOException {
+        int windowCount = windows.size();
+        if (progress != null) {
+            progress.onProgress(chromosome, 0, progressTotal(windowCount), matched[0]);
+        }
+        for (int w = 0; w < windowCount; w++) {
+            SearchWindow window = windows.get(w);
+            final int[] sampleIdx = { window.nodeFrom() };
+            final int nodeTo = window.nodeToExclusive();
+            final long spanEnd = window.end();
+            scanner.visitRegion(chromosome, window.start(), window.end(), (buf, off, len) -> {
+                long pos = parseVcfPos(buf, off, len);
+                if (pos < 0) {
+                    return true;
+                }
+                if (pos > spanEnd) {
+                    return false;
+                }
+                int i = sampleIdx[0];
+                while (i < nodeTo && nodes.get(i).position < pos) {
+                    i++;
+                }
+                sampleIdx[0] = i;
+                if (i >= nodeTo) {
+                    return false;
+                }
+                if (nodes.get(i).position == pos) {
+                    matchRawLine(buf, off, len, pos, nodes, i, nodeTo, pops, matched);
+                }
+                return true;
+            });
+            if (progress != null) {
+                progress.onProgress(chromosome, w + 1, progressTotal(windowCount), matched[0]);
+            }
+        }
+    }
+
+    /** Legacy path: one tabix span from first to last sample allele. */
+    private void annotateSpanSweep(
+            String chromosome,
+            List<VariantNode> nodes,
+            Set<String> pops,
+            int[] matched,
+            ProgressListener progress) throws IOException {
         long spanStart = nodes.get(0).position;
         long spanEnd = alleleEnd(nodes.get(nodes.size() - 1));
         long spanLen = Math.max(1L, spanEnd - spanStart + 1);
-        Set<String> pops = selectedPopulations();
         final int total = nodes.size();
         final int[] sampleIdx = { 0 };
-        final int[] matched = { 0 };
         final int[] scanned = { 0 };
         final boolean[] stop = { false };
 
@@ -375,7 +522,6 @@ public final class ControlFrequencyAnnotator implements AutoCloseable {
         if (progress != null) {
             progress.onProgress(chromosome, progressTotal(spanLen), progressTotal(spanLen), matched[0]);
         }
-        list.setControlAfSourcePath(annotationFingerprint());
     }
 
     private static int progressTotal(long spanLen) {

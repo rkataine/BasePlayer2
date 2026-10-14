@@ -1251,7 +1251,8 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   private BAMRecord findReadAt(double mx, double my) {
     if (sampleRegistry.getSampleTracks().isEmpty()) return null;
-    if (drawStack.getViewLength() > Settings.get().getMaxReadViewLength()) return null;
+    // Match canDrawReadData: no hit-test when piles are not painted (zoom or short rows).
+    if (!isWithinReadZoom() || !isSampleHeightEnoughForReads()) return null;
 
     double sampleH           = sampleRegistry.getSampleHeight();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
@@ -1303,7 +1304,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
     CoverageHoverInfo coverageHover = findCoverageHoverInfo(lastMouseX, lastMouseY);
     boolean hasExternalLinkedRead = externalLinkedReadName != null && externalLinkedOwner != null;
 
-    if (drawStack.getViewLength() > Settings.get().getMaxReadViewLength()) {
+    if (!isSampleHeightEnoughForReads()) {
+      // Short rows: neither reads nor coverage are painted.
+      hoveredRead = null;
+      clearCrossStackTargetHighlight();
+      MainController.releaseCrossStackMateArc(this);
+      return;
+    }
+    if (!isWithinReadZoom()) {
+      // Coverage-only zoom: drop read highlights; coverage hover may remain.
+      hoveredRead = null;
       clearCrossStackTargetHighlight();
       MainController.releaseCrossStackMateArc(this);
       if (coverageHover != null) {
@@ -1526,10 +1536,11 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (isScrollbarOverrideActive() || mx < 0 || my < 0) {
       return -1L;
     }
-    if (!coverageDrawer.hasData()) {
+    // Match canDrawCoverageData — ignore stale rows when coverage is not painted.
+    if (!canDrawCoverageData()) {
       return -1L;
     }
-    if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) {
+    if (!coverageDrawer.hasData()) {
       return -1L;
     }
     int genomicPos = (int) Math.floor(drawStack.getViewStart() + mx * drawStack.scale);
@@ -1589,8 +1600,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private CoverageHoverInfo findCoverageHoverInfo(double mx, double my) {
     if (isScrollbarOverrideActive()) return null;
     if (mx < 0 || my < 0) return null;
+    // Match canDrawCoverageData — ignore stale rows when coverage is not painted.
+    if (!canDrawCoverageData()) return null;
     if (!coverageDrawer.hasData()) return null;
-    if (drawStack.getViewLength() > Settings.get().getMaxCoverageViewLength()) return null;
 
     int genomicPos = (int) Math.floor(drawStack.getViewStart() + mx * drawStack.scale);
     int px = (int) Math.floor(chromPosToScreenPos.apply((double) genomicPos));

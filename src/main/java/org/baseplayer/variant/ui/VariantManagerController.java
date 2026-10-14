@@ -5,9 +5,12 @@ import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
+import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BedVariantAnnotation;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VariantTableExcelWriter;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.io.readers.BedFileReader.BedFeature;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
@@ -33,6 +36,7 @@ import org.baseplayer.variant.ui.components.VariantBusyOverlay;
 import org.baseplayer.variant.ui.components.VariantClassWorkspace;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.GeneGroup;
+import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.NestedPanel;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.TableRow;
 import org.baseplayer.variant.ui.components.VariantExcelExportBuilder;
 import org.baseplayer.variant.ui.components.VariantFiltersPanel;
@@ -215,6 +219,26 @@ public class VariantManagerController implements Initializable {
     private SvVariantTable svVariantTable;
     private LohVariantTable lohVariantTable;
 
+    /** Point-results tabs for BED annotation tracks (Feature → Variant → Sample). */
+    private final Map<BedTrack, AnnotationFeatureTabSlot> annotationFeatureTabs =
+        new IdentityHashMap<>();
+    private ChangeListener<Number> annotationUiPulseListener;
+
+    private static final class AnnotationFeatureTabSlot {
+        final BedTrack track;
+        final Tab tab;
+        final NestedPanel panel;
+        String titleBase;
+        List<GeneGroup> lastGroups = List.of();
+
+        AnnotationFeatureTabSlot(BedTrack track, Tab tab, NestedPanel panel, String titleBase) {
+            this.track = track;
+            this.tab = tab;
+            this.panel = panel;
+            this.titleBase = titleBase;
+        }
+    }
+
     // ── Initialization ────────────────────────────────────────────────────────
 
     @Override
@@ -303,11 +327,28 @@ public class VariantManagerController implements Initializable {
         initializeVariantTable();
         initializeSvVariantTable();
         initializeLohVariantTable();
+        syncAnnotationFeatureTabs();
+        annotationUiPulseListener = (obs, oldVal, newVal) -> {
+            if (disposed) {
+                return;
+            }
+            Platform.runLater(() -> {
+                if (disposed) {
+                    return;
+                }
+                syncAnnotationFeatureTabs();
+                if (vcfManager != null) {
+                    scheduleRebuild(vcfManager.getCurrentFilter());
+                }
+            });
+        };
+        BedVariantAnnotation.uiPulseProperty().addListener(annotationUiPulseListener);
         if (tableSearchField != null) {
             tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (variantTable != null) {
                     variantTable.setTableSearchQuery(newVal);
                 }
+                refreshAnnotationFeatureGroupsFromSearch();
             });
         }
         setupExcelExportButton(excelExportButton, false);
@@ -812,6 +853,10 @@ public class VariantManagerController implements Initializable {
             GenomicCanvas.update.removeListener(updateListener);
             updateListener = null;
         }
+        if (annotationUiPulseListener != null) {
+            BedVariantAnnotation.uiPulseProperty().removeListener(annotationUiPulseListener);
+            annotationUiPulseListener = null;
+        }
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
         if (sampleTracksListener != null) {
             registry.getSampleTracks().removeListener(sampleTracksListener);
@@ -1206,6 +1251,67 @@ public class VariantManagerController implements Initializable {
             () -> NavigationCommands.navigateToGene(geneName, true),
             tracks,
             geneName);
+    }
+
+    private void handleFeatureRowDoubleClick(
+            BedTrack track, String featureName, List<SampleTrack> tracks) {
+        if (featureName == null || featureName.isBlank()) {
+            return;
+        }
+        String navChromosome = chromosome;
+        long navStart = -1;
+        long navEnd = -1;
+
+        AnnotationFeatureTabSlot slot = annotationFeatureTabs.get(track);
+        GeneGroup group = findFeatureGroup(slot, featureName);
+        if (group != null) {
+            String groupChrom = group.firstVariantChromosome();
+            if (groupChrom != null && !groupChrom.isBlank()) {
+                navChromosome = groupChrom;
+            }
+        }
+
+        BedFeature feature = BedVariantAnnotation.findFeatureByName(track, navChromosome, featureName);
+        if (feature != null) {
+            // BED start is 0-based; end is exclusive (same convention as overlap helpers).
+            navStart = feature.start() + 1;
+            navEnd = Math.max(navStart, feature.end());
+            if (feature.chrom() != null && !feature.chrom().isBlank()) {
+                navChromosome = feature.chrom();
+            }
+        } else if (group != null) {
+            long[] span = group.variantSpanInclusive();
+            if (span != null) {
+                navStart = span[0];
+                navEnd = Math.max(span[0], span[1]);
+            }
+        }
+
+        if (navChromosome == null || navChromosome.isBlank() || navStart < 1) {
+            return;
+        }
+        if (navEnd < navStart) {
+            navEnd = navStart;
+        }
+        final String chrom = navChromosome;
+        final long start = navStart;
+        final long end = navEnd;
+        navigateAndApplySampleFilter(
+            () -> NavigationCommands.navigateToPosition(chrom, (int) start, (int) end),
+            tracks,
+            featureName);
+    }
+
+    private static GeneGroup findFeatureGroup(AnnotationFeatureTabSlot slot, String featureName) {
+        if (slot == null || slot.lastGroups == null || featureName == null) {
+            return null;
+        }
+        for (GeneGroup group : slot.lastGroups) {
+            if (group != null && featureName.equals(group.getName())) {
+                return group;
+            }
+        }
+        return null;
     }
 
     public void handlePositionClick(VariantTable.TableRow row) {
@@ -2836,8 +2942,9 @@ public class VariantManagerController implements Initializable {
         boolean svExpand = svSearch != null && !svSearch.isBlank();
         boolean lohExpand = lohSearch != null && !lohSearch.isBlank();
 
-        // Point + SV All + SV types + LOH All + LOH types
-        int totalSteps = 3 + 1 + SvVariantTable.TYPE_ORDER.length
+        List<BedTrack> annotationTracks = BedVariantAnnotation.annotationTracks();
+        // Point + feature tabs + SV All + SV types + LOH All + LOH types
+        int totalSteps = 3 + annotationTracks.size() + 1 + SvVariantTable.TYPE_ORDER.length
             + 1 + LohVariantTable.TYPE_ORDER.length;
         int step = 0;
 
@@ -2865,6 +2972,26 @@ public class VariantManagerController implements Initializable {
                 result.intergenic(), pointSearch, filter);
             List<GeneGroup> intergenicGroups = AbstractNestedVariantTable.buildGeneGroups(
                 intergenicRows, true, filter, pointExpand);
+
+            List<AnnotationFeaturePrebuilt> annotationFeatures = new ArrayList<>();
+            if (!annotationTracks.isEmpty()) {
+                List<TableRow> pointUnion = new ArrayList<>(
+                    codingRows.size() + intronicRows.size() + intergenicRows.size());
+                pointUnion.addAll(codingRows);
+                pointUnion.addAll(intronicRows);
+                pointUnion.addAll(intergenicRows);
+                for (BedTrack track : annotationTracks) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        return null;
+                    }
+                    reportUiBuildProgress(
+                        ++step, totalSteps, "Feature " + BedVariantAnnotation.excelHeaderBase(track));
+                    List<TableRow> fanned = fanOutPointRowsByFeatureName(pointUnion, track);
+                    List<GeneGroup> featureGroups = AbstractNestedVariantTable.buildFeatureGroups(
+                        fanned, filter, pointExpand);
+                    annotationFeatures.add(new AnnotationFeaturePrebuilt(track, featureGroups));
+                }
+            }
 
             if (Thread.currentThread().isInterrupted()) {
                 return null;
@@ -2915,7 +3042,8 @@ public class VariantManagerController implements Initializable {
             return new PrebuiltTableUi(
                 codingGroups, intronicGroups, intergenicGroups,
                 svAllGroups, svByTypeGroups,
-                lohAllGroups, lohByTypeGroups);
+                lohAllGroups, lohByTypeGroups,
+                annotationFeatures);
         } catch (Throwable t) {
             System.err.println("Prebuilding table gene groups failed: " + t.getMessage());
             t.printStackTrace();
@@ -3030,6 +3158,13 @@ public class VariantManagerController implements Initializable {
         }
         updateLohTabVisibility(filterSnapshot, !lohEmpty);
 
+        if (prebuilt != null) {
+            applyAnnotationFeatureGroups(prebuilt.annotationFeatures());
+        } else {
+            applyAnnotationFeatureGroups(buildAnnotationFeatureGroupsOnFx(
+                result.coding(), result.intronic(), result.intergenic(), filterSnapshot));
+        }
+
         if (pendingScrollToChromosome != null && !pendingScrollToChromosome.isBlank()) {
             final String scrollTarget = pendingScrollToChromosome;
             Platform.runLater(() -> {
@@ -3041,6 +3176,40 @@ public class VariantManagerController implements Initializable {
         }
     }
 
+    private List<AnnotationFeaturePrebuilt> buildAnnotationFeatureGroupsOnFx(
+            List<VariantTable.TableRow> coding,
+            List<VariantTable.TableRow> intronic,
+            List<VariantTable.TableRow> intergenic,
+            VariantFilter filter) {
+        List<BedTrack> tracks = BedVariantAnnotation.annotationTracks();
+        if (tracks.isEmpty()) {
+            return List.of();
+        }
+        String pointSearch = tableSearchField != null ? tableSearchField.getText() : null;
+        boolean expand = pointSearch != null && !pointSearch.isBlank();
+        List<TableRow> codingRows = AbstractNestedVariantTable.rowsMatchingSearch(
+            coding, pointSearch, filter);
+        List<TableRow> intronicRows = AbstractNestedVariantTable.rowsMatchingSearch(
+            intronic, pointSearch, filter);
+        List<TableRow> intergenicRows = AbstractNestedVariantTable.rowsMatchingSearch(
+            intergenic, pointSearch, filter);
+        List<TableRow> pointUnion = new ArrayList<>(
+            codingRows.size() + intronicRows.size() + intergenicRows.size());
+        pointUnion.addAll(codingRows);
+        pointUnion.addAll(intronicRows);
+        pointUnion.addAll(intergenicRows);
+        List<AnnotationFeaturePrebuilt> out = new ArrayList<>(tracks.size());
+        for (BedTrack track : tracks) {
+            List<TableRow> fanned = fanOutPointRowsByFeatureName(pointUnion, track);
+            out.add(new AnnotationFeaturePrebuilt(
+                track,
+                AbstractNestedVariantTable.buildFeatureGroups(fanned, filter, expand)));
+        }
+        return out;
+    }
+
+    private record AnnotationFeaturePrebuilt(BedTrack track, List<GeneGroup> groups) {}
+
     private record PrebuiltTableUi(
         List<GeneGroup> codingGroups,
         List<GeneGroup> intronicGroups,
@@ -3048,7 +3217,8 @@ public class VariantManagerController implements Initializable {
         List<GeneGroup> svAllGroups,
         Map<VcfVariantType, List<GeneGroup>> svByTypeGroups,
         List<GeneGroup> lohAllGroups,
-        Map<VcfVariantType, List<GeneGroup>> lohByTypeGroups) {}
+        Map<VcfVariantType, List<GeneGroup>> lohByTypeGroups,
+        List<AnnotationFeaturePrebuilt> annotationFeatures) {}
 
     private void updateTableRebuildProgress(String stage) {
         ThreadRunner.RunnerTask task = tableRebuildTask;
@@ -3251,16 +3421,186 @@ public class VariantManagerController implements Initializable {
         boolean show = hasRegions;
         if (show) {
             if (!resultsTabPane.getTabs().contains(lohRegionsTab)) {
-                int index = resultsTabPane.getTabs().size();
-                if (intergenicTab != null && resultsTabPane.getTabs().contains(intergenicTab)) {
-                    index = resultsTabPane.getTabs().indexOf(intergenicTab) + 1;
-                }
+                int index = indexAfterAnnotationFeatureTabs();
                 resultsTabPane.getTabs().add(
                     Math.min(index, resultsTabPane.getTabs().size()), lohRegionsTab);
             }
         } else {
             resultsTabPane.getTabs().remove(lohRegionsTab);
         }
+    }
+
+    /**
+     * Ensure one Point-results tab + NestedPanel per active BED annotation track,
+     * placed after Intergenic and before LOH. Titles match Excel header disambiguation.
+     */
+    private void syncAnnotationFeatureTabs() {
+        if (resultsTabPane == null) {
+            return;
+        }
+        List<BedTrack> tracks = BedVariantAnnotation.annotationTracks();
+        List<String> titles = BedVariantAnnotation.excelColumnHeaders();
+
+        Set<BedTrack> wanted = Collections.newSetFromMap(new IdentityHashMap<>());
+        wanted.addAll(tracks);
+
+        Iterator<Map.Entry<BedTrack, AnnotationFeatureTabSlot>> it =
+            annotationFeatureTabs.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<BedTrack, AnnotationFeatureTabSlot> entry = it.next();
+            if (!wanted.contains(entry.getKey())) {
+                resultsTabPane.getTabs().remove(entry.getValue().tab);
+                it.remove();
+            }
+        }
+
+        int insertAt = indexAfterIntergenicTab();
+        for (int i = 0; i < tracks.size(); i++) {
+            BedTrack track = tracks.get(i);
+            String title = i < titles.size() ? titles.get(i) : BedVariantAnnotation.excelHeaderBase(track);
+            AnnotationFeatureTabSlot slot = annotationFeatureTabs.get(track);
+            if (slot == null) {
+                final BedTrack tabTrack = track;
+                NestedPanel panel = AbstractNestedVariantTable.createFeatureAnnotationPanel(
+                    (name, sampleTracks) -> handleFeatureRowDoubleClick(tabTrack, name, sampleTracks),
+                    this::handlePositionClick,
+                    () -> vcfManager != null
+                        ? vcfManager.getCurrentFilter()
+                        : buildFilterFromUI());
+                panel.setEmptyMessage("No overlapping variants");
+                Tab tab = new Tab(title);
+                tab.setClosable(false);
+                tab.setContent(panel.getRoot());
+                slot = new AnnotationFeatureTabSlot(track, tab, panel, title);
+                annotationFeatureTabs.put(track, slot);
+                resultsTabPane.getTabs().add(
+                    Math.min(insertAt, resultsTabPane.getTabs().size()), tab);
+                insertAt++;
+            } else {
+                slot.titleBase = title;
+                int currentIdx = resultsTabPane.getTabs().indexOf(slot.tab);
+                if (currentIdx < 0) {
+                    resultsTabPane.getTabs().add(
+                        Math.min(insertAt, resultsTabPane.getTabs().size()), slot.tab);
+                } else if (currentIdx != insertAt) {
+                    resultsTabPane.getTabs().remove(slot.tab);
+                    resultsTabPane.getTabs().add(
+                        Math.min(insertAt, resultsTabPane.getTabs().size()), slot.tab);
+                }
+                updateFeatureTabTitle(slot, slot.lastGroups != null ? slot.lastGroups.size() : 0);
+                insertAt = resultsTabPane.getTabs().indexOf(slot.tab) + 1;
+            }
+        }
+    }
+
+    private int indexAfterIntergenicTab() {
+        if (resultsTabPane == null) {
+            return 0;
+        }
+        if (intergenicTab != null && resultsTabPane.getTabs().contains(intergenicTab)) {
+            return resultsTabPane.getTabs().indexOf(intergenicTab) + 1;
+        }
+        return 0;
+    }
+
+    /** Insert LOH after Intergenic and any annotation feature tabs. */
+    private int indexAfterAnnotationFeatureTabs() {
+        int index = indexAfterIntergenicTab();
+        for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
+            if (slot == null || slot.tab == null || resultsTabPane == null) {
+                continue;
+            }
+            int i = resultsTabPane.getTabs().indexOf(slot.tab);
+            if (i >= 0) {
+                index = Math.max(index, i + 1);
+            }
+        }
+        return index;
+    }
+
+    private static void updateFeatureTabTitle(AnnotationFeatureTabSlot slot, int groupCount) {
+        if (slot == null || slot.tab == null) {
+            return;
+        }
+        String base = slot.titleBase != null && !slot.titleBase.isBlank()
+            ? slot.titleBase
+            : BedVariantAnnotation.excelHeaderBase(slot.track);
+        slot.tab.setText(base + " (" + Math.max(0, groupCount) + ")");
+    }
+
+    private static List<TableRow> fanOutPointRowsByFeatureName(
+            List<TableRow> pointRows, BedTrack track) {
+        if (pointRows == null || pointRows.isEmpty() || track == null) {
+            return List.of();
+        }
+        List<TableRow> out = new ArrayList<>();
+        for (TableRow row : pointRows) {
+            if (row == null || row.node() == null) {
+                continue;
+            }
+            List<String> names = BedVariantAnnotation.overlappingFeatureNames(
+                track, row.chromosome(), row.node());
+            for (String name : names) {
+                if (name == null || name.isBlank()) {
+                    continue;
+                }
+                out.add(new TableRow(row.chromosome(), row.node(), List.of(name)));
+            }
+        }
+        return out;
+    }
+
+    private void applyAnnotationFeatureGroups(List<AnnotationFeaturePrebuilt> prebuilts) {
+        syncAnnotationFeatureTabs();
+        if (prebuilts == null) {
+            for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
+                slot.panel.setGroups(List.of());
+                slot.lastGroups = List.of();
+                slot.panel.setEmptyMessage("No overlapping variants");
+                updateFeatureTabTitle(slot, 0);
+            }
+            return;
+        }
+        IdentityHashMap<BedTrack, List<GeneGroup>> byTrack = new IdentityHashMap<>();
+        for (AnnotationFeaturePrebuilt prebuilt : prebuilts) {
+            if (prebuilt != null && prebuilt.track() != null) {
+                byTrack.put(prebuilt.track(),
+                    prebuilt.groups() != null ? prebuilt.groups() : List.of());
+            }
+        }
+        for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
+            List<GeneGroup> groups = byTrack.getOrDefault(slot.track, List.of());
+            slot.panel.setGroups(groups);
+            slot.lastGroups = groups;
+            if (groups.isEmpty()) {
+                slot.panel.setEmptyMessage("No overlapping variants");
+            }
+            updateFeatureTabTitle(slot, groups.size());
+        }
+    }
+
+    /** Re-fan-out feature tabs from Gene-tab search-filtered point rows (live search). */
+    private void refreshAnnotationFeatureGroupsFromSearch() {
+        if (annotationFeatureTabs.isEmpty() || variantTable == null) {
+            return;
+        }
+        VariantFilter filter = vcfManager != null
+            ? vcfManager.getCurrentFilter()
+            : buildFilterFromUI();
+        String pointSearch = tableSearchField != null ? tableSearchField.getText() : null;
+        boolean expand = pointSearch != null && !pointSearch.isBlank();
+        List<TableRow> pointUnion = new ArrayList<>();
+        pointUnion.addAll(variantTable.getDisplayedCodingRows());
+        pointUnion.addAll(variantTable.getDisplayedIntronicRows());
+        pointUnion.addAll(variantTable.getDisplayedIntergenicRows());
+        List<AnnotationFeaturePrebuilt> out = new ArrayList<>();
+        for (BedTrack track : BedVariantAnnotation.annotationTracks()) {
+            List<TableRow> fanned = fanOutPointRowsByFeatureName(pointUnion, track);
+            out.add(new AnnotationFeaturePrebuilt(
+                track,
+                AbstractNestedVariantTable.buildFeatureGroups(fanned, filter, expand)));
+        }
+        applyAnnotationFeatureGroups(out);
     }
 
     /** Types actually present in cached chromosome variant lists. */

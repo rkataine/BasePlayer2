@@ -14,8 +14,11 @@ import org.baseplayer.variant.VisibleVariantIndex;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 
+import org.baseplayer.utils.AppFonts;
+
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
+import javafx.scene.text.Font;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,6 +48,9 @@ public class VariantDrawer {
     private final VisibleVariantIndex visibleIndex;
     private final VariantDrawSeek drawSeek = new VariantDrawSeek();
     private final List<VariantHit> hitRegions = new ArrayList<>();
+
+    /** Set for the duration of {@link #draw}: ALT-base colors/letters vs type colors. */
+    private boolean paintByAltBase;
 
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;
@@ -108,6 +114,7 @@ public class VariantDrawer {
         long screenEnd = (long) drawStack.getViewEnd();
         double pixelSize = drawStack.getPixelSize();
         boolean drawClickableRects = pixelSize > 1.0;
+        paintByAltBase = VariantTypeVisuals.paintByAltBase(pixelSize);
 
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
         double[] yPositions = visibleIndex.getYPositions();
@@ -503,6 +510,27 @@ public class VariantDrawer {
         gc.setLineWidth(1.0);
         gc.strokeRect(x1 + 0.5, y + 0.5, Math.max(0, width - 1), Math.max(0, rectHeight - 1));
 
+        // ALT letter only in close zoom (same gate as ALT-base fill colors).
+        if (paintByAltBase
+            && width >= 6
+            && rectHeight >= 8
+            && !variant.isHomozygousRef(call)) {
+            String label = VariantTypeVisuals.allelePaintLabel(variant);
+            if (label != null && !label.isEmpty()) {
+                Font font = width >= 10 && label.length() == 1
+                    ? AppFonts.getMonoBoldFont(11)
+                    : AppFonts.getMonoBoldFont(9);
+                gc.setFont(font);
+                gc.setFill(Color.WHITE);
+                if (opacity != 1.0) gc.setGlobalAlpha(opacity);
+                double textW = label.length() == 1 ? (width >= 10 ? 7 : 5.5) : Math.min(width - 2, 12);
+                double textX = x1 + (width - textW) / 2;
+                double textY = y + rectHeight - (rectHeight - (width >= 10 ? 10 : 8)) / 2;
+                gc.fillText(label, textX, textY, Math.max(4, width - 2));
+                if (opacity != 1.0) gc.setGlobalAlpha(1.0);
+            }
+        }
+
         hitRegions.add(new VariantHit(variant, call, x1, y, x1 + width, y + rectHeight));
     }
 
@@ -885,7 +913,13 @@ public class VariantDrawer {
         if (variant != null && variant.isHomozygousRef(call)) {
             return VariantTypeVisuals.lohAaColor();
         }
-        return VariantTypeVisuals.color(variant != null ? variant.type : null);
+        if (variant == null) {
+            return VariantTypeVisuals.color(null);
+        }
+        // Far / mid zoom: SNV / INS / DEL type colors. Close zoom: ALT-base palette.
+        return paintByAltBase
+            ? VariantTypeVisuals.allelePaintColor(variant)
+            : VariantTypeVisuals.color(variant.type);
     }
 
     public void markIndexDirty() {

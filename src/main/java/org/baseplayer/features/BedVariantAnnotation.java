@@ -394,31 +394,40 @@ public final class BedVariantAnnotation {
     if (tracks.isEmpty() || node == null) {
       return List.of();
     }
+    List<String> values = new ArrayList<>(tracks.size());
+    for (BedTrack track : tracks) {
+      List<String> names = overlappingFeatureNames(track, chromosome, node);
+      values.add(names.isEmpty() ? "" : String.join(";", names));
+    }
+    return values;
+  }
+
+  /**
+   * Ordered unique feature names from {@code track} overlapping {@code node}
+   * (point = position; spanning SV/CNV = {@code [position, svEnd]}).
+   */
+  public static List<String> overlappingFeatureNames(
+      BedTrack track, String chromosome, VariantNode node) {
+    if (track == null || node == null) {
+      return List.of();
+    }
     long start1 = node.position;
     long end1 = node.position;
     if (VariantTypeVisuals.isSpanningCall(node.type) && node.svEnd > node.position) {
       end1 = node.svEnd;
     }
-    List<String> values = new ArrayList<>(tracks.size());
-    for (BedTrack track : tracks) {
-      values.add(overlappingNames(track, chromosome, start1, end1));
-    }
-    return values;
+    return overlappingFeatureNames(track, chromosome, start1, end1);
   }
 
-  private static String excelHeaderBase(BedTrack track) {
-    String name = track.getName();
-    if (name == null || name.isBlank()) {
-      return "BED annotation";
-    }
-    return name.trim();
-  }
-
-  private static String overlappingNames(
+  /**
+   * Ordered unique feature names from {@code track} overlapping inclusive
+   * 1-based [{@code start1}, {@code end1}].
+   */
+  public static List<String> overlappingFeatureNames(
       BedTrack track, String chromosome, long start1, long end1) {
     List<BedFeature> features = featuresFor(track, chromosome);
-    if (features.isEmpty()) {
-      return "";
+    if (features.isEmpty() || end1 < start1) {
+      return List.of();
     }
     Set<String> names = new LinkedHashSet<>();
     int i = BedTrack.findFirstOverlappingIndex(features, start1, end1);
@@ -434,10 +443,42 @@ public final class BedVariantAnnotation {
       }
       i++;
     }
-    if (names.isEmpty()) {
-      return "";
+    return names.isEmpty() ? List.of() : List.copyOf(names);
+  }
+
+  /**
+   * First BED interval on {@code chromosome} whose display name equals {@code featureName}
+   * (same naming rules as {@link #overlappingFeatureNames}).
+   */
+  public static BedFeature findFeatureByName(
+      BedTrack track, String chromosome, String featureName) {
+    if (track == null || featureName == null || featureName.isBlank()) {
+      return null;
     }
-    return String.join(";", names);
+    String needle = featureName.trim();
+    List<BedFeature> features = featuresFor(track, chromosome);
+    for (BedFeature f : features) {
+      if (f == null) {
+        continue;
+      }
+      String name = f.name();
+      String key = (name != null && !name.isBlank() && !".".equals(name))
+          ? name.trim()
+          : (f.start() + "-" + f.end());
+      if (needle.equals(key)) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  /** Display name for an annotation track tab / Excel header (not disambiguated). */
+  public static String excelHeaderBase(BedTrack track) {
+    String name = track != null ? track.getName() : null;
+    if (name == null || name.isBlank()) {
+      return "BED annotation";
+    }
+    return name.trim();
   }
 
   private static List<BedFeature> featuresFor(BedTrack track, String chromosome) {

@@ -3,6 +3,7 @@ package org.baseplayer.components;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,8 +48,19 @@ public class MasterTrackPainter {
 
   private final CanvasColorLegend colorLegend = new CanvasColorLegend();
 
-  /** Zoomed-in precise bars — reuse across paints while view/filter/chain stay put. */
-  private record PreciseBar(double x, double w, int count, VcfVariantType type) {}
+  /**
+   * Zoomed-in precise bars — reuse across paints while view/filter/chain stay put.
+   * {@code position} groups alleles at the same locus for vertical stacking;
+   * {@code fill}/{@code label} carry ALT-base paint (type color / null when N/A).
+   */
+  private record PreciseBar(
+      long position,
+      double x,
+      double w,
+      int count,
+      VcfVariantType type,
+      Color fill,
+      String label) {}
   private List<PreciseBar> preciseBarsCache = List.of();
   private int preciseBarsMaxC = 1;
   private VariantList preciseBarsList;
@@ -720,7 +732,13 @@ public class MasterTrackPainter {
         }
 
         windowMax[0] = Math.max(windowMax[0], count);
-        bars.add(new PreciseBar(x, w, count, node.type));
+        // Mid precise zoom keeps type colors; ALT palette only when bases are wide enough.
+        boolean byAlt = VariantTypeVisuals.paintByAltBase(pixelSize);
+        Color fill = byAlt
+            ? VariantTypeVisuals.allelePaintColor(node)
+            : VariantTypeVisuals.color(node.type);
+        String label = byAlt ? VariantTypeVisuals.allelePaintLabel(node) : null;
+        bars.add(new PreciseBar(g0, x, w, count, node.type, fill, label));
       };
 
       variants.withVisibleChain(activeFilter, () -> {
@@ -768,15 +786,52 @@ public class MasterTrackPainter {
       preciseBarsChainGen = variants.getVisibleChainGeneration();
     }
 
-    double bottom = top + h;
+    // Stack alleles that share a genomic start so multi-allelic / multi-type
+    // sites remain separable. Fill/label are type-colored until ALT close zoom.
+    Map<Long, List<PreciseBar>> byPosition = new LinkedHashMap<>();
     for (PreciseBar bar : bars) {
-      double bh = maxBarH * (double) bar.count() / maxC;
-      if (bh < 1) {
-        bh = 1;
+      byPosition.computeIfAbsent(bar.position(), k -> new ArrayList<>()).add(bar);
+    }
+
+    double bottom = top + h;
+    for (List<PreciseBar> stack : byPosition.values()) {
+      double stackNeeded = 0;
+      for (PreciseBar bar : stack) {
+        double bh = maxBarH * (double) bar.count() / maxC;
+        if (bh < 1) {
+          bh = 1;
+        }
+        stackNeeded += bh;
       }
-      Color c = VariantTypeVisuals.color(bar.type());
-      gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.6));
-      gc.fillRect(bar.x(), bottom - bh, bar.w(), bh);
+      double scale = stackNeeded > maxBarH ? maxBarH / stackNeeded : 1.0;
+      double y = bottom;
+      for (PreciseBar bar : stack) {
+        double bh = maxBarH * (double) bar.count() / maxC;
+        if (bh < 1) {
+          bh = 1;
+        }
+        bh *= scale;
+        y -= bh;
+        Color c = bar.fill() != null ? bar.fill() : VariantTypeVisuals.color(bar.type());
+        gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.72));
+        gc.fillRect(bar.x(), y, bar.w(), bh);
+
+        if (bar.label() != null
+            && bar.w() >= 6
+            && bh >= 8) {
+          Font font = bar.w() >= 10 && bar.label().length() == 1
+              ? AppFonts.getMonoBoldFont(11)
+              : AppFonts.getMonoBoldFont(9);
+          gc.setFont(font);
+          gc.setFill(Color.WHITE);
+          double textW = bar.label().length() == 1
+              ? (bar.w() >= 10 ? 7 : 5.5)
+              : Math.min(bar.w() - 2, 12);
+          double textX = bar.x() + (bar.w() - textW) / 2;
+          double textY = y + bh - (bh - (bar.w() >= 10 ? 10 : 8)) / 2;
+          gc.fillText(bar.label(), textX, textY, Math.max(4, bar.w() - 2));
+        }
+      }
     }
     return maxC;
   }
@@ -803,27 +858,25 @@ public class MasterTrackPainter {
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.DELETION)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.MNV)
         || vcfManager.isCanvasTypeDrawn(VcfVariantType.COMPLEX);
-    boolean showDel = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION)
-        || vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
+    boolean showDel = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION);
+    boolean showCnvLoss = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
     boolean showInv = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INVERSION);
-    boolean showDup = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION)
-        || vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
+    boolean showDup = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION);
+    boolean showCnvGain = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
     boolean showIns = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INSERTION);
     boolean showTra = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_TRANSLOCATION);
     boolean showBnd = vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_BREAKEND);
     boolean showLohAa = vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_AA);
     boolean showLohBb = vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_BB);
-    boolean delColorIsCnv = !vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION)
-        && vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
-    boolean dupColorIsCnv = !vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION)
-        && vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
 
     boolean[] visible = new boolean[VariantDensityPyramid.Channel.values().length];
     visible[VariantDensityPyramid.Channel.SNV.ordinal()] = showSnv;
     visible[VariantDensityPyramid.Channel.INDEL.ordinal()] = showIndel;
     visible[VariantDensityPyramid.Channel.DEL.ordinal()] = showDel;
+    visible[VariantDensityPyramid.Channel.CNV_LOSS.ordinal()] = showCnvLoss;
     visible[VariantDensityPyramid.Channel.INV.ordinal()] = showInv;
     visible[VariantDensityPyramid.Channel.DUP.ordinal()] = showDup;
+    visible[VariantDensityPyramid.Channel.CNV_GAIN.ordinal()] = showCnvGain;
     visible[VariantDensityPyramid.Channel.INS.ordinal()] = showIns;
     visible[VariantDensityPyramid.Channel.TRA.ordinal()] = showTra;
     visible[VariantDensityPyramid.Channel.BND.ordinal()] = showBnd;
@@ -839,8 +892,10 @@ public class MasterTrackPainter {
     int[] snv = level.channel(VariantDensityPyramid.Channel.SNV);
     int[] indel = level.channel(VariantDensityPyramid.Channel.INDEL);
     int[] del = level.channel(VariantDensityPyramid.Channel.DEL);
+    int[] cnvLoss = level.channel(VariantDensityPyramid.Channel.CNV_LOSS);
     int[] inv = level.channel(VariantDensityPyramid.Channel.INV);
     int[] dup = level.channel(VariantDensityPyramid.Channel.DUP);
+    int[] cnvGain = level.channel(VariantDensityPyramid.Channel.CNV_GAIN);
     int[] ins = level.channel(VariantDensityPyramid.Channel.INS);
     int[] tra = level.channel(VariantDensityPyramid.Channel.TRA);
     int[] bnd = level.channel(VariantDensityPyramid.Channel.BND);
@@ -858,14 +913,17 @@ public class MasterTrackPainter {
         b1 = tmp;
       }
 
-      int snvVal = 0, indelVal = 0, delVal = 0, invVal = 0, dupVal = 0;
-      int insVal = 0, traVal = 0, bndVal = 0, lohAaVal = 0, lohBbVal = 0;
+      int snvVal = 0, indelVal = 0, delVal = 0, cnvLossVal = 0, invVal = 0;
+      int dupVal = 0, cnvGainVal = 0, insVal = 0, traVal = 0, bndVal = 0;
+      int lohAaVal = 0, lohBbVal = 0;
       for (int b = b0; b <= b1; b++) {
         if (showSnv) snvVal = Math.max(snvVal, snv[b]);
         if (showIndel) indelVal = Math.max(indelVal, indel[b]);
         if (showDel) delVal = Math.max(delVal, del[b]);
+        if (showCnvLoss) cnvLossVal = Math.max(cnvLossVal, cnvLoss[b]);
         if (showInv) invVal = Math.max(invVal, inv[b]);
         if (showDup) dupVal = Math.max(dupVal, dup[b]);
+        if (showCnvGain) cnvGainVal = Math.max(cnvGainVal, cnvGain[b]);
         if (showIns) insVal = Math.max(insVal, ins[b]);
         if (showTra) traVal = Math.max(traVal, tra[b]);
         if (showBnd) bndVal = Math.max(bndVal, bnd[b]);
@@ -877,15 +935,11 @@ public class MasterTrackPainter {
       List<BarData> bars = new ArrayList<>();
       if (snvVal > 0) bars.add(new BarData(snvVal, VcfVariantType.SNV));
       if (indelVal > 0) bars.add(new BarData(indelVal, VcfVariantType.DELETION));
-      if (delVal > 0) {
-        bars.add(new BarData(delVal,
-            delColorIsCnv ? VcfVariantType.SV_CNV_LOSS : VcfVariantType.SV_DELETION));
-      }
+      if (delVal > 0) bars.add(new BarData(delVal, VcfVariantType.SV_DELETION));
+      if (cnvLossVal > 0) bars.add(new BarData(cnvLossVal, VcfVariantType.SV_CNV_LOSS));
       if (invVal > 0) bars.add(new BarData(invVal, VcfVariantType.SV_INVERSION));
-      if (dupVal > 0) {
-        bars.add(new BarData(dupVal,
-            dupColorIsCnv ? VcfVariantType.SV_CNV_GAIN : VcfVariantType.SV_DUPLICATION));
-      }
+      if (dupVal > 0) bars.add(new BarData(dupVal, VcfVariantType.SV_DUPLICATION));
+      if (cnvGainVal > 0) bars.add(new BarData(cnvGainVal, VcfVariantType.SV_CNV_GAIN));
       if (insVal > 0) bars.add(new BarData(insVal, VcfVariantType.SV_INSERTION));
       if (traVal > 0) bars.add(new BarData(traVal, VcfVariantType.SV_TRANSLOCATION));
       if (bndVal > 0) bars.add(new BarData(bndVal, VcfVariantType.SV_BREAKEND));

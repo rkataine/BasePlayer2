@@ -5,6 +5,8 @@ import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
+import org.baseplayer.utils.DrawColors;
+
 import javafx.scene.paint.Color;
 
 /**
@@ -41,7 +43,19 @@ public final class VariantTypeVisuals {
     }
   }
 
+  /**
+   * Minimum pixels-per-base before variant paint switches from type color
+   * (SNV / INS / DEL / …) to ALT-base color and letter overlay. Matches the
+   * read-mismatch letter gate for a 1 bp allele.
+   */
+  public static final double ALT_PAINT_MIN_PIXEL_SIZE = 6.0;
+
   private VariantTypeVisuals() {}
+
+  /** True when the view is zoomed in enough to color/label alleles by ALT base. */
+  public static boolean paintByAltBase(double pixelSize) {
+    return pixelSize >= ALT_PAINT_MIN_PIXEL_SIZE;
+  }
 
   public static String shortLabel(VcfVariantType type) {
     if (type == null) {
@@ -98,6 +112,81 @@ public final class VariantTypeVisuals {
   /** Faint red for LOH-mode homozygous REF (AA / 0/0) alleles on sample tracks. */
   public static Color lohAaColor() {
     return Color.rgb(220, 90, 90);
+  }
+
+  /**
+   * Nucleotide color for a DNA base (same palette as read mismatches).
+   * Non-ACGT returns {@link DrawColors#MISMATCH_OTHER}.
+   */
+  public static Color dnaBaseColor(char base) {
+    return switch (Character.toUpperCase(base)) {
+      case 'A' -> DrawColors.MISMATCH_A;
+      case 'C' -> DrawColors.MISMATCH_C;
+      case 'G' -> DrawColors.MISMATCH_G;
+      case 'T' -> DrawColors.MISMATCH_T;
+      default -> DrawColors.MISMATCH_OTHER;
+    };
+  }
+
+  /**
+   * First A/C/G/T in {@code alt}, or {@code '\0'} when missing / symbolic ({@code <DEL>}).
+   */
+  public static char firstDnaAltBase(String alt) {
+    if (alt == null || alt.isEmpty() || alt.charAt(0) == '<') {
+      return '\0';
+    }
+    for (int i = 0; i < alt.length(); i++) {
+      char c = Character.toUpperCase(alt.charAt(i));
+      if (c == 'A' || c == 'C' || c == 'G' || c == 'T') {
+        return c;
+      }
+    }
+    return '\0';
+  }
+
+  /**
+   * Close-zoom fill: DNA ALT base color for point alleles with a nucleotide ALT;
+   * otherwise the usual type color. SV / LOH / symbolic alleles stay type-colored.
+   */
+  public static Color allelePaintColor(VariantNode node) {
+    if (node == null) {
+      return color(null);
+    }
+    if (isStructural(node.type) || isLohRegion(node.type) || isCnv(node.type)) {
+      return color(node.type);
+    }
+    char base = firstDnaAltBase(node.alt);
+    if (base != '\0'
+        && (node.type == VcfVariantType.SNV
+            || node.type == VcfVariantType.MNV
+            || node.type == VcfVariantType.INSERTION
+            || node.type == VcfVariantType.DELETION
+            || node.type == VcfVariantType.COMPLEX)) {
+      return dnaBaseColor(base);
+    }
+    return color(node.type);
+  }
+
+  /**
+   * Single-character (or short) label for close-zoom overlay on allele rects/bars.
+   * {@code null} when there is nothing useful to draw (SV spans, blank ALT).
+   */
+  public static String allelePaintLabel(VariantNode node) {
+    if (node == null || isStructural(node.type) || isLohRegion(node.type) || isCnv(node.type)) {
+      return null;
+    }
+    if (node.type == VcfVariantType.INSERTION) {
+      char base = firstDnaAltBase(node.alt);
+      return base != '\0' ? "+" + base : "+";
+    }
+    if (node.type == VcfVariantType.DELETION) {
+      return "−";
+    }
+    char base = firstDnaAltBase(node.alt);
+    if (base == '\0') {
+      return null;
+    }
+    return String.valueOf(base);
   }
 
   /** Synthetic LOH AA/BB region calls (not loaded from VCF). */

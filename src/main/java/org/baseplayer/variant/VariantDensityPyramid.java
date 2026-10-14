@@ -19,7 +19,7 @@ public final class VariantDensityPyramid {
   public static final long[] BIN_SIZES_BP = { 1_000_000L, 100_000L, 10_000L, 1_000L };
 
   public enum Channel {
-    SNV, INDEL, DEL, INV, DUP, INS, TRA, BND, LOH_AA, LOH_BB
+    SNV, INDEL, DEL, CNV_LOSS, INV, DUP, CNV_GAIN, INS, TRA, BND, LOH_AA, LOH_BB
   }
 
   public record SvSpan(long start, long end, VcfVariantType type, int sampleCount) {}
@@ -350,14 +350,18 @@ public final class VariantDensityPyramid {
     return switch (type) {
       case SNV -> Channel.SNV;
       case INSERTION, DELETION, MNV, COMPLEX -> Channel.INDEL;
-      case SV_DELETION, SV_CNV_LOSS -> Channel.DEL;
+      case SV_DELETION -> Channel.DEL;
+      case SV_CNV_LOSS -> Channel.CNV_LOSS;
       case SV_INVERSION -> Channel.INV;
-      case SV_DUPLICATION, SV_CNV_GAIN -> Channel.DUP;
+      case SV_DUPLICATION -> Channel.DUP;
+      case SV_CNV_GAIN -> Channel.CNV_GAIN;
       case SV_INSERTION -> Channel.INS;
       case SV_TRANSLOCATION -> Channel.TRA;
       case SV_BREAKEND -> Channel.BND;
       case LOH_AA -> Channel.LOH_AA;
       case LOH_BB -> Channel.LOH_BB;
+      // Untyped / copy-neutral CNV: no dedicated density channel (keep out of DEL/DUP).
+      case SV_CNV, SV_CNV_NEUTRAL -> null;
       default -> svSpan ? Channel.DEL : null;
     };
   }

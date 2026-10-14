@@ -353,6 +353,7 @@ public class FileCommands {
     if (resolvedType == null || resolvedType.isBlank()) {
       String lower = file.getName().toLowerCase();
       if (lower.endsWith(".bam") || lower.endsWith(".cram")) resolvedType = "BAM";
+      else if (lower.endsWith(".vcf") || lower.endsWith(".vcf.gz")) resolvedType = "VCF";
       else if (lower.endsWith(".bed") || lower.endsWith(".bed.gz")) resolvedType = "BED";
       else if (lower.endsWith(".bw") || lower.endsWith(".bigwig")) resolvedType = "BIGWIG";
       else if (lower.endsWith(".ab1")) resolvedType = "AB1";
@@ -362,6 +363,7 @@ public class FileCommands {
 
     switch (resolvedType.toUpperCase()) {
       case "BAM" -> SampleDataManager.addBamFile(file);
+      case "VCF" -> SampleDataManager.addVcfFile(file);
       case "BED" -> SampleDataManager.addBedSampleFile(file);
       case "BIGWIG" -> SampleDataManager.addBigWigFile(file);
       case "AB1" -> SampleDataManager.addAb1File(file);

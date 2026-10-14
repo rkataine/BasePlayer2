@@ -520,6 +520,7 @@ public class ControlFilesPanel {
                 progressSuffix.accept("(" + chromIndex + "/" + total + " chr" + chrom + ")");
             }
             try {
+                // Force: Apply always re-annotates (visible windows may change with filter).
                 annotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
                     org.baseplayer.services.LoadingManager.get()
                         .setProgress(cur, Math.max(1, tot));
@@ -530,7 +531,7 @@ public class ControlFilesPanel {
                         "(" + chromIndex + "/" + total
                             + " chr" + c
                             + ", " + matched + " AF)");
-                });
+                }, true);
             } catch (IOException e) {
                 // May run on ThreadRunner loader-pool — never build Alert here.
                 showError("Control annotation failed", chrom + ": " + e.getMessage());

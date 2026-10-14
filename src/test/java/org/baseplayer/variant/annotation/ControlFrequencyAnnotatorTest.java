@@ -3,10 +3,13 @@ package org.baseplayer.variant.annotation;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VcfVariantType;
 import org.junit.jupiter.api.Test;
 
 class ControlFrequencyAnnotatorTest {
@@ -138,5 +141,51 @@ class ControlFrequencyAnnotatorTest {
             2.0,
             ControlFrequencyAnnotator.infoNumber(info, 0, info.length, "AC", 1),
             1e-12);
+    }
+
+    @Test
+    void buildSearchWindowsMergesNearbyWithinExonCap() {
+        List<VariantNode> nodes = List.of(
+            snv(100), snv(150), snv(180), snv(500), snv(520));
+        List<ControlFrequencyAnnotator.SearchWindow> windows =
+            ControlFrequencyAnnotator.buildSearchWindows(nodes, 200);
+        assertEquals(2, windows.size());
+        assertEquals(100, windows.get(0).start());
+        assertEquals(180, windows.get(0).end());
+        assertEquals(0, windows.get(0).nodeFrom());
+        assertEquals(3, windows.get(0).nodeToExclusive());
+        assertEquals(500, windows.get(1).start());
+        assertEquals(520, windows.get(1).end());
+        assertEquals(3, windows.get(1).nodeFrom());
+        assertEquals(5, windows.get(1).nodeToExclusive());
+    }
+
+    @Test
+    void buildSearchWindowsSplitsWhenClusterExceedsMax() {
+        List<VariantNode> nodes = new ArrayList<>();
+        nodes.add(snv(100));
+        nodes.add(snv(150));
+        nodes.add(snv(250)); // 100..250 = 151 bp > 100 max → new window
+        List<ControlFrequencyAnnotator.SearchWindow> windows =
+            ControlFrequencyAnnotator.buildSearchWindows(nodes, 100);
+        assertEquals(2, windows.size());
+        assertEquals(100, windows.get(0).start());
+        assertEquals(150, windows.get(0).end());
+        assertEquals(250, windows.get(1).start());
+        assertEquals(250, windows.get(1).end());
+    }
+
+    @Test
+    void buildSearchWindowsKeepsIsolatedSitesTight() {
+        List<ControlFrequencyAnnotator.SearchWindow> windows =
+            ControlFrequencyAnnotator.buildSearchWindows(List.of(snv(42)), 200);
+        assertEquals(1, windows.size());
+        assertEquals(42, windows.get(0).start());
+        assertEquals(42, windows.get(0).end());
+        assertEquals(1, windows.get(0).nodeCount());
+    }
+
+    private static VariantNode snv(long pos) {
+        return new VariantNode(pos, "A", "G", VcfVariantType.SNV);
     }
 }

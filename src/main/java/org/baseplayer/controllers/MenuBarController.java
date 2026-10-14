@@ -566,6 +566,43 @@ public class MenuBarController {
     MenuIcons.apply(saveProjectMenuItem, FontAwesomeSolid.SAVE, "#6aab73");
     MenuIcons.apply(saveProjectAsMenuItem, FontAwesomeSolid.FILE_EXPORT, "#5b9bd5");
     MenuIcons.apply(closeMenuItem, FontAwesomeSolid.TIMES, "#c07070");
+    // Replace Modena's black ▶ chevron with a plain ">" (Cursor-style).
+    for (Menu top : menuBar.getMenus()) {
+      top.setOnShown(e -> Platform.runLater(() -> installPlainSubmenuChevrons(top)));
+    }
+  }
+
+  /** Swap each nested Menu's right-side arrow Region for a plain ">" label. */
+  private static void installPlainSubmenuChevrons(Menu parent) {
+    if (parent == null) {
+      return;
+    }
+    for (MenuItem item : parent.getItems()) {
+      if (!(item instanceof Menu submenu)) {
+        continue;
+      }
+      Node row = submenu.getStyleableNode();
+      if (row == null) {
+        continue;
+      }
+      Node right = row.lookup(".right-container");
+      if (!(right instanceof Pane pane)) {
+        continue;
+      }
+      if (pane.getChildren().size() == 1
+          && pane.getChildren().get(0) instanceof Label existing
+          && ">".equals(existing.getText())) {
+        continue;
+      }
+      Label chevron = new Label(">");
+      chevron.getStyleClass().add("submenu-chevron");
+      chevron.setTextFill(AppTheme.chrome().muted());
+      chevron.setMinWidth(Region.USE_PREF_SIZE);
+      chevron.setStyle(
+          "-fx-background-color: transparent; -fx-padding: 0; -fx-font-size: 13px;");
+      pane.setStyle("-fx-background-color: transparent;");
+      pane.getChildren().setAll(chevron);
+    }
   }
 
   private static void ensureMenuIconColumns(Iterable<? extends MenuItem> items) {

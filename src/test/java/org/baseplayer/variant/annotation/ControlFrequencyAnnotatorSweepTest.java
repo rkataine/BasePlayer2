@@ -12,6 +12,7 @@ import java.util.List;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VcfVariantType;
@@ -94,6 +95,29 @@ class ControlFrequencyAnnotatorSweepTest {
             ControlFrequencyAnnotator.PopulationAnStats global = stats.forPopulation("");
             assertNotNull(global);
             assertTrue(global.maxAn() >= 100);
+        }
+    }
+
+    @Test
+    void annotateUsesVisibleWindowsWhenFilterChainExists() throws Exception {
+        Path vcf = fixtureVcf();
+        SampleTrack track = registerTrack("ctrl-test-windows");
+        try (ControlFrequencyAnnotator annotator = new ControlFrequencyAnnotator()) {
+            annotator.open(vcf);
+            annotator.setSelectedPopulations(List.of(""));
+            VariantList list = new VariantList("1");
+            list.addVariant(100, "A", "G", VcfVariantType.SNV, call(track));
+            list.addVariant(200, "C", "A", VcfVariantType.SNV, call(track));
+            list.addVariant(999, "A", "T", VcfVariantType.SNV, call(track));
+            list.rebuildVisibleChain(new VariantFilter());
+
+            assertTrue(list.getVisibleNodeCount() >= 2);
+            annotator.annotate(list, null, true);
+
+            assertEquals(0.01, list.getFirst().controlAf, 1e-12);
+            assertEquals(0.005, list.getFirst().next.controlAf, 1e-12);
+            // Unmatched allele stays null
+            assertEquals(null, list.getFirst().next.next.controlAf);
         }
     }
 

@@ -77,7 +77,7 @@ public final class BedFeatureFilterDialog {
         hintText,
         "Filter by feature name…",
         confirmLabel,
-        false,
+        true,
         List.of());
 
     BedFeatureNameDiscovery[] discovery = { null };

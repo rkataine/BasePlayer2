@@ -26,14 +26,11 @@
   -fx-background-color: -bp-elevated;
 }
 
-/* Dropdown menus: body = top bar (-bp-elevated); darker left icon strip.
-   JavaFX wraps every MenuItem graphic in .graphic-container (see ContextMenuContent)
-   and Modena adds right padding there — that padding was making the icon column
-   wider than our strip. Keep graphic-container padding 0 / transparent so the
-   column is only as wide as the icon (~14–16px). Strip = 22px content. */
+/* Dropdown menus: body = top bar (-bp-elevated); lighter left icon strip
+   (-bp-panel). Graphic padding + strip width leave air around 14px icons. */
 .context-menu {
-  -fx-background-color: -bp-surface, -bp-elevated;
-  -fx-background-insets: 1, 1 1 1 23;
+  -fx-background-color: -bp-panel, -bp-elevated;
+  -fx-background-insets: 1, 1 1 1 30;
   -fx-border-color: -bp-border;
   -fx-border-width: 1;
   -fx-padding: 4 0 4 0;
@@ -52,25 +49,37 @@
   -fx-background-insets: 0;
 }
 
-/* JavaFX skin wrapper around item.getGraphic() — do not pad/widen or paint a chip. */
+/* JavaFX skin wrapper around item.getGraphic() — do not paint a chip. */
 .menu-item > .graphic-container {
-  -fx-padding: 0 4 0 4;
+  -fx-padding: 0 8 0 8;
   -fx-background-color: transparent;
   -fx-background-insets: 0;
 }
 
 /* Gap is strip → text (label). */
 .menu-item > .label {
-  -fx-padding: 0 0 0 8;
+  -fx-padding: 0 0 0 10;
 }
 
 .menu-item-icon {
   -fx-background-color: transparent;
 }
 
+/* Nested Menu: plain ">" Label replaces Modena's ▶ — no chip behind it. */
+.menu-item > .right-container {
+  -fx-background-color: transparent;
+  -fx-background-insets: 0;
+  -fx-padding: 0 6 0 8;
+}
+.menu-item > .right-container > .label,
+.menu-item > .right-container > .arrow {
+  -fx-background-color: transparent;
+  -fx-background-insets: 0;
+}
+
 .separator-menu-item .line {
   -fx-border-color: -bp-border transparent transparent transparent;
-  -fx-border-insets: 0 0 0 22;
+  -fx-border-insets: 0 0 0 30;
 }
 
 .flat-combo-box .list-cell {
@@ -231,18 +240,25 @@ VBox {
 }
 
 /* Text field styles */
+/* Solid fill + insets 0 so Modena's dual-layer text-input chrome cannot show through. */
 .text-field {
   -fx-prompt-text-fill: -bp-muted;
   -fx-text-fill: -bp-text;
   -fx-background-color: -bp-control;
+  -fx-control-inner-background: -bp-control;
+  -fx-background-insets: 0;
+  -fx-background-radius: 2;
   -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
+  -fx-border-radius: 2;
   -fx-padding: 2 4 2 4;
 }
 
 .text-field:focused {
   -fx-border-color: -bp-focus;
   -fx-background-color: -bp-panel;
+  -fx-control-inner-background: -bp-panel;
+  -fx-background-insets: 0;
 }
 
 #geneSearchField {
@@ -630,18 +646,32 @@ VBox {
   -fx-font-size: 11px;
 }
 
-.variant-table-toolbar .filter-field {
+/* Same chrome as top-bar gene search (.text-field); keep slightly tighter padding. */
+.root-pane .variant-table-toolbar .filter-field,
+.root-pane .table-search-field,
+.variant-table-toolbar .filter-field,
+.table-search-field {
   -fx-background-color: -bp-control;
+  -fx-control-inner-background: -bp-control;
+  -fx-background-insets: 0;
+  -fx-background-radius: 2;
   -fx-text-fill: -bp-text;
-  -fx-border-color: -bp-border;
+  -fx-border-color: -bp-stroke;
   -fx-border-width: 1;
-  -fx-background-radius: 4;
-  -fx-border-radius: 4;
-  -fx-padding: 3 6 3 6;
+  -fx-border-radius: 2;
+  -fx-padding: 2 6 2 6;
+  -fx-prompt-text-fill: -bp-muted;
+  -fx-font-size: 11px;
 }
 
-.table-search-field {
-  -fx-prompt-text-fill: -bp-muted;
+.root-pane .variant-table-toolbar .filter-field:focused,
+.root-pane .table-search-field:focused,
+.variant-table-toolbar .filter-field:focused,
+.table-search-field:focused {
+  -fx-background-color: -bp-panel;
+  -fx-control-inner-background: -bp-panel;
+  -fx-background-insets: 0;
+  -fx-border-color: -bp-focus;
 }
 
 .results-tabs > .tab-header-area {
@@ -734,15 +764,26 @@ VBox {
     -fx-background-color: white;
 }
 
-/* Filter text fields */
+/* Filter text fields — same solid control chrome as gene search */
 .filter-field {
   -fx-background-color: -bp-control;
+  -fx-control-inner-background: -bp-control;
+  -fx-background-insets: 0;
+  -fx-background-radius: 2;
   -fx-text-fill: -bp-text;
   -fx-border-color: -bp-stroke;
   -fx-border-width: 1px;
+  -fx-border-radius: 2;
   -fx-padding: 3 6 3 6;
   -fx-prompt-text-fill: -bp-muted;
   -fx-font-size: 11px;
+}
+
+.filter-field:focused {
+  -fx-background-color: -bp-panel;
+  -fx-control-inner-background: -bp-panel;
+  -fx-background-insets: 0;
+  -fx-border-color: -bp-focus;
 }
 
 /* Compact sliders — transparent chrome so panel color shows through */

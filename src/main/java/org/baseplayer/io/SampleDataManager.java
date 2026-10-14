@@ -1609,9 +1609,6 @@ public class SampleDataManager {
    *        finishes UI once via {@link #finishVcfBatchUi(boolean)}
    * @return true if new sample tracks were created for this file
    */
-  private static boolean loadVcfFileSynchronously(File file, boolean deferUi) throws IOException {
-    return loadVcfFileSynchronously(file, deferUi, null);
-  }
 
   private static boolean loadVcfFileSynchronously(
       File file, boolean deferUi, SampleOpenFailuresDialog failures) throws IOException {

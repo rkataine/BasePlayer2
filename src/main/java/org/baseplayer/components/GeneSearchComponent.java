@@ -35,7 +35,7 @@ import javafx.scene.paint.Color;
 public class GeneSearchComponent {
 
   /** Matches `.context-menu` left strip width in application.css. */
-  private static final int MENU_STRIP_WIDTH = 22;
+  private static final int MENU_STRIP_WIDTH = 30;
 
   private final TextField geneSearchField;
   private final ViewportState viewportState;

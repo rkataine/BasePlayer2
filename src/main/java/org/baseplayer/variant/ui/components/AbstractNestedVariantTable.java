@@ -148,6 +148,50 @@ public abstract class AbstractNestedVariantTable {
             this.descriptionLoaded = false;
         }
 
+        public String getName() {
+            return name;
+        }
+
+        /** Chromosome of the first nested variant, or empty if none. */
+        public String firstVariantChromosome() {
+            if (variants == null || variants.isEmpty()) {
+                return "";
+            }
+            for (VariantEntry entry : variants) {
+                if (entry != null && entry.row != null) {
+                    String chrom = entry.row.chromosome();
+                    if (chrom != null && !chrom.isBlank()) {
+                        return chrom;
+                    }
+                }
+            }
+            return "";
+        }
+
+        /** Inclusive 1-based span covering nested variant positions (and SV ends when present). */
+        public long[] variantSpanInclusive() {
+            long min = Long.MAX_VALUE;
+            long max = Long.MIN_VALUE;
+            if (variants != null) {
+                for (VariantEntry entry : variants) {
+                    if (entry == null || entry.row == null || entry.row.node() == null) {
+                        continue;
+                    }
+                    VariantNode node = entry.row.node();
+                    min = Math.min(min, node.position);
+                    long end = node.position;
+                    if (node.svEnd > node.position) {
+                        end = node.svEnd;
+                    }
+                    max = Math.max(max, end);
+                }
+            }
+            if (min == Long.MAX_VALUE) {
+                return null;
+            }
+            return new long[] { min, max };
+        }
+
         String sortChromosome() {
             GeneLocation loc = AnnotationData.getGeneLocation(name);
             if (loc != null && loc.chrom() != null && !loc.chrom().isBlank()) {
@@ -501,6 +545,26 @@ public abstract class AbstractNestedVariantTable {
             boolean groupByChromosome,
             VariantFilter filter,
             boolean expandGroups) {
+        return buildGroupedRows(rows, groupByChromosome, filter, expandGroups, true);
+    }
+
+    /**
+     * Same nested Feature → Variant → Sample grouping as {@link #buildGeneGroups},
+     * but never applies Cosmic cancer/tier badges (feature names are not genes).
+     */
+    public static List<GeneGroup> buildFeatureGroups(
+            List<TableRow> rows,
+            VariantFilter filter,
+            boolean expandGroups) {
+        return buildGroupedRows(rows, false, filter, expandGroups, false);
+    }
+
+    private static List<GeneGroup> buildGroupedRows(
+            List<TableRow> rows,
+            boolean groupByChromosome,
+            VariantFilter filter,
+            boolean expandGroups,
+            boolean attributeCancerGenes) {
         List<GeneGroup> out = new ArrayList<>();
         if (rows == null || rows.isEmpty()) {
             return out;
@@ -578,7 +642,7 @@ public abstract class AbstractNestedVariantTable {
 
             boolean cancer = false;
             String tier = null;
-            if (!groupByChromosome) {
+            if (attributeCancerGenes && !groupByChromosome) {
                 cancer = rowIsCancerGene(entries.get(0).row);
                 tier = rowCosmicTier(entries.get(0).row);
             }
@@ -702,11 +766,29 @@ public abstract class AbstractNestedVariantTable {
             groupByChromosome,
             onGeneDoubleClick,
             onPositionClick,
-            filterSupplier);
+            filterSupplier,
+            "Gene / Chrom");
         parent.getChildren().add(panel.root);
         table.setVisible(false);
         table.setManaged(false);
         return panel;
+    }
+
+    /**
+     * Nested Feature → Variant → Sample panel for a BED annotation-track tab
+     * (Point results). Caller owns placement in the scene graph.
+     */
+    public static NestedPanel createFeatureAnnotationPanel(
+            BiConsumer<String, List<SampleTrack>> onFeatureDoubleClick,
+            Consumer<TableRow> onPositionClick,
+            Supplier<VariantFilter> filterSupplier) {
+        return new NestedPanel(
+            VariantDetailLayout.POINT_SIMPLE,
+            false,
+            onFeatureDoubleClick,
+            onPositionClick,
+            filterSupplier,
+            "Feature");
     }
 
     // ── Nested UI backend (virtualized ListView) ───────────────────────────────
@@ -802,7 +884,7 @@ public abstract class AbstractNestedVariantTable {
         }
     }
 
-    protected static final class NestedPanel {
+    public static final class NestedPanel {
         private static final double GUTTER_WIDTH = 16;
         /** Shared gap: row spacing and column separators. */
         private static final double COL_SEP_WIDTH = 4;
@@ -870,7 +952,8 @@ public abstract class AbstractNestedVariantTable {
                 boolean groupByChromosome,
                 BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
                 Consumer<TableRow> onPositionClick,
-                Supplier<VariantFilter> filterSupplier) {
+                Supplier<VariantFilter> filterSupplier,
+                String nameColumnHeader) {
             this.layout = layout != null ? layout : VariantDetailLayout.POINT_SIMPLE;
             this.groupByChromosome = groupByChromosome;
             this.onGeneDoubleClick = onGeneDoubleClick;
@@ -881,11 +964,14 @@ public abstract class AbstractNestedVariantTable {
             emptyLabel.getStyleClass().add("vn-empty-label");
             emptyLabel.setWrapText(true);
 
+            String nameHeader = nameColumnHeader != null && !nameColumnHeader.isBlank()
+                ? nameColumnHeader
+                : "Gene / Chrom";
             sortNameArrow = sortArrowLabel();
             sortPosArrow = sortArrowLabel();
             sortVarsArrow = sortArrowLabel();
             sortSamplesArrow = sortArrowLabel();
-            sortNameHeader = sortableHeader("Gene / Chrom", widths.geneName, GeneSort.NAME, sortNameArrow);
+            sortNameHeader = sortableHeader(nameHeader, widths.geneName, GeneSort.NAME, sortNameArrow);
             sortPosHeader = sortableHeader("Chr", widths.chr, GeneSort.POSITION, sortPosArrow);
             sortVarsHeader = sortableHeader("Vars", widths.vars, GeneSort.VARIANT_COUNT, sortVarsArrow);
             sortSamplesHeader = sortableHeader("Samples", widths.samples, GeneSort.SAMPLE_COUNT, sortSamplesArrow);
@@ -928,7 +1014,11 @@ public abstract class AbstractNestedVariantTable {
             root.getChildren().addAll(stickyHeaders, listStack);
         }
 
-        void setGroups(List<GeneGroup> next) {
+        public VBox getRoot() {
+            return root;
+        }
+
+        public void setGroups(List<GeneGroup> next) {
             try {
                 List<GeneGroup> safe = next != null ? next : List.of();
                 items.setAll(safe);
@@ -1064,6 +1154,12 @@ public abstract class AbstractNestedVariantTable {
                 emptyLabel.setGraphic(null);
                 emptyLabel.setText("No variants");
             }
+            list.setPlaceholder(emptyLabel);
+        }
+
+        public void setEmptyMessage(String message) {
+            emptyLabel.setGraphic(null);
+            emptyLabel.setText(message != null && !message.isBlank() ? message : "No variants");
             list.setPlaceholder(emptyLabel);
         }
 
