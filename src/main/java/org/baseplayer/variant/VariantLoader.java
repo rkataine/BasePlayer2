@@ -110,42 +110,137 @@ public class VariantLoader {
     }
     
     private void detectSomaticVcf() {
-        List<String> vcfSamples = vcfSampleNames;
-        // Only check if we have exactly 2 samples (typical for somatic calling)
-        if (vcfSamples.size() != 2) {
+        if (vcfSampleNames.size() != 2) {
             return;
         }
-        
-        String sample1 = vcfSamples.get(0);
-        String sample2 = vcfSamples.get(1);
-        
+        detectNormalFromNames();
+        if (detectedNormalSample == null) {
+            detectNormalFromCallProbe();
+        }
+    }
+
+    /** Name-only tumor/normal heuristics for exactly two sample columns. */
+    private void detectNormalFromNames() {
+        if (vcfSampleNames.size() != 2) {
+            return;
+        }
+
+        String sample1 = vcfSampleNames.get(0);
+        String sample2 = vcfSampleNames.get(1);
+
         String sample1Lower = sample1.toLowerCase();
         String sample2Lower = sample2.toLowerCase();
-        
-        boolean sample1IsNormal = sample1Lower.contains("normal") || sample1Lower.contains("_n_") ||
-                                 sample1Lower.contains("-n-") || sample1Lower.contains("germline") ||
-                                 sample1Lower.endsWith("_n") || sample1Lower.endsWith("-n");
-        boolean sample2IsNormal = sample2Lower.contains("normal") || sample2Lower.contains("_n_") ||
-                                 sample2Lower.contains("-n-") || sample2Lower.contains("germline") ||
-                                 sample2Lower.endsWith("_n") || sample2Lower.endsWith("-n");
-        
-        boolean sample1IsTumor = sample1Lower.contains("tumor") || sample1Lower.contains("_t_") ||
-                                sample1Lower.contains("-t-") || sample1Lower.contains("somatic") ||
-                                sample1Lower.endsWith("_t") || sample1Lower.endsWith("-t");
-        boolean sample2IsTumor = sample2Lower.contains("tumor") || sample2Lower.contains("_t_") ||
-                                sample2Lower.contains("-t-") || sample2Lower.contains("somatic") ||
-                                sample2Lower.endsWith("_t") || sample2Lower.endsWith("-t");
-        
-        
+
+        boolean sample1IsNormal = looksNormalName(sample1Lower);
+        boolean sample2IsNormal = looksNormalName(sample2Lower);
+        boolean sample1IsTumor = looksTumorName(sample1Lower);
+        boolean sample2IsTumor = looksTumorName(sample2Lower);
+        boolean sample1Nk = hasToken(sample1Lower, "nk");
+        boolean sample2Nk = hasToken(sample2Lower, "nk");
+        boolean sample1Tk = hasToken(sample1Lower, "tk");
+        boolean sample2Tk = hasToken(sample2Lower, "tk");
+
         if (sample1IsNormal && !sample2IsNormal) {
             detectedNormalSample = sample1;
         } else if (sample2IsNormal && !sample1IsNormal) {
+            detectedNormalSample = sample2;
+        } else if (sample1Nk && !sample1Tk && sample2Tk && !sample2Nk) {
+            // …NK_T + …TK_T (both end with _T) — NK is the matched normal.
+            detectedNormalSample = sample1;
+        } else if (sample2Nk && !sample2Tk && sample1Tk && !sample1Nk) {
             detectedNormalSample = sample2;
         } else if (sample1IsTumor && !sample2IsTumor) {
             detectedNormalSample = sample2;
         } else if (sample2IsTumor && !sample1IsTumor) {
             detectedNormalSample = sample1;
         }
+    }
+
+    private static boolean looksNormalName(String lower) {
+        return lower.contains("normal") || lower.contains("_n_")
+            || lower.contains("-n-") || lower.contains("germline")
+            || lower.endsWith("_n") || lower.endsWith("-n");
+    }
+
+    private static boolean looksTumorName(String lower) {
+        return lower.contains("tumor") || lower.contains("_t_")
+            || lower.contains("-t-") || lower.contains("somatic")
+            || lower.endsWith("_t") || lower.endsWith("-t");
+    }
+
+    /** Token match for {@code nk}/{@code tk} with non-letter boundaries (avoids "unknown"). */
+    static boolean hasToken(String lower, String token) {
+        if (lower == null || token == null || token.isEmpty()) {
+            return false;
+        }
+        int i = 0;
+        while ((i = lower.indexOf(token, i)) >= 0) {
+            char before = i == 0 ? '_' : lower.charAt(i - 1);
+            int afterIdx = i + token.length();
+            char after = afterIdx >= lower.length() ? '_' : lower.charAt(afterIdx);
+            if (!Character.isLetter(before) && !Character.isLetter(after)) {
+                return true;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    /**
+     * Sample first variants: if only one column has non-ref GTs, the other is normal.
+     * No-op when the reader is unavailable or both/neither have calls.
+     */
+    private void detectNormalFromCallProbe() {
+        if (vcfReader == null || vcfSampleNames.size() != 2) {
+            return;
+        }
+        Map<String, Integer> counts = probeNonRefCallCounts(4000);
+        if (counts.isEmpty()) {
+            return;
+        }
+        String sample1 = vcfSampleNames.get(0);
+        String sample2 = vcfSampleNames.get(1);
+        int c1 = counts.getOrDefault(sample1, 0);
+        int c2 = counts.getOrDefault(sample2, 0);
+        if (c1 > 0 && c2 == 0) {
+            detectedNormalSample = sample2;
+        } else if (c2 > 0 && c1 == 0) {
+            detectedNormalSample = sample1;
+        }
+    }
+
+    /**
+     * Count non-ref, non-missing genotypes per sample over the first {@code maxRecords}
+     * variants in file order. Empty map on failure.
+     */
+    public Map<String, Integer> probeNonRefCallCounts(int maxRecords) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        if (vcfReader == null || vcfSampleNames.isEmpty() || maxRecords <= 0) {
+            return counts;
+        }
+        for (String sample : vcfSampleNames) {
+            counts.put(sample, 0);
+        }
+        try (var iterator = vcfReader.rawIterator()) {
+            int seen = 0;
+            while (iterator.hasNext() && seen < maxRecords) {
+                var ctx = iterator.next();
+                seen++;
+                if (ctx == null || !ctx.hasGenotypes()) {
+                    continue;
+                }
+                for (String sample : vcfSampleNames) {
+                    var gt = ctx.getGenotype(sample);
+                    if (gt == null || gt.isNoCall() || gt.isHomRef()) {
+                        continue;
+                    }
+                    counts.merge(sample, 1, Integer::sum);
+                }
+            }
+        } catch (Exception e) {
+            return Map.of();
+        }
+        return counts;
     }
     
     private Map<String, Integer> buildSampleMapping() {
@@ -860,6 +955,46 @@ public class VariantLoader {
     public String getDetectedNormalSample() {
         return detectedNormalSample;
     }
+
+    /** Header sample column names in VCF order. */
+    public List<String> getVcfSampleNames() {
+        return vcfSampleNames;
+    }
+
+    /**
+     * Treat {@code tumorSample} as the only mapped column; the other (when exactly
+     * two samples) becomes the skipped normal. Rebuilds the track mapping.
+     */
+    public void applyTumorSample(String tumorSample) {
+        if (tumorSample == null || tumorSample.isBlank() || vcfSampleNames.size() != 2) {
+            return;
+        }
+        if (!vcfSampleNames.contains(tumorSample)) {
+            return;
+        }
+        for (String sample : vcfSampleNames) {
+            if (!sample.equals(tumorSample)) {
+                detectedNormalSample = sample;
+                break;
+            }
+        }
+        rebuildSampleMapping();
+    }
+
+    /** Clear somatic normal skip so both columns map (germline / keep-both mode). */
+    public void clearDetectedNormalSample() {
+        detectedNormalSample = null;
+        rebuildSampleMapping();
+    }
+
+    /** Set the normal column explicitly and rebuild mapping. */
+    public void setDetectedNormalSample(String normalSample) {
+        if (normalSample != null && !vcfSampleNames.contains(normalSample)) {
+            return;
+        }
+        detectedNormalSample = normalSample;
+        rebuildSampleMapping();
+    }
     
     /**
      * Check if this is a detected somatic VCF file.
@@ -867,6 +1002,27 @@ public class VariantLoader {
      */
     public boolean isSomaticVcf() {
         return detectedNormalSample != null;
+    }
+
+    /** Re-run name + call-probe detection when still ambiguous (reader must be open). */
+    public void redetectSomaticNormal() {
+        if (vcfSampleNames.size() != 2 || detectedNormalSample != null) {
+            return;
+        }
+        detectNormalFromNames();
+        if (detectedNormalSample == null) {
+            detectNormalFromCallProbe();
+        }
+        if (detectedNormalSample != null) {
+            rebuildSampleMapping();
+        }
+    }
+
+    /** Rebuild {@link #vcfSampleToTrackIndex} / {@link #unmappedSamples} from current normal skip. */
+    public void rebuildSampleMapping() {
+        vcfSampleToTrackIndex.clear();
+        unmappedSamples.clear();
+        vcfSampleToTrackIndex.putAll(buildSampleMapping());
     }
     
     /**

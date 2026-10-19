@@ -147,16 +147,23 @@ public class MenuBarController {
     refreshRecentFilesMenu();
     
     GenomicCanvas.update.addListener((observable, oldValue, newValue) -> {
-      DrawStack hoverStack = stackManager.getHoverStack();
-      if(hoverStack == null) return;
-      String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
-      chromosomeLabel.setText(org.baseplayer.utils.ChromosomeNames.forDisplay(chrom) + ":");
-      if (!isEditingPositionField()) {
-        syncPositionFieldFromHoverStack();
+      Runnable refresh = () -> {
+        DrawStack hoverStack = stackManager.getHoverStack();
+        if (hoverStack == null) return;
+        String chrom = hoverStack.getChromosome() != null ? hoverStack.getChromosome() : "1";
+        chromosomeLabel.setText(org.baseplayer.utils.ChromosomeNames.forDisplay(chrom) + ":");
+        if (!isEditingPositionField()) {
+          syncPositionFieldFromHoverStack();
+        }
+        updateViewLengthLabel();
+        if (navigationUndo != null) navigationUndo.updateButtonStates();
+        updateZoomButtonStates();
+      };
+      if (Platform.isFxApplicationThread()) {
+        refresh.run();
+      } else {
+        Platform.runLater(refresh);
       }
-      updateViewLengthLabel();
-      if (navigationUndo != null) navigationUndo.updateButtonStates();
-      updateZoomButtonStates();
     });
     menuBar.widthProperty().addListener((observable, oldValue, newValue) -> {
       menuBar.setMinWidth(newValue.doubleValue());

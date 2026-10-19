@@ -2547,7 +2547,18 @@ public abstract class AbstractNestedVariantTable {
         if (row == null || row.node() == null) {
             return "—";
         }
-        return String.format(Locale.ROOT, "%,d", row.node().position);
+        // Use minimal-allele position (first deleted/inserted base), not VCF padding POS.
+        long pos = org.baseplayer.variant.VcfAlleleNormalizer.normalize(row.node()).position();
+        return String.format(Locale.ROOT, "%,d", pos);
+    }
+
+    /** Ref/Alt with VCF padding stripped, e.g. {@code T → -} instead of {@code CT → C}. */
+    private static String formatRefAltDisplay(VariantNode node) {
+        if (node == null) {
+            return "";
+        }
+        var alleles = org.baseplayer.variant.VcfAlleleNormalizer.normalize(node);
+        return alleles.ref() + " → " + alleles.alt();
     }
 
     private static String effectStyleClass(TableRow row) {
@@ -2750,16 +2761,10 @@ public abstract class AbstractNestedVariantTable {
         return rowTextColor(row != null ? row.node() : null);
     }
 
-    /** Gene label for export; falls back to chromosome when no gene is set. */
+    /** Gene symbol for export. Empty when the row has no annotated gene. */
     public static String exportGeneName(TableRow row) {
         String gene = rowGeneName(row);
-        if (gene != null && !gene.isBlank()) {
-            return gene;
-        }
-        if (row != null && row.chromosome() != null && !row.chromosome().isBlank()) {
-            return ChromosomeNames.forDisplay(row.chromosome());
-        }
-        return "";
+        return gene != null && !gene.isBlank() ? gene : "";
     }
 
     public static String resolveTableColumnValue(TableRow row, String property, VariantFilter filter) {
@@ -2770,7 +2775,7 @@ public abstract class AbstractNestedVariantTable {
         VariantAnnotation ann = rowAnnotation(node);
         return switch (property) {
             case "position" -> formatChrPos(row);
-            case "refAlt" -> node.ref + " → " + (node.alt.isEmpty() ? "." : node.alt);
+            case "refAlt" -> formatRefAltDisplay(node);
             case "variantType" -> typeLabel(node.type);
             case "effectDisplay" -> rowEffect(node).displayName();
             case "aaChange" -> ann != null && ann.aaChange() != null ? ann.aaChange() : "";

@@ -999,8 +999,31 @@ public class VariantFilter {
             || maxSvLengthBp < Long.MAX_VALUE;
     }
 
-    /** Stable key for comparing whether cached chromosome data matches filter settings. */
+    /**
+     * Full UI/filter identity including display-only cohort settings (shared-sample
+     * range, gene-level, comparison window, group roles). Use for visible-chain keys.
+     */
     public String toStableKey() {
+        return toLoadIdentityKey()
+            + "|minShare=" + minSharedSamples
+            + "|maxShare=" + maxSharedSamples
+            + "|geneLevel=" + geneLevel
+            + "|cmpWindow=" + comparisonWindowBp
+            + "|lohGap=" + lohRegionGapOverrideBp
+            + "|presentMode=" + presentMatchMode
+            + "|groupRoles=" + sortedGroupRolesKey()
+            + "|groupTracks=" + sortedGroupTracksKey()
+            + "|pointDisp=" + sliceDisplayIdentityKey(pointSlice)
+            + "|svDisp=" + sliceDisplayIdentityKey(svSlice);
+    }
+
+    /**
+     * Identity of settings that change which alleles are streamed / retained in the
+     * chromosome cache. Excludes display-only cohort fields that change when samples
+     * are opened (shared-sample slider bounds, group track expansion, etc.) so adding
+     * a VCF does not force a full rematerialize.
+     */
+    public String toLoadIdentityKey() {
         List<String> typeNames = new ArrayList<>();
         for (VcfVariantType t : allowedTypes) typeNames.add(t.name());
         Collections.sort(typeNames);
@@ -1028,14 +1051,6 @@ public class VariantFilter {
             + "|minSvLen=" + minSvLengthBp
             + "|maxSvLen=" + (maxSvLengthBp == Long.MAX_VALUE ? "inf" : maxSvLengthBp)
             + "|cancerOnly=" + cancerGenesOnly
-            + "|minShare=" + minSharedSamples
-            + "|maxShare=" + maxSharedSamples
-            + "|geneLevel=" + geneLevel
-            + "|cmpWindow=" + comparisonWindowBp
-            + "|lohGap=" + lohRegionGapOverrideBp
-            + "|presentMode=" + presentMatchMode
-            + "|groupRoles=" + sortedGroupRolesKey()
-            + "|groupTracks=" + sortedGroupTracksKey()
             + "|showCoding=" + showCoding
             + "|showIntronic=" + showIntronic
             + "|showIntergenic=" + showIntergenic
@@ -1044,8 +1059,23 @@ public class VariantFilter {
             + "|info=" + String.join(",", infoPairs)
             + "|filterActive=" + filterFieldsActive
             + "|filterValues=" + String.join(",", filterVals)
-            + "|pointSlice=" + (pointSlice == null ? "-" : pointSlice.toStableKey())
-            + "|svSlice=" + (svSlice == null ? "-" : svSlice.toStableKey());
+            + "|pointSlice=" + (pointSlice == null ? "-" : pointSlice.toLoadIdentityKey())
+            + "|svSlice=" + (svSlice == null ? "-" : svSlice.toLoadIdentityKey());
+    }
+
+    /** Display-only fields on a class slice (not part of cache load identity). */
+    private static String sliceDisplayIdentityKey(VariantFilter slice) {
+        if (slice == null) {
+            return "-";
+        }
+        return "minShare=" + slice.minSharedSamples
+            + "|maxShare=" + slice.maxSharedSamples
+            + "|geneLevel=" + slice.geneLevel
+            + "|cmpWindow=" + slice.comparisonWindowBp
+            + "|lohGap=" + slice.lohRegionGapOverrideBp
+            + "|presentMode=" + slice.presentMatchMode
+            + "|groupRoles=" + slice.sortedGroupRolesKey()
+            + "|groupTracks=" + slice.sortedGroupTracksKey();
     }
 
     private String sortedGroupRolesKey() {

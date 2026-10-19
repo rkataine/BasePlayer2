@@ -289,7 +289,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
   }
 
   @Override
-  public void draw() {
+  protected void paintFrame() {
     double width = getWidth();
     double height = getHeight();
     if (width <= 0 || height <= 0) {
@@ -310,7 +310,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     drawSharedDataLayers();
     drawTrackRows();
     finishTrackDraw();
-    super.draw();
+    super.paintFrame();
 
     if (isSampleBody()) {
       scheduleResizeFrameCapture();

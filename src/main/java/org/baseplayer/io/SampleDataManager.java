@@ -40,6 +40,7 @@ import org.baseplayer.services.FeatureTrackViewportRegistry;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.SomaticSampleResolver;
 import org.baseplayer.variant.VariantLoader;
 
 import javafx.application.Platform;
@@ -862,6 +863,8 @@ public class SampleDataManager {
                 throw new IOException("Tabix/CSI index (.tbi/.csi) not found for: " + vcfPath);
               }
               VariantLoader loader = new VariantLoader(reader);
+              SomaticSampleResolver.resolve(
+                  loader, true, new SomaticSampleResolver.BatchContext());
               loader.mapAllEligibleToTrack(trackIndex);
               VcfManager.VcfData vcfData =
                   VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
@@ -1482,6 +1485,7 @@ public class SampleDataManager {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
     registry.beginBatchTrackMutation();
     boolean addedTracks = false;
+    SomaticSampleResolver.BatchContext somaticBatch = new SomaticSampleResolver.BatchContext();
     try {
       for (int index = 0; index < files.size(); index++) {
         if (Thread.currentThread().isInterrupted()) {
@@ -1505,7 +1509,7 @@ public class SampleDataManager {
         org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
 
         try {
-          if (loadVcfFileSynchronously(file, true, failures)) {
+          if (loadVcfFileSynchronously(file, true, failures, somaticBatch)) {
             addedTracks = true;
           }
         } catch (Exception e) {
@@ -1556,6 +1560,8 @@ public class SampleDataManager {
           Path vcfPath = file.toPath();
           VcfReader reader = new VcfReader(vcfPath);
           VariantLoader loader = new VariantLoader(reader);
+          // No dialogs on restore — heuristics + saved project somatic preference only.
+          SomaticSampleResolver.resolve(loader, false, null);
 
           List<String> unmappedSamples = loader.getUnmappedSamples();
           VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
@@ -1604,14 +1610,11 @@ public class SampleDataManager {
     }
   }
 
-  /**
-   * @param deferUi when true (batch open), skip per-file FX resize/redraw; caller
-   *        finishes UI once via {@link #finishVcfBatchUi(boolean)}
-   * @return true if new sample tracks were created for this file
-   */
-
   private static boolean loadVcfFileSynchronously(
-      File file, boolean deferUi, SampleOpenFailuresDialog failures) throws IOException {
+      File file,
+      boolean deferUi,
+      SampleOpenFailuresDialog failures,
+      SomaticSampleResolver.BatchContext somaticBatch) throws IOException {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
     }
@@ -1627,6 +1630,8 @@ public class SampleDataManager {
       throw new IOException("Tabix/CSI index (.tbi/.csi) not found for: " + vcfPath);
     }
     VariantLoader loader = new VariantLoader(reader);
+    SomaticSampleResolver.resolve(
+        loader, true, somaticBatch != null ? somaticBatch : new SomaticSampleResolver.BatchContext());
     
     List<String> unmappedSamples = loader.getUnmappedSamples();
     

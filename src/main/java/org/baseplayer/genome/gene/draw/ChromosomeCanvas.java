@@ -473,23 +473,23 @@ public class ChromosomeCanvas extends GenomicCanvas {
   }
 
   @Override
-  public void draw() {
+  protected void paintFrame() {
     gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, getWidth(), getHeight());
-    
+
     hoveredGene = null;
     hoveredAminoAcid = null;
     if (!isDragging()) {
       clearReactive();
     }
-   
+
     drawGenes();
     if (selectedGeneId != null && genePopup.isShowing()) {
       drawReactive();
     }
     drawIndicators();
     drawExon.drawReferenceBases(getWidth(), getHeight());
-    super.draw();
+    super.paintFrame();
   }
 
   @Override

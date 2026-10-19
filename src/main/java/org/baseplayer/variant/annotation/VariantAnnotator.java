@@ -36,7 +36,10 @@ public class VariantAnnotator {
         this.refService = refService;
     }
 
-    /** Annotate all variants in the list, setting node.annotation on each node directly. */
+    /**
+     * Annotate variants that do not yet have {@link VariantNode#annotation}.
+     * Skips already-annotated alleles so incremental VCF appends only pay for new nodes.
+     */
     public void annotate(VariantList variants, String chromosome) {
         if (variants == null) return;
 
@@ -47,7 +50,9 @@ public class VariantAnnotator {
         if (!variants.isEmpty()) {
             VariantNode node = variants.getFirst();
             while (node != null) {
-                node.annotation = annotateVariant(node, chromKey, genes, byChrom);
+                if (node.annotation == null) {
+                    node.annotation = annotateVariant(node, chromKey, genes, byChrom);
+                }
                 node = node.next;
             }
         }
@@ -227,50 +232,15 @@ public class VariantAnnotator {
         String codonChange = null;
         int codonNumber = 0;
 
-        // Compute AA change for SNVs in CDS
-        if (effect.isCoding() && node.type == VcfVariantType.SNV
-                && refService != null && refService.hasGenome()) {
-            CodingPos pos = computeCodingPosition(node.position, bestTx, isReverse);
-            if (pos != null) {
-                codonNumber = pos.codonNumber;
-                try {
-                    String cdsSequence = TranscriptCdsCache.getInstance()
-                            .getCodingSequence(bestGene, bestTx, refService);
-                    if (cdsSequence != null) {
-                        int codonStartIndex = (int) pos.posInCds - pos.posInCodon;
-                        if (codonStartIndex >= 0 && codonStartIndex + 2 < cdsSequence.length()) {
-                            String refCodon = cdsSequence.substring(codonStartIndex, codonStartIndex + 3);
-                            char altBase = transcriptAltBase(node.alt, isReverse);
-                            StringBuilder altCodonBuilder = new StringBuilder(refCodon);
-                            altCodonBuilder.setCharAt(pos.posInCodon, altBase);
-                            String altCodon = altCodonBuilder.toString();
-
-                            char refAA = AminoAcids.translateCodon(refCodon);
-                            char altAA = AminoAcids.translateCodon(altCodon);
-
-                            // Reclassify based on actual AA change
-                            if (refAA == '*') {
-                                effect = VariantEffect.CODING_STOP_LOSS;
-                            } else if (altAA == '*') {
-                                effect = VariantEffect.CODING_STOP_GAIN;
-                            } else if (refAA == altAA) {
-                                effect = VariantEffect.CODING_SYNONYMOUS;
-                            } else {
-                                effect = VariantEffect.CODING_MISSENSE;
-                            }
-
-                            String refThree = AminoAcids.getThreeLetter(refAA);
-                            String altThree = AminoAcids.getThreeLetter(altAA);
-                            aaChange = "p." + refThree + codonNumber + altThree;
-
-                            String refBase = node.ref.isEmpty() ? "?" : node.ref;
-                            String altStr = node.alt.isEmpty() ? "?" : node.alt;
-                            int cdsPos = (codonNumber - 1) * 3 + pos.posInCodon + 1;
-                            codonChange = "c." + cdsPos + refBase + ">" + altStr;
-                        }
-                    }
-                } catch (Exception e) {
-                    // Reference access failed — keep effect as CODING_OTHER
+        // HGVS for coding SNVs and indels (frameshift / inframe)
+        if (effect.isCoding() && refService != null && refService.hasGenome()) {
+            HgvsChange hgvs = computeCodingHgvs(node, bestGene, bestTx, isReverse, effect);
+            if (hgvs != null) {
+                codonNumber = hgvs.codonNumber();
+                codonChange = hgvs.codonChange();
+                aaChange = hgvs.aaChange();
+                if (hgvs.refinedEffect() != null) {
+                    effect = hgvs.refinedEffect();
                 }
             }
         }
@@ -622,5 +592,189 @@ public class VariantAnnotator {
         return BaseUtils.reverseComplement(String.valueOf(base)).charAt(0);
     }
 
+    /**
+     * Build HGVS.c / HGVS.p for coding SNVs and indels. Indels use minimal alleles
+     * (VCF padding stripped) so coordinates match the true edited bases.
+     */
+    private HgvsChange computeCodingHgvs(
+            VariantNode node,
+            Gene gene,
+            Transcript tx,
+            boolean isReverse,
+            VariantEffect currentEffect) {
+        try {
+            if (node.type == VcfVariantType.SNV) {
+                return computeSnvHgvs(node, gene, tx, isReverse);
+            }
+            if (node.type == VcfVariantType.INSERTION
+                    || node.type == VcfVariantType.DELETION
+                    || node.type == VcfVariantType.MNV
+                    || node.type == VcfVariantType.COMPLEX) {
+                return computeIndelHgvs(node, gene, tx, isReverse, currentEffect);
+            }
+        } catch (Exception e) {
+            // Reference / CDS access failed — leave HGVS empty
+        }
+        return null;
+    }
+
+    private HgvsChange computeSnvHgvs(VariantNode node, Gene gene, Transcript tx, boolean isReverse) {
+        CodingPos pos = computeCodingPosition(node.position, tx, isReverse);
+        if (pos == null) {
+            return null;
+        }
+        String cdsSequence = TranscriptCdsCache.getInstance()
+                .getCodingSequence(gene, tx, refService);
+        if (cdsSequence == null) {
+            return null;
+        }
+        int codonStartIndex = (int) pos.posInCds - pos.posInCodon;
+        if (codonStartIndex < 0 || codonStartIndex + 2 >= cdsSequence.length()) {
+            return null;
+        }
+        String refCodon = cdsSequence.substring(codonStartIndex, codonStartIndex + 3);
+        char altBase = transcriptAltBase(node.alt, isReverse);
+        StringBuilder altCodonBuilder = new StringBuilder(refCodon);
+        altCodonBuilder.setCharAt(pos.posInCodon, altBase);
+        String altCodon = altCodonBuilder.toString();
+
+        char refAA = AminoAcids.translateCodon(refCodon);
+        char altAA = AminoAcids.translateCodon(altCodon);
+
+        VariantEffect refined;
+        if (refAA == '*') {
+            refined = VariantEffect.CODING_STOP_LOSS;
+        } else if (altAA == '*') {
+            refined = VariantEffect.CODING_STOP_GAIN;
+        } else if (refAA == altAA) {
+            refined = VariantEffect.CODING_SYNONYMOUS;
+        } else {
+            refined = VariantEffect.CODING_MISSENSE;
+        }
+
+        String refThree = AminoAcids.getThreeLetter(refAA);
+        String altThree = AminoAcids.getThreeLetter(altAA);
+        String aaChange = "p." + refThree + pos.codonNumber + altThree;
+
+        String refBase = transcriptDna(node.ref, isReverse);
+        String altStr = transcriptDna(node.alt, isReverse);
+        int cdsPos = (pos.codonNumber - 1) * 3 + pos.posInCodon + 1;
+        String codonChange = "c." + cdsPos + refBase + ">" + altStr;
+        return new HgvsChange(pos.codonNumber, codonChange, aaChange, refined);
+    }
+
+    private HgvsChange computeIndelHgvs(
+            VariantNode node,
+            Gene gene,
+            Transcript tx,
+            boolean isReverse,
+            VariantEffect currentEffect) {
+        var alleles = org.baseplayer.variant.VcfAlleleNormalizer.normalize(node);
+        boolean deletion = !org.baseplayer.variant.VcfAlleleNormalizer.isGap(alleles.ref())
+                && org.baseplayer.variant.VcfAlleleNormalizer.isGap(alleles.alt());
+        boolean insertion = org.baseplayer.variant.VcfAlleleNormalizer.isGap(alleles.ref())
+                && !org.baseplayer.variant.VcfAlleleNormalizer.isGap(alleles.alt());
+
+        // alleles.position() is the event anchor:
+        //  - deletion: first deleted genomic base
+        //  - insertion: last unchanged genomic base (VCF padding / anchor)
+        long eventStart = alleles.position();
+        long eventEnd = deletion
+                ? alleles.position() + Math.max(1, alleles.ref().length()) - 1
+                : alleles.position();
+
+        CodingPos startPos = computeCodingPosition(eventStart, tx, isReverse);
+        if (startPos == null && deletion && eventEnd != eventStart) {
+            startPos = computeCodingPosition(eventEnd, tx, isReverse);
+        }
+        if (startPos == null) {
+            return null;
+        }
+
+        int codonNumber = startPos.codonNumber;
+        int cdsStart = (int) startPos.posInCds + 1; // 1-based HGVS.c
+
+        String codonChange;
+        if (deletion) {
+            String delSeq = transcriptDna(alleles.ref(), isReverse);
+            CodingPos endPos = alleles.ref().length() > 1
+                    ? computeCodingPosition(eventEnd, tx, isReverse)
+                    : startPos;
+            int cdsEnd = endPos != null ? (int) endPos.posInCds + 1 : cdsStart;
+            int c1 = Math.min(cdsStart, cdsEnd);
+            int c2 = Math.max(cdsStart, cdsEnd);
+            if (c1 == c2) {
+                codonChange = "c." + c1 + "del" + delSeq;
+            } else {
+                codonChange = "c." + c1 + "_" + c2 + "del" + delSeq;
+            }
+        } else if (insertion) {
+            String insSeq = transcriptDna(alleles.alt(), isReverse);
+            // Flanking CDS positions around the anchor base (no POS-1 shift).
+            int left = cdsStart;
+            int right = cdsStart + 1;
+            if (isReverse) {
+                right = cdsStart - 1;
+            }
+            if (right < left) {
+                int tmp = left;
+                left = right;
+                right = tmp;
+            }
+            codonChange = "c." + left + "_" + right + "ins" + insSeq;
+        } else {
+            // Complex / MNV after normalize
+            String r = transcriptDna(alleles.ref(), isReverse);
+            String a = transcriptDna(alleles.alt(), isReverse);
+            codonChange = "c." + cdsStart + r + ">" + a;
+        }
+
+        String aaChange = null;
+        String cdsSequence = TranscriptCdsCache.getInstance()
+                .getCodingSequence(gene, tx, refService);
+        if (cdsSequence != null) {
+            int codonStartIndex = (int) startPos.posInCds - startPos.posInCodon;
+            if (codonStartIndex >= 0 && codonStartIndex + 2 < cdsSequence.length()) {
+                String refCodon = cdsSequence.substring(codonStartIndex, codonStartIndex + 3);
+                char refAA = AminoAcids.translateCodon(refCodon);
+                String refThree = AminoAcids.getThreeLetter(refAA);
+                if (currentEffect == VariantEffect.CODING_FRAMESHIFT) {
+                    aaChange = "p." + refThree + codonNumber + "fs";
+                } else if (deletion) {
+                    int delBases = org.baseplayer.variant.VcfAlleleNormalizer.isGap(alleles.ref())
+                            ? 0 : alleles.ref().length();
+                    int aaLen = Math.max(1, (delBases + startPos.posInCodon + 2) / 3);
+                    if (aaLen <= 1) {
+                        aaChange = "p." + refThree + codonNumber + "del";
+                    } else {
+                        aaChange = "p." + refThree + codonNumber + "_"
+                                + (codonNumber + aaLen - 1) + "del";
+                    }
+                } else if (insertion) {
+                    aaChange = "p." + refThree + codonNumber + "ins";
+                }
+            }
+        }
+        if (aaChange == null && currentEffect == VariantEffect.CODING_FRAMESHIFT) {
+            aaChange = "p.?" + codonNumber + "fs";
+        }
+
+        return new HgvsChange(codonNumber, codonChange, aaChange, null);
+    }
+
+    private static String transcriptDna(String genomicDna, boolean isReverse) {
+        if (genomicDna == null || genomicDna.isEmpty() || "-".equals(genomicDna) || ".".equals(genomicDna)) {
+            return genomicDna != null ? genomicDna : "";
+        }
+        String upper = genomicDna.toUpperCase();
+        return isReverse ? BaseUtils.reverseComplement(upper) : upper;
+    }
+
     private record CodingPos(int codonNumber, int posInCodon, long posInCds) {}
+
+    private record HgvsChange(
+            int codonNumber,
+            String codonChange,
+            String aaChange,
+            VariantEffect refinedEffect) {}
 }

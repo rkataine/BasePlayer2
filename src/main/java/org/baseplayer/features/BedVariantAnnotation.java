@@ -33,10 +33,14 @@ import javafx.beans.property.SimpleIntegerProperty;
  * overlapping feature names. Optional {@link Mode#INTERSECT} / {@link Mode#SUBTRACT}
  * also hide variants on canvas/tables:
  * <ul>
- *   <li>INTERSECT — variant must overlap <em>every</em> such track</li>
- *   <li>SUBTRACT — variant must overlap <em>none</em> of those tracks</li>
+ *   <li>INTERSECT — variant must hit <em>every</em> such track</li>
+ *   <li>SUBTRACT — variant must hit <em>none</em> of those tracks</li>
  *   <li>{@link Mode#ANNOTATE} — Excel only, no visibility filter</li>
  * </ul>
+ *
+ * <p>Hit tests use breakpoints for structural SVs (primary {@code position} and
+ * {@code svEnd} when present), not the full deleted/duplicated span. Point calls
+ * and LOH regions still use a single position or the LOH interval.
  */
 public final class BedVariantAnnotation {
 
@@ -326,6 +330,10 @@ public final class BedVariantAnnotation {
   /**
    * Whether {@code node} passes INTERSECT/SUBTRACT rules from all annotation
    * tracks. {@link Mode#ANNOTATE} tracks do not affect visibility.
+   *
+   * <p>Structural SVs: INTERSECT requires <em>both</em> breakpoints to hit the
+   * track; SUBTRACT hides if <em>either</em> breakpoint hits. LOH keeps span
+   * overlap; point calls use {@code position} only.
    */
   public static boolean passes(VariantList list, VariantNode node) {
     if (list == null || node == null || !filterRunning) {
@@ -335,22 +343,17 @@ public final class BedVariantAnnotation {
     if (tracks.isEmpty()) {
       return true;
     }
-    long start1 = node.position;
-    long end1 = node.position;
-    if (VariantTypeVisuals.isSpanningCall(node.type) && node.svEnd > node.position) {
-      end1 = node.svEnd;
-    }
     String chrom = list.getChromosome();
     for (BedTrack track : tracks) {
       Mode mode = track.getVariantAnnotationMode();
       if (!mode.filtersVisibility()) {
         continue;
       }
-      boolean overlaps = overlapsAny(featuresFor(track, chrom), start1, end1);
-      if (mode == Mode.INTERSECT && !overlaps) {
+      List<BedFeature> features = featuresFor(track, chrom);
+      if (mode == Mode.INTERSECT && !hitsForIntersect(features, node)) {
         return false;
       }
-      if (mode == Mode.SUBTRACT && overlaps) {
+      if (mode == Mode.SUBTRACT && hitsForSubtract(features, node)) {
         return false;
       }
     }
@@ -404,16 +407,25 @@ public final class BedVariantAnnotation {
 
   /**
    * Ordered unique feature names from {@code track} overlapping {@code node}
-   * (point = position; spanning SV/CNV = {@code [position, svEnd]}).
+   * (point = position; structural SV/CNV = breakpoints only; LOH =
+   * {@code [position, svEnd]}).
    */
   public static List<String> overlappingFeatureNames(
       BedTrack track, String chromosome, VariantNode node) {
     if (track == null || node == null) {
       return List.of();
     }
+    if (usesBreakpointHits(node)) {
+      Set<String> names = new LinkedHashSet<>();
+      names.addAll(overlappingFeatureNames(track, chromosome, node.position, node.position));
+      if (node.svEnd > node.position) {
+        names.addAll(overlappingFeatureNames(track, chromosome, node.svEnd, node.svEnd));
+      }
+      return names.isEmpty() ? List.of() : List.copyOf(names);
+    }
     long start1 = node.position;
     long end1 = node.position;
-    if (VariantTypeVisuals.isSpanningCall(node.type) && node.svEnd > node.position) {
+    if (VariantTypeVisuals.isLohRegion(node.type) && node.svEnd > node.position) {
       end1 = node.svEnd;
     }
     return overlappingFeatureNames(track, chromosome, start1, end1);
@@ -495,6 +507,43 @@ public final class BedVariantAnnotation {
           track.getAnnotationFeatures(bare, INDEXED_ANNOTATION_MAX_FEATURES);
       return features != null ? features : List.of();
     });
+  }
+
+  /**
+   * Structural SV/CNV with a known second end: filter/annotate at breakpoints
+   * only (not the interior of the span).
+   */
+  static boolean usesBreakpointHits(VariantNode node) {
+    return node != null
+        && VariantTypeVisuals.isStructural(node.type)
+        && node.svEnd > node.position;
+  }
+
+  /** INTERSECT: every tested locus must hit a feature. */
+  static boolean hitsForIntersect(List<BedFeature> features, VariantNode node) {
+    if (usesBreakpointHits(node)) {
+      return overlapsAny(features, node.position, node.position)
+          && overlapsAny(features, node.svEnd, node.svEnd);
+    }
+    return overlapsQuery(features, node);
+  }
+
+  /** SUBTRACT: true if any tested locus hits a feature (variant should be hidden). */
+  static boolean hitsForSubtract(List<BedFeature> features, VariantNode node) {
+    if (usesBreakpointHits(node)) {
+      return overlapsAny(features, node.position, node.position)
+          || overlapsAny(features, node.svEnd, node.svEnd);
+    }
+    return overlapsQuery(features, node);
+  }
+
+  private static boolean overlapsQuery(List<BedFeature> features, VariantNode node) {
+    long start1 = node.position;
+    long end1 = node.position;
+    if (VariantTypeVisuals.isLohRegion(node.type) && node.svEnd > node.position) {
+      end1 = node.svEnd;
+    }
+    return overlapsAny(features, start1, end1);
   }
 
   /** 1-based inclusive genomic interval vs BED 0-based half-open features. */

@@ -67,6 +67,14 @@ public class GenomicCanvas extends Canvas {
   /** Coalesce parent-size local redraws for this canvas (not a global update). */
   private boolean localRedrawPending;
 
+  /**
+   * True while {@link #paintFrame()} runs on this canvas. Re-entrant {@link #draw()}
+   * calls coalesce into one follow-up paint — nested GC writes corrupt NGCanvas's
+   * opcode stream (PrismFont↔Paint ClassCastException).
+   */
+  private boolean paintInProgress;
+  private boolean paintAgain;
+
   public GenomicCanvas(Canvas reactiveCanvas, StackPane parent, DrawStack drawStack) {
     this.reactiveCanvas = reactiveCanvas;
     this.drawStack = drawStack;
@@ -105,7 +113,7 @@ public class GenomicCanvas extends Canvas {
   /**
    * Parent-height change → local redraw only (not {@link #update}).
    * {@link org.baseplayer.genome.gene.draw.ChromosomeCanvas} overrides to a no-op
-   * because it sets its own height during {@code draw()}.
+   * because it sets its own height during {@code paintFrame()}.
    */
   protected void setupParentHeightListener(StackPane parent) {
     parent.heightProperty().addListener((obs, oldVal, newVal) -> {
@@ -129,8 +137,33 @@ public class GenomicCanvas extends Canvas {
     });
   }
 
-  protected void draw() {
-    
+  /**
+   * Safe paint entry for scene-attached canvases. Marshals off the FX thread and
+   * coalesces re-entrant paints so {@link GraphicsContext} is never written nested
+   * or from a worker (avoids NGCanvas PrismFont↔Paint ClassCastException).
+   */
+  public final void draw() {
+    if (!Platform.isFxApplicationThread()) {
+      Platform.runLater(this::draw);
+      return;
+    }
+    if (paintInProgress) {
+      paintAgain = true;
+      return;
+    }
+    paintInProgress = true;
+    try {
+      do {
+        paintAgain = false;
+        paintFrame();
+      } while (paintAgain);
+    } finally {
+      paintInProgress = false;
+    }
+  }
+
+  /** Subclass paint body — always invoked on the FX thread, never nested. */
+  protected void paintFrame() {
     drawMiddleLines();
   }
   

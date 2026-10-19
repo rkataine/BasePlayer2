@@ -177,7 +177,8 @@ public final class TrackSettingsPopup {
 
       Label hint = new Label(
           "Adds an Excel column with overlapping feature names. "
-              + "Intersect/Subtract optionally hide variants. Multiple tracks allowed. "
+              + "Intersect/Subtract optionally hide variants (SVs use breakpoints, "
+              + "not the full span). Multiple tracks allowed. "
               + "Use play/stop on the feature track to pause filters.");
       hint.setFont(AppFonts.getUIFont(10));
       hint.setTextFill(Color.GRAY);

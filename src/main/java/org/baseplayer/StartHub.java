@@ -9,6 +9,7 @@ import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.UserPreferences.RecentFile;
 
+import javafx.animation.AnimationTimer;
 import javafx.animation.FadeTransition;
 import javafx.animation.Interpolator;
 import javafx.animation.ParallelTransition;
@@ -189,6 +190,34 @@ public final class StartHub {
     if (stage != null && stage.getScene() != null) {
       removeAllHubOverlays(stage.getScene().getRoot());
     }
+
+    // Project open / paint errors can leave an orphan backdrop if dismiss raced
+    // the intro animation. Sweep for a short window while suppressed.
+    scheduleSuppressedOverlaySweep();
+  }
+
+  private static AnimationTimer suppressedSweep;
+
+  private static void scheduleSuppressedOverlaySweep() {
+    if (suppressedSweep != null) {
+      return;
+    }
+    final long deadlineNanos = System.nanoTime() + 2_000_000_000L;
+    suppressedSweep = new AnimationTimer() {
+      @Override
+      public void handle(long now) {
+        if (!suppressed || now > deadlineNanos) {
+          stop();
+          suppressedSweep = null;
+          return;
+        }
+        Stage stage = MainApp.stage;
+        if (stage != null && stage.getScene() != null) {
+          removeAllHubOverlays(stage.getScene().getRoot());
+        }
+      }
+    };
+    suppressedSweep.start();
   }
 
   private static void forceRemoveNode(Node overlay) {

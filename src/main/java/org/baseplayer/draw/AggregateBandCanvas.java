@@ -48,11 +48,11 @@ public abstract class AggregateBandCanvas extends GenomicCanvas {
   }
 
   @Override
-  public void draw() {
+  protected void paintFrame() {
     getGraphicsContext2D().setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     getGraphicsContext2D().fillRect(0, 0, getWidth() + 1, getHeight() + 1);
     drawBand();
-    super.draw();
+    super.paintFrame();
   }
 
   /** Paint band-specific content into this canvas (full height = band height). */

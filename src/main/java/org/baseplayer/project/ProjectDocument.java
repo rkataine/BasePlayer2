@@ -29,6 +29,12 @@ public class ProjectDocument {
   public int schemaVersion = 3;
   public String name;
 
+  /**
+   * How to treat 2-sample VCFs (tumor+normal vs keep both columns).
+   * Values: {@code UNSET}, {@code SOMATIC}, {@code NOT_SOMATIC}.
+   */
+  public String somaticSampleMode = "UNSET";
+
   public GenomeSpec genome = new GenomeSpec();
   /**
    * Legacy field; draw settings (read height, coverage, …) are user-global via

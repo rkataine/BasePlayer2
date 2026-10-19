@@ -63,6 +63,20 @@ public class VariantList {
     
     private int vcfCountWhenLoaded = 0;
 
+    /**
+     * Streaming merge cursor helpers for {@link #addVariantWithCursor}: first allele at the
+     * current genomic position and the node before that run. Avoids O(n) head restarts on
+     * multi-allelic sites. Cleared by {@link #resetStreamMergeState()} between loads.
+     */
+    private VariantNode streamAlleleRunStart;
+    private VariantNode streamAlleleRunPrev;
+
+    /** Call before each VCF stream pass so multi-allelic run pointers are not stale. */
+    public void resetStreamMergeState() {
+        streamAlleleRunStart = null;
+        streamAlleleRunPrev = null;
+    }
+
     /** First drawable node under {@link #visibleFilterKey}. */
     private VariantNode visibleHead;
     /** Drawable nodes in genomic order (for binary seek). */
@@ -223,12 +237,19 @@ public class VariantList {
 
         VariantNode prev;
         VariantNode current;
-        if (cursor != null && cursor.position < position) {
+        if (cursor != null && cursor.position == position
+                && streamAlleleRunStart != null
+                && streamAlleleRunStart.position == position) {
+            // Multi-allelic at the cursor locus: rescan this position's allele run only
+            // (O(alleles at locus)). Never restart from list head — that was O(n) per alt.
+            prev = streamAlleleRunPrev;
+            current = streamAlleleRunStart;
+        } else if (cursor != null && cursor.position < position) {
+            // Sorted forward merge: continue from the previous insert.
             prev = cursor;
             current = cursor.next;
         } else {
-            // cursor is null, past this position, or at this position for another allele —
-            // locate the position run from the head so we do not miss an earlier allele.
+            // cursor is null or behind this position — locate from the head.
             prev = null;
             current = head;
         }
@@ -237,6 +258,10 @@ public class VariantList {
             prev = current;
             current = current.next;
         }
+
+        // Remember the allele-run bounds so the next alt at this position stays O(1) amortised.
+        streamAlleleRunPrev = prev;
+        streamAlleleRunStart = current;
 
         while (current != null && current.position == position) {
             if (sameAllele(current.ref, ref) && sameAllele(current.alt, alt)) {
@@ -250,6 +275,10 @@ public class VariantList {
 
         VariantNode newNode = new VariantNode(position, ref, alt, type);
         newNode.addSample(call);
+        if (streamAlleleRunStart == null || streamAlleleRunStart.position != position) {
+            streamAlleleRunStart = newNode;
+            streamAlleleRunPrev = prev;
+        }
         if (prev == null) {
             newNode.next = head;
             head = newNode;
@@ -1529,6 +1558,8 @@ public class VariantList {
         annotated = false;
         controlAfSourcePath = null;
         vcfCountWhenLoaded = 0;
+        streamAlleleRunStart = null;
+        streamAlleleRunPrev = null;
         lohRegions = List.of();
     }
     

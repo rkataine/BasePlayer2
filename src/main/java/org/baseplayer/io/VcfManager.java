@@ -28,6 +28,7 @@ import org.baseplayer.services.RegionFetchCache;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.SomaticSampleResolver;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantLoader;
@@ -49,9 +50,10 @@ import javafx.application.Platform;
  * Handles loading multiple VCF files and updating variants when genomic region changes.
  * Supports merging variants from multiple VCFs into a single view.
  * 
- * Strategy: 
+ * Strategy:
  * - Keep a list of all loaded VCF files (VcfData objects)
- * - When loading variants for a chromosome, merge variants from all VCFs
+ * - Populate {@link VariantList} by streaming VCFs (append-only when new files open)
+ * - Annotate gene effects once after the populate pass (skip nodes already annotated)
  * - Cache merged variant lists to avoid redundant loads
  */
 public class VcfManager {
@@ -211,6 +213,9 @@ public class VcfManager {
                     Path vcfPath = file.toPath();
                     VcfReader reader = new VcfReader(vcfPath);
                     VariantLoader loader = new VariantLoader(reader);
+                    // Resolve tumor/normal before the FX callback creates tracks.
+                    SomaticSampleResolver.resolve(
+                        loader, true, new SomaticSampleResolver.BatchContext());
                     return new VcfData(reader, loader, file);
                 } catch (IOException e) {
                     System.err.println("Failed to open VCF: " + file + " - " + e.getMessage());
@@ -416,16 +421,50 @@ public class VcfManager {
             return;
         }
 
+        final int previouslyLoadedVcfCount = variantList.getVcfCountWhenLoaded();
+        final boolean filterCompatible = isFilterCompatible(variantList, requestFilterSnapshot);
+        final boolean incrementalAppend = !variantList.isEmpty()
+            && previouslyLoadedVcfCount > 0
+            && previouslyLoadedVcfCount < loadedVcfs.size()
+            && filterCompatible;
+
         if (shouldResetVariantListBeforeLoad(variantList, requestFilterSnapshot)) {
-            // If we must reload, expand partial requests to full chromosome so we keep a reusable cache.
+            // Filter change or VCF removal — rematerialize. Expand partial → full chrom for reuse.
+            System.err.printf(
+                "[VcfManager] RESET chrom=%s listSize=%d loadedVcfs=%d->%d filterCompatible=%s%n",
+                chromosome,
+                variantList.size(),
+                previouslyLoadedVcfCount,
+                loadedVcfs.size(),
+                filterCompatible);
             if (partialRequest) {
                 long fullEnd = resolveChromosomeLoadEnd(chromosome);
                 start = 1;
                 end = fullEnd;
             }
             variantList.clear();
+        } else if (incrementalAppend) {
+            // New VCFs only: cover whatever the list already claims so cache stays consistent.
+            System.err.printf(
+                "[VcfManager] APPEND chrom=%s listSize=%d streamVcfs=%d..%d%n",
+                chromosome,
+                variantList.size(),
+                previouslyLoadedVcfCount,
+                loadedVcfs.size());
+            long[] cover = regionToStreamForIncrementalAppend(chromosome, variantList, start, end);
+            start = cover[0];
+            end = cover[1];
+        } else {
+            System.err.printf(
+                "[VcfManager] LOAD chrom=%s listSize=%d loadedCount=%d vcfCount=%d filterCompatible=%s empty=%s%n",
+                chromosome,
+                variantList.size(),
+                previouslyLoadedVcfCount,
+                loadedVcfs.size(),
+                filterCompatible,
+                variantList.isEmpty());
         }
-        
+
         // Clear canvases only for stacks showing this chromosome; other stacks keep theirs.
         clearVariantListsForChromosome(chromosome);
         lastLoadedChromosome = chromosome;
@@ -445,19 +484,36 @@ public class VcfManager {
         loading = true;
         final int vcfCountBefore = loadedVcfs.size();
         final VariantList mergedList = variantList;
+        // Populate first; annotation runs once after all selected VCFs are streamed.
         mergedList.setAnnotated(false);
 
-        activeChromosomeLoadTask = ThreadRunner.get().submit("Loading variants for " + chromosome + ":" + start + "-" + end + "…",
+        // Append path: only newly registered VCFs. Region fill / rematerialize: all open VCFs.
+        final int streamFromIndex = incrementalAppend
+            ? Math.min(previouslyLoadedVcfCount, loadedVcfs.size())
+            : 0;
+        final List<VcfData> vcfsToStream = new ArrayList<>(
+            loadedVcfs.subList(streamFromIndex, loadedVcfs.size()));
+
+        String loadLabel = incrementalAppend
+            ? "Appending variants for " + chromosome + ":" + start + "-" + end + "…"
+            : "Loading variants for " + chromosome + ":" + start + "-" + end + "…";
+
+        activeChromosomeLoadTask = ThreadRunner.get().submit(loadLabel,
             () -> {
                 try {
                     final int totalMappedSamples = Math.max(1,
-                        loadedVcfs.stream().mapToInt(vcf -> Math.max(1, vcf.loader.getMappedSampleCount())).sum());
+                        vcfsToStream.stream()
+                            .mapToInt(vcf -> Math.max(1, vcf.loader.getMappedSampleCount()))
+                            .sum());
 
                     org.baseplayer.variant.VariantNode cursor = null;
                     org.baseplayer.services.LoadingManager.get().setProgress(0, totalMappedSamples);
 
                     int completedSamples = 0;
-                    for (VcfData vcfData : loadedVcfs) {
+                    long phaseStartNs = System.nanoTime();
+                    // Phase 1: populate VariantList only (no gene annotation).
+                    mergedList.resetStreamMergeState();
+                    for (VcfData vcfData : vcfsToStream) {
                         if (regionLoadGeneration != chromosomeLoadGeneration.get()) {
                             throw new InterruptedException("Stale region load discarded");
                         }
@@ -493,20 +549,34 @@ public class VcfManager {
                     }
 
                     VariantList result = mergedList;
-                    
-                    // ALWAYS annotate before filtering, so we can apply effect-based filters
+                    long streamNs = System.nanoTime() - phaseStartNs;
+
+                    // Phase 2: annotate once after all samples are in the list
+                    // (skips nodes that already have gene annotation from a prior load).
+                    phaseStartNs = System.nanoTime();
                     VariantAnnotator annotator = new VariantAnnotator(
                         ServiceRegistry.getInstance().getReferenceGenomeService());
                     annotator.annotate(result, targetChromosome);
                     noteObservedEffectsFromList(result);
+                    long annotateNs = System.nanoTime() - phaseStartNs;
 
                     // Filter variants: keep alleles that pass type/effect/Q/DP/AF.
                     // Gene-level / cohort comparison is display-only — do not prune the cache.
+                    phaseStartNs = System.nanoTime();
                     result.retainVariants(loadFilterSnapshot::passesCacheRetention);
                     result.rebuildVisibleChain(loadFilterSnapshot);
                     if (!result.getLohRegions().isEmpty()) {
                         annotator.annotateLohRegions(result, targetChromosome);
                     }
+                    long rebuildNs = System.nanoTime() - phaseStartNs;
+                    System.err.printf(
+                        "[VcfManager] timing chrom=%s vcfsStreamed=%d listSize=%d stream=%.2fs annotate=%.2fs rebuild=%.2fs%n",
+                        targetChromosome,
+                        vcfsToStream.size(),
+                        result.size(),
+                        streamNs / 1e9,
+                        annotateNs / 1e9,
+                        rebuildNs / 1e9);
 
                     return result;
                 } catch (InterruptedException e) {
@@ -528,7 +598,18 @@ public class VcfManager {
                     return;
                 }
 
+                // More VCFs arrived during populate — append only the new ones (no full rematerialize).
                 if (loadedVcfs.size() > vcfCountBefore) {
+                    result.setVcfCountWhenLoaded(vcfCountBefore);
+                    // Record coverage from this populate pass so the append covers the same span.
+                    long fullLoadEnd = resolveChromosomeLoadEnd(targetChromosome);
+                    if (regionStart <= 1 && regionEnd >= (fullLoadEnd - 1)) {
+                        result.addLoadedRegion(1, Long.MAX_VALUE);
+                    } else {
+                        result.addLoadedRegion(regionStart, regionEnd);
+                    }
+                    result.setLoadedFilterKey(loadFilterSnapshot.toLoadIdentityKey());
+                    result.setLoadedFilter(loadFilterSnapshot.copy());
                     Platform.runLater(() -> loadRegionVariants(targetChromosome, regionStart, regionEnd));
                     return;
                 }
@@ -554,7 +635,7 @@ public class VcfManager {
                         }
                     }
                 }
-                result.setLoadedFilterKey(loadFilterSnapshot.toStableKey());
+                result.setLoadedFilterKey(loadFilterSnapshot.toLoadIdentityKey());
                 result.setLoadedFilter(loadFilterSnapshot.copy());
                 result.setAnnotated(true);
                 result.setVcfCountWhenLoaded(loadedVcfs.size());
@@ -619,17 +700,55 @@ public class VcfManager {
         }
     }
 
+    /**
+     * Full rematerialize only when the load-time filter changed or VCFs were removed.
+     * Adding VCFs is handled by incremental append (stream new files only).
+     */
     private boolean shouldResetVariantListBeforeLoad(VariantList cachedVariants, VariantFilter requestedFilter) {
         if (cachedVariants == null || cachedVariants.isEmpty()) {
             return false;
         }
 
-        if (cachedVariants.getVcfCountWhenLoaded() != loadedVcfs.size()) {
+        int loadedCount = cachedVariants.getVcfCountWhenLoaded();
+        if (loadedCount > loadedVcfs.size()) {
+            // Samples were unloaded — cannot surgically drop their calls; rebuild.
             return true;
         }
 
-        String requestedKey = requestedFilter != null ? requestedFilter.toStableKey() : null;
-        return !java.util.Objects.equals(cachedVariants.getLoadedFilterKey(), requestedKey);
+        return !isFilterCompatible(cachedVariants, requestedFilter);
+    }
+
+    private static boolean isFilterCompatible(VariantList cachedVariants, VariantFilter requestedFilter) {
+        if (cachedVariants == null) {
+            return false;
+        }
+        // Load identity ignores display-only cohort fields that change as samples open.
+        String requestedKey = requestedFilter != null ? requestedFilter.toLoadIdentityKey() : null;
+        return java.util.Objects.equals(cachedVariants.getLoadedFilterKey(), requestedKey);
+    }
+
+    /**
+     * Region the newly added VCFs must cover so the merged cache stays consistent
+     * with {@link VariantList#getLoadedRegions()} / full-chromosome markers.
+     */
+    private long[] regionToStreamForIncrementalAppend(
+            String chromosome, VariantList list, long requestStart, long requestEnd) {
+        if (isFullChromosomeCached(list)) {
+            return new long[] { 1L, resolveChromosomeLoadEnd(chromosome) };
+        }
+        long start = requestStart;
+        long end = requestEnd;
+        for (VariantList.LoadedRegion region : list.getLoadedRegions()) {
+            if (region == null) {
+                continue;
+            }
+            start = Math.min(start, region.start);
+            end = Math.max(end, region.end);
+        }
+        if (end >= Long.MAX_VALUE / 4) {
+            return new long[] { 1L, resolveChromosomeLoadEnd(chromosome) };
+        }
+        return new long[] { start, end };
     }
 
     private boolean shouldReuseCachedVariants(String chromosome, long start, long end,
@@ -646,7 +765,7 @@ public class VcfManager {
             return false;  // VCF count changed - must reload to merge with new VCFs
         }
 
-        String requestedKey = requestedFilter != null ? requestedFilter.toStableKey() : null;
+        String requestedKey = requestedFilter != null ? requestedFilter.toLoadIdentityKey() : null;
         String loadedKey = cachedVariants.getLoadedFilterKey();
         if (!java.util.Objects.equals(requestedKey, loadedKey)) {
             return false;
@@ -711,6 +830,10 @@ public class VcfManager {
     }
 
     private void updateCanvasesWithVariants(VariantList justLoaded) {
+        if (!Platform.isFxApplicationThread()) {
+            Platform.runLater(() -> updateCanvasesWithVariants(justLoaded));
+            return;
+        }
         if (justLoaded != null) {
             justLoaded.ensureVisibleChain(currentFilter);
         }
@@ -727,13 +850,13 @@ public class VcfManager {
                 continue;
             }
             list.ensureVisibleChain(currentFilter);
+            // Attach lists only — EventCoordinator paints via GenomicCanvas.update.
+            // Drawing here + toggling update nested GC writes and corrupted NGCanvas.
             if (stack.sampleTrackCanvas != null) {
                 stack.sampleTrackCanvas.setVariantList(list);
-                stack.sampleTrackCanvas.draw();
             }
             if (stack.sampleAggregateCanvas != null) {
                 stack.sampleAggregateCanvas.setVariantList(list);
-                stack.sampleAggregateCanvas.draw();
             }
         }
     }
@@ -1038,7 +1161,7 @@ public class VcfManager {
                     String active = lastLoadedChromosome;
                     if (active != null && !active.isBlank()) {
                         VariantList activeList = findCachedVariantList(active);
-                        String requestedKey = filterSnapshot.toStableKey();
+                        String requestedKey = filterSnapshot.toLoadIdentityKey();
                         boolean needsRefresh = activeList == null
                             || !java.util.Objects.equals(requestedKey, activeList.getLoadedFilterKey())
                             || !activeList.isAnnotated();
@@ -1152,7 +1275,7 @@ public class VcfManager {
         boolean annotated = hasCache && cachedVariants.isAnnotated();
         boolean nonEmpty = hasCache && !cachedVariants.isEmpty();
         boolean vcfCountMatches = hasCache && cachedVariants.getVcfCountWhenLoaded() == files.size();
-        String requestedKey = filter != null ? filter.toStableKey() : null;
+        String requestedKey = filter != null ? filter.toLoadIdentityKey() : null;
         boolean filterCompatible = hasCache
             && java.util.Objects.equals(requestedKey, cachedVariants.getLoadedFilterKey());
         boolean fullRegionLoaded = hasCache && isChromosomeFullyLoadedForCache(cachedVariants, loadEnd);
@@ -1170,16 +1293,49 @@ public class VcfManager {
         }
 
         VariantList variants = cachedVariants != null ? cachedVariants : new VariantList(chromosome);
-        variants.clear();
         putVariantList(chromosome, variants);
+
+        int previouslyLoaded = variants.getVcfCountWhenLoaded();
+        boolean canAppend = !variants.isEmpty()
+            && previouslyLoaded > 0
+            && previouslyLoaded < files.size()
+            && filterCompatible
+            && fullRegionLoaded
+            && previouslyLoaded <= loadedVcfs.size();
+
+        int streamFromIndex = 0;
+        if (canAppend) {
+            streamFromIndex = previouslyLoaded;
+            variants.setAnnotated(false);
+        } else {
+            variants.clear();
+            previouslyLoaded = 0;
+            streamFromIndex = 0;
+        }
+
         VariantNode cursor = null;
 
         int samplesDoneBeforeFile = 0;
-        int samplesTotalInChrom = Math.max(1,
-            loadedVcfs.stream().mapToInt(vcf -> Math.max(1, vcf.loader.getMappedSampleCount())).sum());
+        // Progress over the files we actually stream this pass.
+        final int samplesTotalInChrom;
+        synchronized (this) {
+            int mapped = 0;
+            for (int i = streamFromIndex; i < files.size(); i++) {
+                File file = files.get(i);
+                for (VcfData vcfData : loadedVcfs) {
+                    if (vcfData.file != null && vcfData.file.equals(file)) {
+                        mapped += Math.max(1, vcfData.loader.getMappedSampleCount());
+                        break;
+                    }
+                }
+            }
+            samplesTotalInChrom = Math.max(1, mapped > 0 ? mapped : (files.size() - streamFromIndex));
+        }
         final Set<VcfVariantType> knownTypesBeforeLoad = getSessionAvailableTypes();
 
-        for (File file : files) {
+        // Phase 1: populate only.
+        for (int fileIndex = streamFromIndex; fileIndex < files.size(); fileIndex++) {
+            File file = files.get(fileIndex);
             if (Thread.currentThread().isInterrupted()) {
                 break;
             }
@@ -1237,6 +1393,7 @@ public class VcfManager {
             return 0;
         }
 
+        // Phase 2: annotate once (existing alleles keep their annotation).
         try {
             annotator.annotate(variants, chromosome);
             noteObservedEffectsFromList(variants);
@@ -1254,7 +1411,7 @@ public class VcfManager {
         // Mark the variants as annotated and store the filter info.
         // Use Long.MAX_VALUE so isFullChromosomeCached / RegionFetchCache agree with
         // loadRegionVariants full-chromosome loads (gene viewports with padding still match).
-        String filterKey = filter.toStableKey();
+        String filterKey = filter.toLoadIdentityKey();
         variants.setLoadedFilterKey(filterKey);
         variants.setLoadedFilter(filter.copy());
         variants.setAnnotated(true);
@@ -1429,19 +1586,16 @@ public class VcfManager {
         }
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.sampleTrackCanvas != null) {
-                if (stack.sampleTrackCanvas.getVariantDrawer() != null) {
-                    stack.sampleTrackCanvas.getVariantDrawer().markIndexDirty();
-                }
-                stack.sampleTrackCanvas.draw();
+            if (stack.sampleTrackCanvas != null
+                && stack.sampleTrackCanvas.getVariantDrawer() != null) {
+                stack.sampleTrackCanvas.getVariantDrawer().markIndexDirty();
             }
             if (stack.sampleAggregateCanvas != null) {
-                // Force density rebuild, then paint immediately (async pyramid also redraws).
+                // Async pyramid completion triggers its own redrawCallback.
                 stack.sampleAggregateCanvas.forceCalculateDensity();
-                stack.sampleAggregateCanvas.draw();
             }
         }
-        // Same path as hover/scroll so EventCoordinator flushes every stack canvas.
+        // Single coalesced paint via EventCoordinator — do not draw() here too.
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
 
@@ -1804,15 +1958,12 @@ public class VcfManager {
     }
 
     private void redrawCanvasesForTypeVisibility() {
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        for (DrawStack stack : stackManager.getStacks()) {
-            if (stack.sampleTrackCanvas != null) {
-                stack.sampleTrackCanvas.draw();
-            }
-            if (stack.sampleAggregateCanvas != null) {
-                stack.sampleAggregateCanvas.draw();
-            }
+        if (!Platform.isFxApplicationThread()) {
+            Platform.runLater(this::redrawCanvasesForTypeVisibility);
+            return;
         }
+        // One coalesced redraw path — avoid per-canvas draw racing EventCoordinator.
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
 
     /** Set filter state for future loads only; does not redraw current data. */
@@ -2010,7 +2161,7 @@ public class VcfManager {
         if (lists == null || lists.isEmpty()) return false;
 
         VariantFilter filterSnapshot = loadTimeFilterSnapshot();
-        String filterKey = filterSnapshot.toStableKey();
+        String filterKey = filterSnapshot.toLoadIdentityKey();
         int vcfCount = loadedVcfs.size();
 
         EnumSet<VcfVariantType> cacheTypes = EnumSet.noneOf(VcfVariantType.class);

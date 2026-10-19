@@ -54,6 +54,10 @@ public class CytobandCanvas extends Canvas {
   private boolean indicatorDragging = false;
   private double indicatorDragStartX = 0;
   private double indicatorViewStartPos = 0;
+
+  /** Coalesce re-entrant / off-FX paints (same contract as {@link GenomicCanvas#draw()}). */
+  private boolean paintInProgress;
+  private boolean paintAgain;
   
   public CytobandCanvas(DrawStack drawStack) {
     this.drawStack = drawStack;
@@ -66,15 +70,9 @@ public class CytobandCanvas extends Canvas {
     }
     
     setupInteraction();
-    
-    // Redraw when update flag changes (must stay on FX thread — Canvas is not thread-safe).
-    GenomicCanvas.update.addListener((obs, oldVal, newVal) -> {
-      if (Platform.isFxApplicationThread()) {
-        draw();
-      } else {
-        Platform.runLater(this::draw);
-      }
-    });
+
+    // EventCoordinator redraws this canvas on GenomicCanvas.update — do not also
+    // listen here (synchronous draw during update.set races nested GC writes).
 
     // Redraw on width change
     widthProperty().addListener((obs, oldVal, newVal) -> draw());
@@ -209,12 +207,28 @@ public class CytobandCanvas extends Canvas {
   }
   
   public void draw() {
-    // Canvas GraphicsContext is not thread-safe; off-FX paint corrupts the command
-    // buffer (ClassCastException String/Font → Paint in NGCanvas).
+    // Canvas GraphicsContext is not thread-safe; off-FX / nested paint corrupts the
+    // command buffer (ClassCastException PrismFont → Paint in NGCanvas).
     if (!Platform.isFxApplicationThread()) {
       Platform.runLater(this::draw);
       return;
     }
+    if (paintInProgress) {
+      paintAgain = true;
+      return;
+    }
+    paintInProgress = true;
+    try {
+      do {
+        paintAgain = false;
+        paintFrame();
+      } while (paintAgain);
+    } finally {
+      paintInProgress = false;
+    }
+  }
+
+  private void paintFrame() {
     gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, getWidth(), getHeight());
     

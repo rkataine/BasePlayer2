@@ -169,6 +169,37 @@ public final class ProjectSessionState {
     }
   }
 
+  /** How 2-sample VCFs are treated in this project. */
+  public enum SomaticSampleMode {
+    UNSET,
+    SOMATIC,
+    NOT_SOMATIC;
+
+    public static SomaticSampleMode fromPersisted(String raw) {
+      if (raw == null || raw.isBlank()) {
+        return UNSET;
+      }
+      try {
+        return SomaticSampleMode.valueOf(raw.trim().toUpperCase());
+      } catch (IllegalArgumentException e) {
+        return UNSET;
+      }
+    }
+  }
+
+  public SomaticSampleMode getSomaticSampleMode() {
+    return SomaticSampleMode.fromPersisted(getDocument().somaticSampleMode);
+  }
+
+  public void setSomaticSampleMode(SomaticSampleMode mode) {
+    SomaticSampleMode next = mode != null ? mode : SomaticSampleMode.UNSET;
+    String persisted = next.name();
+    if (!Objects.equals(getDocument().somaticSampleMode, persisted)) {
+      getDocument().somaticSampleMode = persisted;
+      markDirty();
+    }
+  }
+
   /**
    * Whether the live session has anything worth saving (samples, VCFs, or user feature tracks).
    * Built-in default tracks (phyloP / gnomAD) do not count.

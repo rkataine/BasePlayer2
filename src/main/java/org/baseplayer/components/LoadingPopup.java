@@ -54,6 +54,12 @@ public class LoadingPopup {
      */
     private Timeline unfocusedHideDelay;
 
+    /**
+     * While &gt; 0, keep the popup hidden so modal {@link AppDialog} stages are
+     * not covered (JavaFX {@link Popup} can stack above modal stages on Linux).
+     */
+    private int modalSuppressDepth;
+
     private final ChangeListener<Boolean> focusListener =
             (obs, was, is) -> syncForegroundVisibility();
     private final ChangeListener<Number> boundsListener =
@@ -288,12 +294,38 @@ public class LoadingPopup {
     public void hide() {
         if (Platform.isFxApplicationThread()) {
             sessionActive = false;
+            modalSuppressDepth = 0;
             stopElapsedTicker();
             cancelUnfocusedHide();
             ownerHint = null;
             popup.hide();
         } else {
             Platform.runLater(this::hide);
+        }
+    }
+
+    /**
+     * Temporarily hide this popup without ending the loading session so a modal
+     * dialog can receive input. Pair with {@link #endModalSuppress()}.
+     * Must be called on the JavaFX thread.
+     */
+    public void beginModalSuppress() {
+        modalSuppressDepth++;
+        cancelUnfocusedHide();
+        popup.hide();
+    }
+
+    /**
+     * Undo one {@link #beginModalSuppress()}; restores the popup when the nesting
+     * depth returns to zero and a session is still active.
+     * Must be called on the JavaFX thread.
+     */
+    public void endModalSuppress() {
+        if (modalSuppressDepth > 0) {
+            modalSuppressDepth--;
+        }
+        if (modalSuppressDepth == 0 && sessionActive) {
+            syncForegroundVisibility();
         }
     }
 
@@ -306,7 +338,7 @@ public class LoadingPopup {
     }
 
     public void syncForegroundVisibility() {
-        if (!sessionActive) {
+        if (!sessionActive || modalSuppressDepth > 0) {
             cancelUnfocusedHide();
             popup.hide();
             return;

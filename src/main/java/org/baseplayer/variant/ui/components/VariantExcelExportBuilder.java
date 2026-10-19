@@ -1,8 +1,10 @@
 package org.baseplayer.variant.ui.components;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -15,6 +17,7 @@ import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
+import org.baseplayer.variant.VcfAlleleNormalizer;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.GeneGroup;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.TableRow;
@@ -110,24 +113,31 @@ public final class VariantExcelExportBuilder {
             boolean groupByChromosome,
             Predicate<VariantNode.SampleCall> sampleFilter,
             Consumer<List<String>> consumer) {
+        // Collapsed groups defer sample lists (calls == null) for UI speed; Excel must
+        // materialize them via ensureCalls — otherwise every row is skipped.
         List<GeneGroup> groups = AbstractNestedVariantTable.buildGeneGroups(
             rows, groupByChromosome, filter, false);
         List<String> reusable = new ArrayList<>(
             20 + BedVariantAnnotation.excelColumnHeaders().size());
+        // Group key is the chromosome on Intergenic and sample-group sheets.
+        // Description must follow the row's gene, not that key.
+        Map<String, String> descriptions = new HashMap<>();
         for (GeneGroup group : groups) {
-            String description = resolveGeneDescription(group);
             for (VariantEntry entry : group.variants) {
                 if (entry == null || entry.row == null || entry.row.node() == null) {
                     continue;
                 }
-                if (entry.calls == null || entry.calls.isEmpty()) {
+                List<VariantNode.SampleCall> calls = entry.ensureCalls(filter);
+                if (calls == null || calls.isEmpty()) {
                     continue;
                 }
-                for (VariantNode.SampleCall call : entry.calls) {
+                for (VariantNode.SampleCall call : calls) {
                     if (sampleFilter != null && !sampleFilter.test(call)) {
                         continue;
                     }
-                    fillPointRow(reusable, group, entry.row, call, filter, description);
+                    String gene = AbstractNestedVariantTable.exportGeneName(entry.row);
+                    String description = descriptions.computeIfAbsent(gene, VariantExcelExportBuilder::descriptionForGene);
+                    fillPointRow(reusable, entry.row, call, filter, gene, description);
                     // Writer consumes synchronously before the next fill clears the buffer.
                     consumer.accept(reusable);
                 }
@@ -144,20 +154,23 @@ public final class VariantExcelExportBuilder {
             rows, false, filter, false);
         List<String> reusable = new ArrayList<>(
             18 + BedVariantAnnotation.excelColumnHeaders().size());
+        Map<String, String> descriptions = new HashMap<>();
         for (GeneGroup group : groups) {
-            String description = resolveGeneDescription(group);
             for (VariantEntry entry : group.variants) {
                 if (entry == null || entry.row == null || entry.row.node() == null) {
                     continue;
                 }
-                if (entry.calls == null || entry.calls.isEmpty()) {
+                List<VariantNode.SampleCall> calls = entry.ensureCalls(filter);
+                if (calls == null || calls.isEmpty()) {
                     continue;
                 }
-                for (VariantNode.SampleCall call : entry.calls) {
+                for (VariantNode.SampleCall call : calls) {
                     if (sampleFilter != null && !sampleFilter.test(call)) {
                         continue;
                     }
-                    fillStructuralRow(reusable, group, entry.row, call, filter, description);
+                    String gene = AbstractNestedVariantTable.exportGeneName(entry.row);
+                    String description = descriptions.computeIfAbsent(gene, VariantExcelExportBuilder::descriptionForGene);
+                    fillStructuralRow(reusable, entry.row, call, filter, gene, description);
                     // Writer consumes synchronously before the next fill clears the buffer.
                     consumer.accept(reusable);
                 }
@@ -247,19 +260,22 @@ public final class VariantExcelExportBuilder {
 
     private static void fillPointRow(
             List<String> values,
-            GeneGroup group,
             TableRow row,
             VariantNode.SampleCall call,
             VariantFilter filter,
+            String gene,
             String description) {
         values.clear();
         VariantNode node = row.node();
         VariantAnnotation ann = AbstractNestedVariantTable.rowAnnotation(node);
-        values.add(nullToEmpty(group != null ? group.name : AbstractNestedVariantTable.exportGeneName(row)));
+        // Display minimal alleles (T→-) rather than VCF-padded form (CT→C).
+        VcfAlleleNormalizer.Alleles alleles = VcfAlleleNormalizer.normalize(node);
+        // Group name is the chromosome when the sheet is grouped that way.
+        values.add(nullToEmpty(gene));
         values.add(chromDisplay(row));
-        values.add(node.position > 0 ? Long.toString(node.position) : "");
-        values.add(nullToEmpty(node.ref));
-        values.add(node.alt != null && !node.alt.isEmpty() ? node.alt : ".");
+        values.add(alleles.position() > 0 ? Long.toString(alleles.position()) : "");
+        values.add(nullToEmpty(alleles.ref()));
+        values.add(nullToEmpty(alleles.alt()));
         values.add(AbstractNestedVariantTable.resolveTableColumnValue(row, "variantType", filter));
         values.add(AbstractNestedVariantTable.resolveTableColumnValue(row, "effectDisplay", filter));
         values.add(ann != null && ann.transcriptId() != null ? ann.transcriptId() : "");
@@ -272,21 +288,21 @@ public final class VariantExcelExportBuilder {
         values.add(formatGq(call));
         values.add(formatDp(call));
         values.add(formatSiteQual(node));
-        values.add(formatCancerGene(group));
+        values.add(formatCancerGene(row));
         appendBedAnnotationColumns(values, row);
         values.add(nullToEmpty(description));
     }
 
     private static void fillStructuralRow(
             List<String> values,
-            GeneGroup group,
             TableRow row,
             VariantNode.SampleCall call,
             VariantFilter filter,
+            String gene,
             String description) {
         values.clear();
         VariantNode node = row.node();
-        values.add(nullToEmpty(group != null ? group.name : AbstractNestedVariantTable.exportGeneName(row)));
+        values.add(nullToEmpty(gene));
         values.add(chromDisplay(row));
         values.add(node.position > 0 ? Long.toString(node.position) : "");
         values.add(node.svEnd > node.position ? Long.toString(node.svEnd) : "");
@@ -303,7 +319,7 @@ public final class VariantExcelExportBuilder {
         values.add(formatGq(call));
         values.add(formatDp(call));
         values.add(formatSiteQual(node));
-        values.add(formatCancerGene(group));
+        values.add(formatCancerGene(row));
         appendBedAnnotationColumns(values, row);
         values.add(nullToEmpty(description));
     }
@@ -318,11 +334,11 @@ public final class VariantExcelExportBuilder {
         values.addAll(BedVariantAnnotation.excelColumnValues(row.chromosome(), row.node()));
     }
 
-    private static String resolveGeneDescription(GeneGroup group) {
-        if (group == null || group.name == null || group.name.isBlank()) {
+    private static String descriptionForGene(String geneName) {
+        if (geneName == null || geneName.isBlank()) {
             return "";
         }
-        String description = AnnotationData.getGeneDescription(group.name);
+        String description = AnnotationData.getGeneDescription(geneName);
         return description != null ? description : "";
     }
 
@@ -376,11 +392,11 @@ public final class VariantExcelExportBuilder {
     }
 
     /** Cancer census flag plus tier when available, e.g. {@code Yes (1)} or empty. */
-    private static String formatCancerGene(GeneGroup group) {
-        if (group == null || !group.cancer) {
+    private static String formatCancerGene(TableRow row) {
+        if (row == null || !AbstractNestedVariantTable.rowIsCancerGene(row)) {
             return "";
         }
-        String tier = group.tier;
+        String tier = AbstractNestedVariantTable.rowCosmicTier(row);
         if (tier != null && !tier.isBlank()) {
             return "Yes (" + tier.trim() + ")";
         }

@@ -65,6 +65,22 @@ public final class LoadingManager {
     });
   }
 
+  /**
+   * Hide the loading popup while a modal dialog is shown (must run on FX thread).
+   * Nestable; pair each call with {@link #endModalSuppress()}.
+   */
+  public void beginModalSuppress() {
+    ensurePopup();
+    popup.beginModalSuppress();
+  }
+
+  /** Restore the loading popup after a modal dialog (must run on FX thread). */
+  public void endModalSuppress() {
+    if (popup != null) {
+      popup.endModalSuppress();
+    }
+  }
+
   // ── Private ────────────────────────────────────────────────────────────────
 
   /** Called on the FX thread whenever the ThreadRunner active-task list changes. */
