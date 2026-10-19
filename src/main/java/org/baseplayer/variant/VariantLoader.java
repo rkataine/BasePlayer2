@@ -310,10 +310,11 @@ public class VariantLoader {
                 observeType(snv.getType());
                 double siteQual = snv.getQuality();
                 List<String> alts = snv.getAlt();
-                for (String alt : alts) {
+                for (int altIdx = 0; altIdx < alts.size(); altIdx++) {
+                    String alt = alts.get(altIdx);
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                         VariantNode.SampleCall call = getSampleCallForAllele(
-                            snv, entry.getKey(), entry.getValue(), alt);
+                            snv, entry.getKey(), entry.getValue(), alt, altIdx + 1);
                         if (call != null) {
                             if (!passesLoadFilter(loadFilter, snv.getType(), siteQual, call, -1)) {
                                 continue;
@@ -366,10 +367,11 @@ public class VariantLoader {
                 
                 List<String> alts = sv.getAlt();
                 double siteQual = sv.getQuality();
-                for (String alt : alts) {
+                for (int altIdx = 0; altIdx < alts.size(); altIdx++) {
+                    String alt = alts.get(altIdx);
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                         VariantNode.SampleCall call = getSampleCallForAllele(
-                            sv, entry.getKey(), entry.getValue(), alt);
+                            sv, entry.getKey(), entry.getValue(), alt, altIdx + 1);
                         if (call != null) {
                             if (!passesLoadFilter(loadFilter, sv.getType(), siteQual, call, svLengthBp(sv))) {
                                 continue;
@@ -487,10 +489,11 @@ public class VariantLoader {
                 observeType(snv.getType());
                 double siteQual = snv.getQuality();
                 List<String> alts = snv.getAlt();
-                for (String alt : alts) {
+                for (int altIdx = 0; altIdx < alts.size(); altIdx++) {
+                    String alt = alts.get(altIdx);
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                         VariantNode.SampleCall call = getSampleCallForAllele(
-                            snv, entry.getKey(), entry.getValue(), alt);
+                            snv, entry.getKey(), entry.getValue(), alt, altIdx + 1);
                         if (call != null) {
                             if (!passesLoadFilter(loadFilter, snv.getType(), siteQual, call, -1)) {
                                 continue;
@@ -541,10 +544,11 @@ public class VariantLoader {
                 svProcessed[0]++;
                 List<String> alts = sv.getAlt();
                 double siteQual = sv.getQuality();
-                for (String alt : alts) {
+                for (int altIdx = 0; altIdx < alts.size(); altIdx++) {
+                    String alt = alts.get(altIdx);
                     for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
                         VariantNode.SampleCall call = getSampleCallForAllele(
-                            sv, entry.getKey(), entry.getValue(), alt);
+                            sv, entry.getKey(), entry.getValue(), alt, altIdx + 1);
                         if (call != null) {
                             if (!passesLoadFilter(loadFilter, sv.getType(), siteQual, call, svLengthBp(sv))) {
                                 continue;
@@ -730,8 +734,12 @@ public class VariantLoader {
         return -1;
     }
 
+    /**
+     * @param altIndex1Based VCF ALT index (1 = first alt). Used when GT is numeric ({@code 1/2}).
+     */
     private VariantNode.SampleCall getSampleCallForAllele(Object variant, String sampleName,
-                                                           int trackIndex, String altAllele) {
+                                                           int trackIndex, String altAllele,
+                                                           int altIndex1Based) {
         Map<String, Object> gtMap = null;
 
         if (variant instanceof VcfSnvIndel snvIndel) {
@@ -741,7 +749,6 @@ public class VariantLoader {
         }
 
         if (gtMap == null) {
-            // System.err.println("[VariantLoader.getSampleCallForAllele] No genotype map for sample '" + sampleName + "', alt=" + altAllele);
             return null;
         }
 
@@ -760,21 +767,21 @@ public class VariantLoader {
         if ("NA".equalsIgnoreCase(gt)) {
             double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
             int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
-            double af = calculateAlleleFraction(gtMap, altAllele);
+            double af = calculateAlleleFraction(gtMap, altAllele, altIndex1Based);
             // Skip extra FORMAT maps at load — they dominate per-call RAM (AD, F1R2, SB, …).
             // GT/GQ/DP/AF cover filters and drawing; details popup can stay lean.
             return new VariantNode.SampleCall(
                 trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af, null);
         }
         
-        // GT contains allele bases (e.g. "G/A") or indices (e.g. "0/1"); skip if this alt is not present
-        if (gt != null && !gtContainsAlt(gt, altAllele)) {
+        // GT may be allele bases ("G/AT") or numeric indices ("0/1", "1/2").
+        if (gt != null && !gtContainsAlt(gt, altAllele, altIndex1Based)) {
             return null;
         }
 
         double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
         int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
-        double af = calculateAlleleFraction(gtMap, altAllele);
+        double af = calculateAlleleFraction(gtMap, altAllele, altIndex1Based);
         return new VariantNode.SampleCall(
             trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af, null);
     }
@@ -853,7 +860,8 @@ public class VariantLoader {
      * AD format: [ref_count, alt1_count, alt2_count, ...]
      * Returns alt_count / (ref_count + alt_count), or -1 if AD not available.
      */
-    private static double calculateAlleleFraction(Map<String, Object> gtMap, String altAllele) {
+    private static double calculateAlleleFraction(
+            Map<String, Object> gtMap, String altAllele, int altIndex1Based) {
         // Site-only FACETS CNVs stash cellular fraction as AF (from CF_EM).
         Object afObj = gtMap.get("AF");
         if (afObj instanceof Number number) {
@@ -880,7 +888,8 @@ public class VariantLoader {
         }
         
         int refCount = ad[0];
-        int altCount = ad[1];  // Assuming first alt allele (multi-allelic sites split earlier)
+        int adIdx = Math.max(1, altIndex1Based);
+        int altCount = adIdx < ad.length ? ad[adIdx] : ad[1];
         int totalCount = refCount + altCount;
         
         if (totalCount == 0) {
@@ -890,39 +899,32 @@ public class VariantLoader {
         return (double) altCount / totalCount;
     }
 
-    /** Returns true if the GT string (allele-base form, e.g. "G/A") contains the given alt allele. */
-    private static boolean gtContainsAlt(String gt, String altAllele) {
-        // System.err.println("[VariantLoader.gtContainsAlt] Checking if GT=" + gt + " contains altAllele=" + altAllele);
-        
+    /**
+     * True if {@code gt} carries this ALT — allele bases ({@code G/AT}) or numeric
+     * indices ({@code 0/1}, {@code 1/2}). {@code altIndex1Based} is the VCF ALT column
+     * index (1 = first alt).
+     */
+    private static boolean gtContainsAlt(String gt, String altAllele, int altIndex1Based) {
         // Handle NA/missing GT - for SVs, assume present if NA
         if (gt == null || "NA".equalsIgnoreCase(gt) || gt.equals(".") || gt.equals("./.")) {
             boolean isSvAlt = (altAllele != null && 
                 (altAllele.startsWith("<") || altAllele.contains("[") || altAllele.contains("]")));
-            if (isSvAlt) {
-                // System.err.println("[VariantLoader.gtContainsAlt]   SV with NA/missing GT -> PRESENT");
-                return true;
-            }
-            // System.err.println("[VariantLoader.gtContainsAlt]   Non-SV with NA/missing GT -> ABSENT");
-            return false;
+            return isSvAlt;
         }
         
         // For symbolic alleles (e.g., <DEL>) or breakends (e.g., C[chr6:123[), GT is in numeric form (0/1, 1/1, etc.)
         if (altAllele != null && (altAllele.startsWith("<") || altAllele.contains("[") || altAllele.contains("]"))) {
             // SV/Breakend - GT should be in numeric form
             // Any non-homozygous-ref GT means variant is present
-            boolean hasVariant = !gt.equals("0/0");
-            // System.err.println("[VariantLoader.gtContainsAlt]   SV/breakend allele -> " + (hasVariant ? "PRESENT" : "ABSENT"));
-            return hasVariant;
+            return !gt.equals("0/0");
         }
         
-        // For regular alleles (SNVs/indels), check if altAllele is in the GT string
+        String altIndexToken = altIndex1Based > 0 ? Integer.toString(altIndex1Based) : null;
         for (String a : gt.split("[/|]")) {
-            if (a.equals(altAllele)) {
-                // System.err.println("[VariantLoader.gtContainsAlt]   Regular allele -> PRESENT");
+            if (a.equals(altAllele) || (altIndexToken != null && a.equals(altIndexToken))) {
                 return true;
             }
         }
-        // System.err.println("[VariantLoader.gtContainsAlt]   Regular allele -> ABSENT");
         return false;
     }
     

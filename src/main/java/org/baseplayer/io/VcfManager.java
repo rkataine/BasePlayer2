@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.baseplayer.draw.DrawStack;
@@ -506,47 +508,24 @@ public class VcfManager {
                             .mapToInt(vcf -> Math.max(1, vcf.loader.getMappedSampleCount()))
                             .sum());
 
-                    org.baseplayer.variant.VariantNode cursor = null;
                     org.baseplayer.services.LoadingManager.get().setProgress(0, totalMappedSamples);
 
-                    int completedSamples = 0;
                     long phaseStartNs = System.nanoTime();
-                    // Phase 1: populate VariantList only (no gene annotation).
-                    mergedList.resetStreamMergeState();
-                    for (VcfData vcfData : vcfsToStream) {
-                        if (regionLoadGeneration != chromosomeLoadGeneration.get()) {
-                            throw new InterruptedException("Stale region load discarded");
-                        }
-                        if (Thread.currentThread().isInterrupted()) {
-                            throw new InterruptedException("Region load cancelled");
-                        }
-
-                        try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
-                            vcfData.loader.setVcfReader(reader);
-                            vcfData.loader.setTypeObserver(vcfData::noteType);
-                            vcfData.loader.setAutoAdmitNewType(type -> {
-                                if (type == null || knownTypesBeforeLoad.contains(type)) {
-                                    return false;
-                                }
-                                synchronized (autoAdmittedTypes) {
-                                    autoAdmittedTypes.add(type);
-                                }
-                                return true;
-                            });
-                            cursor = vcfData.loader.streamRegionVariantsToList(
-                                targetChromosome, regionStart, regionEnd, mergedList, cursor, null, loadFilterSnapshot);
-                        } catch (IOException e) {
-                        } finally {
-                            vcfData.loader.setTypeObserver(null);
-                            vcfData.loader.setAutoAdmitNewType(null);
-                            vcfData.loader.setVcfReader(null);
-                        }
-
-                        int vcfSampleCount = Math.max(1, vcfData.loader.getMappedSampleCount());
-                        completedSamples = Math.min(totalMappedSamples, completedSamples + vcfSampleCount);
-                        org.baseplayer.services.LoadingManager.get().setProgress(completedSamples, totalMappedSamples);
-
-                    }
+                    // Phase 1: same populate path as annotate-all (shared cursor + merge).
+                    streamVcfsIntoList(
+                        targetChromosome,
+                        regionStart,
+                        regionEnd,
+                        mergedList,
+                        vcfsToStream,
+                        loadFilterSnapshot,
+                        knownTypesBeforeLoad,
+                        autoAdmittedTypes,
+                        (done, total) -> org.baseplayer.services.LoadingManager.get()
+                            .setProgress(done, totalMappedSamples),
+                        () -> regionLoadGeneration != chromosomeLoadGeneration.get()
+                            || Thread.currentThread().isInterrupted(),
+                        null);
 
                     VariantList result = mergedList;
                     long streamNs = System.nanoTime() - phaseStartNs;
@@ -1333,80 +1312,37 @@ public class VcfManager {
             streamFromIndex = 0;
         }
 
-        VariantNode cursor = null;
-
-        int samplesDoneBeforeFile = 0;
-        // Progress over the files we actually stream this pass.
-        final int samplesTotalInChrom;
-        synchronized (this) {
-            int mapped = 0;
-            for (int i = streamFromIndex; i < files.size(); i++) {
-                File file = files.get(i);
-                for (VcfData vcfData : loadedVcfs) {
-                    if (vcfData.file != null && vcfData.file.equals(file)) {
-                        mapped += Math.max(1, vcfData.loader.getMappedSampleCount());
-                        break;
-                    }
-                }
-            }
-            samplesTotalInChrom = Math.max(1, mapped > 0 ? mapped : (files.size() - streamFromIndex));
-        }
         final Set<VcfVariantType> knownTypesBeforeLoad = getSessionAvailableTypes();
-
-        // Phase 1: populate only.
-        for (int fileIndex = streamFromIndex; fileIndex < files.size(); fileIndex++) {
-            File file = files.get(fileIndex);
-            if (Thread.currentThread().isInterrupted()) {
-                break;
-            }
-
-            VcfData matched = null;
-            synchronized (this) {
+        List<VcfData> vcfsToStream = new ArrayList<>();
+        synchronized (this) {
+            for (int fileIndex = streamFromIndex; fileIndex < files.size(); fileIndex++) {
+                File file = files.get(fileIndex);
                 for (VcfData vcfData : loadedVcfs) {
                     if (vcfData.file != null && vcfData.file.equals(file)) {
-                        matched = vcfData;
+                        vcfsToStream.add(vcfData);
                         break;
                     }
                 }
             }
+        }
 
-            int mappedForFile = 1;
-            try (VcfReader reader = new VcfReader(file.toPath())) {
-                VariantLoader loader;
-                if (matched != null) {
-                    matched.loader.setVcfReader(reader);
-                    matched.loader.setTypeObserver(matched::noteType);
-                    matched.loader.setAutoAdmitNewType(type ->
-                        type != null && !knownTypesBeforeLoad.contains(type));
-                    loader = matched.loader;
-                } else {
-                    loader = new VariantLoader(reader);
-                    loader.setAutoAdmitNewType(type ->
-                        type != null && !knownTypesBeforeLoad.contains(type));
-                }
-                mappedForFile = Math.max(1, loader.getMappedSampleCount());
-                final int fileBase = samplesDoneBeforeFile;
-                cursor = loader.streamRegionVariantsToList(
-                    chromosome, 1, loadEnd, variants, cursor,
-                    onSampleProgress == null ? null : (cur, tot) -> {
-                        onSampleProgress.accept(
-                            Math.min(samplesTotalInChrom, fileBase + Math.max(0, cur)),
-                            samplesTotalInChrom);
-                    },
-                    filter);
-            } catch (IOException e) {
-                warnings.add("Load failed for " + file.getName() + " (" + chromosome + "): " + e.getMessage());
-            } finally {
-                if (matched != null) {
-                    matched.loader.setTypeObserver(null);
-                    matched.loader.setAutoAdmitNewType(null);
-                    matched.loader.setVcfReader(null);
-                }
-            }
-            samplesDoneBeforeFile = Math.min(samplesTotalInChrom, samplesDoneBeforeFile + mappedForFile);
-            if (onSampleProgress != null) {
-                onSampleProgress.accept(samplesDoneBeforeFile, samplesTotalInChrom);
-            }
+        // Phase 1: same populate path as gene/region load (shared cursor + merge).
+        try {
+            streamVcfsIntoList(
+                chromosome,
+                1,
+                loadEnd,
+                variants,
+                vcfsToStream,
+                filter,
+                knownTypesBeforeLoad,
+                null,
+                onSampleProgress,
+                () -> Thread.currentThread().isInterrupted(),
+                warnings);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return 0;
         }
 
         if (Thread.currentThread().isInterrupted() || variants.isEmpty()) {
@@ -1440,11 +1376,92 @@ public class VcfManager {
         variants.setVcfCountWhenLoaded(files.size());
         markVcfRegionFetched(chromosome, 1, Long.MAX_VALUE, variants);
         variantsRevision.incrementAndGet();
-
-        if (onSampleProgress != null) {
-            onSampleProgress.accept(samplesTotalInChrom, samplesTotalInChrom);
-        }
         return variants.size();
+    }
+
+    /**
+     * Sole VCF→{@link VariantList} populate implementation for gene/region load and
+     * annotate-all. Resets stream-merge state once, then streams every VCF through
+     * {@link VariantLoader#streamRegionVariantsToList} with one shared cursor so allele
+     * merging (including multiallelic loci) cannot diverge between call sites.
+     *
+     * @param autoAdmittedOut when non-null, newly admitted types are recorded here
+     * @param abortRequested  checked between files; {@code true} aborts with InterruptedException
+     * @param warningsOut     optional per-file IO warnings (annotate-all); silent when null
+     */
+    private void streamVcfsIntoList(
+            String chromosome,
+            long start,
+            long end,
+            VariantList target,
+            List<VcfData> vcfs,
+            VariantFilter loadFilter,
+            Set<VcfVariantType> knownTypesBeforeLoad,
+            Set<VcfVariantType> autoAdmittedOut,
+            BiConsumer<Integer, Integer> onSampleProgress,
+            BooleanSupplier abortRequested,
+            List<String> warningsOut) throws InterruptedException {
+
+        if (target == null || vcfs == null || vcfs.isEmpty()) {
+            return;
+        }
+
+        target.resetStreamMergeState();
+        VariantNode cursor = null;
+
+        int samplesTotal = Math.max(1,
+            vcfs.stream().mapToInt(v -> Math.max(1, v.loader.getMappedSampleCount())).sum());
+        int samplesDone = 0;
+        if (onSampleProgress != null) {
+            onSampleProgress.accept(0, samplesTotal);
+        }
+
+        for (VcfData vcfData : vcfs) {
+            if (abortRequested != null && abortRequested.getAsBoolean()) {
+                throw new InterruptedException("Variant stream aborted");
+            }
+            if (vcfData == null || vcfData.file == null) {
+                continue;
+            }
+
+            int mappedForFile = Math.max(1, vcfData.loader.getMappedSampleCount());
+            try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
+                vcfData.loader.setVcfReader(reader);
+                vcfData.loader.setTypeObserver(vcfData::noteType);
+                vcfData.loader.setAutoAdmitNewType(type -> {
+                    if (type == null || knownTypesBeforeLoad.contains(type)) {
+                        return false;
+                    }
+                    if (autoAdmittedOut != null) {
+                        synchronized (autoAdmittedOut) {
+                            autoAdmittedOut.add(type);
+                        }
+                    }
+                    return true;
+                });
+                final int fileBase = samplesDone;
+                cursor = vcfData.loader.streamRegionVariantsToList(
+                    chromosome, start, end, target, cursor,
+                    onSampleProgress == null ? null : (cur, tot) -> onSampleProgress.accept(
+                        Math.min(samplesTotal, fileBase + Math.max(0, cur)),
+                        samplesTotal),
+                    loadFilter);
+            } catch (IOException e) {
+                if (warningsOut != null) {
+                    warningsOut.add("Load failed for " + vcfData.file.getName()
+                        + " (" + chromosome + "): " + e.getMessage());
+                }
+            } finally {
+                vcfData.loader.setTypeObserver(null);
+                vcfData.loader.setAutoAdmitNewType(null);
+                vcfData.loader.setVcfReader(null);
+            }
+
+            samplesDone = Math.min(samplesTotal, samplesDone + mappedForFile);
+            if (onSampleProgress != null) {
+                onSampleProgress.accept(samplesDone, samplesTotal);
+            }
+        }
     }
 
     private boolean isChromosomeFullyLoadedForCache(VariantList variants, long loadEnd) {

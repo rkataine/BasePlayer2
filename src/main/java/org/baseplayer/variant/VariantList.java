@@ -202,11 +202,15 @@ public class VariantList {
     }
 
     /**
-     * Like addVariant, but starts scanning from {@code cursor} instead of from the list head.
-     * Since VCF records arrive in position-sorted order, passing the previously returned node
-     * as the cursor reduces each insertion from O(n) to O(1) amortised.
+     * Streaming merge used by every VCF load (gene region and annotate-all).
+     * Callers must {@link #resetStreamMergeState()} once before a stream session, then pass
+     * the returned node as {@code cursor} for each subsequent record — same cursor movement
+     * for every path, no alternate merge algorithms.
      *
-     * @param cursor last node returned by a previous call (null = start from head)
+     * <p>Within a session, VCFs are position-sorted so the cursor walks forward; a new file
+     * that restarts at a lower coordinate falls back to a head seek (same rule for all loads).
+     *
+     * @param cursor last node returned by a previous call ({@code null} = start of session)
      * @return the inserted or updated node – pass it as cursor to the next call
      */
     public VariantNode addVariantWithCursor(VariantNode cursor, long position, String ref,
@@ -223,12 +227,17 @@ public class VariantList {
             head.addSample(call);
             tail = head;
             size = 1;
+            streamAlleleRunPrev = null;
+            streamAlleleRunStart = head;
             invalidateSampleIndexes();
             return head;
         }
 
-        // Fast path: next sample for the allele we just touched (hotspot / multi-sample VCF).
+        // Same allele as the cursor at this locus (hotspot / multi-sample).
+        // Allele-run must be active for this position (reset between sessions).
         if (cursor != null && cursor.position == position
+                && streamAlleleRunStart != null
+                && streamAlleleRunStart.position == position
                 && sameAllele(cursor.ref, ref) && sameAllele(cursor.alt, alt)) {
             cursor.addSample(call);
             invalidateSampleIndexes();
@@ -240,16 +249,15 @@ public class VariantList {
         if (cursor != null && cursor.position == position
                 && streamAlleleRunStart != null
                 && streamAlleleRunStart.position == position) {
-            // Multi-allelic at the cursor locus: rescan this position's allele run only
-            // (O(alleles at locus)). Never restart from list head — that was O(n) per alt.
+            // Another alt at the current locus — rescan only this position's allele run.
             prev = streamAlleleRunPrev;
             current = streamAlleleRunStart;
         } else if (cursor != null && cursor.position < position) {
-            // Sorted forward merge: continue from the previous insert.
+            // Sorted forward merge.
             prev = cursor;
             current = cursor.next;
         } else {
-            // cursor is null or behind this position — locate from the head.
+            // Session start (cursor null) or next VCF restarts at a lower coordinate.
             prev = null;
             current = head;
         }
@@ -259,7 +267,7 @@ public class VariantList {
             current = current.next;
         }
 
-        // Remember the allele-run bounds so the next alt at this position stays O(1) amortised.
+        // Allele-run bounds for the next alt / sample at this position.
         streamAlleleRunPrev = prev;
         streamAlleleRunStart = current;
 
@@ -1462,12 +1470,16 @@ public class VariantList {
                     tail = prev;
                 }
                 size--;
+                // Detach so stale stream-merge cursors cannot walk back into the live list.
+                current.next = null;
             } else {
                 prev = current;
             }
 
             current = next;
         }
+        // Stream-merge helpers may still point at removed nodes — drop them.
+        resetStreamMergeState();
 
         recalculateBounds();
         clearVisibleChain();
