@@ -115,6 +115,8 @@ public class VariantManagerController implements Initializable {
 
     // Loading Modal
     @FXML private VBox loadingModal;
+    @FXML private ProgressIndicator loadingSpinner;
+    @FXML private Label loadingStatusLabel;
     
     @FXML private HBox minimizedPane;
     @FXML private Button minimizedExpandButton;
@@ -199,8 +201,6 @@ public class VariantManagerController implements Initializable {
     private javafx.collections.ListChangeListener<SampleTrack> sampleTracksListener;
     private ChangeListener<? super Number> sampleGroupsRevisionListener;
     private volatile boolean disposed;
-    private volatile boolean annotationRunning;
-    private volatile Thread annotationThread;
     private volatile boolean controlAnnotationRunning;
     private volatile ThreadRunner.RunnerTask controlAnnotationTask;
     private long lastSeenVariantsRevision = -1;
@@ -317,7 +317,8 @@ public class VariantManagerController implements Initializable {
         restoreControlFilesFromSession(controlFilesPanel);
 
         busyOverlay = new VariantBusyOverlay();
-        busyOverlay.install(new VariantBusyOverlay.Nodes(loadingModal));
+        busyOverlay.install(
+            new VariantBusyOverlay.Nodes(loadingModal, loadingSpinner, loadingStatusLabel));
         busyOverlay.setLockTargets(
             new VariantBusyOverlay.LockTargets(
                 filterTabPane,
@@ -840,9 +841,6 @@ public class VariantManagerController implements Initializable {
 
     public void cleanup() {
         disposed = true;
-        if (annotationThread != null && annotationThread.isAlive()) {
-            annotationThread.interrupt();
-        }
         ThreadRunner.RunnerTask task = busyOverlay != null
             ? busyOverlay.getAllChromosomeAnnotationTask()
             : null;
@@ -2279,18 +2277,6 @@ public class VariantManagerController implements Initializable {
         return false;
     }
 
-    private void annotateControlAfQuietly(VariantList list) {
-        ControlFilesPanel panel = activeControlPanelWithOpenFile();
-        if (panel == null || list == null) {
-            return;
-        }
-        if (!panel.annotator().needsAnnotation(list)) {
-            scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
-            return;
-        }
-        runControlAnnotationAsync(progress -> panel.annotateIfOpen(list, progress));
-    }
-
     /**
      * Per-chromosome control AF during annotate-all / reload-all — same step as when
      * switching chromosomes manually. No LoadingManager bar updates (annotate-all owns progress).
@@ -2483,52 +2469,105 @@ public class VariantManagerController implements Initializable {
         } else {
             scheduleRebuild(vcfManager.getCurrentFilter());
         }
-        maybeStartGeneAnnotation();
     }
 
-    private void maybeStartGeneAnnotation() {
-        if (annotationRunning
-            || chromosome == null
-            || chromosome.isBlank()
-            || vcfManager == null
-            || vcfManager.isAnnotated(chromosome)
-            || isCurrentChromosomeStillLoading()) {
+    /**
+     * Background continuation of a region load (same ThreadRunner task as gene annotate):
+     * optional control AF, then table row construction. Must not touch the scene graph.
+     */
+    public Object buildPostLoadTablesOnWorker(
+            VariantList list,
+            String chrom,
+            VariantFilter filter,
+            ThreadRunner.RunnerTask loadTask) {
+        if (list == null || disposed) {
+            return null;
+        }
+        ControlFilesPanel panel = activeControlPanelWithOpenFile();
+        if (panel != null && panel.annotator().needsAnnotation(list)) {
+            updateVariantLoadPhaseOnWorker(loadTask, "Annotating control AF…");
+            try {
+                panel.annotateIfOpen(list, suffix -> {
+                    if (loadTask != null) {
+                        loadTask.setProgressSuffix("— " + suffix);
+                        ThreadRunner.get().notifyDescriptionChanged();
+                    }
+                });
+            } catch (Throwable t) {
+                System.err.println("Control AF during post-load failed: " + t.getMessage());
+            }
+        }
+
+        updateVariantLoadPhaseOnWorker(loadTask, "Updating tables…");
+        VariantFilter filterSnapshot;
+        try {
+            filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
+        } catch (RuntimeException ex) {
+            return null;
+        }
+        List<VcfManager.CachedChromosomeVariants> snapshots =
+            vcfManager != null
+                ? vcfManager.getCachedVariantListsInOrder(getReferenceChromosomeOrder())
+                : List.of();
+        if (snapshots.isEmpty() && chrom != null && !chrom.isBlank()) {
+            snapshots = List.of(new VcfManager.CachedChromosomeVariants(chrom, list));
+        }
+        return buildTableRebuildResult(snapshots, filterSnapshot, false);
+    }
+
+    /**
+     * Apply tables built on the region-load worker. Stamps revision so {@link #loadData}
+     * does not start another annotate/table task.
+     */
+    public void applyPostLoadTables(Object opaqueResult, VariantList list) {
+        if (disposed || opaqueResult == null || !(opaqueResult instanceof TableRebuildResult result)) {
             return;
         }
-        annotationRunning = true;
-        final String capturedChrom = chromosome;
-        final VariantList capturedVariants = sourceVariants;
-        annotationThread = new Thread(() -> {
-            boolean interrupted = Thread.currentThread().isInterrupted();
-            if (!interrupted) {
-                try {
-                    vcfManager.ensureAnnotated(capturedChrom);
-                } catch (Throwable ignored) {
-                    // Keep table refreshes alive even if annotation fails.
-                }
+        sourceVariants = list;
+        sourceVariantLists = getCachedVariantSources();
+        if (vcfManager != null) {
+            lastSeenVariantsRevision = vcfManager.getVariantsRevision();
+            String activeChromosome = vcfManager.getLastLoadedChromosome();
+            if (activeChromosome != null) {
+                chromosome = activeChromosome;
             }
+        }
+        VariantFilter typeFilter = result.filter();
+        if (typeFilter == null && vcfManager != null) {
+            typeFilter = vcfManager.getCurrentFilter();
+        }
+        VariantFilter pointSnap = typeFilter != null && typeFilter.getPointSlice() != null
+            ? typeFilter.getPointSlice()
+            : typeFilter;
+        VariantFilter svSnap = typeFilter != null && typeFilter.getSvSlice() != null
+            ? typeFilter.getSvSlice()
+            : typeFilter;
+        if (pointWorkspace != null) {
+            pointWorkspace.populateTypes(sourceVariantLists, pointSnap);
+            pointWorkspace.captureFilterSnapshot(pointSnap);
+        }
+        if (svWorkspace != null) {
+            svWorkspace.populateTypes(sourceVariantLists, svSnap);
+            svWorkspace.captureFilterSnapshot(svSnap);
+        }
+        updateModeTabVisibility();
+        refreshReloadBannerState();
+        rebuildRunning = false;
+        rebuildNeeded = false;
+        finishTableRebuild(result);
+    }
 
-            Platform.runLater(() -> {
-                annotationRunning = false;
-                if (interrupted) {
-                    return;
-                }
-                if (!Objects.equals(capturedChrom, chromosome) || capturedVariants != sourceVariants) {
-                    loadData();
-                    return;
-                }
-                // Controlling off: rebuild only. Controlling on: annotate if cache lacks AFs.
-                if (activeControlPanelWithOpenFile() != null) {
-                    annotateControlAfQuietly(capturedVariants);
-                } else {
-                    scheduleRebuild(vcfManager != null
-                        ? vcfManager.getCurrentFilter()
-                        : buildFilterFromUI());
-                }
-            });
-        }, "variant-annotator");
-        annotationThread.setDaemon(true);
-        annotationThread.start();
+    private void updateVariantLoadPhaseOnWorker(ThreadRunner.RunnerTask task, String status) {
+        if (task != null && status != null) {
+            task.setProgressSuffix("— " + status);
+            ThreadRunner.get().notifyDescriptionChanged();
+        }
+        final String label = status;
+        Platform.runLater(() -> {
+            if (!disposed) {
+                setBusyStatus(label);
+            }
+        });
     }
 
     private void scheduleRebuild(VariantFilter filter) {
@@ -2571,13 +2610,12 @@ public class VariantManagerController implements Initializable {
         rebuildRunning = true;
         rebuildNeeded = false;
 
-        // Same light path for genotype roles, AF, GQ, present/absent, etc.
-        Thread buildThread = new Thread(() -> {
-            TableRebuildResult result = buildTableRebuildResult(snapshots, filterSnapshot, false);
-            Platform.runLater(() -> finishTableRebuild(result));
-        }, "variant-table-build");
-        buildThread.setDaemon(true);
-        buildThread.start();
+        // Track via ThreadRunner so Variant Manager overlay + LoadingPopup show
+        // spinner / "Updating tables…" while gene groups are built.
+        tableRebuildTask = ThreadRunner.get().submit(
+            "Updating tables…",
+            () -> buildTableRebuildResult(snapshots, filterSnapshot, false),
+            this::finishTableRebuild);
     }
 
     private TableRebuildResult buildTableRebuildResult(
@@ -3355,6 +3393,27 @@ public class VariantManagerController implements Initializable {
             }
         }
         if (busyOverlay != null) {
+            busyOverlay.syncBusyOverlay();
+        }
+    }
+
+    /** Dimmer + spinner + status on the Variant Manager (shared region-load phases). */
+    public void setBusyStatus(String status) {
+        if (busyOverlay != null) {
+            busyOverlay.setStatusMessage(status);
+            busyOverlay.show();
+        }
+    }
+
+    /** Dimmer + spinner + "Annotating" on the Variant Manager. */
+    public void showAnnotatingOverlay() {
+        setBusyStatus("Annotating");
+    }
+
+    /** Clear status chrome; dimmer follows ThreadRunner via {@link #syncBusyOverlay()}. */
+    public void clearAnnotatingOverlay() {
+        if (busyOverlay != null) {
+            busyOverlay.clearStatusMessage();
             busyOverlay.syncBusyOverlay();
         }
     }

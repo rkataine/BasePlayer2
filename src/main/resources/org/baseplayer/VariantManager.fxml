@@ -422,8 +422,17 @@
                 onAction="#handleExpandMinimized"/>
     </HBox>
 
-    <!-- Dimmer only — progress/cancel live in the app-wide LoadingPopup. -->
+    <!-- Busy dimmer; spinner + status shown during gene annotation. -->
     <VBox fx:id="loadingModal" visible="false" managed="false"
+          alignment="CENTER" spacing="12"
           mouseTransparent="false"
-          style="-fx-background-color: rgba(0, 0, 0, 0.55);"/>
+          style="-fx-background-color: rgba(0, 0, 0, 0.55);">
+        <ProgressIndicator fx:id="loadingSpinner" prefWidth="48" prefHeight="48"
+                           maxWidth="48" maxHeight="48"
+                           progress="-1" visible="false" managed="false"
+                           style="-fx-progress-color: #5a9fd4;"/>
+        <Label fx:id="loadingStatusLabel" text="Annotating"
+               visible="false" managed="false"
+               style="-fx-text-fill: white; -fx-font-size: 16px; -fx-font-weight: bold;"/>
+    </VBox>
 </StackPane>

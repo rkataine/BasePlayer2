@@ -296,6 +296,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return;
     }
 
+    // Fit rows before resize-preview early-return so height never stays 0 mid-load.
+    ensureTrackRowHeightFitsViewport(height);
+
     if (isSampleBody() && isResizePreview(width, height)) {
       gc.drawImage(resizeFrame, 0, 0, width, height);
       scheduleResizeCommit();
@@ -304,8 +307,6 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
     gc.setFill(org.baseplayer.ui.theme.AppTheme.canvas().trackBackground());
     gc.fillRect(0, 0, width + 1, height + 1);
-
-    ensureTrackRowHeightFitsViewport(height);
     prepareTrackDraw();
     drawSharedDataLayers();
     drawTrackRows();

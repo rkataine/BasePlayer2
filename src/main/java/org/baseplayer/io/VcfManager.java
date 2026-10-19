@@ -551,24 +551,36 @@ public class VcfManager {
                     VariantList result = mergedList;
                     long streamNs = System.nanoTime() - phaseStartNs;
 
-                    // Phase 2: annotate once after all samples are in the list
-                    // (skips nodes that already have gene annotation from a prior load).
+                    // Phase 2+: gene annotate → optional control AF → table rows on this
+                    // same ThreadRunner task (one overlay / one spinner for the whole tail).
                     phaseStartNs = System.nanoTime();
+                    updateVariantLoadPhase(activeChromosomeLoadTask, "Annotating");
                     VariantAnnotator annotator = new VariantAnnotator(
                         ServiceRegistry.getInstance().getReferenceGenomeService());
                     annotator.annotate(result, targetChromosome);
                     noteObservedEffectsFromList(result);
                     long annotateNs = System.nanoTime() - phaseStartNs;
 
-                    // Filter variants: keep alleles that pass type/effect/Q/DP/AF.
-                    // Gene-level / cohort comparison is display-only — do not prune the cache.
                     phaseStartNs = System.nanoTime();
                     result.retainVariants(loadFilterSnapshot::passesCacheRetention);
                     result.rebuildVisibleChain(loadFilterSnapshot);
                     if (!result.getLohRegions().isEmpty()) {
                         annotator.annotateLohRegions(result, targetChromosome);
                     }
+                    result.setAnnotated(true);
                     long rebuildNs = System.nanoTime() - phaseStartNs;
+
+                    VariantFilter tableFilter = currentFilter != null
+                        ? currentFilter.copy()
+                        : loadFilterSnapshot.copy();
+                    Object tablePayload = null;
+                    VariantManagerController controller =
+                        VariantManagerWindow.getCurrentController();
+                    if (controller != null) {
+                        tablePayload = controller.buildPostLoadTablesOnWorker(
+                            result, targetChromosome, tableFilter, activeChromosomeLoadTask);
+                    }
+
                     System.err.printf(
                         "[VcfManager] timing chrom=%s vcfsStreamed=%d listSize=%d stream=%.2fs annotate=%.2fs rebuild=%.2fs%n",
                         targetChromosome,
@@ -578,13 +590,13 @@ public class VcfManager {
                         annotateNs / 1e9,
                         rebuildNs / 1e9);
 
-                    return result;
+                    return new RegionLoadOutcome(result, tablePayload);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return null;
                 }
             },
-            result -> {
+            outcome -> {
                 if (regionLoadGeneration != chromosomeLoadGeneration.get()) {
                     return;
                 }
@@ -592,11 +604,12 @@ public class VcfManager {
                 loading = false;
                 loadingChromosome = null;
                 activeChromosomeLoadTask = null;
-                if (result == null) {
+                if (outcome == null || outcome.variants() == null) {
                     ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
                     startNextPendingChromosomeLoad();
                     return;
                 }
+                VariantList result = outcome.variants();
 
                 // More VCFs arrived during populate — append only the new ones (no full rematerialize).
                 if (loadedVcfs.size() > vcfCountBefore) {
@@ -643,19 +656,26 @@ public class VcfManager {
                 updateCanvasesWithVariants(result);
                 calculateDensityOnAllCanvases();
                 variantsRevision.incrementAndGet();
-                GenomicCanvas.update.set(!GenomicCanvas.update.get());
 
-                if (!admittedCopy.isEmpty()) {
-                    VariantManagerController controller = VariantManagerWindow.getCurrentController();
-                    if (controller != null && currentFilter != null) {
-                        controller.loadFilterState(currentFilter);
-                    }
+                VariantManagerController controller = VariantManagerWindow.getCurrentController();
+                if (!admittedCopy.isEmpty() && controller != null && currentFilter != null) {
+                    controller.loadFilterState(currentFilter);
                 }
+                // Apply prebuilt tables before the global update so loadData does not
+                // start a second annotate/table ThreadRunner task.
+                if (controller != null && outcome.tablePayload() != null) {
+                    controller.applyPostLoadTables(outcome.tablePayload(), result);
+                }
+
+                GenomicCanvas.update.set(!GenomicCanvas.update.get());
 
                 fireAndClearChromosomeReadyCallback();
                 startNextPendingChromosomeLoad();
             });
     }
+
+    /** Outcome of a region load: variants plus optional prebuilt Variant Manager tables. */
+    private record RegionLoadOutcome(VariantList variants, Object tablePayload) {}
 
     private void markVcfRegionFetched(
         String chromosome, long start, long end, VariantList loadedList) {
@@ -1394,6 +1414,7 @@ public class VcfManager {
         }
 
         // Phase 2: annotate once (existing alleles keep their annotation).
+        // Annotate-all already owns the busy overlay — no separate begin/end flash.
         try {
             annotator.annotate(variants, chromosome);
             noteObservedEffectsFromList(variants);
@@ -1480,6 +1501,26 @@ public class VcfManager {
             ServiceRegistry.getInstance().getReferenceGenomeService());
         annotator.annotate(variants, chromosome);
         variants.setAnnotated(true);
+    }
+
+    /**
+     * Advance status on the shared region-load ThreadRunner task (LoadingPopup +
+     * Variant Manager overlay) without ending the task between phases.
+     */
+    private static void updateVariantLoadPhase(ThreadRunner.RunnerTask task, String status) {
+        if (status == null || status.isBlank()) {
+            return;
+        }
+        if (task != null) {
+            task.setProgressSuffix("— " + status);
+            ThreadRunner.get().notifyDescriptionChanged();
+        }
+        Platform.runLater(() -> {
+            VariantManagerController controller = VariantManagerWindow.getCurrentController();
+            if (controller != null) {
+                controller.setBusyStatus(status);
+            }
+        });
     }
 
     /** Returns true if variants for this chromosome have already been annotated. */

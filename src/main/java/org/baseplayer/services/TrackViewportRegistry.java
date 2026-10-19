@@ -303,9 +303,7 @@ public abstract class TrackViewportRegistry {
   }
 
   public void showAllTracksAndResetRowHeight() {
-    trackRowHeightLocked = false;
-    pendingDefaultRowHeightFit = true;
-    setVisibleTrackRange(0, Integer.MAX_VALUE, 0, 0, trackViewportHeightPixels);
+    applyDefaultRowHeightFitWindow(0, getDisplayedTrackCount() - 1, 0);
   }
 
   /**
@@ -339,13 +337,49 @@ public abstract class TrackViewportRegistry {
   }
 
   public void includeNewTracksAtEndAndResetRowHeight() {
-    trackRowHeightLocked = false;
-    pendingDefaultRowHeightFit = true;
     int first = firstVisibleTrackSlot < 0 ? 0 : firstVisibleTrackSlot;
-    setVisibleTrackRange(
-        first, Integer.MAX_VALUE, 0,
-        firstVisibleTrackSlot < 0 ? 0 : verticalScrollOffsetPixels,
-        trackViewportHeightPixels);
+    double scroll = firstVisibleTrackSlot < 0 ? 0 : verticalScrollOffsetPixels;
+    applyDefaultRowHeightFitWindow(first, getDisplayedTrackCount() - 1, scroll);
+  }
+
+  /**
+   * Fit {@code [firstSlot, lastSlot]} into the current viewport using the same
+   * rules as {@link #ensureTrackRowHeightFitsViewport} with a pending default
+   * fit — never leaves {@code trackRowHeightPixels == 0}, which used to collapse
+   * every sample onto one paint row until the next successful body ensure
+   * (often deferred for the whole variant-load / resize-preview window).
+   */
+  private void applyDefaultRowHeightFitWindow(int firstSlot, int lastSlot, double scrollOffsetPixels) {
+    trackRowHeightLocked = false;
+    int displayed = getDisplayedTrackCount();
+    if (displayed <= 0 || lastSlot < 0) {
+      clearVisibleTrackRange();
+      return;
+    }
+    int first = Math.max(0, Math.min(displayed - 1, firstSlot));
+    int last = Math.max(first, Math.min(displayed - 1, lastSlot));
+    double viewport = trackViewportHeightPixels;
+    if (viewport <= 0) {
+      // Body has not reported a height yet — keep a real default row height so
+      // sidebar/body paints cannot stack every sample at y=0.
+      pendingDefaultRowHeightFit = true;
+      int window = last - first + 1;
+      setVisibleTrackRange(
+          first, last, DEFAULT_TRACK_ROW_HEIGHT_PIXELS, scrollOffsetPixels,
+          window * DEFAULT_TRACK_ROW_HEIGHT_PIXELS);
+      return;
+    }
+    pendingDefaultRowHeightFit = false;
+    int windowSize = last - first + 1;
+    double rawHeight = viewport / windowSize;
+    if (rawHeight < DEFAULT_TRACK_ROW_HEIGHT_PIXELS) {
+      int tracksFit = Math.max(1, (int) (viewport / DEFAULT_TRACK_ROW_HEIGHT_PIXELS));
+      setVisibleTrackRange(
+          first, first + tracksFit - 1,
+          DEFAULT_TRACK_ROW_HEIGHT_PIXELS, Double.NaN, viewport);
+    } else {
+      setVisibleTrackRange(first, last, rawHeight, Double.NaN, viewport);
+    }
   }
 
   public void adjustWindowAfterTrackRemoval(int removedDisplayedSlot, int previousFirstSlot,
@@ -375,8 +409,16 @@ public abstract class TrackViewportRegistry {
       return;
     }
 
-    int first = firstVisibleTrackSlot < 0 ? 0 : firstVisibleTrackSlot;
-    int last = lastVisibleTrackSlot < 0 ? first : lastVisibleTrackSlot;
+    // First tracks after an empty registry: open a default-height window instead
+    // of clamping to a single zero-height slot (batch VCF open used to flash that).
+    if (firstVisibleTrackSlot < 0 || lastVisibleTrackSlot < 0
+        || trackRowHeightPixels <= 0) {
+      showDefaultHeightWindowFromStart();
+      return;
+    }
+
+    int first = firstVisibleTrackSlot;
+    int last = lastVisibleTrackSlot;
     setVisibleTrackRange(
         first, last, trackRowHeightPixels, verticalScrollOffsetPixels, trackViewportHeightPixels);
   }

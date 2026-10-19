@@ -141,10 +141,15 @@ public abstract class TrackListPanel extends SidebarContentPanel {
 
   private void ensureVisibleRangeInitialized(double viewportHeight) {
     int trackCount = getDisplayedTrackCount();
-    if (trackCount <= 0 || trackViewportRegistry.getFirstVisibleTrackSlot() >= 0) {
+    if (trackCount <= 0) {
       return;
     }
-    trackViewportRegistry.setVisibleTrackRange(0, trackCount - 1, viewportHeight);
+    if (trackViewportRegistry.getFirstVisibleTrackSlot() < 0) {
+      trackViewportRegistry.setVisibleTrackRange(0, trackCount - 1, viewportHeight);
+    }
+    if (trackViewportRegistry.getTrackRowHeightPixels() <= 0 && viewportHeight > 0) {
+      trackViewportRegistry.ensureTrackRowHeightFitsViewport(viewportHeight);
+    }
   }
 
   private void setupMouseTracking() {
