@@ -26,10 +26,22 @@ import java.util.function.Function;
 
 /**
  * Draws variants as vertical lines across sample tracks.
- * When {@code pixelSize > 1}, point alleles are drawn as filled rectangles and
- * become clickable hit targets for {@link VariantInfoPopup}.
+ * At {@linkplain #isRealtimeAlleleZoom(double) realtime allele zoom}
+ * ({@code pixelSize > 1}), point alleles are drawn as filled rectangles and
+ * become clickable/hoverable hit targets for {@link VariantInfoPopup}.
  */
 public class VariantDrawer {
+
+    /**
+     * Pixels-per-base above which sample-row alleles are drawn as filled rects
+     * with hover/click hit targets (close / “realtime” allele view).
+     */
+    public static final double REALTIME_ALLELE_MIN_PIXEL_SIZE = 1.0;
+
+    /** True when the view is zoomed in enough for interactive sample-row alleles. */
+    public static boolean isRealtimeAlleleZoom(double pixelSize) {
+        return pixelSize > REALTIME_ALLELE_MIN_PIXEL_SIZE;
+    }
 
     /** Clickable region for a drawn sample allele (canvas-local coordinates). */
     public record VariantHit(
@@ -113,7 +125,7 @@ public class VariantDrawer {
         long screenStart = Math.max(0, (long) drawStack.getViewStart());
         long screenEnd = (long) drawStack.getViewEnd();
         double pixelSize = drawStack.getPixelSize();
-        boolean drawClickableRects = pixelSize > 1.0;
+        boolean drawClickableRects = isRealtimeAlleleZoom(pixelSize);
         paintByAltBase = VariantTypeVisuals.paintByAltBase(pixelSize);
 
         int[] visibleTrackIndices = visibleIndex.getSampleTrackIndices();
@@ -242,12 +254,20 @@ public class VariantDrawer {
             double sampleHeight,
             int[] lastDrawnPixelX) {
         int xPixel = (int) x;
+        // Zoomed-out point ticks: if every visible slot already has ink on this pixel,
+        // skip the per-node sample walk entirely (avoids huge alloc churn on dense VCFs).
+        if (!isSvSpan && !drawClickableRects && allSlotsHavePixel(lastDrawnPixelX, xPixel)) {
+            return;
+        }
         int chainGen = variantList.getVisibleChainGeneration();
         boolean useCache = node.hasDisplayCache(chainGen);
 
         if (useCache) {
             // Display map is keyed by track — walk visible slots.
             for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
+                if (!isSvSpan && !drawClickableRects && lastDrawnPixelX[slot] == xPixel) {
+                    continue;
+                }
                 int trackIndex = visibleTrackIndices[slot];
                 if (trackIndex < 0 || trackIndex >= allTracks.size()) {
                     continue;
@@ -281,6 +301,10 @@ public class VariantDrawer {
             if (slot < 0 || slotSolid[slot]) {
                 return;
             }
+            // Already painted a 1px tick for this sample at this screen column.
+            if (!isSvSpan && !drawClickableRects && lastDrawnPixelX[slot] == xPixel) {
+                return;
+            }
             if (!VariantList.isDisplayEligible(node, candidate, filter, failed)) {
                 return;
             }
@@ -296,6 +320,18 @@ public class VariantDrawer {
                 gc, node, slotCall[slot], isSvSpan, drawClickableRects, chromPosToScreenPos,
                 canvasWidth, x, xPixel, slot, yPositions, sampleHeight, lastDrawnPixelX);
         }
+    }
+
+    private static boolean allSlotsHavePixel(int[] lastDrawnPixelX, int xPixel) {
+        if (lastDrawnPixelX == null || lastDrawnPixelX.length == 0) {
+            return false;
+        }
+        for (int px : lastDrawnPixelX) {
+            if (px != xPixel) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void paintSampleSlot(

@@ -265,9 +265,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (isSampleBody()) {
       setupReadMouseHandlers(reactiveCanvas);
       sampleRegistry.hoverSampleProperty().addListener((obs, oldVal, newVal) -> {
-        if (isSampleBody()) {
-          Platform.runLater(this::drawReadHighlight);
+        // Sidebar chrome listens separately. Do not rebuild the reactive overlay
+        // when nothing is highlighted — especially costly at chromosome zoom.
+        if (!isSampleBody() || isBeyondCoverageZoom()) {
+          return;
         }
+        if (hoveredRead == null && selectedRead == null && hoveredVariant == null
+            && externalLinkedReadName == null && lastCoverageHoverKey == -1L) {
+          return;
+        }
+        Platform.runLater(this::drawReadHighlight);
       });
     } else {
       setupFeatureContextMenu();
@@ -379,6 +386,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (!isSampleBody()) {
       return;
     }
+    // Overview zoom: no read/allele/coverage hover overlays on sample rows.
+    if (isBeyondCoverageZoom()) {
+      hoveredRead = null;
+      hoveredVariant = null;
+      lastCoverageHoverKey = -1L;
+      if (!isReactiveOverlayReserved()) {
+        clearReactive();
+      }
+      return;
+    }
     if (lastMouseX >= 0) {
       if (isScrollbarOverrideActive()) {
         if (hoveredRead != null) {
@@ -432,6 +449,9 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private void drawSharedDataLayers() {
     if (canDrawVariantData()) {
       drawVariantData();
+    } else {
+      // Drop stale click targets from a closer zoom (overview skips allele paint).
+      variantDrawer.clearHits();
     }
     if (canDrawCoverageData()) {
       drawCoverageData();
@@ -596,6 +616,20 @@ public class TrackBodyCanvas extends GenomicCanvas {
       lastMouseX = event.getX();
       lastMouseY = event.getY();
 
+      // Chromosome / extreme overview: no reads, coverage hover, or allele hit-tests.
+      // Only keep sidebar row highlight in sync — skip reactive redraw churn.
+      if (isBeyondCoverageZoom()) {
+        if (hoveredRead != null || hoveredVariant != null || lastCoverageHoverKey != -1L) {
+          hoveredRead = null;
+          hoveredVariant = null;
+          lastCoverageHoverKey = -1L;
+          reactiveCanvas.setCursor(Cursor.DEFAULT);
+          drawReadHighlight();
+        }
+        updateHoverSampleFromY(lastMouseY);
+        return;
+      }
+
       boolean scrollbarHoverChanged = readScrollbarComponent.handleMove(lastMouseX, lastMouseY);
       if (readScrollbarComponent.isOver(lastMouseX, lastMouseY)) {
         reactiveCanvas.setCursor(readScrollbarComponent.cursorFor(lastMouseX, lastMouseY));
@@ -616,18 +650,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
         update.set(!update.get());
       }
 
-      // Update sidebar highlighting based on which sample track is under the cursor
-      double sampleH = sampleRegistry.getSampleHeight();
-      if (sampleH > 0 && lastMouseY >= 0) {
-        int slot = (int) ((lastMouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
-        List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
-        if (slot >= 0 && slot < displayed.size()) {
-          int trackIndex = displayed.get(slot);
-          if (sampleRegistry.hoverSampleProperty().get() != trackIndex) {
-            sampleRegistry.hoverSampleProperty().set(trackIndex);
-          }
-        }
-      }
+      updateHoverSampleFromY(lastMouseY);
 
       BAMRecord hit = findReadAt(lastMouseX, lastMouseY);
       // Do not highlight / hand-cursor VCF alleles while the pointer is in the
@@ -742,13 +765,31 @@ public class TrackBodyCanvas extends GenomicCanvas {
     return true;
   }
 
+  /** Sidebar hover only — no canvas hit-testing. */
+  private void updateHoverSampleFromY(double mouseY) {
+    double sampleH = sampleRegistry.getSampleHeight();
+    if (sampleH <= 0 || mouseY < 0) {
+      return;
+    }
+    int slot = (int) ((mouseY + sampleRegistry.getScrollBarPosition()) / sampleH);
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    if (slot >= 0 && slot < displayed.size()) {
+      int trackIndex = displayed.get(slot);
+      if (sampleRegistry.hoverSampleProperty().get() != trackIndex) {
+        sampleRegistry.hoverSampleProperty().set(trackIndex);
+      }
+    }
+  }
+
   private void drawVariantData() {
     VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
     variantDrawer.draw(gc, variantList, drawStack, chromPosToScreenPos, getWidth(), activeFilter);
   }
 
   private VariantDrawer.VariantHit findVariantHit(double x, double y) {
-    if (drawStack == null || drawStack.getPixelSize() <= 1.0) {
+    // Hover/click only at realtime allele zoom (filled rects + hit targets).
+    // Mid-zoom still paints 1px ticks on load/zoom/pan, but skips hit-testing.
+    if (drawStack == null || !VariantDrawer.isRealtimeAlleleZoom(drawStack.getPixelSize())) {
       return null;
     }
     if (!canDrawVariantData()) {
