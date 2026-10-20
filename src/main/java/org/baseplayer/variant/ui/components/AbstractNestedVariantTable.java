@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -64,6 +67,19 @@ public abstract class AbstractNestedVariantTable {
     private static final String COLOR_TRUNCATING = org.baseplayer.ui.theme.AppTheme.CHROME_DARK.dangerHex();
     private static final String COLOR_NONCODING = "#8a8886";
 
+    /** Minimum trimmed query length before table search filters rows. */
+    public static final int MIN_SEARCH_CHARS = 2;
+
+    /**
+     * Shared background executor for live table search (filter + gene-group rebuild).
+     * Single-threaded so successive keystrokes naturally queue; stale work is skipped
+     * via per-table epoch counters.
+     */
+    protected static final ExecutorService SEARCH_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "variant-table-search");
+        t.setDaemon(true);
+        return t;
+    });
 
     /** Variant-row column set for nested detail lines. */
     public enum VariantDetailLayout {
@@ -86,17 +102,33 @@ public abstract class AbstractNestedVariantTable {
     private ObservableList<TableRow> allIntronicItems = FXCollections.observableArrayList();
     private ObservableList<TableRow> allIntergenicItems = FXCollections.observableArrayList();
     private String tableSearchQuery = "";
+    private final AtomicInteger searchEpoch = new AtomicInteger();
+    /** Last search-filtered coding rows (avoids re-scanning on export / feature tabs). */
+    private List<TableRow> displayedCodingCache = List.of();
+    private List<TableRow> displayedIntronicCache = List.of();
+    private List<TableRow> displayedIntergenicCache = List.of();
 
-    public static record TableRow(String chromosome, VariantNode node, List<String> displayGenes) {
+    public static record TableRow(
+            String chromosome,
+            VariantNode node,
+            List<String> displayGenes,
+            String searchHaystack) {
         public TableRow {
             if (chromosome == null) {
                 chromosome = "";
             }
             displayGenes = displayGenes == null ? null : List.copyOf(displayGenes);
+            if (searchHaystack == null || searchHaystack.isEmpty()) {
+                searchHaystack = buildSearchHaystack(chromosome, node, displayGenes);
+            }
         }
 
         public TableRow(String chromosome, VariantNode node) {
-            this(chromosome, node, null);
+            this(chromosome, node, null, null);
+        }
+
+        public TableRow(String chromosome, VariantNode node, List<String> displayGenes) {
+            this(chromosome, node, displayGenes, null);
         }
     }
 
@@ -333,7 +365,7 @@ public abstract class AbstractNestedVariantTable {
         allCodingItems = codingItems != null ? codingItems : FXCollections.observableArrayList();
         allIntronicItems = intronicItems != null ? intronicItems : FXCollections.observableArrayList();
         allIntergenicItems = intergenicItems != null ? intergenicItems : FXCollections.observableArrayList();
-        applyTableSearch();
+        applyTableSearchAsync(null);
     }
 
     /**
@@ -347,9 +379,15 @@ public abstract class AbstractNestedVariantTable {
             List<GeneGroup> codingGroups,
             List<GeneGroup> intronicGroups,
             List<GeneGroup> intergenicGroups) {
+        // Invalidate any in-flight live search so it cannot overwrite prebuilt groups.
+        searchEpoch.incrementAndGet();
         allCodingItems = codingItems != null ? codingItems : FXCollections.observableArrayList();
         allIntronicItems = intronicItems != null ? intronicItems : FXCollections.observableArrayList();
         allIntergenicItems = intergenicItems != null ? intergenicItems : FXCollections.observableArrayList();
+        String q = normalizeSearchQuery(tableSearchQuery);
+        displayedCodingCache = rowsMatchingSearch(allCodingItems, q, displayFilter);
+        displayedIntronicCache = rowsMatchingSearch(allIntronicItems, q, displayFilter);
+        displayedIntergenicCache = rowsMatchingSearch(allIntergenicItems, q, displayFilter);
         if (backend != null) {
             backend.setPrebuiltGroups(codingGroups, intronicGroups, intergenicGroups);
         }
@@ -374,18 +412,45 @@ public abstract class AbstractNestedVariantTable {
     }
 
     /**
+     * True when {@code query} is long enough to filter the table
+     * ({@link #MIN_SEARCH_CHARS}+ non-blank characters).
+     */
+    public static boolean isActiveSearchQuery(String query) {
+        if (query == null) {
+            return false;
+        }
+        return query.trim().length() >= MIN_SEARCH_CHARS;
+    }
+
+    /**
+     * Trim + lower-case query for matching, or {@code ""} when shorter than
+     * {@link #MIN_SEARCH_CHARS} (treated as no filter).
+     */
+    public static String normalizeSearchQuery(String query) {
+        if (query == null) {
+            return "";
+        }
+        String trimmed = query.trim();
+        if (trimmed.length() < MIN_SEARCH_CHARS) {
+            return "";
+        }
+        return trimmed.toLowerCase(Locale.ROOT);
+    }
+
+    /**
      * Filter rows by table search query (safe off the FX thread).
-     * Returns {@code source} unchanged when the query is blank.
+     * Returns {@code source} unchanged when the query is blank or shorter than
+     * {@link #MIN_SEARCH_CHARS}.
      */
     public static List<TableRow> rowsMatchingSearch(
             List<TableRow> source, String query, VariantFilter filter) {
         if (source == null || source.isEmpty()) {
             return List.of();
         }
-        if (query == null || query.isBlank()) {
+        String q = normalizeSearchQuery(query);
+        if (q.isEmpty()) {
             return source;
         }
-        String q = query.trim().toLowerCase(Locale.ROOT);
         List<TableRow> matched = new ArrayList<>(Math.min(256, source.size()));
         for (TableRow row : source) {
             if (matchesSearch(row, q, filter)) {
@@ -395,9 +460,27 @@ public abstract class AbstractNestedVariantTable {
         return matched;
     }
 
-    public void setTableSearchQuery(String query) {
+    /**
+     * Update the stored search text without rebuilding (e.g. while debouncing keystrokes
+     * so a concurrent table rebuild sees the latest query).
+     */
+    public void rememberSearchQuery(String query) {
         tableSearchQuery = query != null ? query.trim() : "";
-        applyTableSearch();
+    }
+
+    /**
+     * Store the search box text and rebuild gene groups on a background thread.
+     * Queries shorter than {@link #MIN_SEARCH_CHARS} show the unfiltered list.
+     *
+     * @param onApplied optional FX-thread callback after groups are bound
+     */
+    public void setTableSearchQuery(String query, Runnable onApplied) {
+        rememberSearchQuery(query);
+        applyTableSearchAsync(onApplied);
+    }
+
+    public void setTableSearchQuery(String query) {
+        setTableSearchQuery(query, null);
     }
 
     public String getTableSearchQuery() {
@@ -406,99 +489,175 @@ public abstract class AbstractNestedVariantTable {
 
     /** Post-search coding rows currently shown in the Gene tab. */
     public ObservableList<TableRow> getDisplayedCodingRows() {
-        return filterRows(allCodingItems);
+        return FXCollections.observableArrayList(displayedCodingCache);
     }
 
     /** Post-search rows currently shown in the Intronic tab. */
     public ObservableList<TableRow> getDisplayedIntronicRows() {
-        return filterRows(allIntronicItems);
+        return FXCollections.observableArrayList(displayedIntronicCache);
     }
 
     /** Post-search rows currently shown in the Intergenic tab. */
     public ObservableList<TableRow> getDisplayedIntergenicRows() {
-        return filterRows(allIntergenicItems);
+        return FXCollections.observableArrayList(displayedIntergenicCache);
     }
 
     public VariantFilter getDisplayFilter() {
         return displayFilter;
     }
 
-    private void applyTableSearch() {
-        ObservableList<TableRow> coding = filterRows(allCodingItems);
-        ObservableList<TableRow> intronic = filterRows(allIntronicItems);
-        ObservableList<TableRow> intergenic = filterRows(allIntergenicItems);
-        boolean expand = !tableSearchQuery.isEmpty();
-        if (backend != null) {
-            backend.setItems(coding, intronic, intergenic, expand);
-        }
-        setTabCounts(coding.size(), intronic.size(), intergenic.size());
-    }
+    private void applyTableSearchAsync(Runnable onApplied) {
+        final int epoch = searchEpoch.incrementAndGet();
+        final String query = tableSearchQuery;
+        final VariantFilter filter = displayFilter != null ? displayFilter.copy() : new VariantFilter();
+        final List<TableRow> codingSnap = List.copyOf(allCodingItems);
+        final List<TableRow> intronicSnap = List.copyOf(allIntronicItems);
+        final List<TableRow> intergenicSnap = List.copyOf(allIntergenicItems);
 
-    private ObservableList<TableRow> filterRows(ObservableList<TableRow> source) {
-        if (source == null || source.isEmpty()) {
-            return FXCollections.observableArrayList();
-        }
-        if (tableSearchQuery.isEmpty()) {
-            return source;
-        }
-        String q = tableSearchQuery.toLowerCase(Locale.ROOT);
-        List<TableRow> matched = new ArrayList<>(source.size());
-        for (TableRow row : source) {
-            if (matchesSearch(row, q, displayFilter)) {
-                matched.add(row);
+        SEARCH_EXECUTOR.execute(() -> {
+            if (epoch != searchEpoch.get()) {
+                return;
             }
-        }
-        return FXCollections.observableArrayList(matched);
+            String q = normalizeSearchQuery(query);
+            // Live search keeps groups collapsed — expanding every match is too costly.
+            List<TableRow> codingMatched = rowsMatchingSearch(codingSnap, q, filter);
+            List<TableRow> intronicMatched = rowsMatchingSearch(intronicSnap, q, filter);
+            List<TableRow> intergenicMatched = rowsMatchingSearch(intergenicSnap, q, filter);
+            if (epoch != searchEpoch.get()) {
+                return;
+            }
+            List<GeneGroup> codingGroups = buildGeneGroups(codingMatched, false, filter, false);
+            List<GeneGroup> intronicGroups = buildGeneGroups(intronicMatched, false, filter, false);
+            List<GeneGroup> intergenicGroups = buildGeneGroups(intergenicMatched, true, filter, false);
+            if (epoch != searchEpoch.get()) {
+                return;
+            }
+            Platform.runLater(() -> {
+                if (epoch != searchEpoch.get()) {
+                    return;
+                }
+                displayedCodingCache = codingMatched;
+                displayedIntronicCache = intronicMatched;
+                displayedIntergenicCache = intergenicMatched;
+                if (backend != null) {
+                    backend.setPrebuiltGroups(codingGroups, intronicGroups, intergenicGroups);
+                }
+                setTabCounts(
+                    codingMatched.size(),
+                    intronicMatched.size(),
+                    intergenicMatched.size());
+                if (onApplied != null) {
+                    onApplied.run();
+                }
+            });
+        });
     }
 
+    /**
+     * Substring match against the row's precomputed lowercase {@link TableRow#searchHaystack()}.
+     * {@code queryLower} must already be normalized ({@link #normalizeSearchQuery}).
+     * {@code filter} is unused (kept for call-site compatibility).
+     */
     public static boolean matchesSearch(TableRow row, String queryLower, VariantFilter filter) {
+        if (queryLower == null || queryLower.isEmpty() || queryLower.length() < MIN_SEARCH_CHARS) {
+            return true;
+        }
         if (row == null || row.node() == null) {
             return false;
         }
-        if (queryLower == null || queryLower.isEmpty()) {
-            return true;
+        String hay = row.searchHaystack();
+        if (hay == null || hay.isEmpty()) {
+            hay = buildSearchHaystack(row.chromosome(), row.node(), row.displayGenes());
+        }
+        return hay.contains(queryLower);
+    }
+
+    /**
+     * Lowercase searchable blob for one table row (gene, effect, alleles, samples, SV fields).
+     * Built once when the row is created so live search is a cheap {@code contains}.
+     */
+    public static String buildSearchHaystack(
+            String chromosome, VariantNode node, List<String> displayGenes) {
+        if (node == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(160);
+        appendToken(sb, chromosome);
+        sb.append(' ').append(node.position);
+        if (node.svEnd > node.position) {
+            sb.append(' ').append(node.svEnd);
+            sb.append(' ').append(chromosome).append(':').append(node.position)
+                .append('–').append(node.svEnd);
+        } else if (chromosome != null && !chromosome.isBlank()) {
+            sb.append(' ').append(chromosome).append(':').append(node.position);
+        }
+        appendToken(sb, node.ref);
+        appendToken(sb, node.alt);
+        appendToken(sb, formatRefAltDisplay(node));
+        if (node.type != null) {
+            appendToken(sb, node.type.name());
+            appendToken(sb, VariantTypeVisuals.shortLabel(node.type));
+        }
+        appendToken(sb, node.vcfId);
+        appendToken(sb, node.vcfFilter);
+
+        if (displayGenes != null) {
+            for (String gene : displayGenes) {
+                appendToken(sb, gene);
+            }
+        }
+        VariantAnnotation ann = node.annotation;
+        if (ann != null) {
+            appendToken(sb, ann.geneName());
+            appendToken(sb, ann.aaChange());
+            appendToken(sb, ann.codonChange());
+            VariantEffect effect = ann.effect();
+            if (effect != null) {
+                appendToken(sb, effect.displayName());
+                appendToken(sb, effect.name());
+            }
         }
 
-        String gene = rowGeneName(row);
-        if (gene != null && gene.toLowerCase(Locale.ROOT).contains(queryLower)) {
-            return true;
-        }
-
-        VariantEffect effect = rowEffect(row);
-        if (effect != null) {
-            if (effect.displayName().toLowerCase(Locale.ROOT).contains(queryLower)) {
-                return true;
-            }
-            if (effect.name().toLowerCase(Locale.ROOT).contains(queryLower)) {
-                return true;
+        String mateChrom = node.mateChromosome();
+        if (mateChrom != null && !mateChrom.isBlank()) {
+            appendToken(sb, mateChrom);
+            long matePos = node.matePosition();
+            if (matePos >= 0) {
+                sb.append(' ').append(mateChrom).append(':').append(matePos);
             }
         }
-
-        List<VariantNode.SampleCall> searchCalls = filter != null
-            ? filter.listDisplayCalls(row.node())
-            : row.node().getSamples();
-        for (VariantNode.SampleCall call : searchCalls) {
-            if (call == null) {
-                continue;
+        long svLen = VariantTypeVisuals.svSpanLengthBp(node);
+        if (svLen >= 0) {
+            sb.append(' ').append(svLen).append(" bp");
+            if (svLen >= 1_000) {
+                sb.append(' ').append(String.format(Locale.ROOT, "%.1f kb", svLen / 1_000.0));
             }
-            String sampleName = sampleDisplayName(call);
-            if (sampleName != null && sampleName.toLowerCase(Locale.ROOT).contains(queryLower)) {
-                return true;
-            }
-            if (call.gt != null && call.gt.toLowerCase(Locale.ROOT).contains(queryLower)) {
-                return true;
+            if (svLen >= 1_000_000) {
+                sb.append(' ').append(String.format(Locale.ROOT, "%.1f mb", svLen / 1_000_000.0));
             }
         }
 
-        for (String property : List.of(
-            "position", "refAlt", "variantType", "effectDisplay", "aaChange", "codonChange",
-            "alleleFraction")) {
-            String value = resolveTableColumnValue(row, property, filter);
-            if (value != null && value.toLowerCase(Locale.ROOT).contains(queryLower)) {
-                return true;
+        List<VariantNode.SampleCall> samples = node.getSamples();
+        if (samples != null) {
+            for (VariantNode.SampleCall call : samples) {
+                if (call == null) {
+                    continue;
+                }
+                appendToken(sb, sampleDisplayName(call));
+                appendToken(sb, call.gt);
+                if (call.alleleFraction >= 0) {
+                    sb.append(' ').append(String.format(Locale.ROOT, "%.2f", call.alleleFraction));
+                }
             }
         }
-        return false;
+        return sb.toString().toLowerCase(Locale.ROOT);
+    }
+
+    private static void appendToken(StringBuilder sb, String token) {
+        if (token == null || token.isBlank()) {
+            return;
+        }
+        sb.append(' ').append(token);
     }
 
     public void setPlaceholders(Node codingPlaceholder, Node intronicPlaceholder, Node intergenicPlaceholder) {

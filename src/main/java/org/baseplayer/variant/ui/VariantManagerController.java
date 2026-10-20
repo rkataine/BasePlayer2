@@ -210,6 +210,10 @@ public class VariantManagerController implements Initializable {
     private Timeline filterDebounceTimer;
     // Short-delay timer for checkbox/filter actions so UI paints first
     private Timeline immediateFilterApplyTimer;
+    /** Debounce live point/LOH table search (filter + gene-group rebuild). */
+    private Timeline tableSearchDebounceTimer;
+    /** Debounce live SV table search. */
+    private Timeline svTableSearchDebounceTimer;
     private volatile boolean rebuildRunning = false;
     private volatile boolean rebuildNeeded = false;
     private volatile ThreadRunner.RunnerTask tableRebuildTask;
@@ -247,6 +251,12 @@ public class VariantManagerController implements Initializable {
         filterDebounceTimer.setCycleCount(1);
         immediateFilterApplyTimer = new Timeline(new KeyFrame(Duration.millis(40), e -> applyFiltersNow()));
         immediateFilterApplyTimer.setCycleCount(1);
+        tableSearchDebounceTimer = new Timeline(
+            new KeyFrame(Duration.millis(200), e -> applyPointTableSearchNow()));
+        tableSearchDebounceTimer.setCycleCount(1);
+        svTableSearchDebounceTimer = new Timeline(
+            new KeyFrame(Duration.millis(200), e -> applySvTableSearchNow()));
+        svTableSearchDebounceTimer.setCycleCount(1);
 
         pointWorkspace = new VariantClassWorkspace(
             VariantTypeVisuals.VariantClass.POINT, pointMutationsTab);
@@ -347,9 +357,12 @@ public class VariantManagerController implements Initializable {
         if (tableSearchField != null) {
             tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (variantTable != null) {
-                    variantTable.setTableSearchQuery(newVal);
+                    variantTable.rememberSearchQuery(newVal);
                 }
-                refreshAnnotationFeatureGroupsFromSearch();
+                if (lohVariantTable != null) {
+                    lohVariantTable.rememberSearchQuery(newVal);
+                }
+                schedulePointTableSearch();
             });
         }
         setupExcelExportButton(excelExportButton, false);
@@ -597,8 +610,9 @@ public class VariantManagerController implements Initializable {
         if (svTableSearchField != null) {
             svTableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
                 if (svVariantTable != null) {
-                    svVariantTable.setSearchQuery(newVal);
+                    svVariantTable.rememberSearchQuery(newVal);
                 }
+                scheduleSvTableSearch();
             });
         }
         setupExcelExportButton(svExcelExportButton, true);
@@ -675,14 +689,46 @@ public class VariantManagerController implements Initializable {
             this::handleLohRowDoubleClick);
         lohVariantTable.initializeColumns();
 
-        // Reuse the point-mutation search box for LOH nested tables when that tab is selected.
-        if (tableSearchField != null) {
-            tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
-                if (lohVariantTable != null) {
-                    lohVariantTable.setSearchQuery(newVal);
-                }
-            });
+        // LOH reuses the point-mutation search box (same listener in initialize).
+    }
+
+    private void schedulePointTableSearch() {
+        if (tableSearchDebounceTimer != null) {
+            tableSearchDebounceTimer.stop();
+            tableSearchDebounceTimer.playFromStart();
+        } else {
+            applyPointTableSearchNow();
         }
+    }
+
+    private void scheduleSvTableSearch() {
+        if (svTableSearchDebounceTimer != null) {
+            svTableSearchDebounceTimer.stop();
+            svTableSearchDebounceTimer.playFromStart();
+        } else {
+            applySvTableSearchNow();
+        }
+    }
+
+    /** Apply debounced point (+ LOH) table search; feature tabs refresh after groups bind. */
+    private void applyPointTableSearchNow() {
+        String q = tableSearchField != null ? tableSearchField.getText() : "";
+        if (variantTable != null) {
+            variantTable.setTableSearchQuery(q, this::refreshAnnotationFeatureGroupsFromSearch);
+        } else {
+            refreshAnnotationFeatureGroupsFromSearch();
+        }
+        if (lohVariantTable != null) {
+            lohVariantTable.setSearchQuery(q);
+        }
+    }
+
+    private void applySvTableSearchNow() {
+        if (svVariantTable == null) {
+            return;
+        }
+        String q = svTableSearchField != null ? svTableSearchField.getText() : "";
+        svVariantTable.setSearchQuery(q);
     }
 
     /**
@@ -841,6 +887,12 @@ public class VariantManagerController implements Initializable {
 
     public void cleanup() {
         disposed = true;
+        if (tableSearchDebounceTimer != null) {
+            tableSearchDebounceTimer.stop();
+        }
+        if (svTableSearchDebounceTimer != null) {
+            svTableSearchDebounceTimer.stop();
+        }
         ThreadRunner.RunnerTask task = busyOverlay != null
             ? busyOverlay.getAllChromosomeAnnotationTask()
             : null;
@@ -2907,9 +2959,16 @@ public class VariantManagerController implements Initializable {
         final String svSearch;
         final String lohSearch;
         try {
-            pointSearch = variantTable() != null ? variantTable().getTableSearchQuery() : "";
-            svSearch = svVariantTable != null ? svVariantTable.getSearchQuery() : "";
-            lohSearch = lohVariantTable != null ? lohVariantTable.getSearchQuery() : "";
+            // Prefer live text fields so in-flight debounce does not miss the latest query.
+            pointSearch = tableSearchField != null
+                ? tableSearchField.getText()
+                : (variantTable() != null ? variantTable().getTableSearchQuery() : "");
+            svSearch = svTableSearchField != null
+                ? svTableSearchField.getText()
+                : (svVariantTable != null ? svVariantTable.getSearchQuery() : "");
+            lohSearch = tableSearchField != null
+                ? tableSearchField.getText()
+                : (lohVariantTable != null ? lohVariantTable.getSearchQuery() : "");
         } catch (Throwable t) {
             System.err.println("Failed to read table search state: " + t.getMessage());
             tableRebuildTask = null;
@@ -2976,9 +3035,9 @@ public class VariantManagerController implements Initializable {
             String svSearch,
             String lohSearch) {
         VariantFilter filter = result.filter();
-        boolean pointExpand = pointSearch != null && !pointSearch.isBlank();
-        boolean svExpand = svSearch != null && !svSearch.isBlank();
-        boolean lohExpand = lohSearch != null && !lohSearch.isBlank();
+        boolean pointExpand = AbstractNestedVariantTable.isActiveSearchQuery(pointSearch);
+        boolean svExpand = AbstractNestedVariantTable.isActiveSearchQuery(svSearch);
+        boolean lohExpand = AbstractNestedVariantTable.isActiveSearchQuery(lohSearch);
 
         List<BedTrack> annotationTracks = BedVariantAnnotation.annotationTracks();
         // Point + feature tabs + SV All + SV types + LOH All + LOH types
@@ -3102,6 +3161,15 @@ public class VariantManagerController implements Initializable {
         VariantFilter filterSnapshot = result.filter();
 
         variantTable().setDisplayContext(filterSnapshot);
+        if (tableSearchField != null) {
+            variantTable().rememberSearchQuery(tableSearchField.getText());
+            if (lohVariantTable != null) {
+                lohVariantTable.rememberSearchQuery(tableSearchField.getText());
+            }
+        }
+        if (svVariantTable != null && svTableSearchField != null) {
+            svVariantTable.rememberSearchQuery(svTableSearchField.getText());
+        }
         ObservableList<VariantTable.TableRow> codingObs =
             FXCollections.observableArrayList(result.coding());
         ObservableList<VariantTable.TableRow> intronicObs =
@@ -3224,7 +3292,7 @@ public class VariantManagerController implements Initializable {
             return List.of();
         }
         String pointSearch = tableSearchField != null ? tableSearchField.getText() : null;
-        boolean expand = pointSearch != null && !pointSearch.isBlank();
+        boolean expand = AbstractNestedVariantTable.isActiveSearchQuery(pointSearch);
         List<TableRow> codingRows = AbstractNestedVariantTable.rowsMatchingSearch(
             coding, pointSearch, filter);
         List<TableRow> intronicRows = AbstractNestedVariantTable.rowsMatchingSearch(
@@ -3646,8 +3714,7 @@ public class VariantManagerController implements Initializable {
         VariantFilter filter = vcfManager != null
             ? vcfManager.getCurrentFilter()
             : buildFilterFromUI();
-        String pointSearch = tableSearchField != null ? tableSearchField.getText() : null;
-        boolean expand = pointSearch != null && !pointSearch.isBlank();
+        // Feature tabs: keep collapsed during live search (same as gene tabs).
         List<TableRow> pointUnion = new ArrayList<>();
         pointUnion.addAll(variantTable.getDisplayedCodingRows());
         pointUnion.addAll(variantTable.getDisplayedIntronicRows());
@@ -3657,7 +3724,7 @@ public class VariantManagerController implements Initializable {
             List<TableRow> fanned = fanOutPointRowsByFeatureName(pointUnion, track);
             out.add(new AnnotationFeaturePrebuilt(
                 track,
-                AbstractNestedVariantTable.buildFeatureGroups(fanned, filter, expand)));
+                AbstractNestedVariantTable.buildFeatureGroups(fanned, filter, false)));
         }
         applyAnnotationFeatureGroups(out);
     }

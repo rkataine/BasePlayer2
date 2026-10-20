@@ -1,18 +1,20 @@
 package org.baseplayer.variant.ui.components;
 
-import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
 
+import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.scene.control.Label;
@@ -39,6 +41,8 @@ public class LohVariantTable extends AbstractNestedVariantTable {
     private ObservableList<TableRow> allItems = FXCollections.observableArrayList();
     private final Map<VcfVariantType, ObservableList<TableRow>> typeItems = new EnumMap<>(VcfVariantType.class);
     private String searchQuery = "";
+    private final AtomicInteger searchEpoch = new AtomicInteger();
+    private List<TableRow> displayedAllCache = List.of();
 
     private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
     private final Consumer<TableRow> onVariantDoubleClick;
@@ -98,7 +102,7 @@ public class LohVariantTable extends AbstractNestedVariantTable {
             ObservableList<TableRow> items = byType != null ? byType.get(type) : null;
             typeItems.put(type, items != null ? items : FXCollections.observableArrayList());
         }
-        applySearch();
+        applySearchAsync(null);
     }
 
     /** Bind rows and prebuilt gene groups (built off the FX thread). */
@@ -107,11 +111,14 @@ public class LohVariantTable extends AbstractNestedVariantTable {
             Map<VcfVariantType, ObservableList<TableRow>> byType,
             List<GeneGroup> allGroups,
             Map<VcfVariantType, List<GeneGroup>> byTypeGroups) {
+        searchEpoch.incrementAndGet();
         allItems = all != null ? all : FXCollections.observableArrayList();
         for (VcfVariantType type : TYPE_ORDER) {
             ObservableList<TableRow> items = byType != null ? byType.get(type) : null;
             typeItems.put(type, items != null ? items : FXCollections.observableArrayList());
         }
+        displayedAllCache = rowsMatchingSearch(
+            allItems, normalizeSearchQuery(searchQuery), displayFilter);
         if (allPanel != null) {
             allPanel.setGroups(allGroups != null ? allGroups : List.of());
         }
@@ -131,9 +138,18 @@ public class LohVariantTable extends AbstractNestedVariantTable {
         }
     }
 
-    public void setSearchQuery(String query) {
+    /** Update stored search text without rebuilding (while debouncing). */
+    public void rememberSearchQuery(String query) {
         searchQuery = query != null ? query.trim() : "";
-        applySearch();
+    }
+
+    public void setSearchQuery(String query) {
+        setSearchQuery(query, null);
+    }
+
+    public void setSearchQuery(String query, Runnable onApplied) {
+        rememberSearchQuery(query);
+        applySearchAsync(onApplied);
     }
 
     public String getSearchQuery() {
@@ -141,7 +157,7 @@ public class LohVariantTable extends AbstractNestedVariantTable {
     }
 
     public ObservableList<TableRow> getDisplayedAllRows() {
-        return filter(allItems);
+        return FXCollections.observableArrayList(displayedAllCache);
     }
 
     public void setPlaceholders(String allText, String typeText) {
@@ -169,30 +185,65 @@ public class LohVariantTable extends AbstractNestedVariantTable {
         }
     }
 
-    private void applySearch() {
-        boolean expand = !searchQuery.isEmpty();
-        ObservableList<TableRow> all = filter(allItems);
-        if (allPanel != null) {
-            allPanel.setGroups(buildGeneGroups(all, false, displayFilter, expand));
-        }
-        setTitle(allTab, "All", countUniqueNodes(all), true);
-
-        TabPane pane = allTab != null ? allTab.getTabPane() : null;
+    private void applySearchAsync(Runnable onApplied) {
+        final int epoch = searchEpoch.incrementAndGet();
+        final String query = searchQuery;
+        final VariantFilter filter = displayFilter != null ? displayFilter.copy() : new VariantFilter();
+        final List<TableRow> allSnap = List.copyOf(allItems);
+        final Map<VcfVariantType, List<TableRow>> typeSnap = new EnumMap<>(VcfVariantType.class);
         for (VcfVariantType type : TYPE_ORDER) {
-            ObservableList<TableRow> filtered = filter(typeItems.get(type));
-            NestedPanel panel = typePanels.get(type);
-            if (panel != null) {
-                panel.setGroups(buildGeneGroups(filtered, false, displayFilter, expand));
-            }
-            Tab tab = typeTabs.get(type);
-            setTitle(tab, VariantTypeVisuals.shortLabel(type), countUniqueNodes(filtered), true);
-            if (tab != null && pane != null && !pane.getTabs().contains(tab)) {
-                pane.getTabs().add(insertIndexForType(pane, type), tab);
-            }
+            ObservableList<TableRow> items = typeItems.get(type);
+            typeSnap.put(type, items != null ? List.copyOf(items) : List.of());
         }
+
+        SEARCH_EXECUTOR.execute(() -> {
+            if (epoch != searchEpoch.get()) {
+                return;
+            }
+            String q = normalizeSearchQuery(query);
+            List<TableRow> allMatched = rowsMatchingSearch(allSnap, q, filter);
+            List<GeneGroup> allGroups = buildGeneGroups(allMatched, false, filter, false);
+            Map<VcfVariantType, List<GeneGroup>> byTypeGroups = new HashMap<>();
+            Map<VcfVariantType, Integer> typeCounts = new EnumMap<>(VcfVariantType.class);
+            for (VcfVariantType type : TYPE_ORDER) {
+                List<TableRow> filtered = rowsMatchingSearch(typeSnap.get(type), q, filter);
+                byTypeGroups.put(type, buildGeneGroups(filtered, false, filter, false));
+                typeCounts.put(type, countUniqueNodes(filtered));
+            }
+            if (epoch != searchEpoch.get()) {
+                return;
+            }
+            Platform.runLater(() -> {
+                if (epoch != searchEpoch.get()) {
+                    return;
+                }
+                displayedAllCache = allMatched;
+                if (allPanel != null) {
+                    allPanel.setGroups(allGroups);
+                }
+                setTitle(allTab, "All", countUniqueNodes(allMatched), true);
+                TabPane pane = allTab != null ? allTab.getTabPane() : null;
+                for (VcfVariantType type : TYPE_ORDER) {
+                    NestedPanel panel = typePanels.get(type);
+                    List<GeneGroup> groups = byTypeGroups.get(type);
+                    if (panel != null) {
+                        panel.setGroups(groups != null ? groups : List.of());
+                    }
+                    Tab tab = typeTabs.get(type);
+                    setTitle(tab, VariantTypeVisuals.shortLabel(type),
+                        typeCounts.getOrDefault(type, 0), true);
+                    if (tab != null && pane != null && !pane.getTabs().contains(tab)) {
+                        pane.getTabs().add(insertIndexForType(pane, type), tab);
+                    }
+                }
+                if (onApplied != null) {
+                    onApplied.run();
+                }
+            });
+        });
     }
 
-    private static int countUniqueNodes(ObservableList<TableRow> rows) {
+    private static int countUniqueNodes(List<TableRow> rows) {
         if (rows == null || rows.isEmpty()) {
             return 0;
         }
@@ -221,34 +272,6 @@ public class LohVariantTable extends AbstractNestedVariantTable {
             }
         }
         return Math.min(pos, pane.getTabs().size());
-    }
-
-    private ObservableList<TableRow> filter(ObservableList<TableRow> source) {
-        if (source == null || source.isEmpty()) {
-            return FXCollections.observableArrayList();
-        }
-        if (searchQuery.isEmpty()) {
-            return source;
-        }
-        String q = searchQuery.toLowerCase(Locale.ROOT);
-        List<TableRow> matched = new ArrayList<>();
-        for (TableRow row : source) {
-            if (rowMatches(row, q)) {
-                matched.add(row);
-            }
-        }
-        return FXCollections.observableArrayList(matched);
-    }
-
-    private boolean rowMatches(TableRow row, String q) {
-        if (matchesSearch(row, q, displayFilter)) {
-            return true;
-        }
-        if (row == null || row.node() == null) {
-            return false;
-        }
-        String label = VariantTypeVisuals.shortLabel(row.node().type);
-        return label != null && label.toLowerCase(Locale.ROOT).contains(q);
     }
 
     private static void setTitle(Tab tab, String base, int count, boolean withCount) {
