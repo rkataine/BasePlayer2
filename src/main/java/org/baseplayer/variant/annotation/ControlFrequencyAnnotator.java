@@ -206,13 +206,18 @@ public final class ControlFrequencyAnnotator implements AutoCloseable {
         headerPopulationSuffixes = List.of();
     }
 
-    /** Clear {@link VariantNode#controlAf} on every node in the list. */
+    /**
+     * Clear {@link VariantNode#controlAf} on non-structural (point) nodes only.
+     * Structural AF is owned by {@link SvControlAnnotator}.
+     */
     public static void clear(VariantList list) {
         if (list == null) {
             return;
         }
         for (VariantNode node = list.getFirst(); node != null; node = node.next) {
-            node.controlAf = null;
+            if (!org.baseplayer.variant.VariantTypeVisuals.isStructural(node.type)) {
+                node.controlAf = null;
+            }
         }
         list.setControlAfSourcePath(null);
     }
@@ -344,9 +349,11 @@ public final class ControlFrequencyAnnotator implements AutoCloseable {
             return;
         }
 
-        // Clear every node; only the annotate set below gets new AFs.
+        // Clear point nodes only; SV AF is owned by SvControlAnnotator.
         for (VariantNode node = list.getFirst(); node != null; node = node.next) {
-            node.controlAf = null;
+            if (!org.baseplayer.variant.VariantTypeVisuals.isStructural(node.type)) {
+                node.controlAf = null;
+            }
         }
 
         List<VariantNode> nodes = collectAnnotateNodes(list);
@@ -371,19 +378,24 @@ public final class ControlFrequencyAnnotator implements AutoCloseable {
 
     /**
      * Visible-chain snapshot when the list is filtered; otherwise every node (sweep path).
+     * Structural nodes are skipped — they are annotated by {@link SvControlAnnotator}.
      */
     private static List<VariantNode> collectAnnotateNodes(VariantList list) {
         List<VariantNode> nodes = new ArrayList<>();
         synchronized (list) {
             if (list.getVisibleNodeCount() > 0) {
                 for (VariantNode node = list.getVisibleHead(); node != null; node = node.nextVisible) {
-                    nodes.add(node);
+                    if (!org.baseplayer.variant.VariantTypeVisuals.isStructural(node.type)) {
+                        nodes.add(node);
+                    }
                 }
                 return nodes;
             }
         }
         for (VariantNode node = list.getFirst(); node != null; node = node.next) {
-            nodes.add(node);
+            if (!org.baseplayer.variant.VariantTypeVisuals.isStructural(node.type)) {
+                nodes.add(node);
+            }
         }
         return nodes;
     }

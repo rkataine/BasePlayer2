@@ -3,7 +3,6 @@ package org.baseplayer.variant.ui.components;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -28,6 +27,7 @@ import org.baseplayer.variant.annotation.ControlFrequencyAnnotator;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.ControlFileStats;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationAnStats;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationOption;
+import org.baseplayer.variant.annotation.SvControlAnnotator;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -80,6 +80,8 @@ public class ControlFilesPanel {
     /**
      * @param controlOptionsSection AF filter + populations; shown only while a control VCF is open
      * @param clinVarOptionsSection significance filter; shown only while a ClinVar VCF is open
+     * @param svBreakpointWindowField SV-only breakpoint window (bp); null on Point panel
+     * @param svRequireSameTypeCheckBox SV-only same-type toggle; null on Point panel
      */
     public record Nodes(
         Label controlFilePathLabel,
@@ -99,14 +101,49 @@ public class ControlFilesPanel {
         ColoredToggle clinVarPathogenicCheckBox,
         ColoredToggle clinVarVusCheckBox,
         ColoredToggle clinVarBenignCheckBox,
-        ColoredToggle clinVarOtherCheckBox
-    ) {}
+        ColoredToggle clinVarOtherCheckBox,
+        TextField svBreakpointWindowField,
+        ColoredToggle svRequireSameTypeCheckBox
+    ) {
+        /** Point-panel convenience: SV-only nodes are null. */
+        public Nodes(
+            Label controlFilePathLabel,
+            Button addControlVcfButton,
+            Button removeControlFileButton,
+            Node controlOptionsSection,
+            ColoredToggle filterByPopFreqCheckBox,
+            TextField maxPopFreqField,
+            ColoredToggle selectAllPopulationsCheckBox,
+            VBox populationCheckBoxContainer,
+            Label clinVarPathLabel,
+            Button addClinVarButton,
+            Button removeClinVarButton,
+            Hyperlink clinVarDownloadLink,
+            Node clinVarOptionsSection,
+            ColoredToggle filterByClinVarSigCheckBox,
+            ColoredToggle clinVarPathogenicCheckBox,
+            ColoredToggle clinVarVusCheckBox,
+            ColoredToggle clinVarBenignCheckBox,
+            ColoredToggle clinVarOtherCheckBox) {
+            this(
+                controlFilePathLabel, addControlVcfButton, removeControlFileButton,
+                controlOptionsSection, filterByPopFreqCheckBox, maxPopFreqField,
+                selectAllPopulationsCheckBox, populationCheckBoxContainer,
+                clinVarPathLabel, addClinVarButton, removeClinVarButton, clinVarDownloadLink,
+                clinVarOptionsSection, filterByClinVarSigCheckBox, clinVarPathogenicCheckBox,
+                clinVarVusCheckBox, clinVarBenignCheckBox, clinVarOtherCheckBox,
+                null, null);
+        }
+    }
 
     private Nodes nodes;
     private final ControlFrequencyAnnotator annotator = new ControlFrequencyAnnotator();
+    private final SvControlAnnotator svAnnotator = new SvControlAnnotator();
     private final ClinVarAnnotator clinVarAnnotator = new ClinVarAnnotator();
     private final Map<String, ColoredToggle> populationCheckBoxes = new LinkedHashMap<>();
     private final Map<String, Label> populationStatsLabels = new LinkedHashMap<>();
+    /** When true, this panel owns an SV control VCF via {@link #svAnnotator}. */
+    private boolean svMode;
 
     private Supplier<Window> windowSupplier = () -> null;
     private Supplier<List<VcfManager.CachedChromosomeVariants>> sourcesSupplier = List::of;
@@ -115,8 +152,8 @@ public class ControlFilesPanel {
     /** Pop-freq checkbox / max-freq field changed — apply filter without re-annotating. */
     private Runnable onFilterSettingsChanged = () -> {};
     /**
-     * Optional: keep a sibling Control Files panel (Point ↔ SV) in sync so both
-     * modes share the same durable settings.
+     * Optional: keep ClinVar settings on a sibling Control Files panel in sync
+     * (Point ↔ SV). Control VCF path and AF settings are not mirrored.
      */
     private Consumer<ControlFilesPanel> onSettingsMirrored = ignored -> {};
     /** Suppress mirror/listener side-effects while applying programmatic UI updates. */
@@ -130,10 +167,19 @@ public class ControlFilesPanel {
     private Consumer<Consumer<Consumer<String>>> annotateExecutor;
 
     public void install(Nodes nodes) {
+        install(nodes, false);
+    }
+
+    public void install(Nodes nodes, boolean svMode) {
         this.nodes = nodes;
+        this.svMode = svMode;
         wireButtons();
         bindImmediateFilterApply();
         refreshFileUi();
+    }
+
+    public boolean isSvMode() {
+        return svMode;
     }
 
     public void setWindowSupplier(Supplier<Window> windowSupplier) {
@@ -174,8 +220,24 @@ public class ControlFilesPanel {
         return annotator;
     }
 
+    public SvControlAnnotator svAnnotator() {
+        return svAnnotator;
+    }
+
     public ClinVarAnnotator clinVarAnnotator() {
         return clinVarAnnotator;
+    }
+
+    public boolean isControlOpen() {
+        return svMode ? svAnnotator.isOpen() : annotator.isOpen();
+    }
+
+    public Path controlPath() {
+        return svMode ? svAnnotator.path() : annotator.path();
+    }
+
+    public boolean needsControlAnnotation(VariantList list) {
+        return svMode ? svAnnotator.needsAnnotation(list) : annotator.needsAnnotation(list);
     }
 
     public Nodes getNodes() {
@@ -219,12 +281,25 @@ public class ControlFilesPanel {
         if (spec == null) {
             return;
         }
-        Path open = annotator.path();
-        spec.controlVcfPath = open != null ? open.toAbsolutePath().normalize().toString() : null;
-        spec.filterByControlAf = isFilterByPopFreqSelected();
-        spec.maxControlAf = readMaxPopFreq();
-        String pops = annotator.selectedPopulationsPersistString();
-        spec.controlPopulation = pops == null || pops.isBlank() ? null : pops;
+        if (svMode) {
+            Path open = svAnnotator.path();
+            spec.svControlVcfPath =
+                open != null ? open.toAbsolutePath().normalize().toString() : null;
+            spec.svFilterByControlAf = isFilterByPopFreqSelected();
+            spec.svMaxControlAf = readMaxPopFreq();
+            String pops = svAnnotator.selectedPopulationsPersistString();
+            spec.svControlPopulation = pops == null || pops.isBlank() ? null : pops;
+            spec.svBreakpointWindowBp = readBreakpointWindowBp();
+            spec.svRequireSameType = isRequireSameTypeSelected();
+        } else {
+            Path open = annotator.path();
+            spec.controlVcfPath =
+                open != null ? open.toAbsolutePath().normalize().toString() : null;
+            spec.filterByControlAf = isFilterByPopFreqSelected();
+            spec.maxControlAf = readMaxPopFreq();
+            String pops = annotator.selectedPopulationsPersistString();
+            spec.controlPopulation = pops == null || pops.isBlank() ? null : pops;
+        }
         Path clinVar = clinVarAnnotator.path();
         spec.clinVarVcfPath = clinVar != null ? clinVar.toAbsolutePath().normalize().toString() : null;
         spec.filterByClinVarSignificance = isFilterByClinVarSigSelected();
@@ -252,18 +327,26 @@ public class ControlFilesPanel {
         boolean previous = suppressSettingsPersist;
         suppressSettingsPersist = true;
         try {
+            boolean filterBy = svMode ? spec.svFilterByControlAf : spec.filterByControlAf;
+            double maxAf = svMode ? spec.svMaxControlAf : spec.maxControlAf;
             if (nodes.filterByPopFreqCheckBox() != null) {
-                nodes.filterByPopFreqCheckBox().setSelected(spec.filterByControlAf);
+                nodes.filterByPopFreqCheckBox().setSelected(filterBy);
             }
             if (nodes.maxPopFreqField() != null) {
-                nodes.maxPopFreqField().setText(String.valueOf(
-                    spec.maxControlAf > 0 ? spec.maxControlAf : 0.01));
+                nodes.maxPopFreqField().setText(String.valueOf(maxAf > 0 ? maxAf : 0.01));
+            }
+            if (svMode) {
+                applySvMatchSettingsUi(
+                    spec.svBreakpointWindowBp > 0
+                        ? spec.svBreakpointWindowBp
+                        : SvControlAnnotator.DEFAULT_BREAKPOINT_WINDOW_BP,
+                    spec.svRequireSameType);
             }
             applyClinVarFilterUi(
                 resolveFilterByClinVar(spec),
                 resolveClinVarClasses(spec));
             restoreClinVarPath(spec.clinVarVcfPath);
-            String pathText = spec.controlVcfPath;
+            String pathText = svMode ? spec.svControlVcfPath : spec.controlVcfPath;
             if (pathText == null || pathText.isBlank()) {
                 refreshPopulations(null, false);
                 refreshFileUi();
@@ -276,14 +359,20 @@ public class ControlFilesPanel {
                 return clinVarAnnotator.isOpen();
             }
             try {
-                annotator.open(path);
+                if (svMode) {
+                    svAnnotator.open(path);
+                    syncSvMatchSettingsToAnnotator();
+                } else {
+                    annotator.open(path);
+                }
             } catch (IOException e) {
                 System.err.println("Could not restore control VCF: " + e.getMessage());
                 refreshFileUi();
                 return clinVarAnnotator.isOpen();
             }
+            String popPersist = svMode ? spec.svControlPopulation : spec.controlPopulation;
             List<String> preferred =
-                ControlFrequencyAnnotator.parsePopulationsPersistString(spec.controlPopulation);
+                ControlFrequencyAnnotator.parsePopulationsPersistString(popPersist);
             refreshPopulations(preferred, false);
             refreshFileUi();
             refreshStatsAsync();
@@ -311,37 +400,20 @@ public class ControlFilesPanel {
         }
     }
 
-    /** Copy pop-freq toggles and populations from another panel without persisting. */
-    public void mirrorFilterSettingsFrom(ControlFilesPanel other) {
+    /**
+     * Copy ClinVar path + significance filter from another panel without persisting.
+     * Control VCF / AF / SV window settings stay independent per mode.
+     */
+    public void mirrorClinVarSettingsFrom(ControlFilesPanel other) {
         if (other == null || other == this || nodes == null) {
             return;
         }
         boolean previous = suppressSettingsPersist;
         suppressSettingsPersist = true;
         try {
-            if (nodes.filterByPopFreqCheckBox() != null) {
-                nodes.filterByPopFreqCheckBox().setSelected(other.isFilterByPopFreqSelected());
-            }
-            if (nodes.maxPopFreqField() != null) {
-                nodes.maxPopFreqField().setText(String.valueOf(other.readMaxPopFreq()));
-            }
             applyClinVarFilterUi(
                 other.isFilterByClinVarSigSelected(),
                 other.selectedClinVarClasses());
-            Set<String> pops = other.annotator.selectedPopulations();
-            annotator.setSelectedPopulations(pops);
-            if (other.annotator.isOpen() && other.annotator.path() != null) {
-                Path path = other.annotator.path();
-                if (!annotator.isOpen() || !path.equals(annotator.path())) {
-                    try {
-                        annotator.open(path);
-                    } catch (IOException e) {
-                        System.err.println("Could not mirror control VCF: " + e.getMessage());
-                    }
-                }
-            } else if (!other.annotator.isOpen() && annotator.isOpen()) {
-                annotator.close();
-            }
             if (other.clinVarAnnotator.isOpen() && other.clinVarAnnotator.path() != null) {
                 Path path = other.clinVarAnnotator.path();
                 if (!clinVarAnnotator.isOpen() || !path.equals(clinVarAnnotator.path())) {
@@ -354,27 +426,16 @@ public class ControlFilesPanel {
             } else if (!other.clinVarAnnotator.isOpen() && clinVarAnnotator.isOpen()) {
                 clinVarAnnotator.close();
             }
-            refreshPopulations(new ArrayList<>(pops), false);
             refreshFileUi();
-            if (annotator.isOpen()) {
-                // Copy already-sampled counts from the sibling when available.
-                copyPopulationStatsFrom(other);
-            }
         } finally {
             suppressSettingsPersist = previous;
         }
     }
 
-    private void copyPopulationStatsFrom(ControlFilesPanel other) {
-        if (other == null) {
-            return;
-        }
-        for (Map.Entry<String, Label> e : populationStatsLabels.entrySet()) {
-            Label src = other.populationStatsLabels.get(e.getKey());
-            if (src != null && e.getValue() != null) {
-                e.getValue().setText(src.getText());
-            }
-        }
+    /** @deprecated use {@link #mirrorClinVarSettingsFrom(ControlFilesPanel)} */
+    @Deprecated
+    public void mirrorFilterSettingsFrom(ControlFilesPanel other) {
+        mirrorClinVarSettingsFrom(other);
     }
 
     private boolean isFilterByPopFreqSelected() {
@@ -528,9 +589,53 @@ public class ControlFilesPanel {
         return maxAf;
     }
 
+    private int readBreakpointWindowBp() {
+        int fallback = SvControlAnnotator.DEFAULT_BREAKPOINT_WINDOW_BP;
+        if (nodes == null || nodes.svBreakpointWindowField() == null) {
+            return fallback;
+        }
+        String text = nodes.svBreakpointWindowField().getText();
+        if (text == null || text.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(text.trim()));
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private boolean isRequireSameTypeSelected() {
+        return nodes == null
+            || nodes.svRequireSameTypeCheckBox() == null
+            || nodes.svRequireSameTypeCheckBox().isSelected();
+    }
+
+    private void applySvMatchSettingsUi(int windowBp, boolean requireSameType) {
+        if (nodes == null) {
+            return;
+        }
+        if (nodes.svBreakpointWindowField() != null) {
+            nodes.svBreakpointWindowField().setText(String.valueOf(Math.max(0, windowBp)));
+        }
+        if (nodes.svRequireSameTypeCheckBox() != null) {
+            nodes.svRequireSameTypeCheckBox().setSelected(requireSameType);
+        }
+        syncSvMatchSettingsToAnnotator();
+    }
+
+    private void syncSvMatchSettingsToAnnotator() {
+        if (!svMode) {
+            return;
+        }
+        svAnnotator.setBreakpointWindowBp(readBreakpointWindowBp());
+        svAnnotator.setRequireSameType(isRequireSameTypeSelected());
+    }
+
     /** Re-annotate all loaded chromosome caches (control AF and/or ClinVar). */
     public void annotateNow() {
         syncSelectedPopulationsFromUi();
+        syncSvMatchSettingsToAnnotator();
         runAnnotateLoadedSources(true);
     }
 
@@ -539,16 +644,22 @@ public class ControlFilesPanel {
             return;
         }
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Add control VCF (gnomAD sites)");
+        chooser.setTitle(svMode
+            ? "Add SV control VCF"
+            : "Add control VCF (gnomAD sites)");
         chooser.getExtensionFilters().addAll(
             new FileChooser.ExtensionFilter("Compressed VCF", "*.vcf.gz"),
             new FileChooser.ExtensionFilter("VCF", "*.vcf", "*.vcf.gz"));
-        File initialDir = UserPreferences.getLastDirectory("CONTROL_VCF");
+        String dirKey = svMode ? "SV_CONTROL_VCF" : "CONTROL_VCF";
+        File initialDir = UserPreferences.getLastDirectory(dirKey);
         if (initialDir == null) {
-            Path open = annotator.path();
+            Path open = controlPath();
             if (open != null && open.getParent() != null) {
                 initialDir = open.getParent().toFile();
             }
+        }
+        if (initialDir == null) {
+            initialDir = UserPreferences.getLastDirectory(svMode ? "CONTROL_VCF" : "VCF");
         }
         if (initialDir == null) {
             initialDir = UserPreferences.getLastDirectory("VCF");
@@ -561,10 +672,15 @@ public class ControlFilesPanel {
         if (chosen == null) {
             return;
         }
-        UserPreferences.setLastDirectory("CONTROL_VCF", chosen.getParentFile());
+        UserPreferences.setLastDirectory(dirKey, chosen.getParentFile());
         Path path = chosen.toPath();
         try {
-            annotator.open(path);
+            if (svMode) {
+                svAnnotator.open(path);
+                syncSvMatchSettingsToAnnotator();
+            } else {
+                annotator.open(path);
+            }
         } catch (IOException e) {
             showError("Could not open control VCF", e.getMessage());
             return;
@@ -572,7 +688,12 @@ public class ControlFilesPanel {
         // Select all populations by default, then annotate loaded chromosomes.
         refreshPopulations(null, true);
         refreshFileUi();
-        SessionDocumentSync.writeControlVcfPath(path.toAbsolutePath().normalize().toString());
+        String abs = path.toAbsolutePath().normalize().toString();
+        if (svMode) {
+            SessionDocumentSync.writeSvControlVcfPath(abs);
+        } else {
+            SessionDocumentSync.writeControlVcfPath(abs);
+        }
         persistFilterSettingsToDocument();
         refreshStatsAsync();
         onSettingsMirrored.accept(this);
@@ -580,11 +701,17 @@ public class ControlFilesPanel {
     }
 
     public void handleRemoveControlFile() {
-        annotator.close();
-        clearControlAfOnSources();
+        if (svMode) {
+            svAnnotator.close();
+            clearControlAfOnSources();
+            SessionDocumentSync.writeSvControlVcfPath(null);
+        } else {
+            annotator.close();
+            clearControlAfOnSources();
+            SessionDocumentSync.writeControlVcfPath(null);
+        }
         refreshPopulations(null, false);
         refreshFileUi();
-        SessionDocumentSync.writeControlVcfPath(null);
         persistFilterSettingsToDocument();
         onSettingsMirrored.accept(this);
         afterAnnotate.accept(true);
@@ -700,6 +827,14 @@ public class ControlFilesPanel {
             nodes.maxPopFreqField().textProperty().addListener(
                 (obs, oldText, newText) -> onControlFilterUiChanged());
         }
+        if (nodes.svBreakpointWindowField() != null) {
+            nodes.svBreakpointWindowField().textProperty().addListener(
+                (obs, oldText, newText) -> onSvMatchSettingsChanged());
+        }
+        if (nodes.svRequireSameTypeCheckBox() != null) {
+            nodes.svRequireSameTypeCheckBox().selectedProperty().addListener(
+                (obs, was, is) -> onSvMatchSettingsChanged());
+        }
         if (nodes.filterByClinVarSigCheckBox() != null) {
             nodes.filterByClinVarSigCheckBox().selectedProperty().addListener((obs, was, is) -> {
                 if (Boolean.TRUE.equals(is) && selectedClinVarClasses().isEmpty()) {
@@ -736,6 +871,19 @@ public class ControlFilesPanel {
         onFilterSettingsChanged.run();
     }
 
+    /** Window / same-type changes require re-annotation (they affect who gets AF). */
+    private void onSvMatchSettingsChanged() {
+        if (suppressSettingsPersist || !svMode) {
+            return;
+        }
+        syncSvMatchSettingsToAnnotator();
+        persistFilterSettingsToDocument();
+        onSettingsMirrored.accept(this);
+        if (svAnnotator.isOpen()) {
+            annotateNow();
+        }
+    }
+
     private void onClinVarFilterUiChanged() {
         if (suppressSettingsPersist) {
             return;
@@ -757,7 +905,13 @@ public class ControlFilesPanel {
         }
         syncSelectedPopulationsFromUi();
         syncSelectAllCheckbox();
-        SessionDocumentSync.writeControlPopulation(annotator.selectedPopulationsPersistString());
+        if (svMode) {
+            SessionDocumentSync.writeSvControlPopulation(
+                svAnnotator.selectedPopulationsPersistString());
+        } else {
+            SessionDocumentSync.writeControlPopulation(
+                annotator.selectedPopulationsPersistString());
+        }
         persistFilterSettingsToDocument();
         onSettingsMirrored.accept(this);
         annotateNow();
@@ -770,7 +924,11 @@ public class ControlFilesPanel {
                 selected.add(e.getKey());
             }
         }
-        annotator.setSelectedPopulations(selected);
+        if (svMode) {
+            svAnnotator.setSelectedPopulations(selected);
+        } else {
+            annotator.setSelectedPopulations(selected);
+        }
     }
 
     private void syncSelectAllCheckbox() {
@@ -793,10 +951,19 @@ public class ControlFilesPanel {
         if (nodes == null) {
             return;
         }
-        SessionDocumentSync.writeControlFilterSettings(
-            isFilterByPopFreqSelected(),
-            readMaxPopFreq(),
-            annotator.selectedPopulationsPersistString());
+        if (svMode) {
+            SessionDocumentSync.writeSvControlFilterSettings(
+                isFilterByPopFreqSelected(),
+                readMaxPopFreq(),
+                svAnnotator.selectedPopulationsPersistString(),
+                readBreakpointWindowBp(),
+                isRequireSameTypeSelected());
+        } else {
+            SessionDocumentSync.writeControlFilterSettings(
+                isFilterByPopFreqSelected(),
+                readMaxPopFreq(),
+                annotator.selectedPopulationsPersistString());
+        }
     }
 
     private void runAnnotateLoadedSources(boolean notify) {
@@ -816,7 +983,7 @@ public class ControlFilesPanel {
      * @param progressSuffix optional UI updater (e.g. ThreadRunner task suffix); may be null
      */
     public void annotateLoadedSources(boolean notify, Consumer<String> progressSuffix) {
-        boolean hasControl = annotator.isOpen();
+        boolean hasControl = isControlOpen();
         boolean hasClinVar = clinVarAnnotator.isOpen();
         if (!hasControl && !hasClinVar) {
             if (notify) {
@@ -830,6 +997,9 @@ public class ControlFilesPanel {
                 afterAnnotate.accept(true);
             }
             return;
+        }
+        if (svMode) {
+            syncSvMatchSettingsToAnnotator();
         }
         int total = sources.size();
         int index = 0;
@@ -847,10 +1017,7 @@ public class ControlFilesPanel {
                 // Soft annotate: each source skips when its fingerprint already matches
                 // (adding gnomAD must not redo ClinVar, and vice versa).
                 if (hasControl) {
-                    annotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
-                        reportControlDetail(
-                            "Control AF", c, cur, tot, matched, chromIndex, total, progressSuffix);
-                    }, false);
+                    annotateControlList(cached.variants(), chromIndex, total, progressSuffix);
                 }
                 if (hasClinVar) {
                     clinVarAnnotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
@@ -875,6 +1042,71 @@ public class ControlFilesPanel {
         }
     }
 
+    private void annotateControlList(
+            VariantList list, int chromIndex, int chromTotal, Consumer<String> progressSuffix)
+            throws IOException {
+        String kind = svMode ? "SV control AF" : "Control AF";
+        ControlFrequencyAnnotator.ProgressListener progress = (c, cur, tot, matched) ->
+            reportControlDetail(kind, c, cur, tot, matched, chromIndex, chromTotal, progressSuffix);
+        if (svMode) {
+            svAnnotator.annotate(list, progress, false);
+        } else {
+            annotator.annotate(list, progress, false);
+        }
+    }
+
+    /**
+     * Annotate control AF only (no ClinVar). Used when Point and SV panels both run
+     * in one job and ClinVar is handled once by the Point panel.
+     */
+    public void annotateControlAfLoadedSources(Consumer<String> progressSuffix) {
+        if (!isControlOpen()) {
+            return;
+        }
+        if (svMode) {
+            syncSvMatchSettingsToAnnotator();
+        }
+        List<VcfManager.CachedChromosomeVariants> sources = sourcesSupplier.get();
+        if (sources == null || sources.isEmpty()) {
+            return;
+        }
+        int total = sources.size();
+        int index = 0;
+        for (VcfManager.CachedChromosomeVariants cached : sources) {
+            index++;
+            if (cached == null || cached.variants() == null) {
+                continue;
+            }
+            final int chromIndex = index;
+            final String chrom = cached.chromosome() != null ? cached.chromosome() : "?";
+            if (progressSuffix != null) {
+                progressSuffix.accept("(" + chromIndex + "/" + total + " chr" + chrom + ")");
+            }
+            try {
+                annotateControlList(cached.variants(), chromIndex, total, progressSuffix);
+            } catch (IOException e) {
+                showError("Control annotation failed", chrom + ": " + e.getMessage());
+                break;
+            }
+        }
+    }
+
+    /** Annotate control AF on one list only (no ClinVar). */
+    public void annotateControlAfIfOpen(VariantList list, Consumer<String> progressSuffix) {
+        if (list == null || !isControlOpen()) {
+            return;
+        }
+        try {
+            if (svMode) {
+                syncSvMatchSettingsToAnnotator();
+            }
+            annotateControlList(list, -1, -1, progressSuffix);
+        } catch (IOException e) {
+            System.err.println("Control AF annotation failed for "
+                + list.getChromosome() + ": " + e.getMessage());
+        }
+    }
+
     /** Annotate one list quietly (e.g. after gene annotation finishes). */
     public void annotateIfOpen(VariantList list) {
         annotateIfOpen(list, null);
@@ -884,11 +1116,12 @@ public class ControlFilesPanel {
         if (list == null) {
             return;
         }
-        if (annotator.isOpen()) {
+        if (isControlOpen()) {
             try {
-                annotator.annotate(list, (c, cur, tot, matched) -> {
-                    reportControlDetail("Control AF", c, cur, tot, matched, -1, -1, progressSuffix);
-                }, false);
+                if (svMode) {
+                    syncSvMatchSettingsToAnnotator();
+                }
+                annotateControlList(list, -1, -1, progressSuffix);
             } catch (IOException e) {
                 System.err.println("Control AF annotation failed for "
                     + list.getChromosome() + ": " + e.getMessage());
@@ -954,7 +1187,12 @@ public class ControlFilesPanel {
             return;
         }
         for (VcfManager.CachedChromosomeVariants cached : sources) {
-            if (cached != null) {
+            if (cached == null) {
+                continue;
+            }
+            if (svMode) {
+                SvControlAnnotator.clear(cached.variants());
+            } else {
                 ControlFrequencyAnnotator.clear(cached.variants());
             }
         }
@@ -976,7 +1214,7 @@ public class ControlFilesPanel {
         if (nodes == null) {
             return;
         }
-        Path open = annotator.path();
+        Path open = controlPath();
         if (nodes.controlFilePathLabel() != null) {
             if (open != null) {
                 nodes.controlFilePathLabel().setText(open.toAbsolutePath().normalize().toString());
@@ -1038,13 +1276,20 @@ public class ControlFilesPanel {
             populationStatsLabels.clear();
             nodes.populationCheckBoxContainer().getChildren().clear();
 
-            if (!annotator.isOpen()) {
-                annotator.setSelectedPopulations(List.of(ControlFrequencyAnnotator.GLOBAL_POPULATION));
+            if (!isControlOpen()) {
+                if (svMode) {
+                    svAnnotator.setSelectedPopulations(
+                        List.of(ControlFrequencyAnnotator.GLOBAL_POPULATION));
+                } else {
+                    annotator.setSelectedPopulations(
+                        List.of(ControlFrequencyAnnotator.GLOBAL_POPULATION));
+                }
                 syncSelectAllCheckbox();
                 return;
             }
 
-            List<PopulationOption> options = annotator.listPopulations();
+            List<PopulationOption> options =
+                svMode ? svAnnotator.listPopulations() : annotator.listPopulations();
             Set<String> want;
             if (preferredIds != null) {
                 want = new LinkedHashSet<>(preferredIds);
@@ -1054,7 +1299,8 @@ public class ControlFilesPanel {
                     want.add(opt.id());
                 }
             } else {
-                want = new LinkedHashSet<>(annotator.selectedPopulations());
+                want = new LinkedHashSet<>(
+                    svMode ? svAnnotator.selectedPopulations() : annotator.selectedPopulations());
             }
             if (want.isEmpty()) {
                 want.add(ControlFrequencyAnnotator.GLOBAL_POPULATION);
@@ -1099,24 +1345,34 @@ public class ControlFilesPanel {
     }
 
     private void refreshStatsAsync() {
-        if (!annotator.isOpen()) {
+        if (!isControlOpen()) {
             setAllPopulationStatsText("—");
             return;
         }
         setAllPopulationStatsText("…");
-        Path path = annotator.path();
+        Path path = controlPath();
+        final boolean peekSv = svMode;
         Thread t = new Thread(() -> {
             ControlFileStats stats;
-            try (ControlFrequencyAnnotator peek = new ControlFrequencyAnnotator()) {
-                peek.open(path);
-                stats = peek.sampleStats(STATS_SAMPLE_ROWS);
+            try {
+                if (peekSv) {
+                    try (SvControlAnnotator peek = new SvControlAnnotator()) {
+                        peek.open(path);
+                        stats = peek.sampleStats(STATS_SAMPLE_ROWS);
+                    }
+                } else {
+                    try (ControlFrequencyAnnotator peek = new ControlFrequencyAnnotator()) {
+                        peek.open(path);
+                        stats = peek.sampleStats(STATS_SAMPLE_ROWS);
+                    }
+                }
             } catch (IOException e) {
                 Platform.runLater(() -> setAllPopulationStatsText("n/a"));
                 return;
             }
             ControlFileStats finalStats = stats;
             Platform.runLater(() -> {
-                if (!annotator.isOpen() || path == null || !path.equals(annotator.path())) {
+                if (!isControlOpen() || path == null || !path.equals(controlPath())) {
                     return;
                 }
                 applyPopulationStats(finalStats);
@@ -1184,6 +1440,19 @@ public class ControlFilesPanel {
         maxFreq.setPrefWidth(80);
         maxFreq.getStyleClass().add("filter-field");
 
+        TextField windowField = new TextField(
+            String.valueOf(SvControlAnnotator.DEFAULT_BREAKPOINT_WINDOW_BP));
+        windowField.setPrefWidth(80);
+        windowField.getStyleClass().add("filter-field");
+        windowField.setTooltip(new Tooltip(
+            "Both breakpoints must fall within ±window bp to count as the same event "
+                + "(INS: start only)."));
+        ColoredToggle requireSameType = new ColoredToggle("Require same SV type");
+        requireSameType.setSelected(true);
+        requireSameType.setTooltip(new Tooltip(
+            "When on, DEL only matches DEL (etc.). When off, any SVTYPE counts if "
+                + "breakpoints match."));
+
         ColoredToggle selectAllPops = new ColoredToggle();
         selectAllPops.setSelected(true);
         selectAllPops.setDisable(true);
@@ -1223,10 +1492,21 @@ public class ControlFilesPanel {
         left.getStyleClass().add("filter-panel");
         left.setPadding(new Insets(16));
 
-        Label fileTitle = new Label("Control file (allele frequency)");
+        Label fileTitle = new Label("SV control file (allele frequency)");
         fileTitle.getStyleClass().add("section-header");
         HBox fileButtons = new HBox(8, addVcf, remove);
         fileButtons.setAlignment(Pos.CENTER_LEFT);
+
+        Label matchTitle = new Label("Breakpoint matching");
+        matchTitle.getStyleClass().add("section-header");
+        Label matchHint = new Label(
+            "Both breakpoints must match within ±window bp (INS: start only).");
+        matchHint.getStyleClass().add("subsection-label");
+        matchHint.setWrapText(true);
+        Label windowLabel = new Label("Window (bp):");
+        windowLabel.getStyleClass().add("subsection-label");
+        HBox windowRow = new HBox(8, windowLabel, windowField);
+        windowRow.setAlignment(Pos.CENTER_LEFT);
 
         Label filterTitle = new Label("Allele frequency filter");
         filterTitle.getStyleClass().add("section-header");
@@ -1241,6 +1521,8 @@ public class ControlFilesPanel {
         popHint.setWrapText(true);
 
         VBox controlOptions = new VBox(12,
+            new javafx.scene.control.Separator(),
+            matchTitle, matchHint, windowRow, requireSameType,
             new javafx.scene.control.Separator(),
             filterTitle, filterRow,
             new javafx.scene.control.Separator(),
@@ -1293,7 +1575,8 @@ public class ControlFilesPanel {
             pathLabel, addVcf, remove, controlOptions,
             filterByPop, maxFreq, selectAllPops, popBox,
             clinVarPathLabel, addClinVar, removeClinVar, clinVarDownload, clinVarOptions,
-            filterByClinVarSig, clinVarPathogenic, clinVarVus, clinVarBenign, clinVarOther);
+            filterByClinVarSig, clinVarPathogenic, clinVarVus, clinVarBenign, clinVarOther,
+            windowField, requireSameType);
 
         return new Pair<>(root, built);
     }

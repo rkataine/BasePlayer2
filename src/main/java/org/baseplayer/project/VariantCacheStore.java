@@ -44,7 +44,7 @@ import com.google.gson.GsonBuilder;
 public final class VariantCacheStore {
 
   /** v5: per-node control AF + list-level control VCF source path. */
-  public static final int SCHEMA_VERSION = 5;
+  public static final int SCHEMA_VERSION = 6;
   private static final int MAGIC = 0x42505631; // "BPV1"
   private static final String META_FILE = "meta.json";
   private static final String CHROM_SUFFIX = ".bpv.zst";
@@ -239,6 +239,7 @@ public final class VariantCacheStore {
       detail.annotated = list.isAnnotated();
       detail.vcfCount = list.getVcfCountWhenLoaded();
       detail.controlAfSourcePath = list.getControlAfSourcePath();
+      detail.svControlAfSourcePath = list.getSvControlAfSourcePath();
       meta.chromosomes.add(chrom);
       meta.chromosomeDetails.add(detail);
 
@@ -253,6 +254,8 @@ public final class VariantCacheStore {
           .append(detail.vcfCount)
           .append('#')
           .append(detail.controlAfSourcePath == null ? "" : detail.controlAfSourcePath)
+          .append('#')
+          .append(detail.svControlAfSourcePath == null ? "" : detail.svControlAfSourcePath)
           .append(';');
     }
     meta.contentSignature = signature.toString();
@@ -394,6 +397,7 @@ public final class VariantCacheStore {
       out.writeBoolean(list.isAnnotated());
       out.writeInt(list.getVcfCountWhenLoaded());
       writeNullableString(out, list.getControlAfSourcePath());
+      writeNullableString(out, list.getSvControlAfSourcePath());
 
       List<VariantList.LoadedRegion> regions = list.getLoadedRegions();
       out.writeInt(regions.size());
@@ -449,6 +453,7 @@ public final class VariantCacheStore {
       boolean annotated = in.readBoolean();
       int vcfCount = in.readInt();
       String controlAfSourcePath = readNullableString(in);
+      String svControlAfSourcePath = readNullableString(in);
 
       int regionCount = in.readInt();
       for (int i = 0; i < regionCount; i++) {
@@ -481,6 +486,7 @@ public final class VariantCacheStore {
       list.setAnnotated(annotated);
       list.setVcfCountWhenLoaded(vcfCount > 0 ? vcfCount : VcfManager.getInstance().getLoadedVcfCount());
       list.setControlAfSourcePath(controlAfSourcePath);
+      list.setSvControlAfSourcePath(svControlAfSourcePath);
       return list;
     }
   }
@@ -714,6 +720,8 @@ public final class VariantCacheStore {
     public int vcfCount;
     /** Absolute path of control VCF used for population AF, or null. */
     public String controlAfSourcePath;
+    /** Fingerprint of SV control VCF + matching settings, or null. */
+    public String svControlAfSourcePath;
   }
 
   public static final class VcfFingerprint {

@@ -15,6 +15,7 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantNode;
+import org.baseplayer.variant.VariantOddsRatio;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.ClinVarAnnotator;
@@ -44,7 +45,7 @@ import javafx.scene.paint.Color;
 
 /**
  * Closable tool-tab view with full details for a clicked variant (allele, samples,
- * gene annotation, control AF / ClinVar, INFO, and external links).
+ * gene annotation, control AF / odds ratio / ClinVar, INFO, and external links).
  */
 public final class VariantDetailsPanel {
 
@@ -245,6 +246,11 @@ public final class VariantDetailsPanel {
     if (node.controlAf != null) {
       ar = addKv(annGrid, ar, "Control AF", formatAf(node.controlAf),
           controlAfColor(node.controlAf), node.controlAf < 0.01);
+      Double or = VariantOddsRatio.compute(node, cohortSampleCount());
+      if (or != null && !Double.isNaN(or)) {
+        ar = addKv(annGrid, ar, "Odds ratio", VariantOddsRatio.format(or),
+            oddsRatioColor(or), or >= 2.0);
+      }
     }
     if (node.clinVarClnsig != null && !node.clinVarClnsig.isBlank()) {
       String display = node.clinVarClnsig.replace('_', ' ');
@@ -673,6 +679,36 @@ public final class VariantDetailsPanel {
       return COLOR_MISSENSE;
     }
     return COLOR_COMMON_AF;
+  }
+
+  /** Highlight enrichment vs control (OR ≥ 2). */
+  private static String oddsRatioColor(double or) {
+    if (or >= 5.0) {
+      return COLOR_TRUNCATING;
+    }
+    if (or >= 2.0) {
+      return COLOR_MISSENSE;
+    }
+    return COLOR_MUTED;
+  }
+
+  /**
+   * Diploid cohort size for OR: displayed sample tracks, falling back to carrier
+   * count so OR still works before the registry is fully populated.
+   */
+  private static int cohortSampleCount() {
+    try {
+      var registry = ServiceRegistry.getInstance().getSampleRegistry();
+      if (registry != null) {
+        int displayed = registry.getDisplayedTrackCount();
+        if (displayed > 0) {
+          return displayed;
+        }
+      }
+    } catch (RuntimeException ignored) {
+      // Details still render without a live registry (tests / early init).
+    }
+    return 0;
   }
 
   private static String toHex(Color color) {

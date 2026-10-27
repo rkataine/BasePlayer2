@@ -499,7 +499,7 @@ public class VariantManagerController implements Initializable {
 
         javafx.util.Pair<Node, ControlFilesPanel.Nodes> svCtrl = ControlFilesPanel.buildUi();
         ControlFilesPanel svControlFilesPanel = new ControlFilesPanel();
-        svControlFilesPanel.install(svCtrl.getValue());
+        svControlFilesPanel.install(svCtrl.getValue(), true);
         svCtrl.getKey().setUserData(svControlFilesPanel);
         wireControlFilesPanel(svControlFilesPanel);
         if (svWorkspace != null) {
@@ -2029,7 +2029,6 @@ public class VariantManagerController implements Initializable {
         busyOverlay.syncBusyOverlay();
 
         // Capture before background work — same per-chrom control AF as manual chrom switch.
-        final ControlFilesPanel controlPanel = activeControlPanelWithOpenFile();
         Platform.runLater(() -> {
             VariantFilter filterSnapshot = buildFilterFromUI();
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
@@ -2037,7 +2036,7 @@ public class VariantManagerController implements Initializable {
                 chromosomes,
                 progress -> busyOverlay.updateProgress(progress),
                 this::completeAllChromosomeAnnotation,
-                controlAfAfterChromosomeHook(controlPanel));
+                controlAfAfterChromosomeHook());
             busyOverlay.setAllChromosomeAnnotationTask(task);
 
             if (task != null) {
@@ -2115,14 +2114,13 @@ public class VariantManagerController implements Initializable {
 
         final VariantFilter filterSnapshot = target.copy();
         final List<String> cachedChroms = List.copyOf(chromosomes);
-        final ControlFilesPanel controlPanel = activeControlPanelWithOpenFile();
         Platform.runLater(() -> {
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
                 filterSnapshot,
                 cachedChroms,
                 progress -> busyOverlay.updateProgress(progress),
                 this::completeAllChromosomeAnnotation,
-                controlAfAfterChromosomeHook(controlPanel));
+                controlAfAfterChromosomeHook());
             busyOverlay.setAllChromosomeAnnotationTask(task);
 
             if (task != null) {
@@ -2302,21 +2300,21 @@ public class VariantManagerController implements Initializable {
         });
     }
 
-    /** Point and SV Control Files tabs share the same durable pop-freq settings. */
+    /** Point and SV Control Files tabs share ClinVar settings only (not control VCFs). */
     private void wireControlFilesPanelMirroring() {
         ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
         ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
         if (point != null) {
             point.setOnSettingsMirrored(source -> {
                 if (sv != null && source != sv) {
-                    sv.mirrorFilterSettingsFrom(source);
+                    sv.mirrorClinVarSettingsFrom(source);
                 }
             });
         }
         if (sv != null) {
             sv.setOnSettingsMirrored(source -> {
                 if (point != null && source != point) {
-                    point.mirrorFilterSettingsFrom(source);
+                    point.mirrorClinVarSettingsFrom(source);
                 }
             });
         }
@@ -2385,34 +2383,90 @@ public class VariantManagerController implements Initializable {
      * lacks annotations, annotate (modal). Otherwise rebuild tables only.
      */
     private void annotateControlAfThenRebuild() {
-        ControlFilesPanel panel = activeControlPanelWithOpenFile();
-        if (panel == null) {
+        ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
+        ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
+        boolean anyOpen = hasOpenControlOrClinVar(point) || hasOpenControlOrClinVar(sv);
+        if (!anyOpen) {
             // Controlling off: identical to pre-control loadData rebuild path.
             scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
             return;
         }
-        if (!panel.annotator().needsAnnotation(sourceVariants)
-                && !anySourceNeedsControlAf(panel)
-                && !panel.clinVarAnnotator().needsAnnotation(sourceVariants)
-                && !anySourceNeedsClinVar(panel)) {
+        if (!needsAnyControlAnnotation(point, sv)) {
             // Cache already has annotations for these files — just show tables.
             scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
             return;
         }
-        runControlAnnotationAsync(progress -> panel.annotateLoadedSources(false, progress));
+        runControlAnnotationAsync(progress -> annotateAllOpenControlPanels(progress));
     }
 
     /** Called from session save to persist control VCF path + pop-freq toggles. */
     public void writeControlFilesToDocument(
             org.baseplayer.project.ProjectDocument.ControlFilesSpec spec) {
-        // Prefer the panel that has an open control VCF; otherwise Point, then SV.
-        ControlFilesPanel panel = activeControlPanelWithOpenFile();
+        if (spec == null) {
+            return;
+        }
+        ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
+        ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
+        // Point writes point control + ClinVar; SV writes SV control fields (and ClinVar again).
+        if (point != null) {
+            point.writeToDocument(spec);
+        }
+        if (sv != null) {
+            sv.writeToDocument(spec);
+        }
+    }
+
+    private void annotateAllOpenControlPanels(java.util.function.Consumer<String> progress) {
+        ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
+        ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
+        // Point runs first (point AF + ClinVar). SV control AF is separate; skip
+        // re-running ClinVar when Point already owns an open ClinVar file.
+        if (point != null && hasOpenControlOrClinVar(point)) {
+            point.annotateLoadedSources(false, progress);
+        }
+        if (sv != null && sv.isControlOpen()) {
+            if (point != null && point.clinVarAnnotator().isOpen()) {
+                sv.annotateControlAfLoadedSources(progress);
+            } else {
+                sv.annotateLoadedSources(false, progress);
+            }
+        } else if (sv != null && hasOpenControlOrClinVar(sv)
+                && (point == null || !point.clinVarAnnotator().isOpen())) {
+            sv.annotateLoadedSources(false, progress);
+        }
+    }
+
+    private boolean needsAnyControlAnnotation(ControlFilesPanel point, ControlFilesPanel sv) {
+        if (needsControlOrClinVar(point) || needsControlOrClinVar(sv)) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean needsControlOrClinVar(ControlFilesPanel panel) {
         if (panel == null) {
-            panel = activeControlPanel();
+            return false;
         }
-        if (panel != null) {
-            panel.writeToDocument(spec);
+        if (panel.isControlOpen()
+                && (panel.needsControlAnnotation(sourceVariants)
+                    || anySourceNeedsControlAf(panel))) {
+            return true;
         }
+        return panel.clinVarAnnotator().isOpen()
+            && (panel.clinVarAnnotator().needsAnnotation(sourceVariants)
+                || anySourceNeedsClinVar(panel));
+    }
+
+    private static boolean needsControlOrClinVarForList(
+            ControlFilesPanel panel, VariantList list) {
+        if (panel == null || list == null) {
+            return false;
+        }
+        if (panel.isControlOpen() && panel.needsControlAnnotation(list)) {
+            return true;
+        }
+        return panel.clinVarAnnotator().isOpen()
+            && panel.clinVarAnnotator().needsAnnotation(list);
     }
 
     private void restoreControlFilesFromSession(ControlFilesPanel panel) {
@@ -2434,11 +2488,11 @@ public class VariantManagerController implements Initializable {
     }
 
     private boolean anySourceNeedsControlAf(ControlFilesPanel panel) {
-        if (panel == null || sourceVariantLists == null) {
+        if (panel == null || sourceVariantLists == null || !panel.isControlOpen()) {
             return false;
         }
         for (VcfManager.CachedChromosomeVariants cached : sourceVariantLists) {
-            if (cached != null && panel.annotator().needsAnnotation(cached.variants())) {
+            if (cached != null && panel.needsControlAnnotation(cached.variants())) {
                 return true;
             }
         }
@@ -2461,24 +2515,32 @@ public class VariantManagerController implements Initializable {
      * Per-chromosome control AF / ClinVar during annotate-all / reload-all — same step as when
      * switching chromosomes manually. No LoadingManager bar updates (annotate-all owns progress).
      */
-    private java.util.function.Consumer<VariantList> controlAfAfterChromosomeHook(
-            ControlFilesPanel panel) {
-        if (panel == null) {
+    private java.util.function.Consumer<VariantList> controlAfAfterChromosomeHook() {
+        ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
+        ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
+        if (!hasOpenControlOrClinVar(point) && !hasOpenControlOrClinVar(sv)) {
             return null;
         }
-        return list -> panel.annotateIfOpen(list, null);
-    }
-
-    private ControlFilesPanel activeControlPanel() {
-        if (pointWorkspace != null && pointWorkspace.control() != null) {
-            return pointWorkspace.control();
-        }
-        return svWorkspace != null ? svWorkspace.control() : null;
+        return list -> {
+            if (point != null && hasOpenControlOrClinVar(point)) {
+                point.annotateIfOpen(list, null);
+            }
+            if (sv != null && sv.isControlOpen()) {
+                if (point != null && point.clinVarAnnotator().isOpen()) {
+                    sv.annotateControlAfIfOpen(list, null);
+                } else {
+                    sv.annotateIfOpen(list, null);
+                }
+            } else if (sv != null && hasOpenControlOrClinVar(sv)
+                    && (point == null || !point.clinVarAnnotator().isOpen())) {
+                sv.annotateIfOpen(list, null);
+            }
+        };
     }
 
     private static boolean hasOpenControlOrClinVar(ControlFilesPanel panel) {
         return panel != null
-            && (panel.annotator().isOpen() || panel.clinVarAnnotator().isOpen());
+            && (panel.isControlOpen() || panel.clinVarAnnotator().isOpen());
     }
 
     private ControlFilesPanel activeControlPanelWithOpenFile() {
@@ -2658,18 +2720,34 @@ public class VariantManagerController implements Initializable {
         if (list == null || disposed) {
             return null;
         }
-        ControlFilesPanel panel = activeControlPanelWithOpenFile();
-        if (panel != null
-                && (panel.annotator().needsAnnotation(list)
-                    || panel.clinVarAnnotator().needsAnnotation(list))) {
+        ControlFilesPanel point = pointWorkspace != null ? pointWorkspace.control() : null;
+        ControlFilesPanel sv = svWorkspace != null ? svWorkspace.control() : null;
+        boolean needsPoint = needsControlOrClinVarForList(point, list);
+        boolean needsSv = needsControlOrClinVarForList(sv, list);
+        if (needsPoint || needsSv) {
             updateVariantLoadPhaseOnWorker(loadTask, "Annotating control data…");
+            java.util.function.Consumer<String> progress = suffix -> {
+                if (loadTask != null) {
+                    loadTask.setDetailMessage(suffix != null ? suffix : "");
+                    ThreadRunner.get().notifyDescriptionChanged();
+                }
+            };
             try {
-                panel.annotateIfOpen(list, suffix -> {
-                    if (loadTask != null) {
-                        loadTask.setDetailMessage(suffix != null ? suffix : "");
-                        ThreadRunner.get().notifyDescriptionChanged();
+                if (needsPoint && point != null) {
+                    point.annotateIfOpen(list, progress);
+                }
+                if (sv != null && sv.isControlOpen()
+                        && (needsSv || sv.needsControlAnnotation(list))) {
+                    if (point != null && point.clinVarAnnotator().isOpen()) {
+                        sv.annotateControlAfIfOpen(list, progress);
+                    } else if (needsSv) {
+                        sv.annotateIfOpen(list, progress);
+                    } else {
+                        sv.annotateControlAfIfOpen(list, progress);
                     }
-                });
+                } else if (needsSv && sv != null) {
+                    sv.annotateIfOpen(list, progress);
+                }
             } catch (Throwable t) {
                 System.err.println("Control annotation during post-load failed: " + t.getMessage());
             }

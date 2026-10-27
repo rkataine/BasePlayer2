@@ -143,7 +143,7 @@ public class ProjectDocument {
 
   /** Control Files tab: local gnomAD/control VCF path + pop-freq filter toggles. */
   public static class ControlFilesSpec {
-    /** Absolute path to bgzipped+tabix control VCF, or null/blank when unused. */
+    /** Absolute path to bgzipped+tabix point-allele control VCF, or null/blank when unused. */
     public String controlVcfPath;
     public boolean filterByControlAf;
     public double maxControlAf = 0.01;
@@ -153,6 +153,19 @@ public class ProjectDocument {
      * Legacy single values such as {@code fin} are still accepted.
      */
     public String controlPopulation;
+    /**
+     * Absolute path to bgzipped+tabix SV control VCF (symbolic {@code <DEL>}/{@code <DUP>}…),
+     * or null/blank when unused. Independent of {@link #controlVcfPath}.
+     */
+    public String svControlVcfPath;
+    public boolean svFilterByControlAf;
+    public double svMaxControlAf = 0.01;
+    /** Selected SV-control populations (same encoding as {@link #controlPopulation}). */
+    public String svControlPopulation;
+    /** Breakpoint match window in bp for SV control matching (default 50). */
+    public int svBreakpointWindowBp = 50;
+    /** When true, SV control hits must share a compatible SVTYPE (default true). */
+    public boolean svRequireSameType = true;
     /** Absolute path to bgzipped+tabix ClinVar VCF, or null/blank when unused. */
     public String clinVarVcfPath;
     /** Optional display-time ClinVar significance filter (annotation always runs on Apply). */

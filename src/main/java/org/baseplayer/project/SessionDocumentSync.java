@@ -198,6 +198,29 @@ public final class SessionDocumentSync {
     ProjectSessionState.get().markDirty();
   }
 
+  /** Live-write SV Control Files AF + breakpoint-match settings. */
+  public static void writeSvControlFilterSettings(
+      boolean filterByControlAf,
+      double maxControlAf,
+      String controlPopulation,
+      int breakpointWindowBp,
+      boolean requireSameType) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.svFilterByControlAf = filterByControlAf;
+    doc.controlFiles.svMaxControlAf = maxControlAf < 0 ? 0.01 : Math.min(1.0, maxControlAf);
+    if (controlPopulation != null) {
+      doc.controlFiles.svControlPopulation =
+          controlPopulation.isBlank() ? null : controlPopulation;
+    }
+    doc.controlFiles.svBreakpointWindowBp = Math.max(0, breakpointWindowBp);
+    doc.controlFiles.svRequireSameType = requireSameType;
+    syncControlAfIntoVariantFilter(doc);
+    ProjectSessionState.get().markDirty();
+  }
+
   /** Live-write the open control VCF path into the project document. */
   public static void writeControlVcfPath(String controlVcfPath) {
     ProjectDocument doc = live();
@@ -208,6 +231,15 @@ public final class SessionDocumentSync {
     ProjectSessionState.get().markDirty();
   }
 
+  public static void writeSvControlVcfPath(String svControlVcfPath) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.svControlVcfPath = svControlVcfPath;
+    ProjectSessionState.get().markDirty();
+  }
+
   public static void writeControlPopulation(String controlPopulation) {
     ProjectDocument doc = live();
     if (doc.controlFiles == null) {
@@ -215,6 +247,16 @@ public final class SessionDocumentSync {
     }
     doc.controlFiles.controlPopulation =
         controlPopulation == null || controlPopulation.isBlank() ? null : controlPopulation;
+    ProjectSessionState.get().markDirty();
+  }
+
+  public static void writeSvControlPopulation(String svControlPopulation) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.svControlPopulation =
+        svControlPopulation == null || svControlPopulation.isBlank() ? null : svControlPopulation;
     ProjectSessionState.get().markDirty();
   }
 
@@ -250,6 +292,7 @@ public final class SessionDocumentSync {
   /**
    * Copy control-AF / ClinVar toggles from {@link ProjectDocument#controlFiles} into point/SV
    * filter specs when control settings look intentional (path, filter on, or non-default max).
+   * Point and SV AF thresholds are independent.
    */
   static void syncControlAfIntoVariantFilter(ProjectDocument doc) {
     if (doc == null || doc.controlFiles == null || !hasControlFilesSettings(doc.controlFiles)) {
@@ -264,8 +307,10 @@ public final class SessionDocumentSync {
     if (doc.variantFilter.sv == null) {
       doc.variantFilter.sv = new ProjectDocument.ClassFilterSpec();
     }
-    applyControlAf(doc.variantFilter.point, doc.controlFiles);
-    applyControlAf(doc.variantFilter.sv, doc.controlFiles);
+    applyPointControlAf(doc.variantFilter.point, doc.controlFiles);
+    applySvControlAf(doc.variantFilter.sv, doc.controlFiles);
+    applyClinVarToClass(doc.variantFilter.point, doc.controlFiles);
+    applyClinVarToClass(doc.variantFilter.sv, doc.controlFiles);
   }
 
   private static boolean hasControlFilesSettings(ProjectDocument.ControlFilesSpec spec) {
@@ -275,26 +320,50 @@ public final class SessionDocumentSync {
     if (spec.controlVcfPath != null && !spec.controlVcfPath.isBlank()) {
       return true;
     }
+    if (spec.svControlVcfPath != null && !spec.svControlVcfPath.isBlank()) {
+      return true;
+    }
     if (spec.clinVarVcfPath != null && !spec.clinVarVcfPath.isBlank()) {
       return true;
     }
     if (spec.filterByControlAf
+            || spec.svFilterByControlAf
             || spec.filterByClinVarSignificance
             || LegacyClinVarCompat.legacyRequire(spec)
             || LegacyClinVarCompat.legacyPathogenic(spec)) {
       return true;
     }
     // Default max is 0.01 — any other value means the user edited the field.
-    return Math.abs(spec.maxControlAf - 0.01) > 1e-12;
+    return Math.abs(spec.maxControlAf - 0.01) > 1e-12
+        || Math.abs(spec.svMaxControlAf - 0.01) > 1e-12
+        || spec.svBreakpointWindowBp != 50
+        || !spec.svRequireSameType;
   }
 
-  private static void applyControlAf(
+  private static void applyPointControlAf(
       ProjectDocument.ClassFilterSpec classSpec, ProjectDocument.ControlFilesSpec control) {
     if (classSpec == null || control == null) {
       return;
     }
     classSpec.filterByControlAf = control.filterByControlAf;
     classSpec.maxControlAf = control.maxControlAf < 0 ? 0.01 : Math.min(1.0, control.maxControlAf);
+  }
+
+  private static void applySvControlAf(
+      ProjectDocument.ClassFilterSpec classSpec, ProjectDocument.ControlFilesSpec control) {
+    if (classSpec == null || control == null) {
+      return;
+    }
+    classSpec.filterByControlAf = control.svFilterByControlAf;
+    classSpec.maxControlAf =
+        control.svMaxControlAf < 0 ? 0.01 : Math.min(1.0, control.svMaxControlAf);
+  }
+
+  private static void applyClinVarToClass(
+      ProjectDocument.ClassFilterSpec classSpec, ProjectDocument.ControlFilesSpec control) {
+    if (classSpec == null || control == null) {
+      return;
+    }
     classSpec.filterByClinVarSignificance = control.filterByClinVarSignificance
         || LegacyClinVarCompat.legacyRequire(control)
         || LegacyClinVarCompat.legacyPathogenic(control);

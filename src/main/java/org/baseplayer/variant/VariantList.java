@@ -56,10 +56,15 @@ public class VariantList {
     private boolean annotated = false;
 
     /**
-     * Absolute path of the control VCF used for {@link VariantNode#controlAf}, or null
-     * when control AF has not been annotated (or was cleared).
+     * Fingerprint of the point-allele control VCF used for non-structural
+     * {@link VariantNode#controlAf}, or null when not annotated / cleared.
      */
     private String controlAfSourcePath;
+    /**
+     * Fingerprint of the SV control VCF + window/type settings used for structural
+     * {@link VariantNode#controlAf}, or null when not annotated / cleared.
+     */
+    private String svControlAfSourcePath;
     /** Fingerprint of the ClinVar VCF used for {@link VariantNode#clinVarClnsig}. */
     private String clinVarSourcePath;
     
@@ -1571,6 +1576,7 @@ public class VariantList {
         loadedFilter = null;
         annotated = false;
         controlAfSourcePath = null;
+        svControlAfSourcePath = null;
         clinVarSourcePath = null;
         vcfCountWhenLoaded = 0;
         streamAlleleRunStart = null;
@@ -1739,6 +1745,14 @@ public class VariantList {
 
     public void setControlAfSourcePath(String controlAfSourcePath) {
         this.controlAfSourcePath = controlAfSourcePath;
+    }
+
+    public String getSvControlAfSourcePath() {
+        return svControlAfSourcePath;
+    }
+
+    public void setSvControlAfSourcePath(String svControlAfSourcePath) {
+        this.svControlAfSourcePath = svControlAfSourcePath;
     }
 
     public String getClinVarSourcePath() {
