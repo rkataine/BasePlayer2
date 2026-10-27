@@ -211,6 +211,61 @@ public final class TrackSettingsPopup {
     String initMax = track.getMaxValue() != null ? String.format("%.2f", track.getMaxValue()) : "";
     pendingMin = c.input("Min", initMin, pendingAutoScale);
     pendingMax = c.input("Max", initMax, pendingAutoScale);
+
+    if (track instanceof BigWigTrack bigWig) {
+      boolean baf = bigWig.getDisplayMode() == SignalDisplayMode.BAF;
+      boolean copyRatio = bigWig.getDisplayMode() == SignalDisplayMode.COPY_RATIO;
+      BooleanProperty bafMode = c.checkbox("BAF view (0–1, midline 0.5)", baf);
+      BooleanProperty segMode = c.checkbox("Copy-ratio segments (*.seg.bw)", copyRatio);
+      BooleanProperty log2Mode = c.checkbox(
+          "log₂ ratio (midline 0)", copyRatio && bigWig.isCopyRatioLog2());
+
+      bafMode.addListener((obs, o, on) -> {
+        if (Boolean.TRUE.equals(on)) {
+          segMode.set(false);
+          bigWig.setDisplayMode(SignalDisplayMode.BAF);
+          if (pendingAutoScale != null) {
+            pendingAutoScale.set(false);
+          }
+          if (pendingMin != null) {
+            pendingMin.set("0");
+          }
+          if (pendingMax != null) {
+            pendingMax.set("1");
+          }
+          bigWig.setMinValue(0.0);
+          bigWig.setMaxValue(1.0);
+        } else if (!Boolean.TRUE.equals(segMode.get())) {
+          bigWig.setDisplayMode(SignalDisplayMode.HISTOGRAM);
+        }
+        notifyChanged(onApply);
+      });
+      segMode.addListener((obs, o, on) -> {
+        if (Boolean.TRUE.equals(on)) {
+          bafMode.set(false);
+          bigWig.setDisplayMode(SignalDisplayMode.COPY_RATIO);
+          bigWig.setCopyRatioLog2(Boolean.TRUE.equals(log2Mode.get()));
+          if (pendingAutoScale != null) {
+            pendingAutoScale.set(false);
+          }
+          syncCopyRatioScaleFields(bigWig);
+        } else if (!Boolean.TRUE.equals(bafMode.get())) {
+          bigWig.setDisplayMode(SignalDisplayMode.HISTOGRAM);
+        }
+        notifyChanged(onApply);
+      });
+      log2Mode.addListener((obs, o, on) -> {
+        if (bigWig.getDisplayMode() != SignalDisplayMode.COPY_RATIO) {
+          return;
+        }
+        bigWig.setCopyRatioLog2(Boolean.TRUE.equals(on));
+        if (pendingAutoScale != null) {
+          pendingAutoScale.set(false);
+        }
+        syncCopyRatioScaleFields(bigWig);
+        notifyChanged(onApply);
+      });
+    }
     BooleanProperty inAggregate = c.checkbox(
         "Include in aggregate", !track.isAggregateDisabled());
 
@@ -241,6 +296,20 @@ public final class TrackSettingsPopup {
     });
 
     return c;
+  }
+
+  private void syncCopyRatioScaleFields(BigWigTrack bigWig) {
+    if (bigWig == null) {
+      return;
+    }
+    Double min = bigWig.getMinValue();
+    Double max = bigWig.getMaxValue();
+    if (pendingMin != null) {
+      pendingMin.set(min != null ? String.format("%.2f", min) : "");
+    }
+    if (pendingMax != null) {
+      pendingMax.set(max != null ? String.format("%.2f", max) : "");
+    }
   }
 
   private void flushTextFields() {

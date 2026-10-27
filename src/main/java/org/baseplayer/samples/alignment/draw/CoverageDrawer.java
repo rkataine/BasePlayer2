@@ -301,7 +301,7 @@ public class CoverageDrawer {
     // when multiple genomic positions land in one pixel (zoom-out within read
     // view), giving misleading variant counts on the coverage track. Mirrors
     // the bin-level logic used by AlignmentFile's streamed coverage matrix cache.
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked"})
     java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[numColumns];
 
     // Single pass through reads
@@ -981,7 +981,6 @@ public class CoverageDrawer {
 
   // ── Static smoothing utilities ──
 
-  /** In-place smoothing for methylation ratio arrays, handling -1 (no data) gaps. */
   /**
    * Draws chromosome-level sampled coverage for one sample.
    * Used when zoomed out beyond the full-coverage view length.

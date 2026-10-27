@@ -27,6 +27,7 @@ import javafx.util.Duration;
  * Canvas component for drawing chromosome cytobands with interactive navigation.
  * Supports dragging the view indicator and selection to zoom.
  */
+@SuppressWarnings("this-escape")
 public class CytobandCanvas extends Canvas {
   
   public static final double CYTO_PADDING_X = 5;
@@ -181,8 +182,8 @@ public class CytobandCanvas extends Canvas {
       double bandStart = Math.min(band.start(), drawStack.chromSize);
       double bandEnd = Math.min(band.end(), drawStack.chromSize);
       
-      double xStart = CYTO_PADDING_X + (bandStart / (double)drawStack.chromSize) * cytoWidth;
-      double xEnd = CYTO_PADDING_X + (bandEnd / (double)drawStack.chromSize) * cytoWidth;
+      double xStart = CYTO_PADDING_X + (bandStart / drawStack.chromSize) * cytoWidth;
+      double xEnd = CYTO_PADDING_X + (bandEnd / drawStack.chromSize) * cytoWidth;
       
       if (mouseX >= xStart && mouseX <= xEnd) {
         if (band.name().equals(currentHoveredBand)) return;
@@ -318,8 +319,8 @@ public class CytobandCanvas extends Canvas {
       double bandStart = Math.min(band.start(), drawStack.chromSize);
       double bandEnd = Math.min(band.end(), drawStack.chromSize);
       
-      double xStart = CYTO_PADDING_X + (bandStart / (double)drawStack.chromSize) * cytoWidth;
-      double xEnd = CYTO_PADDING_X + (bandEnd / (double)drawStack.chromSize) * cytoWidth;
+      double xStart = CYTO_PADDING_X + (bandStart / drawStack.chromSize) * cytoWidth;
+      double xEnd = CYTO_PADDING_X + (bandEnd / drawStack.chromSize) * cytoWidth;
       double bandWidth = Math.max(1, xEnd - xStart);
       
       Color baseColor = getCytobandColor(band.stain());

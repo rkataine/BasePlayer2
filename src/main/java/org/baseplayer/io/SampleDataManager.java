@@ -20,6 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import org.baseplayer.MainApp;
 import org.baseplayer.components.SampleOpenFailuresDialog;
 import org.baseplayer.components.sidebars.OpenDirectorySamplesDialog;
+import org.baseplayer.components.sidebars.OpenDragenDialog;
 import org.baseplayer.components.sidebars.SelectSampleDirectoriesDialog;
 import org.baseplayer.controllers.MainController;
 import org.baseplayer.draw.DrawStack;
@@ -27,6 +28,10 @@ import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
+import org.baseplayer.io.dragen.DragenAnalysisKind;
+import org.baseplayer.io.dragen.DragenFolderScan;
+import org.baseplayer.io.dragen.DragenFolderScanner;
+import org.baseplayer.io.dragen.DragenLoadPlan;
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.project.SessionDocumentSync;
@@ -44,6 +49,8 @@ import org.baseplayer.variant.SomaticSampleResolver;
 import org.baseplayer.variant.VariantLoader;
 
 import javafx.application.Platform;
+import javafx.scene.control.Alert;
+import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
 
@@ -112,6 +119,154 @@ public class SampleDataManager {
 
       openDirectoriesWithSettings(List.of(dir), settings);
     }
+  }
+
+  /**
+   * Choose a DRAGEN output folder, pick analyses in a dedicated dialog, then
+   * load matching BAM/VCF and companion BigWigs onto one sample track.
+   */
+  public static void openDragenFolder() {
+    DirectoryChooser chooser = new DirectoryChooser();
+    chooser.setTitle("Open DRAGEN folder");
+    File lastDir = UserPreferences.getLastDirectory("DRAGEN");
+    if (lastDir != null) {
+      try {
+        chooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    File dir = chooser.showDialog(MainApp.stage);
+    if (dir == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("DRAGEN", dir);
+    openDragenFolder(dir);
+  }
+
+  /** Open the given DRAGEN output directory with the analysis picker. */
+  public static void openDragenFolder(File directory) {
+    if (directory == null || !directory.isDirectory()) {
+      return;
+    }
+    DragenFolderScan scan = DragenFolderScanner.scan(directory);
+    if (!scan.looksLikeDragen() || scan.available().isEmpty()) {
+      Alert alert = new Alert(Alert.AlertType.INFORMATION);
+      alert.setTitle("Open DRAGEN");
+      alert.setHeaderText("No DRAGEN outputs found");
+      alert.setContentText(
+          "No recognized DRAGEN files in:\n" + directory.getAbsolutePath()
+              + "\n\nExpected files such as *.hard-filtered.vcf.gz, *.cnv.vcf.gz, or *-replay.json.");
+      alert.initOwner(MainApp.stage);
+      alert.showAndWait();
+      return;
+    }
+    OpenDragenDialog.show(MainApp.stage, scan)
+        .ifPresent(result -> loadDragenFolder(scan, result));
+  }
+
+  private static void loadDragenFolder(DragenFolderScan scan, OpenDragenDialog.Result selection) {
+    Set<DragenAnalysisKind> selected = selection.kinds();
+    DragenLoadPlan plan = DragenFolderScanner.resolveLoadPlan(
+        scan, selected, selection.optionalBigWigs());
+    if (plan.isEmpty()) {
+      return;
+    }
+    String stem = plan.stem().isBlank()
+        ? (scan.directory() != null ? scan.directory().getName() : "DRAGEN")
+        : plan.stem();
+
+    SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
+    List<File> bamFiles = plan.bamFiles();
+    List<File> vcfFiles = plan.vcfFiles();
+    List<File> bigWigFiles = plan.bigWigFiles();
+
+    ThreadRunner.get().submit(
+        "Loading DRAGEN samples",
+        () -> {
+          record DragenLoaded(List<Sample> bams, List<Sample> bigWigs) {}
+          List<Sample> loadedBams = new ArrayList<>();
+          List<Sample> loadedBigWigs = new ArrayList<>();
+          int total = Math.max(1, bamFiles.size() + bigWigFiles.size());
+          int index = 0;
+          for (File bam : bamFiles) {
+            if (bam == null) {
+              continue;
+            }
+            index++;
+            org.baseplayer.services.LoadingManager.get().setProgress(index, total);
+            try {
+              loadedBams.add(new Sample(bam.toPath()));
+            } catch (IOException e) {
+              System.err.println("Failed to open BAM: " + bam + " - " + e.getMessage());
+              failures.add(bam, e.getMessage());
+            }
+          }
+          for (File bigWig : bigWigFiles) {
+            if (bigWig == null) {
+              continue;
+            }
+            index++;
+            org.baseplayer.services.LoadingManager.get().setProgress(index, total);
+            try {
+              BigWigTrack bw = new BigWigTrack(bigWig.toPath());
+              loadedBigWigs.add(new Sample(bigWig.toPath(), bw));
+            } catch (IOException e) {
+              System.err.println("Failed to open BigWig: " + bigWig + " - " + e.getMessage());
+              failures.add(bigWig, e.getMessage());
+            }
+          }
+          return new DragenLoaded(loadedBams, loadedBigWigs);
+        },
+        loaded -> {
+          SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+          SampleTrack track = new SampleTrack(stem);
+          track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(stem);
+          if (loaded != null) {
+            if (loaded.bams() != null) {
+              for (Sample sample : loaded.bams()) {
+                if (sample != null) {
+                  track.addSample(sample);
+                  UserPreferences.addRecentFile("BAM", sample.getPath().toFile());
+                }
+              }
+            }
+            if (loaded.bigWigs() != null) {
+              for (Sample sample : loaded.bigWigs()) {
+                if (sample == null) {
+                  continue;
+                }
+                BigWigTrack bw = sample.getBigWigTrack();
+                if (bw != null) {
+                  bw.setVisible(true);
+                  bw.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+                }
+                track.addSample(sample);
+                UserPreferences.addRecentFile("BIGWIG", sample.getPath().toFile());
+              }
+            }
+          }
+          registry.includeNewTracksAtEndResetHeight();
+          ProjectSessionState.get().markDirty();
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          MainController.initializeLoadRegionButton();
+          MainController.addLoadRegionButtonToViewport();
+          // Kick sample-body BigWig region load once the track is registered.
+          for (org.baseplayer.draw.DrawStack stack :
+              ServiceRegistry.getInstance().getDrawStackManager().getStacks()) {
+            if (stack.sampleTrackCanvas != null) {
+              stack.sampleTrackCanvas.forceNotifyRegionChanged();
+            }
+          }
+
+          if (!vcfFiles.isEmpty()) {
+            loadDirectoryVcfs(vcfFiles, false, Map.of(), failures);
+          } else {
+            failures.commitAndShowLater();
+          }
+        });
   }
 
   /** One directory with samples, or immediate subfolders that contain samples. */
@@ -511,6 +666,19 @@ public class SampleDataManager {
       boolean addToGroup,
       Map<File, String> groupNameByDir,
       SampleOpenFailuresDialog priorFailures) {
+    loadDirectoryVcfs(vcfFiles, addToGroup, groupNameByDir, priorFailures, true);
+  }
+
+  /**
+   * @param openVariantManager when false, VCFs are still registered and variants
+   *     loaded for the current view, but the Variant Manager window is not shown
+   */
+  private static void loadDirectoryVcfs(
+      List<File> vcfFiles,
+      boolean addToGroup,
+      Map<File, String> groupNameByDir,
+      SampleOpenFailuresDialog priorFailures,
+      boolean openVariantManager) {
     if (vcfFiles == null || vcfFiles.isEmpty()) {
       if (priorFailures != null) {
         priorFailures.commitAndShowLater();
@@ -540,8 +708,10 @@ public class SampleDataManager {
           Platform.runLater(() -> {
             finishVcfBatchUi(addedTracks);
             VcfManager.getInstance().loadVariantsForCurrentView();
-            org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
-                MainApp.stage, VcfManager.getInstance(), null);
+            if (openVariantManager) {
+              org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+                  MainApp.stage, VcfManager.getInstance(), null);
+            }
             MainController.initializeLoadRegionButton();
             MainController.addLoadRegionButtonToViewport();
             SampleOpenFailuresDialog.showPendingNonModal();
@@ -2062,16 +2232,19 @@ public class SampleDataManager {
     List<Sample> sourceBeds = samplesOfType(source, Sample.DataType.BED);
     List<Sample> sourceVcfs = samplesOfType(source, Sample.DataType.VCF);
     List<Sample> sourceAb1s = samplesOfType(source, Sample.DataType.AB1);
+    List<Sample> sourceBigWigs = samplesOfType(source, Sample.DataType.BIGWIG);
 
     boolean touchedVcfVisibility = false;
     for (SampleTrack track : registry.getSampleTracks()) {
       if (track == null || track == source) {
         continue;
       }
+      track.setSignalLayout(source.getSignalLayout());
       List<Sample> targetBams = samplesOfType(track, Sample.DataType.BAM);
       List<Sample> targetBeds = samplesOfType(track, Sample.DataType.BED);
       List<Sample> targetVcfs = samplesOfType(track, Sample.DataType.VCF);
       List<Sample> targetAb1s = samplesOfType(track, Sample.DataType.AB1);
+      List<Sample> targetBigWigs = samplesOfType(track, Sample.DataType.BIGWIG);
 
       for (int i = 0; i < targetBams.size() && i < sourceBams.size(); i++) {
         Sample from = sourceBams.get(i);
@@ -2104,6 +2277,12 @@ public class SampleDataManager {
       for (int i = 0; i < targetAb1s.size() && i < sourceAb1s.size(); i++) {
         Sample from = sourceAb1s.get(i);
         Sample to = targetAb1s.get(i);
+        to.visible = from.visible;
+        to.overlay = from.overlay;
+      }
+      for (int i = 0; i < targetBigWigs.size() && i < sourceBigWigs.size(); i++) {
+        Sample from = sourceBigWigs.get(i);
+        Sample to = targetBigWigs.get(i);
         to.visible = from.visible;
         to.overlay = from.overlay;
       }

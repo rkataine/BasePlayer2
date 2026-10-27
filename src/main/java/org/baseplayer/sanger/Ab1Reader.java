@@ -185,7 +185,7 @@ public final class Ab1Reader {
     List<Integer> list = new ArrayList<>(numElements);
     buf.position(offset);
     for (int k = 0; k < numElements; k++) {
-      list.add((int) (buf.getShort() & 0xFFFF));
+      list.add(buf.getShort() & 0xFFFF);
     }
     return list;
   }

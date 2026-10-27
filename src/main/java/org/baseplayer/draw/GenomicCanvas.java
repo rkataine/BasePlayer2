@@ -20,6 +20,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 
+@SuppressWarnings("this-escape")
 public class GenomicCanvas extends Canvas {
   //private Pane parent;
   public DrawStack drawStack;

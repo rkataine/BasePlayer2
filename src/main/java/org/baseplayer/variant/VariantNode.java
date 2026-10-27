@@ -70,6 +70,18 @@ public class VariantNode {
     public Double controlAf;
 
     /**
+     * ClinVar clinical significance ({@code CLNSIG}) when the allele matches a
+     * loaded ClinVar VCF. Null when unmatched or ClinVar annotation has not run.
+     */
+    public String clinVarClnsig;
+
+    /**
+     * ClinVar Variation ID from the ClinVar VCF {@code ID} column (e.g. {@code 1473769}).
+     * Used for NCBI ClinVar links. Null when unmatched or not annotated.
+     */
+    public String clinVarVariationId;
+
+    /**
      * VCF call data for one sample at this allele.
      * Identity is the {@link SampleTrack}; {@link #getTrackIndex()} always resolves
      * against the live sample list so drawing follows list add/remove/reorder.

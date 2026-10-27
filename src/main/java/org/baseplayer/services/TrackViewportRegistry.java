@@ -91,7 +91,11 @@ public abstract class TrackViewportRegistry {
     return lastVisibleTrackSlot;
   }
 
-  /** Bumped when the visible first/last slot window changes (sidebar scroll, range handles). */
+  /**
+   * Bumped when the visible first/last slot window or row height changes
+   * (sidebar scroll, range handles, body canvas resize). Sidebars listen so
+   * track rows stay aligned with the body without needing a hover redraw.
+   */
   public IntegerProperty visibleWindowRevisionProperty() {
     return visibleWindowRevision;
   }
@@ -146,6 +150,11 @@ public abstract class TrackViewportRegistry {
 
   public void unlockTrackRowHeight() {
     trackRowHeightLocked = false;
+  }
+
+  /** Clear the deferred “default row height” fit so ensure can shrink below default. */
+  protected void clearPendingDefaultRowHeightFit() {
+    pendingDefaultRowHeightFit = false;
   }
 
   public boolean isTrackRowHeightLocked() {
@@ -223,8 +232,6 @@ public abstract class TrackViewportRegistry {
 
     if (rangeChanged || heightChanged) {
       onVisibleTrackRangeOrRowHeightChanged();
-    }
-    if (rangeChanged) {
       bumpVisibleWindowRevision();
     }
   }
@@ -453,18 +460,20 @@ public abstract class TrackViewportRegistry {
       return;
     }
     masterAggregatesEnabled.set(enabled);
-    if (!enabled) {
+    if (!enabled || getDisplayedTrackCount() <= 1) {
+      // Single-sample / feature: title bar only — aggregate density is not useful.
       setMasterBandHeightPixels(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
-    } else if (getDisplayedTrackCount() > 1) {
-      setMasterBandHeightPixels(EXPANDED_MASTER_BAND_HEIGHT_PIXELS);
     } else {
-      setMasterBandHeightPixels(AGGREGATE_MASTER_BAND_HEIGHT_PIXELS);
+      setMasterBandHeightPixels(EXPANDED_MASTER_BAND_HEIGHT_PIXELS);
     }
   }
 
-  /** True when aggregate density / cohort summaries should run and paint. */
+  /**
+   * True when aggregate density / cohort summaries should run and paint.
+   * Requires the aggregates toggle and more than one displayed track.
+   */
   public boolean shouldPaintMasterAggregates() {
-    return isMasterAggregatesEnabled();
+    return isMasterAggregatesEnabled() && getDisplayedTrackCount() > 1;
   }
 
   public List<VisibleTrackSlot> buildVisibleTrackSlotList(List<Integer> displayedBackingTrackIndices) {

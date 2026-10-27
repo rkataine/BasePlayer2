@@ -16,11 +16,21 @@ import org.baseplayer.samples.alignment.AlignmentFile;
  * (BAM, BED, VCF, etc.) — all treated equally under this individual.
  * The individual's name is what is visible in the track header.
  */
+@SuppressWarnings("this-escape")
 public class SampleTrack implements Closeable {
+
+  /** How companion BigWig signals share the sample row. */
+  public enum SignalLayout {
+    /** All BigWigs paint the full row with transparency (BAM stays behind). */
+    OVERLAY,
+    /** BigWigs get equal-height vertical lanes. */
+    STACK
+  }
 
   private String name;
   private String customName;
   private final List<Sample> samples = new ArrayList<>();
+  private SignalLayout signalLayout = SignalLayout.OVERLAY;
   /**
    * Index in {@link org.baseplayer.services.SampleRegistry#getSampleTracks()}, or -1.
    * Maintained by the registry for O(1) lookups (avoids {@code indexOf} on hot paths).
@@ -166,6 +176,16 @@ public class SampleTrack implements Closeable {
 
   public void clearTags() {
     tags.clear();
+  }
+
+  // ── Signal layout (BigWig companions) ──
+
+  public SignalLayout getSignalLayout() {
+    return signalLayout;
+  }
+
+  public void setSignalLayout(SignalLayout layout) {
+    this.signalLayout = layout != null ? layout : SignalLayout.OVERLAY;
   }
 
   // ── Samples (data files) ──

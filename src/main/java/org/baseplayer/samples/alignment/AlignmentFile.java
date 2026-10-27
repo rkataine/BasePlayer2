@@ -41,6 +41,7 @@ import javafx.application.Platform;
  * {@link org.baseplayer.samples.Sample}; this class handles BAM-specific
  * read fetching, caching, packing, and coverage sampling.
  */
+@SuppressWarnings("this-escape")
 public class AlignmentFile implements Closeable {
 
   /** Exclusive read stacking modes exposed in track/master settings. */
@@ -972,7 +973,7 @@ public class AlignmentFile implements Closeable {
       double[] bisulfiteBin = req.methyl ? new double[req.numBins] : null;
       int[] cgCount = req.methyl ? computeCGBinCounts(req) : null;
 
-      @SuppressWarnings("unchecked")
+      @SuppressWarnings({"unchecked"})
       java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[req.numBins];
 
       List<BAMRecord> detectionReads = new ArrayList<>();

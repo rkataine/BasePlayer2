@@ -13,7 +13,6 @@ import org.baseplayer.features.MotifTrackOpen;
 import org.baseplayer.features.Track;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.services.FeatureTrackViewportRegistry;
-import org.baseplayer.services.SampleRegistry;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
@@ -67,11 +66,12 @@ import javafx.util.Duration;
 
 /**
  * Scrollable track body under an aggregate band. Create one instance bound to
- * {@link SampleRegistry} (sample pane) and one bound to
+ * {@link org.baseplayer.services.SampleRegistry} (sample pane) and one bound to
  * {@link FeatureTrackViewportRegistry} (feature pane) — same class, same draw
  * pipeline; availability of variant/coverage/read/feature layers follows the
  * bound registry and loaded data.
  */
+@SuppressWarnings("this-escape")
 public class TrackBodyCanvas extends GenomicCanvas {
 
   public static final double TRACK_PADDING = 2;
@@ -368,6 +368,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
   private void prepareTrackDraw() {
     if (isSampleBody()) {
       readScrollbarComponent.beginFrame();
+      notifySampleBigWigRegionChanged(false);
       return;
     }
     notifyRegionChanged();
@@ -496,6 +497,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
     }
     if (canDrawVariantData(slot)) {
       drawVariantData(slot, rowTopY, rowHeight);
+    }
+    // BigWig companions paint after BAM/coverage/variants so signals sit on top.
+    if (canDrawSampleBigWigData(slot)) {
+      drawSampleBigWigData(slot, rowTopY, rowHeight);
     }
   }
 
@@ -787,9 +792,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
   }
 
   private VariantDrawer.VariantHit findVariantHit(double x, double y) {
-    // Hover/click only at realtime allele zoom (filled rects + hit targets).
-    // Mid-zoom still paints 1px ticks on load/zoom/pan, but skips hit-testing.
-    if (drawStack == null || !VariantDrawer.isRealtimeAlleleZoom(drawStack.getPixelSize())) {
+    // Hover/click at realtime allele zoom (filled rects), or anytime in BAF-dot mode.
+    boolean allowHits = variantDrawer.isBafDisplayMode()
+        || (drawStack != null && VariantDrawer.isRealtimeAlleleZoom(drawStack.getPixelSize()));
+    if (!allowHits) {
       return null;
     }
     if (!canDrawVariantData()) {
@@ -1016,6 +1022,102 @@ public class TrackBodyCanvas extends GenomicCanvas {
       msg = "Navigate near locus to align";
     }
     gc.fillText(msg, 8, y + height / 2 + 4);
+  }
+
+  // ── Sample-owned BigWig signals (DRAGEN companions, etc.) ───────────────────
+
+  private static final double SAMPLE_BIGWIG_OVERLAY_ALPHA = 0.65;
+  private static final double SAMPLE_BIGWIG_STACK_GAP = 1.0;
+
+  private boolean canDrawSampleBigWigData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    return isSampleBody() && hasVisibleSampleOfType(slot, Sample.DataType.BIGWIG);
+  }
+
+  private void drawSampleBigWigData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null || drawStack == null) {
+      return;
+    }
+    List<Sample> signals = new ArrayList<>();
+    for (Sample sample : track.getSamples()) {
+      if (sample.visible
+          && sample.getDataType() == Sample.DataType.BIGWIG
+          && sample.getBigWigTrack() != null) {
+        signals.add(sample);
+      }
+    }
+    if (signals.isEmpty()) {
+      return;
+    }
+
+    String chrom = drawStack.getChromosome();
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double width = getWidth();
+    SampleTrack.SignalLayout layout = track.getSignalLayout();
+
+    if (layout == SampleTrack.SignalLayout.STACK) {
+      int n = signals.size();
+      double totalGap = SAMPLE_BIGWIG_STACK_GAP * Math.max(0, n - 1);
+      double laneH = Math.max(4, (rowHeight - totalGap) / n);
+      for (int i = 0; i < n; i++) {
+        Sample sample = signals.get(i);
+        BigWigTrack bw = sample.getBigWigTrack();
+        double laneY = rowTopY + i * (laneH + SAMPLE_BIGWIG_STACK_GAP);
+        bw.draw(gc, 0, laneY, width, laneH, chrom, viewStart, viewEnd, true);
+      }
+      return;
+    }
+
+    // OVERLAY: full-row translucent paint; skip opaque backgrounds so BAM stays visible.
+    for (Sample sample : signals) {
+      BigWigTrack bw = sample.getBigWigTrack();
+      double alpha = sample.overlay ? SAMPLE_BIGWIG_OVERLAY_ALPHA : 0.9;
+      gc.save();
+      try {
+        gc.setGlobalAlpha(alpha);
+        bw.draw(gc, 0, rowTopY, width, rowHeight, chrom, viewStart, viewEnd, false);
+      } finally {
+        gc.restore();
+      }
+    }
+  }
+
+  private void notifySampleBigWigRegionChanged(boolean force) {
+    if (!isSampleBody() || drawStack == null) {
+      return;
+    }
+    if (drawStack.nav != null && drawStack.nav.animationRunning) {
+      return;
+    }
+    String chrom = drawStack.getChromosome();
+    long start = (long) drawStack.getViewStart();
+    long end = (long) drawStack.getViewEnd();
+    if (!force
+        && chrom != null
+        && chrom.equals(lastNotifiedChrom)
+        && start == lastNotifiedStart
+        && end == lastNotifiedEnd) {
+      return;
+    }
+    lastNotifiedChrom = chrom;
+    lastNotifiedStart = start;
+    lastNotifiedEnd = end;
+    for (SampleTrack track : sampleRegistry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (!sample.visible || sample.getDataType() != Sample.DataType.BIGWIG) {
+          continue;
+        }
+        BigWigTrack bw = sample.getBigWigTrack();
+        if (bw != null && bw.isVisible()) {
+          bw.onRegionChanged(chrom, start, end, drawStack);
+        }
+      }
+    }
   }
 
   // ── Feature data ─────────────────────────────────────────────────────────────
@@ -2548,6 +2650,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
   }
 
   private void notifyRegionChanged(boolean forceFetchForVisibleTracks) {
+    if (isSampleBody()) {
+      notifySampleBigWigRegionChanged(forceFetchForVisibleTracks);
+      return;
+    }
     if (featureRegistry == null || drawStack == null) {
       return;
     }
@@ -2613,6 +2719,16 @@ public class TrackBodyCanvas extends GenomicCanvas {
         String chrom = drawStack.getChromosome();
         if (chrom != null) {
           motifTrack.onRegionChanged(
+              chrom, (long) drawStack.getViewStart(), (long) drawStack.getViewEnd(), drawStack);
+        }
+      }
+    }
+    if (track instanceof BigWigTrack bigWigTrack) {
+      bigWigTrack.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+      if (drawStack != null && track.isVisible()) {
+        String chrom = drawStack.getChromosome();
+        if (chrom != null) {
+          bigWigTrack.onRegionChanged(
               chrom, (long) drawStack.getViewStart(), (long) drawStack.getViewEnd(), drawStack);
         }
       }

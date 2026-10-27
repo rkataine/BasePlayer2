@@ -126,6 +126,20 @@ public class VariantFilter {
     private double maxControlAf = 0.01;
 
     /**
+     * When true, keep only variants whose ClinVar {@code CLNSIG} falls in
+     * {@link #allowedClinVarClasses}. Unmatched alleles are hidden.
+     * When false, ClinVar is annotation-only (no display filter).
+     */
+    private boolean filterByClinVarSignificance = false;
+    /**
+     * Allowed ClinVar significance buckets when {@link #filterByClinVarSignificance}
+     * is on. Empty means reject all (nothing passes).
+     */
+    private EnumSet<org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass>
+        allowedClinVarClasses = EnumSet.noneOf(
+            org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass.class);
+
+    /**
      * Inclusive minimum SV span length in bp ({@code svEnd - position}).
      * {@code 0} = no minimum. Applied only to structural types.
      */
@@ -168,6 +182,61 @@ public class VariantFilter {
     public double getMaxControlAf() { return maxControlAf; }
     public void setMaxControlAf(double maxControlAf) {
         this.maxControlAf = maxControlAf < 0 ? 0.01 : Math.min(1.0, maxControlAf);
+    }
+
+    public boolean isFilterByClinVarSignificance() { return filterByClinVarSignificance; }
+    public void setFilterByClinVarSignificance(boolean filterByClinVarSignificance) {
+        this.filterByClinVarSignificance = filterByClinVarSignificance;
+    }
+
+    public EnumSet<org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass>
+            getAllowedClinVarClasses() {
+        return allowedClinVarClasses.clone();
+    }
+
+    public void setAllowedClinVarClasses(
+            java.util.Collection<org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass>
+                classes) {
+        allowedClinVarClasses = EnumSet.noneOf(
+            org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass.class);
+        if (classes != null) {
+            for (org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass c : classes) {
+                if (c != null) {
+                    allowedClinVarClasses.add(c);
+                }
+            }
+        }
+    }
+
+    /** @deprecated use {@link #isFilterByClinVarSignificance()} */
+    @Deprecated
+    public boolean isFilterRequireClinVar() {
+        return filterByClinVarSignificance;
+    }
+
+    /** @deprecated use {@link #setFilterByClinVarSignificance(boolean)} */
+    @Deprecated
+    public void setFilterRequireClinVar(boolean filterRequireClinVar) {
+        this.filterByClinVarSignificance = filterRequireClinVar;
+    }
+
+    /** @deprecated use {@link #getAllowedClinVarClasses()} */
+    @Deprecated
+    public boolean isFilterPathogenicClinVar() {
+        return filterByClinVarSignificance
+            && allowedClinVarClasses.size() == 1
+            && allowedClinVarClasses.contains(
+                org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass.PATHOGENIC);
+    }
+
+    /** @deprecated use {@link #setAllowedClinVarClasses} */
+    @Deprecated
+    public void setFilterPathogenicClinVar(boolean filterPathogenicClinVar) {
+        if (filterPathogenicClinVar) {
+            this.filterByClinVarSignificance = true;
+            this.allowedClinVarClasses = EnumSet.of(
+                org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass.PATHOGENIC);
+        }
     }
 
     public boolean isCancerGenesOnly() { return cancerGenesOnly; }
@@ -881,6 +950,8 @@ public class VariantFilter {
         copy.minAlleleFraction = this.minAlleleFraction;
         copy.maxAlleleFraction = this.maxAlleleFraction;
         copy.filterByControlAf = this.filterByControlAf;
+        copy.filterByClinVarSignificance = this.filterByClinVarSignificance;
+        copy.allowedClinVarClasses = this.allowedClinVarClasses.clone();
         copy.maxControlAf = this.maxControlAf;
         copy.cancerGenesOnly = this.cancerGenesOnly;
         copy.minSharedSamples = this.minSharedSamples;
@@ -1160,6 +1231,37 @@ public class VariantFilter {
      * Used when building the gene→samples index so those constraints apply to the gene union.
      */
     public boolean passesBaseNodeLevel(VariantNode node) {
+        if (!passesBaseNodeLevelWithoutDisplayAnnotators(node)) {
+            return false;
+        }
+        return passesDisplayAnnotationFilters(node);
+    }
+
+    /**
+     * Display-time gates that depend on post-load annotators (ClinVar). Safe for
+     * visible-chain rebuild after annotation; must not be used for cache retention.
+     */
+    private boolean passesDisplayAnnotationFilters(VariantNode node) {
+        if (node == null) {
+            return false;
+        }
+        VariantFilter f = classSlice(node.type);
+        if (f.filterByClinVarSignificance) {
+            org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass cls =
+                org.baseplayer.variant.annotation.ClinVarAnnotator.classify(node.clinVarClnsig);
+            if (cls == null || !f.allowedClinVarClasses.contains(cls)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Type / quality / gene-annotation / INFO / control-AF checks without ClinVar.
+     * Used by {@link #passesCacheRetention} so annotate-all does not delete alleles
+     * before ClinVar annotation runs.
+     */
+    private boolean passesBaseNodeLevelWithoutDisplayAnnotators(VariantNode node) {
         if (node == null) return false;
         VariantFilter f = classSlice(node.type);
         if (!f.allowedTypes.contains(node.type)) return false;
@@ -1188,6 +1290,10 @@ public class VariantFilter {
                 && node.controlAf > f.maxControlAf) {
             return false;
         }
+
+        // ClinVar significance is display-only (see {@link #passesDisplayAnnotationFilters}).
+        // It must not run here: annotate-all / cache retention call this before ClinVar
+        // annotation, and rejecting unmatched alleles would empty the chromosome cache.
 
         if (!f.infoFieldFilters.isEmpty()) {
             for (Map.Entry<String, String> entry : f.infoFieldFilters.entrySet()) {
@@ -1947,14 +2053,15 @@ public class VariantFilter {
 
     /**
      * Post-annotation cache retention: type / quality / effect / cancer / DP / AF only.
-     * Does <b>not</b> apply gene-level, comparison-window, or group shared-sample gates —
-     * those are display-time filters and must not delete alleles from the loaded cache.
+     * Does <b>not</b> apply gene-level, comparison-window, group, or ClinVar significance
+     * gates — those are display-time filters and must not delete alleles from the cache
+     * (ClinVar is annotated after this retention step during annotate-all).
      */
     public boolean passesCacheRetention(VariantNode node) {
         if (node == null) {
             return false;
         }
-        if (!passesBaseNodeLevel(node)) {
+        if (!passesBaseNodeLevelWithoutDisplayAnnotators(node)) {
             return false;
         }
         final boolean[] any = { false };
@@ -1984,6 +2091,7 @@ public class VariantFilter {
             && minAlleleFraction == 0.0
             && maxAlleleFraction >= 1.0
             && !filterByControlAf
+            && !filterByClinVarSignificance
             && minSvLengthBp <= 0
             && maxSvLengthBp == Long.MAX_VALUE
             && !cancerGenesOnly

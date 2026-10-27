@@ -33,6 +33,7 @@ import javafx.scene.text.FontWeight;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
 
+@SuppressWarnings("this-escape")
 public class FeatureTrackListPanel extends TrackListPanel {
 
   private static final Font NAME_FONT = Font.font("Segoe UI", 13);

@@ -58,6 +58,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 
+@SuppressWarnings("this-escape")
 public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
   public final LoadRegionButton loadRegionButton;
@@ -659,6 +660,10 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     MenuIcons.directory(directoryItem);
     directoryItem.setOnAction(e -> SampleDataManager.openDirectorySamples());
 
+    MenuItem dragenItem = new MenuItem("DRAGEN…");
+    MenuIcons.directory(dragenItem);
+    dragenItem.setOnAction(e -> SampleDataManager.openDragenFolder());
+
     MenuItem bedItem = new MenuItem("BED");
     MenuIcons.bed(bedItem);
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
@@ -672,7 +677,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     ab1Item.setOnAction(e -> SampleDataManager.addAb1Files());
 
     menu.getItems().addAll(
-        vcfItem, bamItem, directoryItem, new SeparatorMenuItem(), bedItem, bigwigItem, ab1Item);
+        vcfItem, bamItem, directoryItem, dragenItem,
+        new SeparatorMenuItem(), bedItem, bigwigItem, ab1Item);
     return menu;
   }
 
@@ -685,6 +691,37 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     settingsMenu.getItems().addAll(
         new CustomMenuItem(titleLabel, false),
         new SeparatorMenuItem());
+
+    // VCF allele-frequency display (BAF dots on sample rows)
+    VBox vcfDisplayBox = new VBox(4);
+    vcfDisplayBox.setPadding(new Insets(4, 8, 4, 8));
+    CheckBox bafDotsCb = new CheckBox("Show VCF alleles as BAF dots (0–1)");
+    boolean bafOn = false;
+    DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
+    for (DrawStack stack : stacks.getStacks()) {
+      if (stack != null && stack.sampleTrackCanvas != null
+          && stack.sampleTrackCanvas.getVariantDrawer() != null
+          && stack.sampleTrackCanvas.getVariantDrawer().isBafDisplayMode()) {
+        bafOn = true;
+        break;
+      }
+    }
+    bafDotsCb.setSelected(bafOn);
+    bafDotsCb.getStyleClass().add("dark-checkbox");
+    bafDotsCb.setStyle("-fx-font-size: 12;");
+    bafDotsCb.selectedProperty().addListener((obs, o, n) -> {
+      boolean on = Boolean.TRUE.equals(n);
+      for (DrawStack stack : ServiceRegistry.getInstance().getDrawStackManager().getStacks()) {
+        if (stack != null && stack.sampleTrackCanvas != null
+            && stack.sampleTrackCanvas.getVariantDrawer() != null) {
+          stack.sampleTrackCanvas.getVariantDrawer().setBafDisplayMode(on);
+        }
+      }
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    });
+    vcfDisplayBox.getChildren().add(bafDotsCb);
+    settingsMenu.getItems().add(new CustomMenuItem(vcfDisplayBox, false));
+    settingsMenu.getItems().add(new SeparatorMenuItem());
 
     // Gather BAM files once for global controls.
     List<AlignmentFile> bamFiles = new ArrayList<>();

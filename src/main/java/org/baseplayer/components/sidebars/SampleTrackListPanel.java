@@ -8,6 +8,7 @@ import java.util.Set;
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.io.SampleDataManager;
+import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
@@ -33,8 +34,10 @@ import javafx.scene.control.ContextMenu;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.RadioMenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextField;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -45,6 +48,7 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.Window;
 
+@SuppressWarnings("this-escape")
 public class SampleTrackListPanel extends TrackListPanel {
 
   private static final double NAME_PAD_X = 8;
@@ -618,12 +622,51 @@ public class SampleTrackListPanel extends TrackListPanel {
     settingsMenu.setStyle(
         "-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
     addOpenedFilesMenuItems(settingsMenu, track, sampleIndex);
+    addSignalLayoutMenuItems(settingsMenu, track);
     addSampleGroupMenuItems(settingsMenu, track, sampleIndex);
     addMethylationSettings(settingsMenu, track);
     addHaplotypeInformation(settingsMenu, track);
     addReadRenderingSettings(settingsMenu, track);
     addApplySettingsToAllItem(settingsMenu, track);
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  private void addSignalLayoutMenuItems(ContextMenu settingsMenu, SampleTrack track) {
+    boolean hasBigWig = false;
+    for (Sample sample : track.getSamples()) {
+      if (sample != null && sample.getDataType() == Sample.DataType.BIGWIG) {
+        hasBigWig = true;
+        break;
+      }
+    }
+    if (!hasBigWig) {
+      return;
+    }
+    settingsMenu.getItems().add(new SeparatorMenuItem());
+    Label header = new Label("BigWig layout");
+    header.setStyle(
+        "-fx-text-fill: " + AppTheme.chrome().mutedHex()
+            + "; -fx-font-size: 10; -fx-padding: 4 8 0 8;");
+    settingsMenu.getItems().add(new CustomMenuItem(header, false));
+
+    ToggleGroup group = new ToggleGroup();
+    RadioMenuItem overlay = new RadioMenuItem("Overlay (transparent)");
+    overlay.setToggleGroup(group);
+    overlay.setSelected(track.getSignalLayout() != SampleTrack.SignalLayout.STACK);
+    overlay.setOnAction(e -> {
+      track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
+      ProjectSessionState.get().markDirty();
+      onAfterVisibleTrackRangeChanged();
+    });
+    RadioMenuItem stack = new RadioMenuItem("Stack lanes");
+    stack.setToggleGroup(group);
+    stack.setSelected(track.getSignalLayout() == SampleTrack.SignalLayout.STACK);
+    stack.setOnAction(e -> {
+      track.setSignalLayout(SampleTrack.SignalLayout.STACK);
+      ProjectSessionState.get().markDirty();
+      onAfterVisibleTrackRangeChanged();
+    });
+    settingsMenu.getItems().addAll(overlay, stack);
   }
 
   private void addApplySettingsToAllItem(ContextMenu settingsMenu, SampleTrack track) {

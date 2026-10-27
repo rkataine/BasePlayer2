@@ -126,6 +126,19 @@ public class ProjectDocument {
     /** Display-time population AF filter (does not affect VCF load cache keys). */
     public boolean filterByControlAf;
     public double maxControlAf = 0.01;
+    /** Optional display-time ClinVar significance filter. */
+    public boolean filterByClinVarSignificance;
+    /**
+     * Allowed ClinVar significance buckets when filtering
+     * (comma-separated: {@code PATHOGENIC,VUS,BENIGN,OTHER}).
+     */
+    public String clinVarSignificanceClasses;
+    /** @deprecated prefer {@link #filterByClinVarSignificance} */
+    @Deprecated
+    public boolean filterRequireClinVar;
+    /** @deprecated prefer {@link #clinVarSignificanceClasses} */
+    @Deprecated
+    public boolean filterPathogenicClinVar;
   }
 
   /** Control Files tab: local gnomAD/control VCF path + pop-freq filter toggles. */
@@ -140,6 +153,21 @@ public class ProjectDocument {
      * Legacy single values such as {@code fin} are still accepted.
      */
     public String controlPopulation;
+    /** Absolute path to bgzipped+tabix ClinVar VCF, or null/blank when unused. */
+    public String clinVarVcfPath;
+    /** Optional display-time ClinVar significance filter (annotation always runs on Apply). */
+    public boolean filterByClinVarSignificance;
+    /**
+     * Allowed ClinVar significance buckets when filtering
+     * (comma-separated: {@code PATHOGENIC,VUS,BENIGN,OTHER}).
+     */
+    public String clinVarSignificanceClasses;
+    /** @deprecated prefer {@link #filterByClinVarSignificance} */
+    @Deprecated
+    public boolean filterRequireClinVar;
+    /** @deprecated prefer {@link #clinVarSignificanceClasses} */
+    @Deprecated
+    public boolean filterPathogenicClinVar;
   }
 
   /**
@@ -203,11 +231,13 @@ public class ProjectDocument {
     public List<Integer> groupIds = new ArrayList<>();
     /** Fixed sample tags ({@code MOTHER}, {@code FATHER}, …). */
     public List<String> tags = new ArrayList<>();
+    /** How companion BigWigs share the row: {@code OVERLAY} or {@code STACK}. */
+    public String signalLayout;
     public List<SampleFileSpec> samples = new ArrayList<>();
   }
 
   public static class SampleFileSpec {
-    public String type; // BAM, BED, VCF
+    public String type; // BAM, BED, VCF, BIGWIG, AB1
     public String path;
     public String pathRelative;
     public boolean visible = true;

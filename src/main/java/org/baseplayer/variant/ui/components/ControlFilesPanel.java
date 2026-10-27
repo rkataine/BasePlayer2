@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -13,12 +14,16 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.baseplayer.components.ColoredToggle;
+import org.baseplayer.components.InfoPopup;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.project.ProjectDocument;
 import org.baseplayer.project.SessionDocumentSync;
+import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
+import org.baseplayer.variant.annotation.ClinVarAnnotator;
+import org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.ControlFileStats;
 import org.baseplayer.variant.annotation.ControlFrequencyAnnotator.PopulationAnStats;
@@ -30,6 +35,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SplitPane;
@@ -45,13 +51,17 @@ import javafx.stage.Window;
 import javafx.util.Pair;
 
 /**
- * Control Files tab: load a local gnomAD-style sites VCF, pick population AF fields,
- * and optionally filter sample variants by control allele frequency.
- * Opening a file only loads metadata — click Apply to annotate.
+ * Control Files tab: control AF (left) and ClinVar annotation (right).
+ * Control VCF drives population AF filtering; ClinVar primarily annotates
+ * {@code CLNSIG} (optional significance filter). Opening a file only loads
+ * metadata; annotation runs automatically when a file is added or populations change,
+ * and during chromosome annotate/load.
  */
 public class ControlFilesPanel {
 
     private static final int STATS_SAMPLE_ROWS = 10_000;
+    private static final String CLINVAR_DOWNLOAD_URL =
+        "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/";
 
     /** Distinct swatches for population checkboxes (gene-type style). */
     private static final Color[] POPULATION_COLORS = {
@@ -67,18 +77,34 @@ public class ControlFilesPanel {
         Color.web("#B8E986"),
     };
 
+    /**
+     * @param controlOptionsSection AF filter + populations; shown only while a control VCF is open
+     * @param clinVarOptionsSection significance filter; shown only while a ClinVar VCF is open
+     */
     public record Nodes(
         Label controlFilePathLabel,
         Button addControlVcfButton,
         Button removeControlFileButton,
+        Node controlOptionsSection,
         ColoredToggle filterByPopFreqCheckBox,
         TextField maxPopFreqField,
         ColoredToggle selectAllPopulationsCheckBox,
-        VBox populationCheckBoxContainer
+        VBox populationCheckBoxContainer,
+        Label clinVarPathLabel,
+        Button addClinVarButton,
+        Button removeClinVarButton,
+        Hyperlink clinVarDownloadLink,
+        Node clinVarOptionsSection,
+        ColoredToggle filterByClinVarSigCheckBox,
+        ColoredToggle clinVarPathogenicCheckBox,
+        ColoredToggle clinVarVusCheckBox,
+        ColoredToggle clinVarBenignCheckBox,
+        ColoredToggle clinVarOtherCheckBox
     ) {}
 
     private Nodes nodes;
     private final ControlFrequencyAnnotator annotator = new ControlFrequencyAnnotator();
+    private final ClinVarAnnotator clinVarAnnotator = new ClinVarAnnotator();
     private final Map<String, ColoredToggle> populationCheckBoxes = new LinkedHashMap<>();
     private final Map<String, Label> populationStatsLabels = new LinkedHashMap<>();
 
@@ -96,12 +122,10 @@ public class ControlFilesPanel {
     /** Suppress mirror/listener side-effects while applying programmatic UI updates. */
     private boolean suppressSettingsPersist;
     /**
-     * When set, annotation work is handed to the controller (background + loading modal)
-     * instead of running on the FX thread.
-     */
-    /**
      * Schedules annotation: {@code starter.accept(body)} where
      * {@code body.accept(progressSuffix)} runs the blocking annotate work.
+     * When set, work is handed to the controller (background + loading modal)
+     * instead of running on the FX thread.
      */
     private Consumer<Consumer<Consumer<String>>> annotateExecutor;
 
@@ -150,6 +174,10 @@ public class ControlFilesPanel {
         return annotator;
     }
 
+    public ClinVarAnnotator clinVarAnnotator() {
+        return clinVarAnnotator;
+    }
+
     public Nodes getNodes() {
         return nodes;
     }
@@ -160,6 +188,8 @@ public class ControlFilesPanel {
         }
         filter.setFilterByControlAf(isFilterByPopFreqSelected());
         filter.setMaxControlAf(readMaxPopFreq());
+        filter.setFilterByClinVarSignificance(isFilterByClinVarSigSelected());
+        filter.setAllowedClinVarClasses(selectedClinVarClasses());
     }
 
     public void loadFrom(VariantFilter filter) {
@@ -175,9 +205,13 @@ public class ControlFilesPanel {
             if (nodes.maxPopFreqField() != null) {
                 nodes.maxPopFreqField().setText(String.valueOf(filter.getMaxControlAf()));
             }
+            applyClinVarFilterUi(
+                filter.isFilterByClinVarSignificance(),
+                filter.getAllowedClinVarClasses());
         } finally {
             suppressSettingsPersist = previous;
         }
+        refreshClinVarFilterUiEnabled();
     }
 
     /** Persist path + pop-freq toggles + populations into the project document. */
@@ -191,6 +225,17 @@ public class ControlFilesPanel {
         spec.maxControlAf = readMaxPopFreq();
         String pops = annotator.selectedPopulationsPersistString();
         spec.controlPopulation = pops == null || pops.isBlank() ? null : pops;
+        Path clinVar = clinVarAnnotator.path();
+        spec.clinVarVcfPath = clinVar != null ? clinVar.toAbsolutePath().normalize().toString() : null;
+        spec.filterByClinVarSignificance = isFilterByClinVarSigSelected();
+        spec.clinVarSignificanceClasses = persistClinVarClasses(selectedClinVarClasses());
+        // Legacy booleans for older readers.
+        org.baseplayer.project.LegacyClinVarCompat.writeControlCompat(
+            spec,
+            spec.filterByClinVarSignificance,
+            selectedClinVarClasses().equals(EnumSet.of(SignificanceClass.PATHOGENIC))
+                ? "PATHOGENIC"
+                : spec.clinVarSignificanceClasses);
     }
 
     /**
@@ -214,24 +259,28 @@ public class ControlFilesPanel {
                 nodes.maxPopFreqField().setText(String.valueOf(
                     spec.maxControlAf > 0 ? spec.maxControlAf : 0.01));
             }
+            applyClinVarFilterUi(
+                resolveFilterByClinVar(spec),
+                resolveClinVarClasses(spec));
+            restoreClinVarPath(spec.clinVarVcfPath);
             String pathText = spec.controlVcfPath;
             if (pathText == null || pathText.isBlank()) {
                 refreshPopulations(null, false);
                 refreshFileUi();
-                return false;
+                return clinVarAnnotator.isOpen();
             }
             Path path = Path.of(pathText);
             if (!java.nio.file.Files.isRegularFile(path)) {
                 refreshPopulations(null, false);
                 refreshFileUi();
-                return false;
+                return clinVarAnnotator.isOpen();
             }
             try {
                 annotator.open(path);
             } catch (IOException e) {
                 System.err.println("Could not restore control VCF: " + e.getMessage());
                 refreshFileUi();
-                return false;
+                return clinVarAnnotator.isOpen();
             }
             List<String> preferred =
                 ControlFrequencyAnnotator.parsePopulationsPersistString(spec.controlPopulation);
@@ -241,6 +290,24 @@ public class ControlFilesPanel {
             return true;
         } finally {
             suppressSettingsPersist = previous;
+        }
+    }
+
+    private void restoreClinVarPath(String pathText) {
+        if (pathText == null || pathText.isBlank()) {
+            clinVarAnnotator.close();
+            return;
+        }
+        Path path = Path.of(pathText);
+        if (!java.nio.file.Files.isRegularFile(path)) {
+            clinVarAnnotator.close();
+            return;
+        }
+        try {
+            clinVarAnnotator.open(path);
+        } catch (IOException e) {
+            System.err.println("Could not restore ClinVar VCF: " + e.getMessage());
+            clinVarAnnotator.close();
         }
     }
 
@@ -258,6 +325,9 @@ public class ControlFilesPanel {
             if (nodes.maxPopFreqField() != null) {
                 nodes.maxPopFreqField().setText(String.valueOf(other.readMaxPopFreq()));
             }
+            applyClinVarFilterUi(
+                other.isFilterByClinVarSigSelected(),
+                other.selectedClinVarClasses());
             Set<String> pops = other.annotator.selectedPopulations();
             annotator.setSelectedPopulations(pops);
             if (other.annotator.isOpen() && other.annotator.path() != null) {
@@ -271,6 +341,18 @@ public class ControlFilesPanel {
                 }
             } else if (!other.annotator.isOpen() && annotator.isOpen()) {
                 annotator.close();
+            }
+            if (other.clinVarAnnotator.isOpen() && other.clinVarAnnotator.path() != null) {
+                Path path = other.clinVarAnnotator.path();
+                if (!clinVarAnnotator.isOpen() || !path.equals(clinVarAnnotator.path())) {
+                    try {
+                        clinVarAnnotator.open(path);
+                    } catch (IOException e) {
+                        System.err.println("Could not mirror ClinVar VCF: " + e.getMessage());
+                    }
+                }
+            } else if (!other.clinVarAnnotator.isOpen() && clinVarAnnotator.isOpen()) {
+                clinVarAnnotator.close();
             }
             refreshPopulations(new ArrayList<>(pops), false);
             refreshFileUi();
@@ -301,6 +383,136 @@ public class ControlFilesPanel {
             && nodes.filterByPopFreqCheckBox().isSelected();
     }
 
+    private boolean isFilterByClinVarSigSelected() {
+        return nodes != null
+            && nodes.filterByClinVarSigCheckBox() != null
+            && nodes.filterByClinVarSigCheckBox().isSelected();
+    }
+
+    private EnumSet<SignificanceClass> selectedClinVarClasses() {
+        EnumSet<SignificanceClass> set = EnumSet.noneOf(SignificanceClass.class);
+        if (nodes == null) {
+            return set;
+        }
+        if (nodes.clinVarPathogenicCheckBox() != null && nodes.clinVarPathogenicCheckBox().isSelected()) {
+            set.add(SignificanceClass.PATHOGENIC);
+        }
+        if (nodes.clinVarVusCheckBox() != null && nodes.clinVarVusCheckBox().isSelected()) {
+            set.add(SignificanceClass.VUS);
+        }
+        if (nodes.clinVarBenignCheckBox() != null && nodes.clinVarBenignCheckBox().isSelected()) {
+            set.add(SignificanceClass.BENIGN);
+        }
+        if (nodes.clinVarOtherCheckBox() != null && nodes.clinVarOtherCheckBox().isSelected()) {
+            set.add(SignificanceClass.OTHER);
+        }
+        return set;
+    }
+
+    private void applyClinVarFilterUi(boolean filterOn, Set<SignificanceClass> classes) {
+        if (nodes == null) {
+            return;
+        }
+        if (nodes.filterByClinVarSigCheckBox() != null) {
+            nodes.filterByClinVarSigCheckBox().setSelected(filterOn);
+        }
+        Set<SignificanceClass> want = classes != null ? classes : EnumSet.noneOf(SignificanceClass.class);
+        if (want.isEmpty()) {
+            want = EnumSet.allOf(SignificanceClass.class);
+        }
+        if (nodes.clinVarPathogenicCheckBox() != null) {
+            nodes.clinVarPathogenicCheckBox().setSelected(want.contains(SignificanceClass.PATHOGENIC));
+        }
+        if (nodes.clinVarVusCheckBox() != null) {
+            nodes.clinVarVusCheckBox().setSelected(want.contains(SignificanceClass.VUS));
+        }
+        if (nodes.clinVarBenignCheckBox() != null) {
+            nodes.clinVarBenignCheckBox().setSelected(want.contains(SignificanceClass.BENIGN));
+        }
+        if (nodes.clinVarOtherCheckBox() != null) {
+            nodes.clinVarOtherCheckBox().setSelected(want.contains(SignificanceClass.OTHER));
+        }
+        refreshClinVarFilterUiEnabled();
+    }
+
+    private void refreshClinVarFilterUiEnabled() {
+        if (nodes == null) {
+            return;
+        }
+        boolean on = isFilterByClinVarSigSelected();
+        if (nodes.clinVarPathogenicCheckBox() != null) {
+            nodes.clinVarPathogenicCheckBox().setDisable(!on);
+        }
+        if (nodes.clinVarVusCheckBox() != null) {
+            nodes.clinVarVusCheckBox().setDisable(!on);
+        }
+        if (nodes.clinVarBenignCheckBox() != null) {
+            nodes.clinVarBenignCheckBox().setDisable(!on);
+        }
+        if (nodes.clinVarOtherCheckBox() != null) {
+            nodes.clinVarOtherCheckBox().setDisable(!on);
+        }
+    }
+
+    private static boolean resolveFilterByClinVar(ProjectDocument.ControlFilesSpec spec) {
+        if (spec == null) {
+            return false;
+        }
+        return spec.filterByClinVarSignificance
+            || org.baseplayer.project.LegacyClinVarCompat.legacyRequire(spec)
+            || org.baseplayer.project.LegacyClinVarCompat.legacyPathogenic(spec);
+    }
+
+    private static EnumSet<SignificanceClass> resolveClinVarClasses(
+            ProjectDocument.ControlFilesSpec spec) {
+        EnumSet<SignificanceClass> parsed = parseClinVarClasses(
+            spec != null ? spec.clinVarSignificanceClasses : null);
+        if (!parsed.isEmpty()) {
+            return parsed;
+        }
+        if (spec != null
+                && org.baseplayer.project.LegacyClinVarCompat.legacyPathogenic(spec)
+                && !org.baseplayer.project.LegacyClinVarCompat.legacyRequire(spec)) {
+            return EnumSet.of(SignificanceClass.PATHOGENIC);
+        }
+        return EnumSet.allOf(SignificanceClass.class);
+    }
+
+    public static EnumSet<SignificanceClass> parseClinVarClasses(String persist) {
+        EnumSet<SignificanceClass> set = EnumSet.noneOf(SignificanceClass.class);
+        if (persist == null || persist.isBlank()) {
+            return set;
+        }
+        for (String part : persist.split(",")) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            try {
+                set.add(SignificanceClass.valueOf(part.trim().toUpperCase(java.util.Locale.ROOT)));
+            } catch (IllegalArgumentException ignored) {
+                // skip unknown
+            }
+        }
+        return set;
+    }
+
+    static String persistClinVarClasses(Set<SignificanceClass> classes) {
+        if (classes == null || classes.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (SignificanceClass c : SignificanceClass.values()) {
+            if (!classes.contains(c)) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(c.name());
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
     private double readMaxPopFreq() {
         double maxAf = 0.01;
         if (nodes != null && nodes.maxPopFreqField() != null) {
@@ -316,7 +528,8 @@ public class ControlFilesPanel {
         return maxAf;
     }
 
-    public void handleApplyControlSettings() {
+    /** Re-annotate all loaded chromosome caches (control AF and/or ClinVar). */
+    public void annotateNow() {
         syncSelectedPopulationsFromUi();
         runAnnotateLoadedSources(true);
     }
@@ -356,13 +569,14 @@ public class ControlFilesPanel {
             showError("Could not open control VCF", e.getMessage());
             return;
         }
-        // Select all populations by default; do not annotate until Apply.
+        // Select all populations by default, then annotate loaded chromosomes.
         refreshPopulations(null, true);
         refreshFileUi();
         SessionDocumentSync.writeControlVcfPath(path.toAbsolutePath().normalize().toString());
         persistFilterSettingsToDocument();
         refreshStatsAsync();
         onSettingsMirrored.accept(this);
+        annotateNow();
     }
 
     public void handleRemoveControlFile() {
@@ -376,6 +590,65 @@ public class ControlFilesPanel {
         afterAnnotate.accept(true);
     }
 
+    public void handleAddClinVarVcf() {
+        if (nodes == null) {
+            return;
+        }
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Add ClinVar VCF");
+        chooser.getExtensionFilters().addAll(
+            new FileChooser.ExtensionFilter("Compressed VCF", "*.vcf.gz"),
+            new FileChooser.ExtensionFilter("VCF", "*.vcf", "*.vcf.gz"));
+        File initialDir = UserPreferences.getLastDirectory("CLINVAR_VCF");
+        if (initialDir == null) {
+            Path open = clinVarAnnotator.path();
+            if (open != null && open.getParent() != null) {
+                initialDir = open.getParent().toFile();
+            }
+        }
+        if (initialDir == null) {
+            initialDir = UserPreferences.getLastDirectory("CONTROL_VCF");
+        }
+        if (initialDir == null) {
+            initialDir = UserPreferences.getLastDirectory("VCF");
+        }
+        if (initialDir != null) {
+            chooser.setInitialDirectory(initialDir);
+        }
+        Window window = windowSupplier.get();
+        File chosen = window != null ? chooser.showOpenDialog(window) : chooser.showOpenDialog(null);
+        if (chosen == null) {
+            return;
+        }
+        UserPreferences.setLastDirectory("CLINVAR_VCF", chosen.getParentFile());
+        Path path = chosen.toPath();
+        try {
+            clinVarAnnotator.open(path);
+        } catch (IOException e) {
+            showError("Could not open ClinVar VCF", e.getMessage());
+            return;
+        }
+        refreshFileUi();
+        SessionDocumentSync.writeClinVarVcfPath(path.toAbsolutePath().normalize().toString());
+        persistClinVarFilterSettingsToDocument();
+        onSettingsMirrored.accept(this);
+        annotateNow();
+    }
+
+    public void handleRemoveClinVarFile() {
+        clinVarAnnotator.close();
+        clearClinVarOnSources();
+        refreshFileUi();
+        SessionDocumentSync.writeClinVarVcfPath(null);
+        persistClinVarFilterSettingsToDocument();
+        onSettingsMirrored.accept(this);
+        afterAnnotate.accept(true);
+    }
+
+    public void handleOpenClinVarDownloads() {
+        InfoPopup.openUrl(CLINVAR_DOWNLOAD_URL);
+    }
+
     private void wireButtons() {
         if (nodes == null) {
             return;
@@ -385,6 +658,15 @@ public class ControlFilesPanel {
         }
         if (nodes.removeControlFileButton() != null) {
             nodes.removeControlFileButton().setOnAction(e -> handleRemoveControlFile());
+        }
+        if (nodes.addClinVarButton() != null) {
+            nodes.addClinVarButton().setOnAction(e -> handleAddClinVarVcf());
+        }
+        if (nodes.removeClinVarButton() != null) {
+            nodes.removeClinVarButton().setOnAction(e -> handleRemoveClinVarFile());
+        }
+        if (nodes.clinVarDownloadLink() != null) {
+            nodes.clinVarDownloadLink().setOnAction(e -> handleOpenClinVarDownloads());
         }
         if (nodes.selectAllPopulationsCheckBox() != null) {
             nodes.selectAllPopulationsCheckBox().setOnAction(e -> {
@@ -418,6 +700,31 @@ public class ControlFilesPanel {
             nodes.maxPopFreqField().textProperty().addListener(
                 (obs, oldText, newText) -> onControlFilterUiChanged());
         }
+        if (nodes.filterByClinVarSigCheckBox() != null) {
+            nodes.filterByClinVarSigCheckBox().selectedProperty().addListener((obs, was, is) -> {
+                if (Boolean.TRUE.equals(is) && selectedClinVarClasses().isEmpty()) {
+                    boolean previous = suppressSettingsPersist;
+                    suppressSettingsPersist = true;
+                    try {
+                        applyClinVarFilterUi(true, EnumSet.allOf(SignificanceClass.class));
+                    } finally {
+                        suppressSettingsPersist = previous;
+                    }
+                }
+                refreshClinVarFilterUiEnabled();
+                onClinVarFilterUiChanged();
+            });
+        }
+        for (ColoredToggle cb : new ColoredToggle[] {
+            nodes.clinVarPathogenicCheckBox(),
+            nodes.clinVarVusCheckBox(),
+            nodes.clinVarBenignCheckBox(),
+            nodes.clinVarOtherCheckBox()
+        }) {
+            if (cb != null) {
+                cb.selectedProperty().addListener((obs, was, is) -> onClinVarFilterUiChanged());
+            }
+        }
     }
 
     private void onControlFilterUiChanged() {
@@ -429,6 +736,21 @@ public class ControlFilesPanel {
         onFilterSettingsChanged.run();
     }
 
+    private void onClinVarFilterUiChanged() {
+        if (suppressSettingsPersist) {
+            return;
+        }
+        persistClinVarFilterSettingsToDocument();
+        onSettingsMirrored.accept(this);
+        onFilterSettingsChanged.run();
+    }
+
+    public void persistClinVarFilterSettingsToDocument() {
+        SessionDocumentSync.writeClinVarFilterSettings(
+            isFilterByClinVarSigSelected(),
+            persistClinVarClasses(selectedClinVarClasses()));
+    }
+
     private void onPopulationSelectionChanged() {
         if (suppressSettingsPersist) {
             return;
@@ -438,7 +760,7 @@ public class ControlFilesPanel {
         SessionDocumentSync.writeControlPopulation(annotator.selectedPopulationsPersistString());
         persistFilterSettingsToDocument();
         onSettingsMirrored.accept(this);
-        // Do not annotate here — Apply commits AF fields.
+        annotateNow();
     }
 
     private void syncSelectedPopulationsFromUi() {
@@ -494,7 +816,9 @@ public class ControlFilesPanel {
      * @param progressSuffix optional UI updater (e.g. ThreadRunner task suffix); may be null
      */
     public void annotateLoadedSources(boolean notify, Consumer<String> progressSuffix) {
-        if (!annotator.isOpen()) {
+        boolean hasControl = annotator.isOpen();
+        boolean hasClinVar = clinVarAnnotator.isOpen();
+        if (!hasControl && !hasClinVar) {
             if (notify) {
                 afterAnnotate.accept(true);
             }
@@ -520,23 +844,31 @@ public class ControlFilesPanel {
                 progressSuffix.accept("(" + chromIndex + "/" + total + " chr" + chrom + ")");
             }
             try {
-                // Force: Apply always re-annotates (visible windows may change with filter).
-                annotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
-                    org.baseplayer.services.LoadingManager.get()
-                        .setProgress(cur, Math.max(1, tot));
-                    if (progressSuffix == null) {
-                        return;
-                    }
-                    progressSuffix.accept(
-                        "(" + chromIndex + "/" + total
-                            + " chr" + c
-                            + ", " + matched + " AF)");
-                }, true);
+                // Soft annotate: each source skips when its fingerprint already matches
+                // (adding gnomAD must not redo ClinVar, and vice versa).
+                if (hasControl) {
+                    annotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
+                        reportControlDetail(
+                            "Control AF", c, cur, tot, matched, chromIndex, total, progressSuffix);
+                    }, false);
+                }
+                if (hasClinVar) {
+                    clinVarAnnotator.annotate(cached.variants(), (c, cur, tot, matched) -> {
+                        reportControlDetail(
+                            "ClinVar", c, cur, tot, matched, chromIndex, total, progressSuffix);
+                    }, false);
+                }
             } catch (IOException e) {
                 // May run on ThreadRunner loader-pool — never build Alert here.
                 showError("Control annotation failed", chrom + ": " + e.getMessage());
                 break;
             }
+        }
+        org.baseplayer.services.LoadingManager.get().clearDetail();
+        ThreadRunner.RunnerTask active = currentRunnerTask();
+        if (active != null) {
+            active.setDetailMessage("");
+            ThreadRunner.get().notifyDescriptionChanged();
         }
         if (notify) {
             afterAnnotate.accept(true);
@@ -549,23 +881,71 @@ public class ControlFilesPanel {
     }
 
     public void annotateIfOpen(VariantList list, Consumer<String> progressSuffix) {
-        if (!annotator.isOpen() || list == null) {
+        if (list == null) {
             return;
         }
-        try {
-            annotator.annotate(list, (c, cur, tot, matched) -> {
-                org.baseplayer.services.LoadingManager.get()
-                    .setProgress(cur, Math.max(1, tot));
-                if (progressSuffix == null) {
-                    return;
-                }
-                progressSuffix.accept(
-                    "(chr" + c + ", " + matched + " AF)");
-            });
-        } catch (IOException e) {
-            System.err.println("Control AF annotation failed for "
-                + list.getChromosome() + ": " + e.getMessage());
+        if (annotator.isOpen()) {
+            try {
+                annotator.annotate(list, (c, cur, tot, matched) -> {
+                    reportControlDetail("Control AF", c, cur, tot, matched, -1, -1, progressSuffix);
+                }, false);
+            } catch (IOException e) {
+                System.err.println("Control AF annotation failed for "
+                    + list.getChromosome() + ": " + e.getMessage());
+            }
         }
+        if (clinVarAnnotator.isOpen()) {
+            try {
+                clinVarAnnotator.annotate(list, (c, cur, tot, matched) -> {
+                    reportControlDetail("ClinVar", c, cur, tot, matched, -1, -1, progressSuffix);
+                }, false);
+            } catch (IOException e) {
+                System.err.println("ClinVar annotation failed for "
+                    + list.getChromosome() + ": " + e.getMessage());
+            }
+        }
+        org.baseplayer.services.LoadingManager.get().clearDetail();
+        ThreadRunner.RunnerTask active = currentRunnerTask();
+        if (active != null) {
+            active.setDetailMessage("");
+            org.baseplayer.services.ThreadRunner.get().notifyDescriptionChanged();
+        }
+    }
+
+    private static void reportControlDetail(
+            String kind,
+            String chrom,
+            int cur,
+            int tot,
+            int matched,
+            int chromIndex,
+            int chromTotal,
+            Consumer<String> progressSuffix) {
+        int safeTot = Math.max(1, tot);
+        org.baseplayer.services.LoadingManager.get().setDetailProgress(cur, safeTot);
+        String detail = kind + " chr" + chrom
+            + " — " + matched + " matched (" + cur + "/" + safeTot + ")";
+        if (chromIndex > 0 && chromTotal > 0) {
+            detail = "(" + chromIndex + "/" + chromTotal + ") " + detail;
+        }
+        org.baseplayer.services.LoadingManager.get().setDetailMessage(detail);
+        ThreadRunner.RunnerTask active = currentRunnerTask();
+        if (active != null) {
+            active.setDetailMessage(detail);
+            org.baseplayer.services.ThreadRunner.get().notifyDescriptionChanged();
+        }
+        if (progressSuffix != null) {
+            progressSuffix.accept(detail);
+        }
+    }
+
+    private static ThreadRunner.RunnerTask currentRunnerTask() {
+        List<ThreadRunner.RunnerTask> tasks =
+            org.baseplayer.services.ThreadRunner.get().getActiveTasks();
+        if (tasks == null || tasks.isEmpty()) {
+            return null;
+        }
+        return tasks.get(tasks.size() - 1);
     }
 
     private void clearControlAfOnSources() {
@@ -576,6 +956,18 @@ public class ControlFilesPanel {
         for (VcfManager.CachedChromosomeVariants cached : sources) {
             if (cached != null) {
                 ControlFrequencyAnnotator.clear(cached.variants());
+            }
+        }
+    }
+
+    private void clearClinVarOnSources() {
+        List<VcfManager.CachedChromosomeVariants> sources = sourcesSupplier.get();
+        if (sources == null) {
+            return;
+        }
+        for (VcfManager.CachedChromosomeVariants cached : sources) {
+            if (cached != null) {
+                ClinVarAnnotator.clear(cached.variants());
             }
         }
     }
@@ -595,13 +987,37 @@ public class ControlFilesPanel {
         if (nodes.removeControlFileButton() != null) {
             nodes.removeControlFileButton().setDisable(open == null);
         }
-        boolean hasFile = open != null;
+        boolean hasControl = open != null;
+        setSectionShown(nodes.controlOptionsSection(), hasControl);
         if (nodes.selectAllPopulationsCheckBox() != null) {
-            nodes.selectAllPopulationsCheckBox().setDisable(!hasFile || populationCheckBoxes.isEmpty());
+            nodes.selectAllPopulationsCheckBox().setDisable(
+                !hasControl || populationCheckBoxes.isEmpty());
         }
         if (nodes.populationCheckBoxContainer() != null) {
-            nodes.populationCheckBoxContainer().setDisable(!hasFile);
+            nodes.populationCheckBoxContainer().setDisable(!hasControl);
         }
+        Path clinVar = clinVarAnnotator.path();
+        boolean hasClinVar = clinVar != null;
+        if (nodes.clinVarPathLabel() != null) {
+            if (hasClinVar) {
+                nodes.clinVarPathLabel().setText(clinVar.toAbsolutePath().normalize().toString());
+            } else {
+                nodes.clinVarPathLabel().setText("No ClinVar file loaded");
+            }
+        }
+        if (nodes.removeClinVarButton() != null) {
+            nodes.removeClinVarButton().setDisable(!hasClinVar);
+        }
+        setSectionShown(nodes.clinVarOptionsSection(), hasClinVar);
+        refreshClinVarFilterUiEnabled();
+    }
+
+    private static void setSectionShown(Node section, boolean shown) {
+        if (section == null) {
+            return;
+        }
+        section.setVisible(shown);
+        section.setManaged(shown);
     }
 
     /**
@@ -779,11 +1195,35 @@ public class ControlFilesPanel {
         VBox popBox = new VBox(4);
         popBox.setDisable(true);
 
+        Label clinVarPathLabel = new Label("No ClinVar file loaded");
+        clinVarPathLabel.getStyleClass().add("value-label");
+        clinVarPathLabel.setWrapText(true);
+        Button addClinVar = new Button("Add ClinVar VCF");
+        addClinVar.getStyleClass().add("secondary-button");
+        Button removeClinVar = new Button("Remove");
+        removeClinVar.getStyleClass().add("secondary-button");
+        removeClinVar.setDisable(true);
+        Hyperlink clinVarDownload = new Hyperlink("ClinVar downloads (NCBI)");
+        ColoredToggle filterByClinVarSig = new ColoredToggle("Filter by ClinVar significance");
+        ColoredToggle clinVarPathogenic =
+            new ColoredToggle(SignificanceClass.PATHOGENIC.label());
+        clinVarPathogenic.setSelected(true);
+        clinVarPathogenic.setDisable(true);
+        ColoredToggle clinVarVus = new ColoredToggle(SignificanceClass.VUS.label());
+        clinVarVus.setSelected(true);
+        clinVarVus.setDisable(true);
+        ColoredToggle clinVarBenign = new ColoredToggle(SignificanceClass.BENIGN.label());
+        clinVarBenign.setSelected(true);
+        clinVarBenign.setDisable(true);
+        ColoredToggle clinVarOther = new ColoredToggle(SignificanceClass.OTHER.label());
+        clinVarOther.setSelected(true);
+        clinVarOther.setDisable(true);
+
         VBox left = new VBox(12);
         left.getStyleClass().add("filter-panel");
         left.setPadding(new Insets(16));
 
-        Label fileTitle = new Label("Control file");
+        Label fileTitle = new Label("Control file (allele frequency)");
         fileTitle.getStyleClass().add("section-header");
         HBox fileButtons = new HBox(8, addVcf, remove);
         fileButtons.setAlignment(Pos.CENTER_LEFT);
@@ -795,19 +1235,44 @@ public class ControlFilesPanel {
             maxFreq);
         filterRow.setAlignment(Pos.CENTER_LEFT);
 
-        left.getChildren().addAll(
-            fileTitle, pathLabel, fileButtons,
+        Label popHint = new Label(
+            "Only checked populations contribute AF. Annotation runs automatically.");
+        popHint.getStyleClass().add("subsection-label");
+        popHint.setWrapText(true);
+
+        VBox controlOptions = new VBox(12,
             new javafx.scene.control.Separator(),
-            filterTitle, filterRow);
+            filterTitle, filterRow,
+            new javafx.scene.control.Separator(),
+            popsHeader, popHint, popBox);
+        controlOptions.setVisible(false);
+        controlOptions.setManaged(false);
+
+        left.getChildren().addAll(fileTitle, pathLabel, fileButtons, controlOptions);
 
         VBox right = new VBox(12);
         right.getStyleClass().add("filter-panel");
         right.setPadding(new Insets(16));
-        Label popHint = new Label(
-            "Only checked populations contribute AF. Apply to annotate with their max AF.");
-        popHint.getStyleClass().add("subsection-label");
-        popHint.setWrapText(true);
-        right.getChildren().addAll(popsHeader, popHint, popBox);
+        Label clinVarTitle = new Label("ClinVar annotation");
+        clinVarTitle.getStyleClass().add("section-header");
+        Label clinVarHint = new Label(
+            "Load a ClinVar VCF to annotate matches with clinical significance. "
+                + "Filtering by significance is optional.");
+        clinVarHint.getStyleClass().add("subsection-label");
+        clinVarHint.setWrapText(true);
+        HBox clinVarButtons = new HBox(8, addClinVar, removeClinVar);
+        clinVarButtons.setAlignment(Pos.CENTER_LEFT);
+        Label clinVarFilterTitle = new Label("Optional significance filter");
+        clinVarFilterTitle.getStyleClass().add("section-header");
+        VBox clinVarOptions = new VBox(12,
+            new javafx.scene.control.Separator(),
+            clinVarFilterTitle, filterByClinVarSig,
+            clinVarPathogenic, clinVarVus, clinVarBenign, clinVarOther);
+        clinVarOptions.setVisible(false);
+        clinVarOptions.setManaged(false);
+        right.getChildren().addAll(
+            clinVarTitle, clinVarHint, clinVarPathLabel, clinVarButtons, clinVarDownload,
+            clinVarOptions);
 
         ScrollPane leftScroll = new ScrollPane(left);
         leftScroll.setFitToWidth(true);
@@ -821,24 +1286,14 @@ public class ControlFilesPanel {
         split.getStyleClass().add("tab-content-split");
         VBox.setVgrow(split, Priority.ALWAYS);
 
-        Button apply = new Button("Apply");
-        apply.getStyleClass().add("primary-button");
-        HBox applyRow = new HBox(apply);
-        applyRow.setAlignment(Pos.CENTER_RIGHT);
-        applyRow.getStyleClass().add("filter-panel");
-        applyRow.setPadding(new Insets(8, 16, 12, 16));
-
-        VBox root = new VBox(split, new javafx.scene.control.Separator(), applyRow);
+        VBox root = new VBox(split);
+        VBox.setVgrow(split, Priority.ALWAYS);
 
         Nodes built = new Nodes(
-            pathLabel, addVcf, remove, filterByPop, maxFreq, selectAllPops, popBox);
-
-        apply.setOnAction(e -> {
-            Object panel = root.getUserData();
-            if (panel instanceof ControlFilesPanel c) {
-                c.handleApplyControlSettings();
-            }
-        });
+            pathLabel, addVcf, remove, controlOptions,
+            filterByPop, maxFreq, selectAllPops, popBox,
+            clinVarPathLabel, addClinVar, removeClinVar, clinVarDownload, clinVarOptions,
+            filterByClinVarSig, clinVarPathogenic, clinVarVus, clinVarBenign, clinVarOther);
 
         return new Pair<>(root, built);
     }

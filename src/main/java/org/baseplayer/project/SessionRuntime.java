@@ -264,6 +264,11 @@ public final class SessionRuntime {
             if ("BED".equals(type)) {
               BedTrack bed = new BedTrack(path);
               sample = new Sample(path, bed);
+            } else if ("BIGWIG".equals(type)) {
+              BigWigTrack bw = new BigWigTrack(path);
+              bw.setVisible(true);
+              bw.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+              sample = new Sample(path, bw);
             } else if ("BAM".equals(type) || type.isEmpty()) {
               sample = new Sample(path);
             } else {
@@ -285,6 +290,7 @@ public final class SessionRuntime {
         if (track == null) {
           continue;
         }
+        applySignalLayout(track, trackSpec.signalLayout);
         applyTrackGroupMembership(track, trackSpec.groupIds, registry);
         applyTrackTags(track, trackSpec.tags);
         registry.getSampleTracks().add(track);
@@ -397,6 +403,21 @@ public final class SessionRuntime {
       if (registry.getSampleGroup(resolved) != null) {
         track.addGroupId(resolved);
       }
+    }
+  }
+
+  private static void applySignalLayout(SampleTrack track, String layoutName) {
+    if (track == null) {
+      return;
+    }
+    if (layoutName == null || layoutName.isBlank()) {
+      track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
+      return;
+    }
+    try {
+      track.setSignalLayout(SampleTrack.SignalLayout.valueOf(layoutName.trim().toUpperCase(Locale.ROOT)));
+    } catch (IllegalArgumentException e) {
+      track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
     }
   }
 
@@ -907,6 +928,21 @@ public final class SessionRuntime {
     }
     filter.setFilterByControlAf(spec.filterByControlAf);
     filter.setMaxControlAf(spec.maxControlAf > 0 ? spec.maxControlAf : 0.01);
+    boolean clinVarFilter = spec.filterByClinVarSignificance
+        || LegacyClinVarCompat.legacyRequire(spec)
+        || LegacyClinVarCompat.legacyPathogenic(spec);
+    filter.setFilterByClinVarSignificance(clinVarFilter);
+    java.util.EnumSet<org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass> classes =
+        org.baseplayer.variant.ui.components.ControlFilesPanel.parseClinVarClasses(
+            spec.clinVarSignificanceClasses);
+    if (classes.isEmpty() && LegacyClinVarCompat.legacyPathogenic(spec)) {
+      classes = java.util.EnumSet.of(
+          org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass.PATHOGENIC);
+    } else if (classes.isEmpty() && clinVarFilter) {
+      classes = java.util.EnumSet.allOf(
+          org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass.class);
+    }
+    filter.setAllowedClinVarClasses(classes);
     return filter;
   }
 

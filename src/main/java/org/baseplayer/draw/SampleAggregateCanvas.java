@@ -17,6 +17,7 @@ import javafx.scene.layout.StackPane;
  * comparative methylation, and future non-alignment aggregates).
  * Stacked above {@link org.baseplayer.samples.alignment.draw.TrackBodyCanvas}; shares genomic X with other canvases.
  */
+@SuppressWarnings("this-escape")
 public class SampleAggregateCanvas extends AggregateBandCanvas {
 
   private static final double RESIZE_EDGE_PX = 6;

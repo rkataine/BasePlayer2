@@ -10,6 +10,7 @@ import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 
+@SuppressWarnings("this-escape")
 public abstract class TrackListPanel extends SidebarContentPanel {
 
   private static final double TRACK_SCROLLBAR_WIDTH = 8;

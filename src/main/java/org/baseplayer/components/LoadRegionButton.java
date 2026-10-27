@@ -23,6 +23,7 @@ import org.baseplayer.variant.VariantList;
  * Overlay control shown when the current viewport is outside cached VCF data.
  * Styled as a compact accent button so it stays visible on the genomic canvas.
  */
+@SuppressWarnings("this-escape")
 public class LoadRegionButton extends StackPane {
 
     private static final String STYLE_IDLE =
@@ -150,8 +151,8 @@ public class LoadRegionButton extends StackPane {
         }
 
         // Clamp to genomic coords — gene padding can leave start < 1 on the stack region.
-        long viewStart = Math.max(1L, (long) region.start());
-        long viewEnd = Math.max(viewStart, (long) region.end());
+        long viewStart = Math.max(1L, region.start());
+        long viewEnd = Math.max(viewStart, region.end());
 
         VariantList loaded = VcfManager.getInstance().getCachedVariants(region.chrom());
         boolean isCached = regionFetchCache.isFetched("VCF", region.chrom(), viewStart, viewEnd)
@@ -197,8 +198,8 @@ public class LoadRegionButton extends StackPane {
 
         VcfManager.getInstance().loadRegionVariants(
             region.chrom(),
-            (long) region.start(),
-            (long) region.end()
+            region.start(),
+            region.end()
         );
 
         // Cache listener hides the button once the fetch is marked complete.

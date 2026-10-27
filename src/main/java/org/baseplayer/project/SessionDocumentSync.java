@@ -218,8 +218,37 @@ public final class SessionDocumentSync {
     ProjectSessionState.get().markDirty();
   }
 
+  /** Live-write the open ClinVar VCF path into the project document. */
+  public static void writeClinVarVcfPath(String clinVarVcfPath) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.clinVarVcfPath = clinVarVcfPath;
+    ProjectSessionState.get().markDirty();
+  }
+
+  public static void writeClinVarFilterSettings(
+      boolean filterByClinVarSignificance, String clinVarSignificanceClasses) {
+    ProjectDocument doc = live();
+    if (doc.controlFiles == null) {
+      doc.controlFiles = new ProjectDocument.ControlFilesSpec();
+    }
+    doc.controlFiles.filterByClinVarSignificance = filterByClinVarSignificance;
+    doc.controlFiles.clinVarSignificanceClasses =
+        clinVarSignificanceClasses == null || clinVarSignificanceClasses.isBlank()
+            ? null
+            : clinVarSignificanceClasses;
+    LegacyClinVarCompat.writeControlCompat(
+        doc.controlFiles,
+        filterByClinVarSignificance,
+        doc.controlFiles.clinVarSignificanceClasses);
+    syncControlAfIntoVariantFilter(doc);
+    ProjectSessionState.get().markDirty();
+  }
+
   /**
-   * Copy control-AF toggles from {@link ProjectDocument#controlFiles} into point/SV
+   * Copy control-AF / ClinVar toggles from {@link ProjectDocument#controlFiles} into point/SV
    * filter specs when control settings look intentional (path, filter on, or non-default max).
    */
   static void syncControlAfIntoVariantFilter(ProjectDocument doc) {
@@ -246,7 +275,13 @@ public final class SessionDocumentSync {
     if (spec.controlVcfPath != null && !spec.controlVcfPath.isBlank()) {
       return true;
     }
-    if (spec.filterByControlAf) {
+    if (spec.clinVarVcfPath != null && !spec.clinVarVcfPath.isBlank()) {
+      return true;
+    }
+    if (spec.filterByControlAf
+            || spec.filterByClinVarSignificance
+            || LegacyClinVarCompat.legacyRequire(spec)
+            || LegacyClinVarCompat.legacyPathogenic(spec)) {
       return true;
     }
     // Default max is 0.01 — any other value means the user edited the field.
@@ -260,6 +295,20 @@ public final class SessionDocumentSync {
     }
     classSpec.filterByControlAf = control.filterByControlAf;
     classSpec.maxControlAf = control.maxControlAf < 0 ? 0.01 : Math.min(1.0, control.maxControlAf);
+    classSpec.filterByClinVarSignificance = control.filterByClinVarSignificance
+        || LegacyClinVarCompat.legacyRequire(control)
+        || LegacyClinVarCompat.legacyPathogenic(control);
+    classSpec.clinVarSignificanceClasses = control.clinVarSignificanceClasses;
+    if ((classSpec.clinVarSignificanceClasses == null
+            || classSpec.clinVarSignificanceClasses.isBlank())
+            && LegacyClinVarCompat.legacyPathogenic(control)) {
+      classSpec.clinVarSignificanceClasses = "PATHOGENIC";
+    } else if ((classSpec.clinVarSignificanceClasses == null
+            || classSpec.clinVarSignificanceClasses.isBlank())
+            && LegacyClinVarCompat.legacyRequire(control)) {
+      classSpec.clinVarSignificanceClasses = "PATHOGENIC,VUS,BENIGN,OTHER";
+    }
+    LegacyClinVarCompat.writeClassCompat(classSpec);
   }
 
   public static void writeStacksFromRuntime() {
@@ -330,13 +379,23 @@ public final class SessionDocumentSync {
       trackSpec.displayName = track.getDisplayName();
       trackSpec.groupIds = new ArrayList<>(track.getGroupIds());
       trackSpec.tags = writeTrackTags(track);
+      trackSpec.signalLayout = track.getSignalLayout() != null
+          ? track.getSignalLayout().name()
+          : SampleTrack.SignalLayout.OVERLAY.name();
 
       for (Sample sample : track.getSamples()) {
         if (sample.getDataType() == Sample.DataType.VCF && sample.getPath() != null) {
-          trackSpec.samples.add(capturePathAsSampleFile("VCF", sample.getPath(), projectFile));
+          ProjectDocument.SampleFileSpec vcfSpec =
+              capturePathAsSampleFile("VCF", sample.getPath(), projectFile);
+          vcfSpec.visible = sample.visible;
+          vcfSpec.overlay = sample.overlay;
+          trackSpec.samples.add(vcfSpec);
           continue;
         }
-        if (sample.getBamFile() == null && sample.getBedTrack() == null) {
+        if (sample.getBamFile() == null
+            && sample.getBedTrack() == null
+            && sample.getBigWigTrack() == null
+            && sample.getSangerTrace() == null) {
           continue;
         }
         ProjectDocument.SampleFileSpec fileSpec = captureSampleFile(sample, projectFile);
@@ -573,6 +632,21 @@ public final class SessionDocumentSync {
     }
     spec.filterByControlAf = filter.isFilterByControlAf();
     spec.maxControlAf = filter.getMaxControlAf();
+    spec.filterByClinVarSignificance = filter.isFilterByClinVarSignificance();
+    StringBuilder clinVarClasses = new StringBuilder();
+    for (org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass c :
+            filter.getAllowedClinVarClasses()) {
+      if (c == null) {
+        continue;
+      }
+      if (clinVarClasses.length() > 0) {
+        clinVarClasses.append(',');
+      }
+      clinVarClasses.append(c.name());
+    }
+    spec.clinVarSignificanceClasses =
+        clinVarClasses.length() == 0 ? null : clinVarClasses.toString();
+    LegacyClinVarCompat.writeClassCompat(spec);
     return spec;
   }
 
@@ -582,6 +656,10 @@ public final class SessionDocumentSync {
       spec.type = "BAM";
     } else if (sample.getBedTrack() != null) {
       spec.type = "BED";
+    } else if (sample.getBigWigTrack() != null) {
+      spec.type = "BIGWIG";
+    } else if (sample.getSangerTrace() != null) {
+      spec.type = "AB1";
     } else {
       return null;
     }

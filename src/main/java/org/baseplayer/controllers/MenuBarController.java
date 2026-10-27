@@ -73,6 +73,7 @@ public class MenuBarController {
   @FXML private MenuItem openBedMenuItem;
   @FXML private MenuItem openBigwigMenuItem;
   @FXML private MenuItem openDirMenuItem;
+  @FXML private MenuItem openDragenMenuItem;
   @FXML private Menu recentFilesMenu;
   @FXML private MenuItem saveProjectMenuItem;
   @FXML private MenuItem saveProjectAsMenuItem;
@@ -569,6 +570,7 @@ public class MenuBarController {
     MenuIcons.bed(openBedMenuItem);
     MenuIcons.bigwig(openBigwigMenuItem);
     MenuIcons.directory(openDirMenuItem);
+    MenuIcons.directory(openDragenMenuItem);
     MenuIcons.apply(recentFilesMenu, FontAwesomeSolid.HISTORY, "#8a94a6");
     MenuIcons.apply(saveProjectMenuItem, FontAwesomeSolid.SAVE, "#6aab73");
     MenuIcons.apply(saveProjectAsMenuItem, FontAwesomeSolid.FILE_EXPORT, "#5b9bd5");

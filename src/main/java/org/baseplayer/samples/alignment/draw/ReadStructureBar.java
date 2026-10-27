@@ -26,6 +26,7 @@ import javafx.util.Duration;
  * <p>Clicking a segment navigates to its genomic location via the supplied
  * {@link MateNavigator}.
  */
+@SuppressWarnings("this-escape")
 public class ReadStructureBar extends Pane {
 
     // ── Colour palette (colour-blind-friendly) ───────────────────────────────

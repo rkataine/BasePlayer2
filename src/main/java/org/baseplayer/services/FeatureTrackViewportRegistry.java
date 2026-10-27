@@ -23,6 +23,7 @@ import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 
+@SuppressWarnings("this-escape")
 public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
 
   /** Handles feature-track icon actions (close / settings / add) from sidebar or canvas overlay. */
@@ -94,6 +95,46 @@ public class FeatureTrackViewportRegistry extends TrackViewportRegistry {
       throw new IllegalArgumentException("Feature track cannot be null");
     }
     featureTracks.add(track);
+  }
+
+  /**
+   * Feature panes usually hold a handful of BigWig/BED tracks. Always fit every
+   * displayed track into the viewport (shrink rows if needed) so newly opened
+   * companions are not left scrolled out of view at default row height.
+   */
+  @Override
+  public void includeNewTracksAtEndAndResetRowHeight() {
+    fitAllDisplayedTracksInViewport();
+  }
+
+  @Override
+  public void showAllTracksAndResetRowHeight() {
+    fitAllDisplayedTracksInViewport();
+  }
+
+  /** Show slots {@code [0, n)}, shrinking row height down to the minimum if needed. */
+  public void fitAllDisplayedTracksInViewport() {
+    unlockTrackRowHeight();
+    clearPendingDefaultRowHeightFit();
+    int displayed = getDisplayedTrackCount();
+    if (displayed <= 0) {
+      clearVisibleTrackRange();
+      return;
+    }
+    double viewport = getTrackViewportHeightPixels();
+    if (viewport <= 0) {
+      // Body has not reported a height yet — reserve default-sized rows for all;
+      // ensureTrackRowHeightFitsViewport will redistribute once height is known.
+      setVisibleTrackRange(
+          0,
+          displayed - 1,
+          DEFAULT_TRACK_ROW_HEIGHT_PIXELS,
+          0,
+          displayed * DEFAULT_TRACK_ROW_HEIGHT_PIXELS);
+      return;
+    }
+    double rowHeight = Math.max(MINIMUM_TRACK_ROW_HEIGHT_PIXELS, viewport / displayed);
+    setVisibleTrackRange(0, displayed - 1, rowHeight, 0, viewport);
   }
 
   /**

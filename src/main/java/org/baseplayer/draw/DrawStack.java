@@ -33,6 +33,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 
+@SuppressWarnings("this-escape")
 public class DrawStack {
   private static final double CHROM_DROPDOWN_MIN_WIDTH = 70;
   private static final double CHROM_DROPDOWN_MAX_WIDTH = 320;

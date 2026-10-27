@@ -5,13 +5,15 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 import org.baseplayer.features.BedTrack;
+import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.sanger.SangerTrace;
 
 /**
- * Represents a single loaded data file (BAM, BED, VCF, AB1, etc.) under an individual.
+ * Represents a single loaded data file (BAM, BED, VCF, AB1, BigWig, etc.) under an individual.
  * This is the generic wrapper — data-type-specific logic lives in
- * {@link AlignmentFile} (BAM/CRAM), {@link BedTrack} (BED), or {@link SangerTrace} (AB1).
+ * {@link AlignmentFile} (BAM/CRAM), {@link BedTrack} (BED), {@link BigWigTrack} (BigWig),
+ * or {@link SangerTrace} (AB1).
  * <p>
  * All data files under a {@link SampleTrack} are treated equally — there is
  * no "primary" vs "overlay" distinction.
@@ -23,7 +25,8 @@ public class Sample implements Closeable {
     BAM,      // BAM/CRAM alignment files
     BED,      // BED annotation files
     VCF,      // VCF variant files
-    AB1       // Sanger chromatogram (.ab1) files
+    AB1,      // Sanger chromatogram (.ab1) files
+    BIGWIG    // BigWig signal companions (BAF, seg, tn, …)
   }
 
   private final String name;
@@ -43,6 +46,9 @@ public class Sample implements Closeable {
   /** BED track data (non-null for BED type). */
   private final BedTrack bedTrack;
 
+  /** BigWig signal track (non-null for BIGWIG type). */
+  private final BigWigTrack bigWigTrack;
+
   /** Sanger chromatogram (non-null for AB1 type). */
   private final SangerTrace sangerTrace;
 
@@ -53,6 +59,7 @@ public class Sample implements Closeable {
     this.path = filePath;
     this.dataType = DataType.BAM;
     this.bedTrack = null;
+    this.bigWigTrack = null;
     this.sangerTrace = null;
     this.bamFile = new AlignmentFile(filePath);
     this.name = bamFile.getName();
@@ -65,10 +72,26 @@ public class Sample implements Closeable {
     this.path = filePath;
     this.dataType = DataType.BED;
     this.bamFile = null;
+    this.bigWigTrack = null;
     this.sangerTrace = null;
     this.bedTrack = bedTrack;
     this.name = bedTrack.getName();
     this.overlay = true; // BED tracks are transparent by default
+  }
+
+  /**
+   * Create a Sample from a BigWig signal file (sample-track companion).
+   */
+  public Sample(Path filePath, BigWigTrack bigWigTrack) {
+    this.path = filePath;
+    this.dataType = DataType.BIGWIG;
+    this.bamFile = null;
+    this.bedTrack = null;
+    this.sangerTrace = null;
+    this.bigWigTrack = bigWigTrack;
+    this.name = bigWigTrack != null ? bigWigTrack.getName()
+        : (filePath.getFileName() != null ? filePath.getFileName().toString() : filePath.toString());
+    this.overlay = true; // translucent by default when overlaid with other signals
   }
 
   /**
@@ -79,6 +102,7 @@ public class Sample implements Closeable {
     this.dataType = DataType.AB1;
     this.bamFile = null;
     this.bedTrack = null;
+    this.bigWigTrack = null;
     this.sangerTrace = sangerTrace;
     this.name = sangerTrace != null ? sangerTrace.getName()
         : (filePath.getFileName() != null ? filePath.getFileName().toString() : filePath.toString());
@@ -86,12 +110,13 @@ public class Sample implements Closeable {
 
   public Sample(Path vcfPath, DataType type) {
     if (type != DataType.VCF) {
-      throw new IllegalArgumentException("Use typed constructors for BAM/BED/AB1 samples");
+      throw new IllegalArgumentException("Use typed constructors for BAM/BED/AB1/BIGWIG samples");
     }
     this.path = vcfPath;
     this.dataType = DataType.VCF;
     this.bamFile = null;
     this.bedTrack = null;
+    this.bigWigTrack = null;
     this.sangerTrace = null;
     this.name = vcfPath.getFileName() != null
         ? vcfPath.getFileName().toString()
@@ -173,6 +198,11 @@ public class Sample implements Closeable {
   /** Get the BED track (only for BED files). */
   public BedTrack getBedTrack() { return bedTrack; }
 
+  // ── BigWig delegation ──
+
+  /** Get the BigWig track (only for BIGWIG files). */
+  public BigWigTrack getBigWigTrack() { return bigWigTrack; }
+
   // ── AB1 / Sanger delegation ──
 
   /** Get the Sanger chromatogram (only for AB1 files). */
@@ -180,6 +210,11 @@ public class Sample implements Closeable {
 
   @Override
   public void close() throws IOException {
-    if (bamFile != null) bamFile.close();
+    if (bamFile != null) {
+      bamFile.close();
+    }
+    if (bigWigTrack != null) {
+      bigWigTrack.dispose();
+    }
   }
 }

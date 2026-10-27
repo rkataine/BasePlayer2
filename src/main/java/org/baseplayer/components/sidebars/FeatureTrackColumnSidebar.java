@@ -35,6 +35,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 
+@SuppressWarnings("this-escape")
 public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
 
   private final FeatureTrackListPanel trackList;

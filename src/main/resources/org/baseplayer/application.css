@@ -385,13 +385,25 @@ VBox {
 
 /* Context-menu checkmarks — keep light on dark chrome */
 .check-menu-item:checked > .left-container > .check,
-.check-menu-item:checked > .left-container > .mark {
+.check-menu-item:checked > .left-container > .mark,
+.radio-menu-item:checked > .left-container > .radio,
+.radio-menu-item:checked > .left-container > .dot {
   -fx-background-color: -bp-text;
 }
 
 .check-menu-item > .left-container > .check,
-.check-menu-item > .left-container > .mark {
+.check-menu-item > .left-container > .mark,
+.radio-menu-item > .left-container > .radio,
+.radio-menu-item > .left-container > .dot {
   -fx-background-color: transparent;
+}
+
+.radio-menu-item {
+  -fx-text-fill: -bp-text;
+}
+
+.radio-menu-item:focused {
+  -fx-background-color: rgba(255, 255, 255, 0.08);
 }
 
 .dark-checkbox:hover .box {

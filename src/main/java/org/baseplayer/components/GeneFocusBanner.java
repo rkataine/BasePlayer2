@@ -40,6 +40,7 @@ import javafx.stage.Window;
  * the subset. Clear removes the filter/focus. Quick tools apply tags / new group
  * to currently displayed samples.
  */
+@SuppressWarnings("this-escape")
 public class GeneFocusBanner extends StackPane {
 
   private static final String ROOT_STYLE_GENE =

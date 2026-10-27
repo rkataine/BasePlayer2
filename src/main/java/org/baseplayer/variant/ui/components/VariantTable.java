@@ -23,7 +23,8 @@ public class VariantTable extends AbstractNestedVariantTable {
             Tab intronicTab,
             Tab intergenicTab,
             BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
-            Consumer<TableRow> onPositionClick) {
+            Consumer<TableRow> onVariantClick,
+            Consumer<TableRow> onGotoClick) {
         super(
             codingTable,
             intronicTable,
@@ -32,6 +33,7 @@ public class VariantTable extends AbstractNestedVariantTable {
             intronicTab,
             intergenicTab,
             onGeneDoubleClick,
-            onPositionClick);
+            onVariantClick,
+            onGotoClick);
     }
 }

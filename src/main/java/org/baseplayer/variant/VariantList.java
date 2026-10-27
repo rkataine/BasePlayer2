@@ -60,6 +60,8 @@ public class VariantList {
      * when control AF has not been annotated (or was cleared).
      */
     private String controlAfSourcePath;
+    /** Fingerprint of the ClinVar VCF used for {@link VariantNode#clinVarClnsig}. */
+    private String clinVarSourcePath;
     
     private int vcfCountWhenLoaded = 0;
 
@@ -1569,6 +1571,7 @@ public class VariantList {
         loadedFilter = null;
         annotated = false;
         controlAfSourcePath = null;
+        clinVarSourcePath = null;
         vcfCountWhenLoaded = 0;
         streamAlleleRunStart = null;
         streamAlleleRunPrev = null;
@@ -1736,6 +1739,14 @@ public class VariantList {
 
     public void setControlAfSourcePath(String controlAfSourcePath) {
         this.controlAfSourcePath = controlAfSourcePath;
+    }
+
+    public String getClinVarSourcePath() {
+        return clinVarSourcePath;
+    }
+
+    public void setClinVarSourcePath(String clinVarSourcePath) {
+        this.clinVarSourcePath = clinVarSourcePath;
     }
 
     public void setVcfCountWhenLoaded(int count) {

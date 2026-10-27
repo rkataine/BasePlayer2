@@ -363,7 +363,7 @@
                             <padding>
                                 <Insets top="16" right="16" bottom="16" left="16"/>
                             </padding>
-                            <Label text="Control file" styleClass="section-header"/>
+                            <Label text="Control file (allele frequency)" styleClass="section-header"/>
                             <Label fx:id="controlFilePathLabel" text="No control file loaded"
                                    styleClass="value-label" wrapText="true"/>
                             <HBox spacing="8" alignment="CENTER_LEFT">
@@ -373,14 +373,26 @@
                                         disable="true" onAction="#handleRemoveControlFile"/>
                             </HBox>
 
-                            <Separator/>
+                            <VBox fx:id="controlOptionsBox" spacing="12" visible="false" managed="false">
+                                <Separator/>
 
-                            <Label text="Allele frequency filter" styleClass="section-header"/>
-                            <HBox spacing="8" alignment="CENTER_LEFT">
-                                <ColoredToggle fx:id="filterByPopFreqCheckBox" text="Filter by control allele frequency"/>
-                                <Label text="Max AF:" styleClass="subsection-label"/>
-                                <TextField fx:id="maxPopFreqField" text="0.01" prefWidth="80" styleClass="filter-field"/>
-                            </HBox>
+                                <Label text="Allele frequency filter" styleClass="section-header"/>
+                                <HBox spacing="8" alignment="CENTER_LEFT">
+                                    <ColoredToggle fx:id="filterByPopFreqCheckBox" text="Filter by control allele frequency"/>
+                                    <Label text="Max AF:" styleClass="subsection-label"/>
+                                    <TextField fx:id="maxPopFreqField" text="0.01" prefWidth="80" styleClass="filter-field"/>
+                                </HBox>
+
+                                <Separator/>
+
+                                <HBox spacing="6" alignment="CENTER_LEFT">
+                                    <ColoredToggle fx:id="selectAllPopulationsCheckBox" selected="true" disable="true"/>
+                                    <Label text="Populations" styleClass="section-header"/>
+                                </HBox>
+                                <Label text="Only checked populations contribute AF. Annotation runs automatically."
+                                       styleClass="subsection-label" wrapText="true"/>
+                                <VBox fx:id="controlPopulationBox" spacing="4" disable="true"/>
+                            </VBox>
                         </VBox>
                     </ScrollPane>
                     <ScrollPane fitToWidth="true" styleClass="filter-scroll"
@@ -389,23 +401,37 @@
                             <padding>
                                 <Insets top="16" right="16" bottom="16" left="16"/>
                             </padding>
-                            <HBox spacing="6" alignment="CENTER_LEFT">
-                                <ColoredToggle fx:id="selectAllPopulationsCheckBox" selected="true" disable="true"/>
-                                <Label text="Populations" styleClass="section-header"/>
-                            </HBox>
-                            <Label text="Only checked populations contribute AF. Apply to annotate with their max AF."
+                            <Label text="ClinVar annotation" styleClass="section-header"/>
+                            <Label text="Load a ClinVar VCF to annotate matches with clinical significance. Filtering by significance is optional."
                                    styleClass="subsection-label" wrapText="true"/>
-                            <VBox fx:id="controlPopulationBox" spacing="4" disable="true"/>
+                            <Label fx:id="clinVarPathLabel" text="No ClinVar file loaded"
+                                   styleClass="value-label" wrapText="true"/>
+                            <HBox spacing="8" alignment="CENTER_LEFT">
+                                <Button fx:id="addClinVarButton" text="Add ClinVar VCF" styleClass="secondary-button"
+                                        onAction="#handleAddClinVarVcf"/>
+                                <Button fx:id="removeClinVarButton" text="Remove" styleClass="secondary-button"
+                                        disable="true" onAction="#handleRemoveClinVarFile"/>
+                            </HBox>
+                            <Hyperlink fx:id="clinVarDownloadLink" text="ClinVar downloads (NCBI)"/>
+
+                            <VBox fx:id="clinVarOptionsBox" spacing="12" visible="false" managed="false">
+                                <Separator/>
+
+                                <Label text="Optional significance filter" styleClass="section-header"/>
+                                <ColoredToggle fx:id="filterByClinVarSigCheckBox"
+                                               text="Filter by ClinVar significance"/>
+                                <ColoredToggle fx:id="clinVarPathogenicCheckBox"
+                                               text="Pathogenic / likely pathogenic" selected="true" disable="true"/>
+                                <ColoredToggle fx:id="clinVarVusCheckBox"
+                                               text="Uncertain significance" selected="true" disable="true"/>
+                                <ColoredToggle fx:id="clinVarBenignCheckBox"
+                                               text="Benign / likely benign" selected="true" disable="true"/>
+                                <ColoredToggle fx:id="clinVarOtherCheckBox"
+                                               text="Conflicting / other" selected="true" disable="true"/>
+                            </VBox>
                         </VBox>
                     </ScrollPane>
                 </SplitPane>
-                <Separator/>
-                <HBox spacing="12" alignment="CENTER_RIGHT" styleClass="filter-panel">
-                    <padding>
-                        <Insets top="8" right="16" bottom="12" left="16"/>
-                    </padding>
-                    <Button text="Apply" styleClass="primary-button" onAction="#handleApplyControlSettings"/>
-                </HBox>
             </VBox>
         </Tab>
     </TabPane>

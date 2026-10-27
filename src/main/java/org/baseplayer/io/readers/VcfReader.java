@@ -491,13 +491,23 @@ public class VcfReader implements AutoCloseable {
     }
 
     private boolean isStructuralVariant(VariantContext ctx) {
-        // Check for symbolic alleles (e.g., <DEL>, <INS>, <DUP>)
+        // Check for symbolic alleles (e.g., <DEL>, <INS>, <DUP>, <CNV>)
         if (ctx.isSymbolic()) {
             return true;
         }
         
         // Check for SVTYPE in INFO field
         if (ctx.hasAttribute("SVTYPE")) {
+            return true;
+        }
+
+        // DRAGEN CNV segments: INFO/END (+ REFLEN) with FORMAT/SM|CN|BC, including
+        // diploid REF rows that lack SVTYPE (those used to fall through as COMPLEX).
+        if (ctx.hasAttribute("END")
+            && (ctx.hasAttribute("REFLEN")
+                || hasFormatAttribute(ctx, "SM")
+                || hasFormatAttribute(ctx, "CN")
+                || hasFormatAttribute(ctx, "BC"))) {
             return true;
         }
         
@@ -541,9 +551,9 @@ public class VcfReader implements AutoCloseable {
      * or TRA if mate is on different chromosome.
      */
     private VcfVariantType classifyStructuralVariant(VariantContext ctx) {
-        // FACETS / ASCAT-style segment VCFs often keep SVTYPE=DEL|DUP (or <DEL>/<DUP>)
-        // while carrying CNV metrics — prefer Gain/Loss/Neutral over classic SV labels.
-        if (hasCnvSegmentMetrics(ctx)) {
+        // FACETS / DRAGEN segment VCFs: prefer Gain/Loss/Neutral from copy-ratio metrics
+        // (FORMAT/SM, FORMAT/CN, …) over classic SV labels or COMPLEX.
+        if (hasCnvSegmentMetrics(ctx) || looksLikeDragenCnvRecord(ctx)) {
             return classifyCnvSegment(ctx);
         }
 
@@ -646,24 +656,45 @@ public class VcfReader implements AutoCloseable {
     private static final double CNV_LOGR_BUFFER = 0.2;
 
     /**
-     * True when the record carries FACETS-style copy-number segment metrics.
-     * Bare {@code CN} alone is ignored — classic SVs sometimes set it.
+     * True when the record carries FACETS-style INFO metrics or DRAGEN FORMAT
+     * {@code SM}/{@code CN} (sample columns — not INFO).
      */
     private static boolean hasCnvSegmentMetrics(VariantContext ctx) {
-        return doubleInfo(ctx, "CNLR_MEDIAN") != null
-            || doubleInfo(ctx, "CNLR_MEDIAN_CLUST") != null
-            || intInfo(ctx, "TCN_EM") != null
-            || intInfo(ctx, "TCN") != null;
+        return doubleInfoOrFormat(ctx, "CNLR_MEDIAN") != null
+            || doubleInfoOrFormat(ctx, "CNLR_MEDIAN_CLUST") != null
+            || intInfoOrFormat(ctx, "TCN_EM") != null
+            || intInfoOrFormat(ctx, "TCN") != null
+            || doubleInfoOrFormat(ctx, "SM") != null
+            || (ctx.hasAttribute("END") && intInfoOrFormat(ctx, "CN") != null);
+    }
+
+    /** DRAGEN {@code *.cnv.vcf}: END/REFLEN and/or symbolic CNV ALT / SVTYPE=CNV. */
+    private static boolean looksLikeDragenCnvRecord(VariantContext ctx) {
+        if (ctx.hasAttribute("END") && ctx.hasAttribute("REFLEN")) {
+            return true;
+        }
+        String svType = ctx.getAttributeAsString("SVTYPE", null);
+        if (svType != null && "CNV".equalsIgnoreCase(svType)) {
+            return true;
+        }
+        for (var allele : ctx.getAlternateAlleles()) {
+            String alt = allele.getDisplayString().toUpperCase();
+            if ("<CNV>".equals(alt) || "<DEL>".equals(alt) || "<DUP>".equals(alt)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
-     * FACETS-style CNV: prefer {@code CNLR_MEDIAN} (relative to normal), else {@code TCN_EM}
-     * with a buffer (loss ≤1, gain ≥4; 2–3 stay neutral).
+     * FACETS INFO logR / TCN, or DRAGEN FORMAT/SM (linear copy ratio ≈ 1 diploid)
+     * and FORMAT/CN. Falls back to symbolic {@code <DEL>}/{@code <DUP>} when metrics
+     * are missing.
      */
     private static VcfVariantType classifyCnvSegment(VariantContext ctx) {
-        Double logr = doubleInfo(ctx, "CNLR_MEDIAN");
+        Double logr = doubleInfoOrFormat(ctx, "CNLR_MEDIAN");
         if (logr == null) {
-            logr = doubleInfo(ctx, "CNLR_MEDIAN_CLUST");
+            logr = doubleInfoOrFormat(ctx, "CNLR_MEDIAN_CLUST");
         }
         if (logr != null) {
             if (logr > CNV_LOGR_BUFFER) {
@@ -674,9 +705,20 @@ public class VcfReader implements AutoCloseable {
             }
             return VcfVariantType.SV_CNV_NEUTRAL;
         }
-        Integer tcn = intInfo(ctx, "TCN_EM");
+        Double sm = doubleInfoOrFormat(ctx, "SM");
+        if (sm != null && sm > 0) {
+            double smLog2 = Math.log(Math.max(1e-3, sm)) / Math.log(2.0);
+            if (smLog2 > CNV_LOGR_BUFFER) {
+                return VcfVariantType.SV_CNV_GAIN;
+            }
+            if (smLog2 < -CNV_LOGR_BUFFER) {
+                return VcfVariantType.SV_CNV_LOSS;
+            }
+            return VcfVariantType.SV_CNV_NEUTRAL;
+        }
+        Integer tcn = intInfoOrFormat(ctx, "TCN_EM");
         if (tcn == null) {
-            tcn = intInfo(ctx, "CN");
+            tcn = intInfoOrFormat(ctx, "CN");
         }
         if (tcn != null) {
             if (tcn <= CNV_LOSS_MAX_TCN) {
@@ -687,14 +729,67 @@ public class VcfReader implements AutoCloseable {
             }
             return VcfVariantType.SV_CNV_NEUTRAL;
         }
+        // No numeric metric: use symbolic ALT / diploid REF.
+        for (var allele : ctx.getAlternateAlleles()) {
+            String symbolic = allele.getDisplayString().toUpperCase();
+            if (symbolic.startsWith("<DEL")) {
+                return VcfVariantType.SV_CNV_LOSS;
+            }
+            if (symbolic.startsWith("<DUP")) {
+                return VcfVariantType.SV_CNV_GAIN;
+            }
+        }
+        if (!ctx.isVariant() || ctx.getAlternateAlleles().isEmpty()) {
+            return VcfVariantType.SV_CNV_NEUTRAL;
+        }
         return VcfVariantType.SV_CNV;
     }
 
-    private static Integer intInfo(VariantContext ctx, String key) {
-        if (!ctx.hasAttribute(key)) {
+    private static boolean hasFormatAttribute(VariantContext ctx, String key) {
+        if (ctx.getNSamples() <= 0) {
+            return false;
+        }
+        for (Genotype gt : ctx.getGenotypes()) {
+            if (gt != null && gt.hasExtendedAttribute(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Integer intInfoOrFormat(VariantContext ctx, String key) {
+        Integer fromInfo = parseIntValue(ctx.hasAttribute(key) ? ctx.getAttribute(key) : null);
+        if (fromInfo != null) {
+            return fromInfo;
+        }
+        return parseIntValue(firstFormatValue(ctx, key));
+    }
+
+    private static Double doubleInfoOrFormat(VariantContext ctx, String key) {
+        Double fromInfo = parseDoubleValue(ctx.hasAttribute(key) ? ctx.getAttribute(key) : null);
+        if (fromInfo != null) {
+            return fromInfo;
+        }
+        return parseDoubleValue(firstFormatValue(ctx, key));
+    }
+
+    private static Object firstFormatValue(VariantContext ctx, String key) {
+        if (ctx.getNSamples() <= 0) {
             return null;
         }
-        Object value = ctx.getAttribute(key);
+        for (Genotype gt : ctx.getGenotypes()) {
+            if (gt == null || !gt.hasExtendedAttribute(key)) {
+                continue;
+            }
+            return gt.getExtendedAttribute(key);
+        }
+        return null;
+    }
+
+    private static Integer parseIntValue(Object value) {
+        if (value == null) {
+            return null;
+        }
         if (value instanceof Number number) {
             return number.intValue();
         }
@@ -709,11 +804,10 @@ public class VcfReader implements AutoCloseable {
         }
     }
 
-    private static Double doubleInfo(VariantContext ctx, String key) {
-        if (!ctx.hasAttribute(key)) {
+    private static Double parseDoubleValue(Object value) {
+        if (value == null) {
             return null;
         }
-        Object value = ctx.getAttribute(key);
         if (value instanceof Number number) {
             return number.doubleValue();
         }

@@ -27,6 +27,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.stage.Window;
 
+@SuppressWarnings("this-escape")
 public abstract class TrackColumnSidebar extends SidebarBase {
 
   public static record HitBox(double x, double y, double w, double h) {
@@ -114,6 +115,12 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     trackViewportRegistry.visibleWindowRevisionProperty().addListener((obs, o, n) -> {
       syncMasterHeaderRenderState();
       drawMasterHeader();
+      // Body resize updates row height without a range-slot change; keep list rows
+      // in sync immediately (hover used to be the only redraw trigger).
+      TrackListPanel list = getTrackListPanel();
+      if (list != null) {
+        list.draw();
+      }
     });
   }
 
@@ -271,28 +278,20 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     int trackCount = trackViewportRegistry.getDisplayedTrackCount();
     double masterH = trackViewportRegistry.getMasterBandHeightPixels();
 
-    if (!trackViewportRegistry.isMasterAggregatesEnabled()) {
-      // Aggregates off: Add/settings title bar only (no slider / density).
+    if (!trackViewportRegistry.isMasterAggregatesEnabled()
+        || !shouldAutoExpandMasterHeader(trackCount)) {
+      // Aggregates off, or only one track: title bar only (no slider / density).
       if (Math.abs(masterH - TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS) > 0.5) {
         trackViewportRegistry.setMasterBandHeightPixels(
             TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
         masterH = TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
       }
-    } else if (shouldAutoExpandMasterHeader(trackCount)) {
-      // Multi-track: title + range slider needs ~82px. Single-track aggregate
-      // settles at 60px, which clips the slider when a second sample is opened.
+    } else {
+      // Multi-track with aggregates on: title + range slider needs ~82px.
       // Skip while the user is dragging the band edge so resize stays interactive.
       if (!isDraggingResize && masterH < EXPANDED_MASTER_HEIGHT - 1) {
         trackViewportRegistry.setMasterBandHeightPixels(EXPANDED_MASTER_HEIGHT);
         masterH = EXPANDED_MASTER_HEIGHT;
-      }
-    } else {
-      // Aggregates on, ≤1 track: keep density band, drop slider-only extra height.
-      double aggregateH = TrackViewportRegistry.AGGREGATE_MASTER_BAND_HEIGHT_PIXELS;
-      if (masterH > EXPANDED_MASTER_HEIGHT - 1
-          || masterH <= TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
-        trackViewportRegistry.setMasterBandHeightPixels(aggregateH);
-        masterH = aggregateH;
       }
     }
 

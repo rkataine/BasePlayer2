@@ -5,6 +5,7 @@ import javafx.scene.canvas.Canvas;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
 
+@SuppressWarnings("this-escape")
 public abstract class AggregateBandCanvas extends GenomicCanvas {
 
   private final ObservableNumberValue bandHeight;

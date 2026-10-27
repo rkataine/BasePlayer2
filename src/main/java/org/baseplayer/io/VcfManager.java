@@ -1073,6 +1073,7 @@ public class VcfManager {
                 org.baseplayer.services.LoadingManager.get().setProgress(0, globalSampleTotal);
                 updateAnnotateAllTaskSuffix(taskRef[0],
                     "0/" + totalChromosomes + " chromosomes, rows: 0");
+                clearAnnotateAllDetail(taskRef[0]);
 
                 for (String chromosome : chromosomes) {
                     if (Thread.currentThread().isInterrupted()) {
@@ -1082,6 +1083,12 @@ public class VcfManager {
                     final int chromBase = completedChromosomes * samplesPerChromosome;
                     final String chromLabel = chromosome;
                     final int[] lastNotifiedSample = { -1 };
+                    updateAnnotateAllTaskSuffix(taskRef[0],
+                        chromLabel
+                            + " (" + progressState[0] + "/" + totalChromosomes + ")"
+                            + ", rows: " + progressState[1]);
+                    setAnnotateAllDetail(taskRef[0], "Loading / annotating variants…",
+                        0, samplesPerChromosome);
                     int chromosomeRows = buildChromosomeCacheForAnnotation(
                         chromosome,
                         filesSnapshot,
@@ -1091,6 +1098,7 @@ public class VcfManager {
                         (samplesDoneInChrom, samplesTotalInChrom) -> {
                             int clamped = Math.min(samplesPerChromosome,
                                 Math.max(0, samplesDoneInChrom));
+                            // Overall bar stays chromosome/sample advancement.
                             org.baseplayer.services.LoadingManager.get().setProgress(
                                 chromBase + clamped, globalSampleTotal);
                             // Throttle message updates so FX isn't flooded.
@@ -1103,23 +1111,29 @@ public class VcfManager {
                                     chromLabel
                                         + " (" + progressState[0] + "/" + totalChromosomes + ")"
                                         + ", rows: " + progressState[1]);
+                                setAnnotateAllDetail(taskRef[0],
+                                    "Loading samples " + clamped + "/" + samplesPerChromosome,
+                                    clamped, samplesPerChromosome);
                             }
                         });
 
-                    // Per-chrom control AF (same as switching chroms manually) — before next chrom.
+                    // Per-chrom control AF / ClinVar — detail bar only; overall suffix stays chrom-level.
                     if (afterChromosomeReady != null && !Thread.currentThread().isInterrupted()) {
                         VariantList built = findCachedVariantList(chromosome);
                         if (built != null) {
                             updateAnnotateAllTaskSuffix(taskRef[0],
                                 chromLabel
                                     + " (" + (progressState[0] + 1) + "/" + totalChromosomes + ")"
-                                    + " controlling…");
+                                    + ", rows: " + progressState[1]);
+                            setAnnotateAllDetail(taskRef[0],
+                                "Control / ClinVar annotation…", -1, 0);
                             try {
                                 afterChromosomeReady.accept(built);
                             } catch (Throwable t) {
                                 warnings.add("Control AF failed for " + chromosome + ": "
                                     + t.getMessage());
                             }
+                            clearAnnotateAllDetail(taskRef[0]);
                         }
                     }
 
@@ -1133,6 +1147,7 @@ public class VcfManager {
                         chromosome
                             + " (" + completedChromosomes + "/" + totalChromosomes + ")"
                             + ", rows: " + totalRows);
+                    clearAnnotateAllDetail(taskRef[0]);
 
                     if (onProgress != null) {
                         int completedSnapshot = completedChromosomes;
@@ -1223,6 +1238,32 @@ public class VcfManager {
     private static void updateAnnotateAllTaskSuffix(ThreadRunner.RunnerTask task, String suffix) {
         if (task == null) return;
         task.setProgressSuffix(suffix);
+        ThreadRunner.get().notifyDescriptionChanged();
+    }
+
+    private static void setAnnotateAllDetail(
+            ThreadRunner.RunnerTask task, String detail, int current, int total) {
+        if (task != null) {
+            task.setDetailMessage(detail != null ? detail : "");
+        }
+        if (detail == null || detail.isBlank()) {
+            org.baseplayer.services.LoadingManager.get().clearDetail();
+        } else {
+            org.baseplayer.services.LoadingManager.get().setDetailMessage(detail);
+            if (total > 0) {
+                org.baseplayer.services.LoadingManager.get().setDetailProgress(current, total);
+            } else if (current < 0) {
+                org.baseplayer.services.LoadingManager.get().setDetailProgress(-1.0);
+            }
+        }
+        ThreadRunner.get().notifyDescriptionChanged();
+    }
+
+    private static void clearAnnotateAllDetail(ThreadRunner.RunnerTask task) {
+        if (task != null) {
+            task.setDetailMessage("");
+        }
+        org.baseplayer.services.LoadingManager.get().clearDetail();
         ThreadRunner.get().notifyDescriptionChanged();
     }
 

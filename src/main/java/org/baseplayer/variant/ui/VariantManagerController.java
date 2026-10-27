@@ -39,6 +39,7 @@ import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.GeneGroup
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.NestedPanel;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.TableRow;
 import org.baseplayer.variant.ui.components.VariantExcelExportBuilder;
+import org.baseplayer.variant.ui.components.VariantDetailsPanel;
 import org.baseplayer.variant.ui.components.VariantFiltersPanel;
 import org.baseplayer.variant.ui.components.VariantTable;
 
@@ -152,10 +153,21 @@ public class VariantManagerController implements Initializable {
     @FXML private Label controlFilePathLabel;
     @FXML private Button addControlVcfButton;
     @FXML private Button removeControlFileButton;
+    @FXML private VBox controlOptionsBox;
     @FXML private ColoredToggle filterByPopFreqCheckBox;
     @FXML private TextField maxPopFreqField;
     @FXML private ColoredToggle selectAllPopulationsCheckBox;
     @FXML private VBox controlPopulationBox;
+    @FXML private Label clinVarPathLabel;
+    @FXML private Button addClinVarButton;
+    @FXML private Button removeClinVarButton;
+    @FXML private javafx.scene.control.Hyperlink clinVarDownloadLink;
+    @FXML private VBox clinVarOptionsBox;
+    @FXML private ColoredToggle filterByClinVarSigCheckBox;
+    @FXML private ColoredToggle clinVarPathogenicCheckBox;
+    @FXML private ColoredToggle clinVarVusCheckBox;
+    @FXML private ColoredToggle clinVarBenignCheckBox;
+    @FXML private ColoredToggle clinVarOtherCheckBox;
     @FXML private VBox controlFilesRoot;
     @FXML private SplitPane controlFilesSplitPane;
 
@@ -222,6 +234,8 @@ public class VariantManagerController implements Initializable {
     private VariantTable variantTable;
     private SvVariantTable svVariantTable;
     private LohVariantTable lohVariantTable;
+    private final VariantDetailsPanel pointVariantDetails = new VariantDetailsPanel();
+    private final VariantDetailsPanel svVariantDetails = new VariantDetailsPanel();
 
     /** Point-results tabs for BED annotation tracks (Feature → Variant → Sample). */
     private final Map<BedTrack, AnnotationFeatureTabSlot> annotationFeatureTabs =
@@ -317,10 +331,21 @@ public class VariantManagerController implements Initializable {
                 controlFilePathLabel,
                 addControlVcfButton,
                 removeControlFileButton,
+                controlOptionsBox,
                 filterByPopFreqCheckBox,
                 maxPopFreqField,
                 selectAllPopulationsCheckBox,
-                controlPopulationBox));
+                controlPopulationBox,
+                clinVarPathLabel,
+                addClinVarButton,
+                removeClinVarButton,
+                clinVarDownloadLink,
+                clinVarOptionsBox,
+                filterByClinVarSigCheckBox,
+                clinVarPathogenicCheckBox,
+                clinVarVusCheckBox,
+                clinVarBenignCheckBox,
+                clinVarOtherCheckBox));
         wireControlFilesPanel(controlFilesPanel);
         pointWorkspace.setControl(controlFilesPanel);
         // Early restore for Point; SV is restored after restructureModeWorkspaces().
@@ -410,7 +435,8 @@ public class VariantManagerController implements Initializable {
         }
 
         pointToolTabPane = new TabPane();
-        pointToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        // SELECTED_TAB so the dynamic Variant details tab can close; fixed tabs stay non-closable.
+        pointToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.SELECTED_TAB);
         pointToolTabPane.getStyleClass().add("filter-tabs");
 
         pointFiltersTab = new Tab("Variant Filters", pointFilters);
@@ -447,7 +473,7 @@ public class VariantManagerController implements Initializable {
         }
 
         svToolTabPane = new TabPane();
-        svToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        svToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.SELECTED_TAB);
         svToolTabPane.getStyleClass().add("filter-tabs");
 
         // Filters host may already contain the built SV filter UI.
@@ -662,7 +688,8 @@ public class VariantManagerController implements Initializable {
             typeTables,
             typeTabs,
             this::handleGeneRowDoubleClick,
-            this::handleSvRowDoubleClick);
+            this::handleSvVariantSelect,
+            this::handleSvGotoVariant);
         svVariantTable.initializeColumns();
         // FXML lists every SV type tab; prune to types observed in open VCFs.
         svVariantTable.setBaseTabTitles();
@@ -686,7 +713,8 @@ public class VariantManagerController implements Initializable {
             typeTables,
             typeTabs,
             this::handleGeneRowDoubleClick,
-            this::handleLohRowDoubleClick);
+            this::handleLohVariantSelect,
+            this::handleLohGotoVariant);
         lohVariantTable.initializeColumns();
 
         // LOH reuses the point-mutation search box (same listener in initialize).
@@ -731,10 +759,20 @@ public class VariantManagerController implements Initializable {
         svVariantTable.setSearchQuery(q);
     }
 
-    /**
-     * Double-click LOH region row: zoom to the AA/BB span like a deletion.
-     */
-    public void handleLohRowDoubleClick(VariantTable.TableRow row) {
+    /** Single-click LOH row: open details only. */
+    public void handleLohVariantSelect(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+        String rowChromosome = row.chromosome();
+        if (rowChromosome == null || rowChromosome.isBlank()) {
+            rowChromosome = chromosome;
+        }
+        openVariantDetails(row.node(), rowChromosome, false);
+    }
+
+    /** Double-click / Go to variant: zoom to the AA/BB span like a deletion. */
+    public void handleLohGotoVariant(VariantTable.TableRow row) {
         if (row == null || row.node() == null) {
             return;
         }
@@ -760,7 +798,7 @@ public class VariantManagerController implements Initializable {
                 "LOH:" + chrom + ":" + node.position + "-" + node.svEnd);
             return;
         }
-        handlePositionClick(row);
+        handleGotoVariant(row);
     }
 
     /**
@@ -1281,7 +1319,8 @@ public class VariantManagerController implements Initializable {
             intronicTab,
             intergenicTab,
             this::handleGeneRowDoubleClick,
-            this::handlePositionClick);
+            this::handleVariantSelect,
+            this::handleGotoVariant);
 
         variantTable.initializeColumns();
     }
@@ -1364,7 +1403,20 @@ public class VariantManagerController implements Initializable {
         return null;
     }
 
-    public void handlePositionClick(VariantTable.TableRow row) {
+    /** Single-click: open the Variant details tab (no genome navigation). */
+    public void handleVariantSelect(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+        String rowChromosome = row.chromosome();
+        if (rowChromosome == null || rowChromosome.isBlank()) {
+            rowChromosome = chromosome;
+        }
+        openVariantDetails(row.node(), rowChromosome, false);
+    }
+
+    /** Double-click / Go to variant: navigate the genome browser to this allele. */
+    public void handleGotoVariant(VariantTable.TableRow row) {
         if (row == null || row.node() == null) {
             return;
         }
@@ -1380,21 +1432,76 @@ public class VariantManagerController implements Initializable {
         long start = Math.max(1, position - minViewLength / 2);
         long end = position + minViewLength / 2;
 
-        // Make effectively final for lambda
         final String navChromosome = rowChromosome;
         final long navStart = start;
         final long navEnd = end;
 
         navigateAndApplySampleFilter(
-            () -> NavigationCommands.navigateToPosition(navChromosome, (int)navStart, (int)navEnd),
+            () -> NavigationCommands.navigateToPosition(navChromosome, (int) navStart, (int) navEnd),
             resolveTracksFromCalls(node.getSamples()),
             "Position:" + position);
     }
 
+    /** @deprecated Use {@link #handleVariantSelect} / {@link #handleGotoVariant}. */
+    @Deprecated
+    public void handlePositionClick(VariantTable.TableRow row) {
+        handleVariantSelect(row);
+        handleGotoVariant(row);
+    }
+
     /**
-     * Double-click SV row: full span for DEL/DUP/INV; dual-stack for TRA/BND; breakpoint otherwise.
+     * Open or refresh the Variant details tool tab (beside Filters / Control Files).
+     *
+     * @param structural when true, use the SV workspace tool tab pane
      */
-    public void handleSvRowDoubleClick(VariantTable.TableRow row) {
+    public void openVariantDetails(VariantNode node, String chrom, boolean structural) {
+        if (node == null) {
+            return;
+        }
+        String chromName = chrom;
+        if (chromName == null || chromName.isBlank()) {
+            chromName = chromosome;
+        }
+        final String gotoChrom = chromName;
+        final VariantNode gotoNode = node;
+        Runnable gotoAction = () -> {
+            if (structural) {
+                handleSvGotoVariant(fakeRow(gotoNode, gotoChrom));
+            } else if (VariantTypeVisuals.isLohRegion(gotoNode.type)) {
+                handleLohGotoVariant(fakeRow(gotoNode, gotoChrom));
+            } else {
+                handleGotoVariant(fakeRow(gotoNode, gotoChrom));
+            }
+        };
+        if (structural) {
+            TabPane tools = svWorkspace != null ? svWorkspace.toolTabPane() : svToolTabPane;
+            svVariantDetails.show(tools, node, chromName, gotoAction);
+        } else {
+            TabPane tools = pointWorkspace != null ? pointWorkspace.toolTabPane() : pointToolTabPane;
+            pointVariantDetails.show(tools, node, chromName, gotoAction);
+        }
+    }
+
+    private static VariantTable.TableRow fakeRow(VariantNode node, String chrom) {
+        return new VariantTable.TableRow(chrom, node);
+    }
+
+    /** Single-click SV row: open details only. */
+    public void handleSvVariantSelect(VariantTable.TableRow row) {
+        if (row == null || row.node() == null) {
+            return;
+        }
+        String rowChromosome = row.chromosome();
+        if (rowChromosome == null || rowChromosome.isBlank()) {
+            rowChromosome = chromosome;
+        }
+        openVariantDetails(row.node(), rowChromosome, true);
+    }
+
+    /**
+     * Double-click / Go to variant: full span for DEL/DUP/INV; dual-stack for TRA/BND.
+     */
+    public void handleSvGotoVariant(VariantTable.TableRow row) {
         if (row == null || row.node() == null) {
             return;
         }
@@ -1429,7 +1536,14 @@ public class VariantManagerController implements Initializable {
             return;
         }
 
-        handlePositionClick(row);
+        long position = node.position;
+        long minViewLength = 40;
+        final long navStart = Math.max(1, position - minViewLength / 2);
+        final long navEnd = position + minViewLength / 2;
+        navigateAndApplySampleFilter(
+            () -> NavigationCommands.navigateToPosition(chrom, (int) navStart, (int) navEnd),
+            tracks,
+            "Position:" + position);
     }
 
     private void navigateSvTranslocation(String primaryChrom, VariantNode node, List<SampleTrack> tracks) {
@@ -2232,7 +2346,7 @@ public class VariantManagerController implements Initializable {
         final java.util.concurrent.atomic.AtomicReference<ThreadRunner.RunnerTask> taskRef =
             new java.util.concurrent.atomic.AtomicReference<>();
         controlAnnotationTask = ThreadRunner.get().submit(
-            "Annotating control AF…",
+            "Annotating control data…",
             () -> {
                 work.accept(suffix -> {
                     ThreadRunner.RunnerTask t = taskRef.get();
@@ -2267,8 +2381,8 @@ public class VariantManagerController implements Initializable {
     }
 
     /**
-     * After chrom load / switch: when a control VCF is open and this chrom lacks AFs,
-     * annotate (modal). Otherwise rebuild tables only — no control side effects.
+     * After chrom load / switch: when a control or ClinVar VCF is open and this chrom
+     * lacks annotations, annotate (modal). Otherwise rebuild tables only.
      */
     private void annotateControlAfThenRebuild() {
         ControlFilesPanel panel = activeControlPanelWithOpenFile();
@@ -2278,8 +2392,10 @@ public class VariantManagerController implements Initializable {
             return;
         }
         if (!panel.annotator().needsAnnotation(sourceVariants)
-                && !anySourceNeedsControlAf(panel)) {
-            // Cache already has control AF for this file — just show tables.
+                && !anySourceNeedsControlAf(panel)
+                && !panel.clinVarAnnotator().needsAnnotation(sourceVariants)
+                && !anySourceNeedsClinVar(panel)) {
+            // Cache already has annotations for these files — just show tables.
             scheduleRebuild(vcfManager != null ? vcfManager.getCurrentFilter() : buildFilterFromUI());
             return;
         }
@@ -2329,8 +2445,20 @@ public class VariantManagerController implements Initializable {
         return false;
     }
 
+    private boolean anySourceNeedsClinVar(ControlFilesPanel panel) {
+        if (panel == null || sourceVariantLists == null) {
+            return false;
+        }
+        for (VcfManager.CachedChromosomeVariants cached : sourceVariantLists) {
+            if (cached != null && panel.clinVarAnnotator().needsAnnotation(cached.variants())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
-     * Per-chromosome control AF during annotate-all / reload-all — same step as when
+     * Per-chromosome control AF / ClinVar during annotate-all / reload-all — same step as when
      * switching chromosomes manually. No LoadingManager bar updates (annotate-all owns progress).
      */
     private java.util.function.Consumer<VariantList> controlAfAfterChromosomeHook(
@@ -2338,20 +2466,7 @@ public class VariantManagerController implements Initializable {
         if (panel == null) {
             return null;
         }
-        return list -> {
-            if (list == null || !panel.annotator().isOpen()) {
-                return;
-            }
-            if (!panel.annotator().needsAnnotation(list)) {
-                return;
-            }
-            try {
-                panel.annotator().annotate(list);
-            } catch (java.io.IOException e) {
-                System.err.println("Control AF annotation failed for "
-                    + list.getChromosome() + ": " + e.getMessage());
-            }
-        };
+        return list -> panel.annotateIfOpen(list, null);
     }
 
     private ControlFilesPanel activeControlPanel() {
@@ -2361,25 +2476,19 @@ public class VariantManagerController implements Initializable {
         return svWorkspace != null ? svWorkspace.control() : null;
     }
 
+    private static boolean hasOpenControlOrClinVar(ControlFilesPanel panel) {
+        return panel != null
+            && (panel.annotator().isOpen() || panel.clinVarAnnotator().isOpen());
+    }
+
     private ControlFilesPanel activeControlPanelWithOpenFile() {
-        if (pointWorkspace != null
-                && pointWorkspace.control() != null
-                && pointWorkspace.control().annotator().isOpen()) {
+        if (pointWorkspace != null && hasOpenControlOrClinVar(pointWorkspace.control())) {
             return pointWorkspace.control();
         }
-        if (svWorkspace != null
-                && svWorkspace.control() != null
-                && svWorkspace.control().annotator().isOpen()) {
+        if (svWorkspace != null && hasOpenControlOrClinVar(svWorkspace.control())) {
             return svWorkspace.control();
         }
         return null;
-    }
-
-    @FXML
-    private void handleApplyControlSettings() {
-        if (pointWorkspace != null && pointWorkspace.control() != null) {
-            pointWorkspace.control().handleApplyControlSettings();
-        }
     }
 
     @FXML
@@ -2393,6 +2502,20 @@ public class VariantManagerController implements Initializable {
     private void handleRemoveControlFile() {
         if (pointWorkspace != null && pointWorkspace.control() != null) {
             pointWorkspace.control().handleRemoveControlFile();
+        }
+    }
+
+    @FXML
+    private void handleAddClinVarVcf() {
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            pointWorkspace.control().handleAddClinVarVcf();
+        }
+    }
+
+    @FXML
+    private void handleRemoveClinVarFile() {
+        if (pointWorkspace != null && pointWorkspace.control() != null) {
+            pointWorkspace.control().handleRemoveClinVarFile();
         }
     }
 
@@ -2536,17 +2659,19 @@ public class VariantManagerController implements Initializable {
             return null;
         }
         ControlFilesPanel panel = activeControlPanelWithOpenFile();
-        if (panel != null && panel.annotator().needsAnnotation(list)) {
-            updateVariantLoadPhaseOnWorker(loadTask, "Annotating control AF…");
+        if (panel != null
+                && (panel.annotator().needsAnnotation(list)
+                    || panel.clinVarAnnotator().needsAnnotation(list))) {
+            updateVariantLoadPhaseOnWorker(loadTask, "Annotating control data…");
             try {
                 panel.annotateIfOpen(list, suffix -> {
                     if (loadTask != null) {
-                        loadTask.setProgressSuffix("— " + suffix);
+                        loadTask.setDetailMessage(suffix != null ? suffix : "");
                         ThreadRunner.get().notifyDescriptionChanged();
                     }
                 });
             } catch (Throwable t) {
-                System.err.println("Control AF during post-load failed: " + t.getMessage());
+                System.err.println("Control annotation during post-load failed: " + t.getMessage());
             }
         }
 
@@ -3590,7 +3715,8 @@ public class VariantManagerController implements Initializable {
                 final BedTrack tabTrack = track;
                 NestedPanel panel = AbstractNestedVariantTable.createFeatureAnnotationPanel(
                     (name, sampleTracks) -> handleFeatureRowDoubleClick(tabTrack, name, sampleTracks),
-                    this::handlePositionClick,
+                    this::handleVariantSelect,
+                    this::handleGotoVariant,
                     () -> vcfManager != null
                         ? vcfManager.getCurrentFilter()
                         : buildFilterFromUI());

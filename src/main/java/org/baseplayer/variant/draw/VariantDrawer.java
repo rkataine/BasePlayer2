@@ -61,8 +61,16 @@ public class VariantDrawer {
     private final VariantDrawSeek drawSeek = new VariantDrawSeek();
     private final List<VariantHit> hitRegions = new ArrayList<>();
 
+    /**
+     * When true, point variants are drawn as BAF dots (y = alleleFraction on 0–1),
+     * with a 0.5 midline. SV/CNV/LOH keep their usual glyphs.
+     */
+    private boolean bafDisplayMode = false;
+
     /** Set for the duration of {@link #draw}: ALT-base colors/letters vs type colors. */
     private boolean paintByAltBase;
+
+    private static final double BAF_DOT_SIZE = 4.0;
 
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;
@@ -77,6 +85,14 @@ public class VariantDrawer {
     public VariantDrawer() {
         this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
         this.visibleIndex = new VisibleVariantIndex();
+    }
+
+    public boolean isBafDisplayMode() {
+        return bafDisplayMode;
+    }
+
+    public void setBafDisplayMode(boolean bafDisplayMode) {
+        this.bafDisplayMode = bafDisplayMode;
     }
 
     public void draw(GraphicsContext gc,
@@ -141,12 +157,13 @@ public class VariantDrawer {
             }
         }
 
-        // Track last drawn X pixel per sample to avoid overdraw of point variants when zoomed out
-        // (SV spans are exempt from this deduplication as they span multiple pixels)
+        // Zoomed-out point ticks: one ink per sample X column.
+        // BAF mode instead uses (slot,x,y) so 0 / 0.5 / 1 at the same X all stay visible.
         int[] lastDrawnPixelX = new int[visibleTrackIndices.length];
         for (int i = 0; i < lastDrawnPixelX.length; i++) {
             lastDrawnPixelX[i] = -1;
         }
+        java.util.HashSet<Long> bafDrawnPixels = bafDisplayMode ? new java.util.HashSet<>() : null;
 
         VcfManager vcfManager = VcfManager.getInstance();
         java.util.Set<VcfVariantType> legendTypes = vcfManager.getSessionAvailableTypes();
@@ -154,6 +171,9 @@ public class VariantDrawer {
         // Mid-line + left scale for CNV tracks (gains up / losses down).
         if (sessionHasCanvasCnv(vcfManager, legendTypes)) {
             drawCnvSampleGuides(gc, visibleTrackIndices.length, yPositions, sampleHeight);
+        }
+        if (bafDisplayMode) {
+            drawBafGuidelines(gc, visibleTrackIndices, yPositions, sampleHeight, canvasWidth);
         }
 
         // Hold the list lock for ensure + walk so a concurrent slider/filter rebuild
@@ -179,7 +199,7 @@ public class VariantDrawer {
                     gc, variantList, node, filter, true, drawClickableRects, chromPosToScreenPos,
                     canvasWidth, chromPosToScreenPos.apply((double) node.position),
                     visibleTrackIndices, trackIndexToSlot, yPositions, allTracks, sampleHeight,
-                    lastDrawnPixelX);
+                    lastDrawnPixelX, bafDrawnPixels);
             }
 
             // Synthetic LOH AA/BB regions: arc from first→last marker (not a solid bar).
@@ -213,7 +233,7 @@ public class VariantDrawer {
                             gc, variantList, node, filter, isSvSpan, drawClickableRects,
                             chromPosToScreenPos, canvasWidth, x,
                             visibleTrackIndices, trackIndexToSlot, yPositions, allTracks,
-                            sampleHeight, lastDrawnPixelX);
+                            sampleHeight, lastDrawnPixelX, bafDrawnPixels);
                     }
                 }
 
@@ -252,11 +272,14 @@ public class VariantDrawer {
             double[] yPositions,
             List<SampleTrack> allTracks,
             double sampleHeight,
-            int[] lastDrawnPixelX) {
+            int[] lastDrawnPixelX,
+            java.util.Set<Long> bafDrawnPixels) {
         int xPixel = (int) x;
         // Zoomed-out point ticks: if every visible slot already has ink on this pixel,
         // skip the per-node sample walk entirely (avoids huge alloc churn on dense VCFs).
-        if (!isSvSpan && !drawClickableRects && allSlotsHavePixel(lastDrawnPixelX, xPixel)) {
+        // BAF keeps multiple Y values per X, so this fast-path must not apply.
+        if (!bafDisplayMode && !isSvSpan && !drawClickableRects
+            && allSlotsHavePixel(lastDrawnPixelX, xPixel)) {
             return;
         }
         int chainGen = variantList.getVisibleChainGeneration();
@@ -265,7 +288,8 @@ public class VariantDrawer {
         if (useCache) {
             // Display map is keyed by track — walk visible slots.
             for (int slot = 0; slot < visibleTrackIndices.length; slot++) {
-                if (!isSvSpan && !drawClickableRects && lastDrawnPixelX[slot] == xPixel) {
+                if (!bafDisplayMode && !isSvSpan && !drawClickableRects
+                    && lastDrawnPixelX[slot] == xPixel) {
                     continue;
                 }
                 int trackIndex = visibleTrackIndices[slot];
@@ -279,7 +303,8 @@ public class VariantDrawer {
                 VariantNode.SampleCall call = node.getDisplayCall(track, chainGen);
                 paintSampleSlot(
                     gc, node, call, isSvSpan, drawClickableRects, chromPosToScreenPos,
-                    canvasWidth, x, xPixel, slot, yPositions, sampleHeight, lastDrawnPixelX);
+                    canvasWidth, x, xPixel, slot, yPositions, sampleHeight,
+                    lastDrawnPixelX, bafDrawnPixels);
             }
             return;
         }
@@ -302,7 +327,8 @@ public class VariantDrawer {
                 return;
             }
             // Already painted a 1px tick for this sample at this screen column.
-            if (!isSvSpan && !drawClickableRects && lastDrawnPixelX[slot] == xPixel) {
+            if (!bafDisplayMode && !isSvSpan && !drawClickableRects
+                && lastDrawnPixelX[slot] == xPixel) {
                 return;
             }
             if (!VariantList.isDisplayEligible(node, candidate, filter, failed)) {
@@ -318,7 +344,8 @@ public class VariantDrawer {
         for (int slot = 0; slot < slotCall.length; slot++) {
             paintSampleSlot(
                 gc, node, slotCall[slot], isSvSpan, drawClickableRects, chromPosToScreenPos,
-                canvasWidth, x, xPixel, slot, yPositions, sampleHeight, lastDrawnPixelX);
+                canvasWidth, x, xPixel, slot, yPositions, sampleHeight,
+                lastDrawnPixelX, bafDrawnPixels);
         }
     }
 
@@ -334,6 +361,21 @@ public class VariantDrawer {
         return true;
     }
 
+    /** Pack slot + screen x/y into one key for BAF overdraw suppression. */
+    private static long bafPixelKey(int slot, int xPixel, int yPixel) {
+        return (((long) (slot & 0x3FF)) << 42)
+            | (((long) (xPixel & 0x1FFFFF)) << 21)
+            | ((long) (yPixel & 0x1FFFFF));
+    }
+
+    private static int bafValueYPixel(double rowTop, double sampleHeight, double alleleFraction) {
+        double v = Math.max(0, Math.min(1, alleleFraction));
+        double top = rowTop + 1;
+        double usable = Math.max(2, sampleHeight - 2);
+        double valueY = top + usable * (1.0 - v);
+        return (int) Math.round(valueY);
+    }
+
     private void paintSampleSlot(
             GraphicsContext gc,
             VariantNode node,
@@ -347,23 +389,100 @@ public class VariantDrawer {
             int slot,
             double[] yPositions,
             double sampleHeight,
-            int[] lastDrawnPixelX) {
+            int[] lastDrawnPixelX,
+            java.util.Set<Long> bafDrawnPixels) {
         if (call == null || !call.isUiVisible()) {
-            return;
-        }
-        if (!isSvSpan && !drawClickableRects && xPixel == lastDrawnPixelX[slot]) {
             return;
         }
         double y = yPositions[slot];
         if (isSvSpan) {
             drawSvSpan(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight,
                 drawClickableRects);
-        } else if (drawClickableRects) {
+            return;
+        }
+        if (bafDisplayMode) {
+            if (call.alleleFraction < 0) {
+                return;
+            }
+            int yPixel = bafValueYPixel(y, sampleHeight, call.alleleFraction);
+            if (bafDrawnPixels != null
+                && !bafDrawnPixels.add(bafPixelKey(slot, xPixel, yPixel))) {
+                return;
+            }
+            drawVariantBafDot(gc, node, call, x, y, sampleHeight, true);
+            return;
+        }
+        if (!drawClickableRects && xPixel == lastDrawnPixelX[slot]) {
+            return;
+        }
+        if (drawClickableRects) {
             drawVariantRect(gc, node, call, chromPosToScreenPos, canvasWidth, x, y, sampleHeight);
         } else {
             drawVariantLine(gc, node, call, x, y, sampleHeight);
             lastDrawnPixelX[slot] = xPixel;
         }
+    }
+
+    /**
+     * Point allele as a BAF dot: 0 at bottom, 0.5 mid, 1 at top.
+     * Uses {@link VariantNode.SampleCall#alleleFraction} when available.
+     */
+    private void drawVariantBafDot(
+            GraphicsContext gc,
+            VariantNode variant,
+            VariantNode.SampleCall call,
+            double x,
+            double y,
+            double sampleHeight,
+            boolean recordHit) {
+        if (call == null || call.alleleFraction < 0) {
+            return;
+        }
+        double v = Math.max(0, Math.min(1, call.alleleFraction));
+        double top = y + 1;
+        double usable = Math.max(2, sampleHeight - 2);
+        double valueY = top + usable * (1.0 - v);
+
+        // Midline once per slot is expensive in a per-variant loop; stroke a short tick
+        // only — full midline is drawn in {@link #drawBafGuidelines}.
+        Color baseColor = colorForCall(variant, call);
+        double opacity = callOpacity(call, 0.95, variant.isHomozygousRef(call));
+        if (opacity != 1.0) {
+            gc.setGlobalAlpha(opacity);
+        }
+        gc.setFill(baseColor);
+        gc.fillOval(x - BAF_DOT_SIZE * 0.5, valueY - BAF_DOT_SIZE * 0.5,
+            BAF_DOT_SIZE, BAF_DOT_SIZE);
+        if (opacity != 1.0) {
+            gc.setGlobalAlpha(1.0);
+        }
+
+        if (recordHit) {
+            hitRegions.add(new VariantHit(
+                variant, call,
+                x - BAF_DOT_SIZE, valueY - BAF_DOT_SIZE,
+                x + BAF_DOT_SIZE, valueY + BAF_DOT_SIZE));
+        }
+    }
+
+    /** Draw 0.5 guidelines across visible sample rows when in BAF mode. */
+    public void drawBafGuidelines(
+            GraphicsContext gc,
+            int[] visibleTrackIndices,
+            double[] yPositions,
+            double sampleHeight,
+            double canvasWidth) {
+        if (!bafDisplayMode || visibleTrackIndices == null || yPositions == null) {
+            return;
+        }
+        gc.setStroke(Color.rgb(110, 110, 110));
+        gc.setLineWidth(1);
+        gc.setLineDashes(2, 3);
+        for (int slot = 0; slot < visibleTrackIndices.length && slot < yPositions.length; slot++) {
+            double midY = yPositions[slot] + sampleHeight * 0.5;
+            gc.strokeLine(0, midY, canvasWidth, midY);
+        }
+        gc.setLineDashes();
     }
 
     /**

@@ -20,6 +20,7 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 
+@SuppressWarnings("this-escape")
 public class VariantLoader {
     
     private VcfReader vcfReader; // non-final: released after header parse, set again for variant loading

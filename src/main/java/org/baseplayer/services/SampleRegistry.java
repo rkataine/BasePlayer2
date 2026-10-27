@@ -33,6 +33,7 @@ import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.scene.paint.Color;
 
+@SuppressWarnings("this-escape")
 public class SampleRegistry extends TrackViewportRegistry {
 
     public static final double DEFAULT_MASTER_TRACK_HEIGHT = DEFAULT_MASTER_BAND_HEIGHT_PIXELS;

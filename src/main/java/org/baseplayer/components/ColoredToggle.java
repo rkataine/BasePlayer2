@@ -25,6 +25,7 @@ import javafx.scene.shape.Polyline;
  * Gene-sidebar-style toggle: colored swatch with strike when off, or ink checkbox chrome.
  * Exposes {@link #selectedProperty()} so callers can wire like a CheckBox.
  */
+@SuppressWarnings("this-escape")
 public class ColoredToggle extends HBox {
 
   private final Region chrome = new Region();

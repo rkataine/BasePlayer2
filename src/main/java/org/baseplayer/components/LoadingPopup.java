@@ -14,6 +14,7 @@ import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Popup;
 import javafx.stage.Stage;
@@ -30,16 +31,19 @@ import javafx.util.Duration;
 public class LoadingPopup {
 
     /** Approximate popup dimensions used for immediate centering. */
-    private static final double POPUP_W = 310;
-    private static final double POPUP_H = 230;
+    private static final double POPUP_W = 360;
+    private static final double POPUP_H = 300;
 
     private static final String POPUP_STYLE = AppDialog.PANEL_STYLE;
 
     private static final double PROGRESS_EPSILON = 1e-9;
 
     private final Popup popup;
+    private final VBox root;
     private final Label messageLabel;
+    private final Label detailLabel;
     private final ProgressBar progressBar;
+    private final ProgressBar detailProgressBar;
     private final Label timeEstimateLabel;
 
     private Runnable onCancel;
@@ -74,53 +78,54 @@ public class LoadingPopup {
         popup.setAutoHide(false);
         popup.setHideOnEscape(false);
 
-        VBox root = new VBox(8);
+        root = new VBox(8);
         root.setPadding(new Insets(16, 24, 16, 24));
         root.setAlignment(Pos.CENTER);
         root.setStyle(POPUP_STYLE);
         root.setPrefWidth(POPUP_W);
         root.setMinWidth(POPUP_W);
         root.setMaxWidth(POPUP_W);
-        root.setPrefHeight(POPUP_H);
-        root.setMinHeight(POPUP_H);
-        root.setMaxHeight(POPUP_H);
+        root.setMinHeight(Region.USE_PREF_SIZE);
+        root.setPrefHeight(Region.USE_COMPUTED_SIZE);
+        root.setMaxHeight(420);
 
         ProgressIndicator spinner = new ProgressIndicator(-1);
         spinner.setPrefSize(22, 22);
         spinner.setStyle("-fx-progress-color: #5a9fd4;");
 
+        double textWidth = POPUP_W - 48 - 32; // padding + spinner + gap
         messageLabel = new Label("Loading…");
         messageLabel.setStyle("-fx-text-fill: #d3d3d3; -fx-font-size: 13;");
-        messageLabel.setWrapText(false);
-        messageLabel.setTextOverrun(OverrunStyle.ELLIPSIS);
-        messageLabel.setEllipsisString("…");
+        messageLabel.setWrapText(true);
+        messageLabel.setTextOverrun(OverrunStyle.CLIP);
         messageLabel.setMinWidth(0);
-        messageLabel.setPrefWidth(210);
-        messageLabel.setMaxWidth(210);
+        messageLabel.setPrefWidth(textWidth);
+        messageLabel.setMaxWidth(textWidth);
 
         HBox msgRow = new HBox(10, spinner, messageLabel);
-        msgRow.setAlignment(Pos.CENTER_LEFT);
+        msgRow.setAlignment(Pos.TOP_LEFT);
         msgRow.setMaxWidth(POPUP_W - 48);
         HBox.setHgrow(messageLabel, Priority.ALWAYS);
 
+        progressBar = createProgressBar(20);
+
+        detailLabel = new Label("");
+        detailLabel.setStyle("-fx-text-fill: #a8a8a8; -fx-font-size: 11;");
+        detailLabel.setWrapText(true);
+        detailLabel.setTextOverrun(OverrunStyle.CLIP);
+        detailLabel.setMaxWidth(POPUP_W - 48);
+        detailLabel.setVisible(false);
+        detailLabel.setManaged(false);
+
+        detailProgressBar = createProgressBar(12);
+        detailProgressBar.setVisible(false);
+        detailProgressBar.setManaged(false);
+
         timeEstimateLabel = new Label("Elapsed: — | ETA: —");
         timeEstimateLabel.setStyle("-fx-text-fill: #999999; -fx-font-size: 11;");
-        timeEstimateLabel.setWrapText(false);
-        timeEstimateLabel.setTextOverrun(OverrunStyle.ELLIPSIS);
+        timeEstimateLabel.setWrapText(true);
+        timeEstimateLabel.setTextOverrun(OverrunStyle.CLIP);
         timeEstimateLabel.setMaxWidth(POPUP_W - 48);
-
-        progressBar = new ProgressBar(0.0);
-        progressBar.setPrefHeight(20);
-        progressBar.setMinHeight(20);
-        progressBar.setMaxHeight(20);
-        progressBar.setMaxWidth(Double.MAX_VALUE);
-        progressBar.setStyle(
-                "-fx-pref-height: 20px;"
-                + "-fx-background-color: linear-gradient(to bottom, #2a2a2a, #1a1a1a);"
-                + "-fx-background-radius: 3px;"
-                + "-fx-border-color: #555555;"
-                + "-fx-border-width: 1px;"
-                + "-fx-border-radius: 3px;");
 
         Button cancelBtn = new Button("Cancel");
         String cancelNormal =
@@ -143,12 +148,25 @@ public class LoadingPopup {
         cancelBtn.setOnMouseExited(e -> cancelBtn.setStyle(cancelNormal));
         cancelBtn.setOnAction(e -> cancel());
 
-        root.getChildren().addAll(msgRow, progressBar, timeEstimateLabel, cancelBtn);
-        VBox.setVgrow(msgRow, Priority.NEVER);
-        VBox.setVgrow(progressBar, Priority.NEVER);
-        VBox.setVgrow(timeEstimateLabel, Priority.NEVER);
-        VBox.setVgrow(cancelBtn, Priority.NEVER);
+        root.getChildren().addAll(
+            msgRow, progressBar, detailLabel, detailProgressBar, timeEstimateLabel, cancelBtn);
         popup.getContent().add(root);
+    }
+
+    private static ProgressBar createProgressBar(double height) {
+        ProgressBar bar = new ProgressBar(0.0);
+        bar.setPrefHeight(height);
+        bar.setMinHeight(height);
+        bar.setMaxHeight(height);
+        bar.setMaxWidth(Double.MAX_VALUE);
+        bar.setStyle(
+                "-fx-pref-height: " + height + "px;"
+                + "-fx-background-color: linear-gradient(to bottom, #2a2a2a, #1a1a1a);"
+                + "-fx-background-radius: 3px;"
+                + "-fx-border-color: #555555;"
+                + "-fx-border-width: 1px;"
+                + "-fx-border-radius: 3px;");
+        return bar;
     }
 
     /**
@@ -163,6 +181,7 @@ public class LoadingPopup {
         this.onCancel = onCancel;
         this.ownerHint = owner;
         messageLabel.setText(message);
+        clearDetail();
         progressBar.setProgress(0.0);
         lastProgress = 0.0;
         timeEstimateLabel.setText("Elapsed: 0s | ETA: —");
@@ -173,14 +192,19 @@ public class LoadingPopup {
         syncForegroundVisibility();
 
         Platform.runLater(() -> {
-            Node bar = progressBar.lookup(".bar");
-            if (bar != null) {
-                bar.setStyle(
-                        "-fx-background-color: " + org.baseplayer.ui.theme.AppTheme.CHROME_DARK.focusHex() + ";"
-                        + "-fx-background-radius: 2px;"
-                        + "-fx-background-insets: 2px;");
-            }
+            styleBarFill(progressBar);
+            styleBarFill(detailProgressBar);
         });
+    }
+
+    private static void styleBarFill(ProgressBar bar) {
+        Node fill = bar.lookup(".bar");
+        if (fill != null) {
+            fill.setStyle(
+                    "-fx-background-color: " + org.baseplayer.ui.theme.AppTheme.CHROME_DARK.focusHex() + ";"
+                    + "-fx-background-radius: 2px;"
+                    + "-fx-background-insets: 2px;");
+        }
     }
 
     /** Replace the cancel callback after {@link #show} has been called. */
@@ -188,17 +212,93 @@ public class LoadingPopup {
         this.onCancel = onCancel;
     }
 
-    /** Update the displayed message. Safe to call from any thread. */
+    /** Update the displayed message (overall task). Safe to call from any thread. */
     public void setMessage(String message) {
         if (Platform.isFxApplicationThread()) {
-            messageLabel.setText(message);
+            messageLabel.setText(message != null ? message : "");
+            recenterIfShowing();
         } else {
-            Platform.runLater(() -> messageLabel.setText(message));
+            Platform.runLater(() -> {
+                messageLabel.setText(message != null ? message : "");
+                recenterIfShowing();
+            });
         }
     }
 
     /**
-     * Update the progress bar. Safe to call from any thread.
+     * Secondary status under the overall bar (e.g. ClinVar windows within a chromosome).
+     * Empty/null hides the detail row. Safe from any thread.
+     */
+    public void setDetailMessage(String detail) {
+        if (Platform.isFxApplicationThread()) {
+            applyDetailMessage(detail);
+        } else {
+            Platform.runLater(() -> applyDetailMessage(detail));
+        }
+    }
+
+    private void applyDetailMessage(String detail) {
+        String text = detail != null ? detail.trim() : "";
+        boolean show = !text.isEmpty();
+        detailLabel.setText(text);
+        detailLabel.setVisible(show);
+        detailLabel.setManaged(show);
+        recenterIfShowing();
+    }
+
+    /**
+     * Fine-grained progress under the detail message. Negative hides the detail bar.
+     * Does not move the overall progress bar or ETA. Safe from any thread.
+     */
+    public void setDetailProgress(int current, int total) {
+        if (total <= 0) {
+            setDetailProgressRatio(-1.0);
+            return;
+        }
+        setDetailProgressRatio(Math.min(1.0, (double) current / total));
+    }
+
+    public void setDetailProgress(double progress) {
+        setDetailProgressRatio(progress);
+    }
+
+    public void clearDetail() {
+        if (Platform.isFxApplicationThread()) {
+            applyDetailMessage("");
+            applyDetailProgress(-1.0);
+        } else {
+            Platform.runLater(() -> {
+                applyDetailMessage("");
+                applyDetailProgress(-1.0);
+            });
+        }
+    }
+
+    private void setDetailProgressRatio(double progress) {
+        if (Platform.isFxApplicationThread()) {
+            applyDetailProgress(progress);
+        } else {
+            Platform.runLater(() -> applyDetailProgress(progress));
+        }
+    }
+
+    private void applyDetailProgress(double progress) {
+        boolean show = progress >= 0.0;
+        detailProgressBar.setVisible(show);
+        detailProgressBar.setManaged(show);
+        if (show) {
+            if (Math.abs(detailProgressBar.getProgress() - progress) >= PROGRESS_EPSILON) {
+                detailProgressBar.setProgress(progress);
+            }
+            styleBarFill(detailProgressBar);
+        } else {
+            detailProgressBar.setProgress(0.0);
+        }
+        recenterIfShowing();
+    }
+
+    /**
+     * Update the overall progress bar. Safe to call from any thread.
      *
      * @param current current progress value
      * @param total   total progress value
@@ -212,7 +312,7 @@ public class LoadingPopup {
     }
 
     /**
-     * Update the progress bar directly. Safe to call from any thread.
+     * Update the overall progress bar directly. Safe to call from any thread.
      *
      * @param progress value between 0.0 and 1.0, or negative for indeterminate
      */
@@ -234,6 +334,23 @@ public class LoadingPopup {
         }
         lastProgress = progress;
         updateTimeEstimate(progress);
+    }
+
+    private void recenterIfShowing() {
+        if (sessionActive && popup.isShowing()) {
+            syncForegroundVisibility();
+        }
+    }
+
+    private double popupHeight() {
+        double h = root.getHeight();
+        if (h <= 0) {
+            h = root.getPrefHeight();
+        }
+        if (h <= 0) {
+            h = POPUP_H;
+        }
+        return h;
     }
 
     /**
@@ -364,8 +481,9 @@ public class LoadingPopup {
             popup.hide();
             return;
         }
+        double height = popupHeight();
         double x = top.getX() + (top.getWidth() - POPUP_W) / 2;
-        double y = top.getY() + (top.getHeight() - POPUP_H) / 2;
+        double y = top.getY() + (top.getHeight() - height) / 2;
         if (popup.isShowing() && popup.getOwnerWindow() == top) {
             popup.setX(x);
             popup.setY(y);

@@ -32,6 +32,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 import javafx.stage.Window;
 
+@SuppressWarnings("this-escape")
 public class ChromosomeCanvas extends GenomicCanvas {
   static {
     GeneBiotypeVisibility.get().addListener(ChromosomeCanvas::onBiotypeVisibilityChanged);

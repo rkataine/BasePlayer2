@@ -29,6 +29,7 @@ import javafx.scene.text.TextAlignment;
  * Region set-ops (union / intersect / subtract) are in-place overlays via the
  * feature BED row + control.
  */
+@SuppressWarnings("this-escape")
 public class FeatureAggregateCanvas extends AggregateBandCanvas {
 
   private static final double RESIZE_EDGE_PX = 6;

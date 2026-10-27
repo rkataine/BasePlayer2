@@ -15,6 +15,7 @@ import javafx.scene.layout.StackPane;
  * Dual-thumb continuous range control matching single-slider filter row layout:
  * {@code [track] [low] – [high]}. Defaults to the unit interval [0, 1] (allele fraction).
  */
+@SuppressWarnings("this-escape")
 public class DualRangeSlider extends HBox {
 
     private static final double EPSILON = 1e-9;

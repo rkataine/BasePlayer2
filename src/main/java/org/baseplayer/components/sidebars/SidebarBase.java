@@ -1,6 +1,5 @@
 package org.baseplayer.components.sidebars;
 
-import org.baseplayer.components.InfoPopup;
 import org.baseplayer.ui.theme.AppTheme;
 
 import javafx.geometry.Pos;
@@ -25,9 +24,10 @@ import javafx.scene.text.Font;
  *       with their own canvases, controls, or child panels.</li>
  * </ol>
  *
- * <p>The pattern is similar to {@link InfoPopup}: callers describe <em>what</em>
+ * <p>The pattern is similar to {@link org.baseplayer.components.InfoPopup}: callers describe <em>what</em>
  * to show and the base class handles layout and shared chrome.</p>
  */
+@SuppressWarnings("this-escape")
 public abstract class SidebarBase {
 
   // ── Layout ────────────────────────────────────────────────────────────────

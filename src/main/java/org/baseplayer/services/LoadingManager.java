@@ -34,7 +34,7 @@ public final class LoadingManager {
   }
 
   /**
-   * Update the progress bar in the loading popup.
+   * Update the overall progress bar in the loading popup.
    * Safe to call from any thread.
    */
   public void setProgress(int current, int total) {
@@ -50,7 +50,7 @@ public final class LoadingManager {
   }
 
   /**
-   * Update the progress bar directly.
+   * Update the overall progress bar directly.
    * Safe to call from any thread.
    */
   public void setProgress(double progress) {
@@ -62,6 +62,62 @@ public final class LoadingManager {
     Platform.runLater(() -> {
       ensurePopup();
       popup.setProgress(progress);
+    });
+  }
+
+  /**
+   * Per-step detail under the overall bar (e.g. ClinVar windows within a chromosome).
+   * Safe from any thread.
+   */
+  public void setDetailMessage(String detail) {
+    if (Platform.isFxApplicationThread()) {
+      ensurePopup();
+      popup.setDetailMessage(detail);
+      return;
+    }
+    Platform.runLater(() -> {
+      ensurePopup();
+      popup.setDetailMessage(detail);
+    });
+  }
+
+  /** Fine-grained detail progress bar. Safe from any thread. */
+  public void setDetailProgress(int current, int total) {
+    if (Platform.isFxApplicationThread()) {
+      ensurePopup();
+      popup.setDetailProgress(current, total);
+      return;
+    }
+    Platform.runLater(() -> {
+      ensurePopup();
+      popup.setDetailProgress(current, total);
+    });
+  }
+
+  public void setDetailProgress(double progress) {
+    if (Platform.isFxApplicationThread()) {
+      ensurePopup();
+      popup.setDetailProgress(progress);
+      return;
+    }
+    Platform.runLater(() -> {
+      ensurePopup();
+      popup.setDetailProgress(progress);
+    });
+  }
+
+  /** Hide detail message and detail progress bar. Safe from any thread. */
+  public void clearDetail() {
+    if (Platform.isFxApplicationThread()) {
+      if (popup != null) {
+        popup.clearDetail();
+      }
+      return;
+    }
+    Platform.runLater(() -> {
+      if (popup != null) {
+        popup.clearDetail();
+      }
     });
   }
 
@@ -94,10 +150,13 @@ public final class LoadingManager {
     } else {
       ensurePopup();
       String message = buildMessage(tasks);
+      String detail = buildDetail(tasks);
       if (!popup.isShowing()) {
         popup.show(message, resolveOwnerWindow(), ThreadRunner.get()::cancelAll);
+        popup.setDetailMessage(detail);
       } else {
         popup.setMessage(message);
+        popup.setDetailMessage(detail);
         popup.syncForegroundVisibility();
       }
     }
@@ -132,5 +191,14 @@ public final class LoadingManager {
     }
     ThreadRunner.RunnerTask latest = tasks.get(tasks.size() - 1);
     return latest.getDescription() + " (+" + (tasks.size() - 1) + " more)";
+  }
+
+  private static String buildDetail(List<ThreadRunner.RunnerTask> tasks) {
+    if (tasks == null || tasks.isEmpty()) {
+      return "";
+    }
+    ThreadRunner.RunnerTask latest = tasks.get(tasks.size() - 1);
+    String detail = latest.getDetailMessage();
+    return detail != null ? detail : "";
   }
 }

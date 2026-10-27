@@ -38,6 +38,7 @@ import javafx.stage.Window;
  * Feature track backed by JASPAR/PFM matrices. When zoomed in, scans the
  * reference with a simplified MOODS-style PWM scorer and draws sequence logos.
  */
+@SuppressWarnings("this-escape")
 public class MotifTrack extends AbstractTrack {
 
   public static final long MAX_SCAN_VIEW_BP = 5_000L;

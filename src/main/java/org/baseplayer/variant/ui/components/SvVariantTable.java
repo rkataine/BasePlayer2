@@ -55,7 +55,8 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     private List<TableRow> displayedAllCache = List.of();
 
     private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
-    private final Consumer<TableRow> onVariantDoubleClick;
+    private final Consumer<TableRow> onVariantClick;
+    private final Consumer<TableRow> onGotoClick;
 
     public SvVariantTable(
             TableView<?> allTable,
@@ -63,18 +64,21 @@ public class SvVariantTable extends AbstractNestedVariantTable {
             Map<VcfVariantType, TableView<?>> typeTableMap,
             Map<VcfVariantType, Tab> typeTabMap,
             BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
-            Consumer<TableRow> onVariantDoubleClick) {
+            Consumer<TableRow> onVariantClick,
+            Consumer<TableRow> onGotoClick) {
         super();
         this.allTab = allTab;
         this.onGeneDoubleClick = onGeneDoubleClick != null ? onGeneDoubleClick : (g, t) -> {};
-        this.onVariantDoubleClick = onVariantDoubleClick != null ? onVariantDoubleClick : r -> {};
+        this.onVariantClick = onVariantClick != null ? onVariantClick : r -> {};
+        this.onGotoClick = onGotoClick != null ? onGotoClick : r -> {};
 
         this.allPanel = mountNestedPanel(
             allTable,
             VariantDetailLayout.STRUCTURAL,
             false,
             this.onGeneDoubleClick,
-            this.onVariantDoubleClick,
+            this.onVariantClick,
+            this.onGotoClick,
             () -> this.displayFilter);
 
         for (VcfVariantType type : TYPE_ORDER) {
@@ -90,7 +94,8 @@ public class SvVariantTable extends AbstractNestedVariantTable {
                     VariantDetailLayout.STRUCTURAL,
                     false,
                     this.onGeneDoubleClick,
-                    this.onVariantDoubleClick,
+                    this.onVariantClick,
+                    this.onGotoClick,
                     () -> this.displayFilter);
                 if (panel != null) {
                     typePanels.put(type, panel);

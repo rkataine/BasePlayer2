@@ -23,9 +23,6 @@ import org.baseplayer.utils.ChromosomeNames;
  */
 public class BAMFileReader implements AlignmentReader {
 
-  /** Print raw SAM-like line for the first record only. */
-  //private static boolean firstRecordPrinted = false;
-  
   /** Common tag processor shared with CRAMFileReader. */
   private final TagProcessor tagProcessor = new TagProcessor();
   
@@ -330,10 +327,6 @@ public class BAMFileReader implements AlignmentReader {
     return rec;
   }
 
-  /**
-   * Print a SAM-like text representation of a BAM record to stdout.
-   * Shows all parsed fields and ALL tags in their raw form.
-   */
  /*  private void printRawSamLine(BAMRecord rec, char[] seq, byte[] tagData) {
     StringBuilder sb = new StringBuilder();
     sb.append("\n=== First BAM record (SAM-like) ===");
@@ -608,11 +601,6 @@ public class BAMFileReader implements AlignmentReader {
   @Override public void setActiveSignalTag(char tag) { tagProcessor.setActiveSignalTag(tag); }
   public TagProcessor getTagProcessor() { return tagProcessor; }
 
-  /**
-   * Read a BAM record minimally — only refID, pos, flag, and readLength.
-   * Skips all variable-length data (name, CIGAR, SEQ, QUAL, tags) for maximum speed.
-   * Returns null on EOF. Sets refID, pos, flag on the shared scratch record.
-   */
   /**
    * Read minimal BAM record fields for fast counting.
    * BAM fixed fields (after blockSize): refID, pos, bin_mq_nl, flag_nc, l_seq, ...

@@ -16,6 +16,7 @@ import javafx.scene.paint.Color;
 /**
  * Handles locus navigation history (undo/redo) for the menubar controls.
  */
+@SuppressWarnings("this-escape")
 public class NavigationUndoComponent {
 
   private static final int MAX_NAV_HISTORY = 200;

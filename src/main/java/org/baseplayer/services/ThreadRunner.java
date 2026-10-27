@@ -198,7 +198,10 @@ public final class ThreadRunner {
 
     private final String id = UUID.randomUUID().toString();
     private final String description;
-    private volatile String progressSuffix = ""; // Updated dynamically by tasks for progress display
+    /** Overall progress line (e.g. chromosome index) — appended to {@link #description}. */
+    private volatile String progressSuffix = "";
+    /** Per-step detail under the overall bar (e.g. ClinVar windows). */
+    private volatile String detailMessage = "";
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     private final AtomicBoolean completed = new AtomicBoolean(false);
     private volatile Future<?> future;
@@ -212,17 +215,28 @@ public final class ThreadRunner {
     public String getId()          { return id; }
     public String getDescription() { 
       String suffix = progressSuffix;
-      return suffix.isEmpty() ? description : description + " " + suffix;
+      return suffix.isEmpty() ? description : description + "\n" + suffix;
+    }
+    public String getDetailMessage() {
+      return detailMessage;
     }
     public boolean isCancelled()   { return cancelled.get(); }
     public boolean isCompleted()   { return completed.get(); }
     
     /**
-     * Update progress display suffix (shown after description).
+     * Update overall progress display suffix (shown under the task title).
      * Thread-safe; can be called from any thread.
      */
     public void setProgressSuffix(String suffix) {
-      this.progressSuffix = suffix;
+      this.progressSuffix = suffix != null ? suffix : "";
+    }
+
+    /**
+     * Update fine-grained detail (ClinVar / control AF / sample streaming within a chrom).
+     * Thread-safe; pair with {@link org.baseplayer.services.LoadingManager#setDetailProgress}.
+     */
+    public void setDetailMessage(String detail) {
+      this.detailMessage = detail != null ? detail : "";
     }
 
     /** Cancel this task. Interrupts the pool thread (if any) and calls the extra cancel action. Thread-safe. */

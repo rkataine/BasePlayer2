@@ -16,6 +16,7 @@ import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
+import org.baseplayer.variant.annotation.ClinVarAnnotator;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 
 import javafx.geometry.Insets;
@@ -81,6 +82,11 @@ public class VariantInfoPopup extends InfoPopup {
     if (node.annotation != null && node.annotation.isCancerGene()) {
       badges.add(new Badge("Cancer gene", "#aa4444"));
     }
+    if (node.clinVarClnsig != null && !node.clinVarClnsig.isBlank()) {
+      badges.add(new Badge(
+          node.clinVarClnsig.replace('_', ' '),
+          ClinVarAnnotator.looksPathogenic(node.clinVarClnsig) ? "#aa4444" : "#666688"));
+    }
     c.badges(badges);
     c.separator();
 
@@ -107,6 +113,23 @@ public class VariantInfoPopup extends InfoPopup {
     long matePos = node.matePosition();
     if (mateChrom != null || matePos >= 0) {
       c.row("Mate", formatMate(mateChrom, matePos));
+    }
+
+    if (node.clinVarClnsig != null || node.clinVarVariationId != null) {
+      c.separator();
+      c.section("ClinVar");
+      if (node.clinVarClnsig != null && !node.clinVarClnsig.isBlank()) {
+        c.row("Significance", node.clinVarClnsig.replace('_', ' '));
+      }
+      String clinVarUrl = ClinVarAnnotator.variationUrl(node.clinVarVariationId);
+      if (clinVarUrl != null) {
+        String idLabel = node.clinVarVariationId.trim();
+        int semi = idLabel.indexOf(';');
+        if (semi >= 0) {
+          idLabel = idLabel.substring(0, semi).trim();
+        }
+        c.link("ClinVar", idLabel, () -> InfoPopup.openUrl(clinVarUrl));
+      }
     }
 
     Map<String, String> info = node.getInfoFields();

@@ -30,10 +30,11 @@ public final class AppComboBox {
   }
 
   @SafeVarargs
+  @SuppressWarnings("varargs")
   public static <T> ComboBox<T> create(T... items) {
     ComboBox<T> combo = new ComboBox<>();
     if (items != null && items.length > 0) {
-      combo.getItems().addAll(items);
+      combo.getItems().addAll(java.util.Arrays.asList(items));
     }
     style(combo);
     return combo;

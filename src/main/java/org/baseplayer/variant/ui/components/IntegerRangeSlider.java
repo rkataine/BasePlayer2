@@ -15,6 +15,7 @@ import javafx.scene.layout.VBox;
  * Dual-thumb integer range control: {@code [track] [low] – [high]} plus a compact summary.
  * Values are inclusive (e.g. 3–7 keeps variants shared by 3 to 7 samples).
  */
+@SuppressWarnings("this-escape")
 public class IntegerRangeSlider extends VBox {
 
     private final Slider lowSlider = new Slider();

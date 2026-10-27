@@ -352,15 +352,11 @@ public class TagProcessor {
     return arr;
   }
 
-  /**
-   * Skip a BAM tag value based on its type code.
-   * Returns new position, or -1 on error.
-   */
   /** Extract a human-readable string for an unknown BAM aux tag value (non-B types). */
   private static String extractBamTagValue(byte[] data, int pos, char type) {
     return switch (type) {
       case 'A' -> pos < data.length ? String.valueOf((char)(data[pos] & 0xFF)) : null;
-      case 'c' -> pos < data.length ? String.valueOf((int)(byte)data[pos]) : null;
+      case 'c' -> pos < data.length ? String.valueOf((int) data[pos]) : null;
       case 'C' -> pos < data.length ? String.valueOf(data[pos] & 0xFF) : null;
       case 's' -> pos + 1 < data.length
           ? String.valueOf((short)((data[pos] & 0xFF) | ((data[pos+1] & 0xFF) << 8))) : null;
@@ -387,7 +383,7 @@ public class TagProcessor {
     int len = data.length;
     return switch (type) {
       case 'A' -> len >= 1 ? String.valueOf((char)(data[0] & 0xFF)) : null;
-      case 'c' -> len >= 1 ? String.valueOf((int)(byte)data[0]) : null;
+      case 'c' -> len >= 1 ? String.valueOf((int) data[0]) : null;
       case 'C' -> len >= 1 ? String.valueOf(data[0] & 0xFF) : null;
       case 's' -> len >= 2
           ? String.valueOf((short)((data[0] & 0xFF) | ((data[1] & 0xFF) << 8))) : null;

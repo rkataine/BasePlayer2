@@ -34,6 +34,7 @@
             <MenuItem fx:id="openBigwigMenuItem" id="LOAD_BIGWIG" onAction="#openFileMenu" text="Open BigWig" />
             <SeparatorMenuItem />
             <MenuItem fx:id="openDirMenuItem" id="LOAD_DIR" onAction="#openFileMenu" text="Open Directory…" />
+            <MenuItem fx:id="openDragenMenuItem" id="LOAD_DRAGEN" onAction="#openFileMenu" text="Open DRAGEN…" />
             <SeparatorMenuItem />
             <Menu fx:id="recentFilesMenu" text="Open Recent Samples" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />

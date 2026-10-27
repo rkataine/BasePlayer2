@@ -56,6 +56,7 @@ import javafx.stage.Window;
  * InfoPopup narrow = new InfoPopup(320, 300, false);
  * }</pre>
  */
+@SuppressWarnings("this-escape")
 public class InfoPopup {
 
     // ── Constants ────────────────────────────────────────────────────────────

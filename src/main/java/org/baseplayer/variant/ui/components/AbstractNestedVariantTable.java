@@ -328,7 +328,8 @@ public abstract class AbstractNestedVariantTable {
         Tab intronicTab,
         Tab intergenicTab,
         BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
-        Consumer<TableRow> onPositionClick) {
+        Consumer<TableRow> onVariantClick,
+        Consumer<TableRow> onGotoClick) {
 
         this.codingTab = codingTab;
         this.intronicTab = intronicTab;
@@ -339,7 +340,8 @@ public abstract class AbstractNestedVariantTable {
             intronicTable,
             intergenicTable,
             onGeneDoubleClick,
-            onPositionClick,
+            onVariantClick,
+            onGotoClick,
             () -> this.displayFilter);
     }
 
@@ -915,7 +917,8 @@ public abstract class AbstractNestedVariantTable {
             VariantDetailLayout layout,
             boolean groupByChromosome,
             BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
-            Consumer<TableRow> onPositionClick,
+            Consumer<TableRow> onVariantClick,
+            Consumer<TableRow> onGotoClick,
             Supplier<VariantFilter> filterSupplier) {
         if (table == null || !(table.getParent() instanceof StackPane parent)) {
             return null;
@@ -924,7 +927,8 @@ public abstract class AbstractNestedVariantTable {
             layout,
             groupByChromosome,
             onGeneDoubleClick,
-            onPositionClick,
+            onVariantClick,
+            onGotoClick,
             filterSupplier,
             "Gene / Chrom");
         parent.getChildren().add(panel.root);
@@ -939,13 +943,15 @@ public abstract class AbstractNestedVariantTable {
      */
     public static NestedPanel createFeatureAnnotationPanel(
             BiConsumer<String, List<SampleTrack>> onFeatureDoubleClick,
-            Consumer<TableRow> onPositionClick,
+            Consumer<TableRow> onVariantClick,
+            Consumer<TableRow> onGotoClick,
             Supplier<VariantFilter> filterSupplier) {
         return new NestedPanel(
             VariantDetailLayout.POINT_SIMPLE,
             false,
             onFeatureDoubleClick,
-            onPositionClick,
+            onVariantClick,
+            onGotoClick,
             filterSupplier,
             "Feature");
     }
@@ -957,7 +963,8 @@ public abstract class AbstractNestedVariantTable {
         private final TableView<VariantNode> intronicTable;
         private final TableView<VariantNode> intergenicTable;
         private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
-        private final Consumer<TableRow> onPositionClick;
+        private final Consumer<TableRow> onVariantClick;
+        private final Consumer<TableRow> onGotoClick;
         private final Supplier<VariantFilter> filterSupplier;
 
         private NestedPanel codingPanel;
@@ -969,13 +976,15 @@ public abstract class AbstractNestedVariantTable {
                 TableView<VariantNode> intronicTable,
                 TableView<VariantNode> intergenicTable,
                 BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
-                Consumer<TableRow> onPositionClick,
+                Consumer<TableRow> onVariantClick,
+                Consumer<TableRow> onGotoClick,
                 Supplier<VariantFilter> filterSupplier) {
             this.codingTable = codingTable;
             this.intronicTable = intronicTable;
             this.intergenicTable = intergenicTable;
             this.onGeneDoubleClick = onGeneDoubleClick;
-            this.onPositionClick = onPositionClick;
+            this.onVariantClick = onVariantClick;
+            this.onGotoClick = onGotoClick;
             this.filterSupplier = filterSupplier;
         }
 
@@ -1039,7 +1048,8 @@ public abstract class AbstractNestedVariantTable {
                 VariantDetailLayout layout,
                 boolean groupByChromosome) {
             return AbstractNestedVariantTable.mountNestedPanel(
-                table, layout, groupByChromosome, onGeneDoubleClick, onPositionClick, filterSupplier);
+                table, layout, groupByChromosome, onGeneDoubleClick,
+                onVariantClick, onGotoClick, filterSupplier);
         }
     }
 
@@ -1056,6 +1066,7 @@ public abstract class AbstractNestedVariantTable {
         private static final double COL_SAMPLES = 72;
         private static final double COL_AF = 70;
         private static final double COL_GNOMAD = 72;
+        private static final double COL_CLINVAR = 56;
         private static final double COL_REFALT = 88;
         private static final double COL_TYPE = 52;
         private static final double COL_EFFECT = 100;
@@ -1077,7 +1088,10 @@ public abstract class AbstractNestedVariantTable {
         private final VariantDetailLayout layout;
         private final boolean groupByChromosome;
         private final BiConsumer<String, List<SampleTrack>> onGeneDoubleClick;
-        private final Consumer<TableRow> onPositionClick;
+        /** Single-click: open variant details (no genome navigation). */
+        private final Consumer<TableRow> onVariantClick;
+        /** Double-click: navigate genome to the variant. */
+        private final Consumer<TableRow> onGotoClick;
         private final Supplier<VariantFilter> filterSupplier;
 
         private final ListView<GeneGroup> list = new ListView<>();
@@ -1110,13 +1124,15 @@ public abstract class AbstractNestedVariantTable {
                 VariantDetailLayout layout,
                 boolean groupByChromosome,
                 BiConsumer<String, List<SampleTrack>> onGeneDoubleClick,
-                Consumer<TableRow> onPositionClick,
+                Consumer<TableRow> onVariantClick,
+                Consumer<TableRow> onGotoClick,
                 Supplier<VariantFilter> filterSupplier,
                 String nameColumnHeader) {
             this.layout = layout != null ? layout : VariantDetailLayout.POINT_SIMPLE;
             this.groupByChromosome = groupByChromosome;
             this.onGeneDoubleClick = onGeneDoubleClick;
-            this.onPositionClick = onPositionClick;
+            this.onVariantClick = onVariantClick;
+            this.onGotoClick = onGotoClick;
             this.filterSupplier = filterSupplier;
             this.widths = new ColumnWidths(this.layout);
 
@@ -1747,6 +1763,7 @@ public abstract class AbstractNestedVariantTable {
                 cols.add(headerLabel("Samples", widths.samples), widths.samples);
                 cols.add(headerLabel("AF", widths.af), widths.af);
                 cols.add(headerLabel("gnomAD", widths.gnomad), widths.gnomad);
+                cols.add(headerLabel("ClinVar", widths.clinvar), widths.clinvar);
                 cols.add(headerLabel("QUAL", widths.gq), widths.gq);
                 cols.addGrow(headerGrow(""));
             } else {
@@ -1760,6 +1777,7 @@ public abstract class AbstractNestedVariantTable {
                 cols.add(headerLabel("Samples", widths.samples), widths.samples);
                 cols.add(headerLabel("AF", widths.af), widths.af);
                 cols.add(headerLabel("gnomAD", widths.gnomad), widths.gnomad);
+                cols.add(headerLabel("ClinVar", widths.clinvar), widths.clinvar);
                 cols.add(headerLabel("GQ", widths.gq), widths.gq);
                 cols.addGrow(headerGrow(""));
             }
@@ -1832,6 +1850,7 @@ public abstract class AbstractNestedVariantTable {
             final DoubleProperty samples = new SimpleDoubleProperty(COL_SAMPLES);
             final DoubleProperty af = new SimpleDoubleProperty(COL_AF);
             final DoubleProperty gnomad = new SimpleDoubleProperty(COL_GNOMAD);
+            final DoubleProperty clinvar = new SimpleDoubleProperty(COL_CLINVAR);
             final DoubleProperty pos = new SimpleDoubleProperty(COL_POS);
             final DoubleProperty refAlt = new SimpleDoubleProperty(COL_REFALT);
             final DoubleProperty type = new SimpleDoubleProperty(COL_TYPE);
@@ -2101,6 +2120,9 @@ public abstract class AbstractNestedVariantTable {
                 }
                 refreshGroup(group, true);
             }, e -> {
+                if (e.getClickCount() < 2) {
+                    return false;
+                }
                 if (!groupByChromosome
                         && onGeneDoubleClick != null
                         && !group.variants.isEmpty()) {
@@ -2109,7 +2131,7 @@ public abstract class AbstractNestedVariantTable {
                     return true;
                 }
                 return false;
-            });
+            }, true);
             return row;
         }
 
@@ -2205,6 +2227,8 @@ public abstract class AbstractNestedVariantTable {
             af.getStyleClass().add(colorClass);
             Label gnomad = fixedCol(formatControlAf(tableRow.node()), widths.gnomad, "vn-summary");
             gnomad.getStyleClass().add(colorClass);
+            Label clinvar = fixedCol(formatClinVar(tableRow.node()), widths.clinvar, "vn-summary");
+            clinvar.getStyleClass().add(colorClass);
             Label gq = fixedCol(
                 layout == VariantDetailLayout.STRUCTURAL
                     ? formatSvQual(tableRow)
@@ -2214,6 +2238,7 @@ public abstract class AbstractNestedVariantTable {
             cols.add(samples, widths.samples);
             cols.add(af, widths.af);
             cols.add(gnomad, widths.gnomad);
+            cols.add(clinvar, widths.clinvar);
             cols.add(gq, widths.gq);
             Region trail = new Region();
             trail.getStyleClass().add("vn-col");
@@ -2226,12 +2251,20 @@ public abstract class AbstractNestedVariantTable {
                 // Keep this row's screen position; samples push content below it.
                 scheduleRebuild(group, entry, false);
             }, e -> {
-                if (onPositionClick != null) {
-                    onPositionClick.accept(tableRow);
+                // Single-click → details; double-click → navigate to genome.
+                if (e.getClickCount() >= 2) {
+                    if (onGotoClick != null) {
+                        onGotoClick.accept(tableRow);
+                        return true;
+                    }
+                    return false;
+                }
+                if (onVariantClick != null) {
+                    onVariantClick.accept(tableRow);
                     return true;
                 }
                 return false;
-            });
+            }, false);
             return row;
         }
 
@@ -2283,10 +2316,16 @@ public abstract class AbstractNestedVariantTable {
             cols.addGrow(trail);
 
             sampleRow.addEventHandler(MouseEvent.MOUSE_CLICKED, e -> {
-                if (e.getButton() == MouseButton.PRIMARY
-                        && e.getClickCount() >= 2
-                        && onPositionClick != null) {
-                    onPositionClick.accept(row);
+                if (e.getButton() != MouseButton.PRIMARY) {
+                    return;
+                }
+                if (e.getClickCount() >= 2) {
+                    if (onGotoClick != null) {
+                        onGotoClick.accept(row);
+                        e.consume();
+                    }
+                } else if (onVariantClick != null) {
+                    onVariantClick.accept(row);
                     e.consume();
                 }
             });
@@ -2337,11 +2376,17 @@ public abstract class AbstractNestedVariantTable {
             return toggle;
         }
 
+        /**
+         * @param expandOnBodyClick when true (gene rows), single-click empty row area
+         *     expands/collapses; when false (variant rows), body click opens details and
+         *     expand is only via the +/- toggle
+         */
         private static void wireExpandableRow(
                 HBox row,
                 Label toggle,
                 Runnable onToggle,
-                java.util.function.Function<MouseEvent, Boolean> onDoubleClick) {
+                java.util.function.Function<MouseEvent, Boolean> onRowClick,
+                boolean expandOnBodyClick) {
             // Use PRESSED so ListView selection does not eat the first click.
             toggle.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
                 if (e.getButton() != MouseButton.PRIMARY) {
@@ -2350,23 +2395,23 @@ public abstract class AbstractNestedVariantTable {
                 onToggle.run();
                 e.consume();
             });
-            // Bubble phase: type chips and other functional children consume first.
-            // Single-click empty/non-functional areas expand or collapse.
-            row.addEventHandler(MouseEvent.MOUSE_PRESSED, e -> {
-                if (e.getButton() != MouseButton.PRIMARY || e.isConsumed()) {
-                    return;
-                }
-                if (e.getClickCount() >= 2) {
-                    return;
-                }
-                onToggle.run();
-                e.consume();
-            });
+            if (expandOnBodyClick) {
+                row.addEventHandler(MouseEvent.MOUSE_PRESSED, e -> {
+                    if (e.getButton() != MouseButton.PRIMARY || e.isConsumed()) {
+                        return;
+                    }
+                    if (e.getClickCount() >= 2) {
+                        return;
+                    }
+                    onToggle.run();
+                    e.consume();
+                });
+            }
             row.addEventHandler(MouseEvent.MOUSE_CLICKED, e -> {
                 if (e.getButton() != MouseButton.PRIMARY || e.isConsumed()) {
                     return;
                 }
-                if (e.getClickCount() >= 2 && Boolean.TRUE.equals(onDoubleClick.apply(e))) {
+                if (Boolean.TRUE.equals(onRowClick.apply(e))) {
                     e.consume();
                 }
             });
@@ -2835,6 +2880,14 @@ public abstract class AbstractNestedVariantTable {
             return String.format(Locale.ROOT, "%.6f", af);
         }
         return String.format(Locale.ROOT, "%.2e", af);
+    }
+
+    /** ClinVar significance short label from annotation. */
+    static String formatClinVar(VariantNode node) {
+        if (node == null || node.clinVarClnsig == null || node.clinVarClnsig.isBlank()) {
+            return "—";
+        }
+        return org.baseplayer.variant.annotation.ClinVarAnnotator.shortLabel(node.clinVarClnsig);
     }
 
     static String sampleDisplayName(VariantNode.SampleCall call) {
