@@ -50,7 +50,6 @@ import org.baseplayer.variant.VariantLoader;
 
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
-import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
 
@@ -122,47 +121,94 @@ public class SampleDataManager {
   }
 
   /**
-   * Choose a DRAGEN output folder, pick analyses in a dedicated dialog, then
-   * load matching BAM/VCF and companion BigWigs onto one sample track.
+   * Choose one or more DRAGEN output folders (same multi-directory dialog as
+   * sample dirs), ask once which analyses to open, then load each folder with
+   * that selection.
    */
   public static void openDragenFolder() {
-    DirectoryChooser chooser = new DirectoryChooser();
-    chooser.setTitle("Open DRAGEN folder");
-    File lastDir = UserPreferences.getLastDirectory("DRAGEN");
-    if (lastDir != null) {
-      try {
-        chooser.setInitialDirectory(lastDir);
-      } catch (IllegalArgumentException e) {
-        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
-      }
-    }
-    File dir = chooser.showDialog(MainApp.stage);
-    if (dir == null) {
-      return;
-    }
-    UserPreferences.setLastDirectory("DRAGEN", dir);
-    openDragenFolder(dir);
+    SelectSampleDirectoriesDialog.show(MainApp.stage, "Open DRAGEN folders", "DRAGEN")
+        .ifPresent(SampleDataManager::openDragenFolders);
   }
 
   /** Open the given DRAGEN output directory with the analysis picker. */
   public static void openDragenFolder(File directory) {
-    if (directory == null || !directory.isDirectory()) {
+    if (directory == null) {
       return;
     }
-    DragenFolderScan scan = DragenFolderScanner.scan(directory);
-    if (!scan.looksLikeDragen() || scan.available().isEmpty()) {
+    openDragenFolders(List.of(directory));
+  }
+
+  /**
+   * Scan selected directories, prompt once for analyses (union of available
+   * kinds), then load every valid DRAGEN folder with the same choices.
+   */
+  public static void openDragenFolders(List<File> directories) {
+    if (directories == null || directories.isEmpty()) {
+      return;
+    }
+
+    List<DragenFolderScan> scans = new ArrayList<>();
+    List<String> skipped = new ArrayList<>();
+    for (File directory : directories) {
+      if (directory == null || !directory.isDirectory()) {
+        continue;
+      }
+      DragenFolderScan scan = DragenFolderScanner.scan(directory);
+      if (!scan.looksLikeDragen() || scan.available().isEmpty()) {
+        skipped.add(directory.getAbsolutePath());
+        continue;
+      }
+      scans.add(scan);
+    }
+
+    if (scans.isEmpty()) {
       Alert alert = new Alert(Alert.AlertType.INFORMATION);
       alert.setTitle("Open DRAGEN");
       alert.setHeaderText("No DRAGEN outputs found");
-      alert.setContentText(
-          "No recognized DRAGEN files in:\n" + directory.getAbsolutePath()
-              + "\n\nExpected files such as *.hard-filtered.vcf.gz, *.cnv.vcf.gz, or *-replay.json.");
+      StringBuilder body = new StringBuilder(
+          "No recognized DRAGEN files in the selected folder(s).");
+      if (!skipped.isEmpty()) {
+        body.append("\n\nExpected files such as *.hard-filtered.vcf.gz, *.cnv.vcf.gz, or *-replay.json.");
+        body.append("\n\nChecked:");
+        for (String path : skipped) {
+          body.append("\n").append(path);
+        }
+      }
+      alert.setContentText(body.toString());
       alert.initOwner(MainApp.stage);
       alert.showAndWait();
       return;
     }
-    OpenDragenDialog.show(MainApp.stage, scan)
-        .ifPresent(result -> loadDragenFolder(scan, result));
+
+    EnumSet<DragenAnalysisKind> available = EnumSet.noneOf(DragenAnalysisKind.class);
+    List<File> optionalUnion = new ArrayList<>();
+    Set<String> optionalNames = new LinkedHashSet<>();
+    for (DragenFolderScan scan : scans) {
+      available.addAll(scan.available());
+      for (File optional : scan.optionalCnvBigWigs()) {
+        if (optional != null && optionalNames.add(optional.getName())) {
+          optionalUnion.add(optional);
+        }
+      }
+    }
+
+    DragenFolderScan primary = scans.get(0);
+    String displayName = primary.stem() != null && !primary.stem().isBlank()
+        ? primary.stem()
+        : primary.directory().getName();
+
+    OpenDragenDialog.show(
+            MainApp.stage,
+            displayName,
+            scans.size(),
+            available,
+            primary.previewByKind(),
+            optionalUnion)
+        .ifPresent(result -> {
+          for (DragenFolderScan scan : scans) {
+            loadDragenFolder(scan, result);
+          }
+        });
   }
 
   private static void loadDragenFolder(DragenFolderScan scan, OpenDragenDialog.Result selection) {

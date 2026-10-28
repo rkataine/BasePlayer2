@@ -30,12 +30,15 @@ import javafx.stage.StageStyle;
 import javafx.stage.Window;
 
 /**
- * Settings dialog for opening a DRAGEN output folder: choose which analysis
- * products to load onto a single sample track, plus optional secondary BigWigs.
+ * Settings dialog for opening DRAGEN output folder(s): choose which analysis
+ * products to load onto sample track(s), plus optional secondary BigWigs.
  */
 public final class OpenDragenDialog {
 
-  /** Selected analyses and any optional CNV BigWigs the user opted into. */
+  /**
+   * Selected analyses and optional CNV BigWig basenames (matched per folder
+   * when applying the same choice to a batch).
+   */
   public record Result(Set<DragenAnalysisKind> kinds, List<File> optionalBigWigs) {
     public Result {
       kinds = kinds != null && !kinds.isEmpty()
@@ -48,10 +51,37 @@ public final class OpenDragenDialog {
   private OpenDragenDialog() {}
 
   /**
-   * @return selection result, or empty if cancelled / nothing available
+   * Single-folder picker using that scan's available analyses and optionals.
    */
   public static Optional<Result> show(Window owner, DragenFolderScan scan) {
     if (scan == null || scan.available().isEmpty()) {
+      return Optional.empty();
+    }
+    return show(
+        owner,
+        scan.stem() != null && !scan.stem().isBlank()
+            ? scan.stem()
+            : scan.directory().getName(),
+        1,
+        scan.available(),
+        scan.previewByKind(),
+        scan.optionalCnvBigWigs());
+  }
+
+  /**
+   * Batch-aware picker. {@code available} / {@code optionalFiles} should be the
+   * union across folders; previews may come from the first scan.
+   *
+   * @param folderCount number of DRAGEN folders the result will apply to
+   */
+  public static Optional<Result> show(
+      Window owner,
+      String displayName,
+      int folderCount,
+      Set<DragenAnalysisKind> available,
+      Map<DragenAnalysisKind, String> previews,
+      List<File> optionalFiles) {
+    if (available == null || available.isEmpty()) {
       return Optional.empty();
     }
 
@@ -67,9 +97,12 @@ public final class OpenDragenDialog {
     Label title = new Label("Open DRAGEN");
     title.getStyleClass().add("panel-title");
 
-    String stem = scan.stem() != null && !scan.stem().isBlank() ? scan.stem() : scan.directory().getName();
-    Label hint = new Label(
-        "Sample \"" + stem + "\". Select analyses to load onto one sample track.");
+    String name = displayName != null && !displayName.isBlank() ? displayName : "DRAGEN";
+    String hintText = folderCount > 1
+        ? "Settings apply to " + folderCount + " selected DRAGEN folders (first: \"" + name
+            + "\"). Select analyses to load onto each sample track."
+        : "Sample \"" + name + "\". Select analyses to load onto one sample track.";
+    Label hint = new Label(hintText);
     hint.getStyleClass().add("value-label");
     hint.setWrapText(true);
     hint.setMaxWidth(420);
@@ -77,18 +110,21 @@ public final class OpenDragenDialog {
     Label analysesHeader = new Label("Analyses");
     analysesHeader.getStyleClass().add("section-header");
 
+    Map<DragenAnalysisKind, String> previewMap =
+        previews != null ? previews : Map.of();
+
     Map<DragenAnalysisKind, CheckBox> boxes = new LinkedHashMap<>();
     VBox analysesBox = new VBox(8);
     for (DragenAnalysisKind kind : DragenAnalysisKind.values()) {
-      if (!scan.available().contains(kind)) {
+      if (!available.contains(kind)) {
         continue;
       }
-      String preview = scan.preview(kind);
+      String preview = previewMap.getOrDefault(kind, "");
       String boxText = preview == null || preview.isBlank()
           ? kind.label()
           : kind.label() + " — " + preview;
       CheckBox box = new CheckBox(boxText);
-      box.setSelected(true);
+      box.setSelected(false);
       box.setWrapText(true);
       box.setMaxWidth(400);
       box.getStyleClass().add("filter-checkbox");
@@ -96,25 +132,37 @@ public final class OpenDragenDialog {
       analysesBox.getChildren().add(box);
     }
 
+    // Dedupe optionals by basename so a batch union lists each track once.
+    Map<String, File> optionalByName = new LinkedHashMap<>();
+    if (optionalFiles != null) {
+      for (File file : optionalFiles) {
+        if (file != null) {
+          optionalByName.putIfAbsent(file.getName(), file);
+        }
+      }
+    }
+
     List<CheckBox> optionalBoxes = new ArrayList<>();
-    List<File> optionalFiles = scan.optionalCnvBigWigs();
     VBox optionalBox = new VBox(8);
     Label optionalHeader = null;
-    if (!optionalFiles.isEmpty()) {
+    if (!optionalByName.isEmpty()) {
       optionalHeader = new Label("Optional CNV tracks");
       optionalHeader.getStyleClass().add("section-header");
-      Label optionalHint = new Label("Unchecked by default. Add tn / target counts / extras if needed.");
+      Label optionalHint = new Label(
+          folderCount > 1
+              ? "Unchecked by default. Matching files are loaded in each folder when present."
+              : "Unchecked by default. Add tn / target counts / extras if needed.");
       optionalHint.getStyleClass().add("value-label");
       optionalHint.setWrapText(true);
       optionalHint.setMaxWidth(420);
       optionalBox.getChildren().add(optionalHint);
-      for (File file : optionalFiles) {
-        CheckBox box = new CheckBox(file.getName());
+      for (Map.Entry<String, File> entry : optionalByName.entrySet()) {
+        CheckBox box = new CheckBox(entry.getKey());
         box.setSelected(false);
         box.setWrapText(true);
         box.setMaxWidth(400);
         box.getStyleClass().add("filter-checkbox");
-        box.setUserData(file);
+        box.setUserData(entry.getValue());
         CheckBox cnvBox = boxes.get(DragenAnalysisKind.CNV);
         if (cnvBox != null) {
           box.disableProperty().bind(cnvBox.selectedProperty().not());
@@ -169,7 +217,8 @@ public final class OpenDragenDialog {
     root.getStyleClass().addAll("filter-panel", "dialog-surface");
 
     int height = Math.min(640, 180 + boxes.size() * 48 + optionalBoxes.size() * 28
-        + (optionalHeader != null ? 60 : 0));
+        + (optionalHeader != null ? 60 : 0)
+        + (folderCount > 1 ? 24 : 0));
     Scene scene = new Scene(root, 460, height);
     applyTheme(scene);
     scene.setFill(AppTheme.chrome().panel());

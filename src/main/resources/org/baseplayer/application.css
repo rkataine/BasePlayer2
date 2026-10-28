@@ -496,6 +496,210 @@ VBox {
   -fx-background-color: -bp-panel;
 }
 
+/* Native-like multi-directory chooser (SelectSampleDirectoriesDialog).
+ * Layout: places | (path + folders); footer Selected + Cancel/Open. */
+.directory-chooser {
+  -fx-background-color: -bp-panel;
+}
+
+.directory-chooser .label {
+  -fx-text-fill: -bp-text;
+}
+
+.directory-chooser-body {
+  -fx-background-color: -bp-panel;
+  -fx-border-color: transparent transparent -bp-border transparent;
+  -fx-border-width: 0 0 1 0;
+  -fx-padding: 0;
+}
+
+.directory-chooser-places {
+  -fx-background-color: -bp-elevated;
+  -fx-control-inner-background: -bp-elevated;
+  -fx-background-insets: 0;
+  -fx-border-color: transparent -bp-border transparent transparent;
+  -fx-border-width: 0 1 0 0;
+  -fx-padding: 6 0 6 0;
+}
+
+.directory-chooser-main {
+  -fx-background-color: -bp-surface;
+}
+
+.directory-chooser-path-bar {
+  -fx-background-color: -bp-panel;
+  -fx-border-color: transparent transparent -bp-border transparent;
+  -fx-border-width: 0 0 1 0;
+}
+
+.directory-chooser-crumb-scroll {
+  -fx-background-color: transparent;
+  -fx-background: transparent;
+  -fx-padding: 0;
+  -fx-border-width: 0;
+}
+
+.directory-chooser-crumb-scroll > .viewport {
+  -fx-background-color: transparent;
+}
+
+.directory-chooser-crumbs {
+  -fx-alignment: center-left;
+}
+
+.directory-chooser-crumb {
+  -fx-background-color: transparent;
+  -fx-text-fill: -bp-text;
+  -fx-padding: 3 6 3 6;
+  -fx-font-size: 12px;
+  -fx-background-radius: 4;
+  -fx-border-width: 0;
+  -fx-cursor: hand;
+}
+
+.directory-chooser-crumb:hover {
+  -fx-background-color: -bp-control;
+}
+
+.directory-chooser-crumb:pressed {
+  -fx-background-color: -bp-elevated;
+}
+
+.directory-chooser-crumb-sep {
+  -fx-padding: 0 2 0 2;
+}
+
+.directory-chooser-up {
+  -fx-min-width: 32px;
+  -fx-padding: 4 8 4 8;
+}
+
+.directory-chooser-folders,
+.directory-chooser-selected {
+  -fx-background-color: -bp-surface;
+  -fx-control-inner-background: -bp-surface;
+  -fx-background-insets: 0;
+  -fx-border-width: 0;
+  -fx-padding: 2;
+}
+
+.directory-chooser-places .list-cell,
+.directory-chooser-folders .list-cell,
+.directory-chooser-selected .list-cell {
+  -fx-text-fill: -bp-text;
+  -fx-background-color: transparent;
+  -fx-padding: 6 12 6 12;
+  -fx-font-size: 12px;
+}
+
+.directory-chooser-places .list-cell:filled:selected,
+.directory-chooser-folders .list-cell:filled:selected,
+.directory-chooser-selected .list-cell:filled:selected {
+  -fx-background-color: -bp-focus;
+  -fx-text-fill: white;
+}
+
+.directory-chooser-places .list-cell:filled:hover,
+.directory-chooser-folders .list-cell:filled:hover,
+.directory-chooser-selected .list-cell:filled:hover {
+  -fx-background-color: -bp-control;
+}
+
+.directory-chooser-places .list-cell:filled:selected:hover,
+.directory-chooser-folders .list-cell:filled:selected:hover,
+.directory-chooser-selected .list-cell:filled:selected:hover {
+  -fx-background-color: derive(-bp-focus, -10%);
+  -fx-text-fill: white;
+}
+
+.directory-chooser-place-icon,
+.directory-chooser-folder-icon {
+  -fx-font-size: 13px;
+  -fx-padding: 0;
+  -fx-min-width: 18px;
+}
+
+.directory-chooser-place-name,
+.directory-chooser-folder-name {
+  -fx-text-fill: -bp-text;
+  -fx-font-size: 12px;
+}
+
+.directory-chooser-places .list-cell:filled:selected .directory-chooser-place-name,
+.directory-chooser-folders .list-cell:filled:selected .directory-chooser-folder-name {
+  -fx-text-fill: white;
+}
+
+.directory-chooser-section {
+  -fx-font-size: 11px;
+  -fx-font-weight: bold;
+  -fx-text-fill: -bp-muted;
+}
+
+.directory-chooser-footer {
+  -fx-background-color: -bp-panel;
+}
+
+.directory-chooser-selected-pane {
+  -fx-padding: 0;
+}
+
+.directory-chooser-selected {
+  -fx-border-color: -bp-border;
+  -fx-border-width: 1;
+  -fx-background-radius: 3;
+  -fx-border-radius: 3;
+}
+
+.directory-chooser .secondary-button {
+  -fx-background-color: -bp-control;
+  -fx-text-fill: -bp-text;
+  -fx-cursor: hand;
+  -fx-padding: 5 14 5 14;
+  -fx-font-size: 12px;
+  -fx-background-radius: 4;
+  -fx-border-radius: 4;
+  -fx-border-color: -bp-stroke;
+  -fx-border-width: 1;
+}
+
+.directory-chooser .secondary-button:hover {
+  -fx-background-color: -bp-elevated;
+  -fx-border-color: -bp-focus;
+}
+
+.directory-chooser .secondary-button:pressed {
+  -fx-background-color: -bp-panel;
+  -fx-border-color: -bp-accent;
+}
+
+.directory-chooser .primary-button {
+  -fx-background-color: -bp-focus;
+  -fx-text-fill: white;
+  -fx-cursor: hand;
+  -fx-padding: 5 18 5 18;
+  -fx-font-size: 12px;
+  -fx-font-weight: bold;
+  -fx-background-radius: 4;
+  -fx-border-radius: 4;
+  -fx-border-color: derive(-bp-focus, -15%);
+  -fx-border-width: 1;
+}
+
+.directory-chooser .primary-button:hover {
+  -fx-background-color: #1a8eee;
+  -fx-border-color: #1a8eee;
+}
+
+.directory-chooser .primary-button:pressed {
+  -fx-background-color: derive(-bp-focus, -20%);
+}
+
+.directory-chooser .primary-button:disabled,
+.directory-chooser .secondary-button:disabled {
+  -fx-opacity: 0.45;
+}
+
 .filter-panel .label {
   -fx-text-fill: -bp-text;
 }

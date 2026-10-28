@@ -183,10 +183,16 @@ public final class DragenFolderScanner {
       addIfPresent(vcfs, scan.cnvVcf());
       addPreferredBam(bams, scan);
       bigWigs.addAll(scan.cnvCompanionBigWigs());
-      if (optionalBigWigs != null) {
+      if (optionalBigWigs != null && !optionalBigWigs.isEmpty()) {
+        Set<String> wantedNames = new LinkedHashSet<>();
         for (File optional : optionalBigWigs) {
-          if (optional != null && scan.optionalCnvBigWigs().contains(optional)) {
-            bigWigs.add(optional);
+          if (optional != null) {
+            wantedNames.add(optional.getName());
+          }
+        }
+        for (File candidate : scan.optionalCnvBigWigs()) {
+          if (candidate != null && wantedNames.contains(candidate.getName())) {
+            bigWigs.add(candidate);
           }
         }
       }
