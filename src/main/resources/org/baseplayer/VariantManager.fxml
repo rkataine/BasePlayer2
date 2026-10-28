@@ -85,7 +85,7 @@
                                 <Label text="Custom filters" styleClass="section-header"/>
                                 <VBox fx:id="advancedFiltersContainer" spacing="4"/>
                                 <HBox spacing="8">
-                                    <Button fx:id="addInfoFilterButton" text="Add custom filter"
+                                    <Button fx:id="addInfoFilterButton" text="Add field…"
                                             styleClass="secondary-button" onAction="#handleAddCustomFilter"/>
                                 </HBox>
                             </VBox>

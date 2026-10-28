@@ -17,6 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
+import org.baseplayer.MainApp;
+import org.baseplayer.components.AppDialog;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.Cytoband;
 import org.baseplayer.io.Settings;
@@ -24,6 +26,9 @@ import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.genome.gene.Transcript;
+
+import javafx.application.Platform;
+import javafx.stage.Window;
 
 /**
  * Loads annotation data (cytobands, genes) from files.
@@ -37,6 +42,9 @@ public final class AnnotationLoader {
       Path.of("genomes/GRCh38/annotation/Homo_sapiens.GRCh38.115.chr.gff3.gz");
   private static final Object GENE_LOAD_LOCK = new Object();
   private static final AtomicInteger geneLoadGeneration = new AtomicInteger();
+  /** genome/annotation key that already failed — avoids ChromosomeCanvas retry loops. */
+  private static volatile String lastFailedAnnotationKey;
+  private static volatile String lastNotifiedFailureKey;
   
   private AnnotationLoader() {} // Utility class
   
@@ -86,7 +94,17 @@ public final class AnnotationLoader {
    * Concurrent calls are serialized; a newer request supersedes an older one.
    */
   public static void loadGenesBackground() {
+    String requestKey = annotationSelectionKey();
+    if (requestKey != null && requestKey.equals(lastFailedAnnotationKey)
+        && !AnnotationData.isGenesLoaded()
+        && !AnnotationData.isGenesLoading()) {
+      // Already failed for this genome/annotation — do not retry from draw loops.
+      return;
+    }
+
     final int generation = geneLoadGeneration.incrementAndGet();
+    // Drop previous assembly's genes immediately so they never paint under a new reference.
+    AnnotationData.clearGenes();
     AnnotationData.setGenesLoading(true);
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
     
@@ -102,7 +120,7 @@ public final class AnnotationLoader {
         return;
       }
       
-      javafx.application.Platform.runLater(() -> {
+      Platform.runLater(() -> {
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
       
@@ -116,7 +134,7 @@ public final class AnnotationLoader {
   }
   
   /**
-   * Load genes from the selected annotation file (or GRCh38 fallback) / cache.
+   * Load genes from the selected annotation file for the current genome / cache.
    * Must be called under {@link #GENE_LOAD_LOCK} (or from a single thread).
    * Builds into local maps and publishes atomically to avoid CME with the UI.
    */
@@ -124,12 +142,17 @@ public final class AnnotationLoader {
     AnnotationData.setGenesLoaded(false);
     AnnotationData.setGenesLoading(true);
 
+    String genome = Settings.get().getLastGenome();
+    String annotation = Settings.get().getLastAnnotation();
+    String selectionKey = annotationSelectionKey(genome, annotation);
+
     Path gff3File = resolveGeneAnnotationFile();
     if (gff3File == null || !Files.exists(gff3File)) {
-      System.err.println("Gene annotation file not found"
-          + (gff3File != null ? ": " + gff3File : " (no genome/annotation selected)"));
+      String detail = missingAnnotationMessage(genome, annotation, gff3File);
+      System.err.println(detail);
       AnnotationData.clearGenes();
       AnnotationData.setGenesLoading(false);
+      markAnnotationLoadFailed(selectionKey, "Gene annotation not loaded", detail);
       return;
     }
 
@@ -142,6 +165,8 @@ public final class AnnotationLoader {
         if (!Files.exists(gff3File) || 
             Files.getLastModifiedTime(cacheFile).compareTo(Files.getLastModifiedTime(gff3File)) >= 0) {
           if (loadGenesFromCache(cacheFile)) {
+            lastFailedAnnotationKey = null;
+            lastNotifiedFailureKey = null;
             AnnotationData.setGenesLoading(false);
             return;
           }
@@ -187,6 +212,8 @@ public final class AnnotationLoader {
           geneBuilders, transcriptBuilders, exonsByTranscript, cdsBoundsByTranscript);
       AnnotationData.replaceGeneAnnotation(
           snapshot.byChrom, snapshot.searchMap, snapshot.biotypeMap, snapshot.names);
+      lastFailedAnnotationKey = null;
+      lastNotifiedFailureKey = null;
       
       // Save to cache for faster subsequent loads
       saveGenesToCache(cacheFile);
@@ -197,6 +224,10 @@ public final class AnnotationLoader {
     } catch (IOException e) {
       System.err.println("Failed to load genes from " + gff3File + ": " + e.getMessage());
       AnnotationData.clearGenes();
+      markAnnotationLoadFailed(
+          selectionKey,
+          "Gene annotation failed to load",
+          "Could not read:\n" + gff3File + "\n\n" + e.getMessage());
     } finally {
       AnnotationData.setGenesLoading(false);
     }
@@ -204,25 +235,74 @@ public final class AnnotationLoader {
 
   /**
    * Resolve {@code genomes/<genome>/annotation/<file>} from Settings.
-   * Falls back to the bundled GRCh38 annotation when nothing is selected.
+   * Never falls back to another assembly once a genome is selected — that painted
+   * the previous reference's genes under the new one.
    */
   static Path resolveGeneAnnotationFile() {
     String genome = Settings.get().getLastGenome();
     String annotation = Settings.get().getLastAnnotation();
-    if (genome != null && !genome.isBlank()
-        && annotation != null && !annotation.isBlank()) {
+    if (genome != null && !genome.isBlank()) {
+      if (annotation == null || annotation.isBlank()) {
+        return null;
+      }
       Path selected = Path.of("genomes", genome, "annotation", annotation);
       if (Files.exists(selected)) {
         return selected;
       }
       System.err.println("Selected annotation missing: " + selected);
+      return null;
     }
+    // No genome selected yet (cold start) — optional bundled default only.
     return Files.exists(FALLBACK_GENE_ANNOTATION) ? FALLBACK_GENE_ANNOTATION : null;
+  }
+
+  private static String annotationSelectionKey() {
+    return annotationSelectionKey(
+        Settings.get().getLastGenome(), Settings.get().getLastAnnotation());
+  }
+
+  private static String annotationSelectionKey(String genome, String annotation) {
+    if (genome == null || genome.isBlank()) {
+      return null;
+    }
+    return genome + "/" + (annotation == null ? "" : annotation);
+  }
+
+  private static String missingAnnotationMessage(String genome, String annotation, Path path) {
+    if (genome == null || genome.isBlank()) {
+      return "Gene annotation file not found (no genome selected).";
+    }
+    if (annotation == null || annotation.isBlank()) {
+      return "No gene annotation selected for reference " + genome + ".";
+    }
+    if (path != null) {
+      return "Gene annotation file not found for " + genome + ":\n" + path;
+    }
+    return "Gene annotation file not found for " + genome + " / " + annotation + ".";
+  }
+
+  private static void markAnnotationLoadFailed(String selectionKey, String heading, String detail) {
+    if (selectionKey != null) {
+      lastFailedAnnotationKey = selectionKey;
+    }
+    if (selectionKey != null && selectionKey.equals(lastNotifiedFailureKey)) {
+      return;
+    }
+    lastNotifiedFailureKey = selectionKey;
+    Platform.runLater(() -> {
+      Window owner = MainApp.stage;
+      AppDialog.info(
+          owner,
+          "Gene annotation",
+          heading,
+          detail);
+    });
   }
 
   private static BufferedReader openAnnotationReader(Path annotationFile) throws IOException {
     String name = annotationFile.getFileName().toString().toLowerCase();
-    if (name.endsWith(".gz")) {
+    // BGZF (.bgz) is gzip-compatible; GZIPInputStream reads it fine for full-file parse.
+    if (name.endsWith(".gz") || name.endsWith(".bgz")) {
       return new BufferedReader(new InputStreamReader(
           new GZIPInputStream(Files.newInputStream(annotationFile)), StandardCharsets.UTF_8));
     }

@@ -1,15 +1,19 @@
 package org.baseplayer.variant.draw;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.components.InfoPopup;
 import org.baseplayer.components.PopupContent;
 import org.baseplayer.components.PopupContent.Badge;
 import org.baseplayer.io.Settings;
+import org.baseplayer.io.readers.VcfReader;
+import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.ChromosomeNames;
@@ -19,6 +23,7 @@ import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.ClinVarAnnotator;
 import org.baseplayer.variant.annotation.VariantAnnotation;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -237,12 +242,7 @@ public class VariantInfoPopup extends InfoPopup {
     }
 
     // Expandable dumps live below the summary TextArea (InfoPopup interactive section).
-    if (!info.isEmpty()) {
-      c.node(buildExpandableMap("All INFO fields", info));
-    }
-    if (call != null && call.formatFields != null && !call.formatFields.isEmpty()) {
-      c.node(buildExpandableMap("Sample FORMAT fields", call.formatFields));
-    }
+    c.node(buildExpandableAllVcfFields(node, call, chromosome));
     if (node.getSampleCount() > 1) {
       c.node(buildExpandableOtherSamples(node, call));
     }
@@ -250,13 +250,136 @@ public class VariantInfoPopup extends InfoPopup {
     return c;
   }
 
-  private static Node buildExpandableMap(String title, Map<String, String> fields) {
+  /**
+   * Collapsed by default; on first expand, loads every fixed/INFO/FORMAT field from the
+   * sample VCF (falls back to whatever was already cached on the node/call).
+   */
+  private static Node buildExpandableAllVcfFields(
+      VariantNode node, VariantNode.SampleCall call, String chromosome) {
     VBox body = new VBox(3);
     body.setPadding(new Insets(4, 0, 2, 4));
+    Label hint = new Label("Expand to list all VCF fields…");
+    hint.setFont(AppFonts.getUIFont());
+    hint.setTextFill(Color.GRAY);
+    body.getChildren().add(hint);
+
+    TitledPane pane = titledPane("All VCF fields", body);
+    AtomicBoolean loading = new AtomicBoolean(false);
+    pane.expandedProperty().addListener((obs, wasExpanded, expanded) -> {
+      if (!expanded || loading.get()) {
+        return;
+      }
+      if (Boolean.TRUE.equals(body.getProperties().get("vcfFieldsLoaded"))) {
+        return;
+      }
+      loading.set(true);
+      body.getChildren().setAll(statusLabel("Loading VCF fields…"));
+
+      Path vcfPath = resolveVcfPath(call);
+      String preferredSample = sampleName(call);
+      Map<String, String> cachedInfo = node.getInfoFields();
+      Map<String, String> cachedFormat = call != null && call.formatFields != null
+          ? call.formatFields
+          : Map.of();
+
+      Thread loader = new Thread(() -> {
+        VcfReader.SiteFields fromFile = null;
+        String error = null;
+        if (vcfPath != null) {
+          try (VcfReader reader = new VcfReader(vcfPath)) {
+            fromFile = reader.findSiteFields(
+                chromosome,
+                node.position,
+                node.svEnd,
+                node.ref,
+                node.alt,
+                preferredSample);
+          } catch (Exception ex) {
+            error = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+          }
+        }
+        VcfReader.SiteFields site = fromFile;
+        String err = error;
+        Platform.runLater(() -> {
+          body.getChildren().clear();
+          if (site != null) {
+            appendSection(body, "Fixed", site.fixed());
+            appendSection(body, "INFO", site.info());
+            appendSection(body, "FORMAT"
+                + (site.matchedSample() != null ? " (" + site.matchedSample() + ")" : ""),
+                site.format());
+            int total = site.fixed().size() + site.info().size() + site.format().size();
+            pane.setText("All VCF fields (" + total + ")");
+          } else {
+            if (!cachedInfo.isEmpty() || !cachedFormat.isEmpty()) {
+              appendSection(body, "INFO (cached)", cachedInfo);
+              appendSection(body, "FORMAT (cached)", cachedFormat);
+              if (err != null) {
+                body.getChildren().add(statusLabel("Could not re-read VCF: " + err));
+              } else if (vcfPath == null) {
+                body.getChildren().add(statusLabel("No VCF path on this sample — showing cached fields only."));
+              } else {
+                body.getChildren().add(statusLabel("No matching VCF record found at this locus."));
+              }
+              pane.setText("All VCF fields (" + (cachedInfo.size() + cachedFormat.size()) + ")");
+            } else {
+              body.getChildren().add(statusLabel(
+                  err != null ? "Could not load VCF fields: " + err
+                      : (vcfPath == null
+                          ? "No VCF path available for this call."
+                          : "No matching VCF record found at this locus.")));
+            }
+          }
+          body.getProperties().put("vcfFieldsLoaded", Boolean.TRUE);
+          loading.set(false);
+        });
+      }, "variant-info-vcf-fields");
+      loader.setDaemon(true);
+      loader.start();
+    });
+    return pane;
+  }
+
+  private static Path resolveVcfPath(VariantNode.SampleCall call) {
+    if (call == null) {
+      return null;
+    }
+    Sample sample = call.sample;
+    if (sample != null && sample.getPath() != null) {
+      return sample.getPath();
+    }
+    SampleTrack track = call.getTrack();
+    if (track == null) {
+      return null;
+    }
+    for (Sample s : track.getSamples()) {
+      if (s != null && s.getDataType() == Sample.DataType.VCF && s.getPath() != null) {
+        return s.getPath();
+      }
+    }
+    return null;
+  }
+
+  private static void appendSection(VBox body, String title, Map<String, String> fields) {
+    if (fields == null || fields.isEmpty()) {
+      return;
+    }
+    Label header = new Label(title);
+    header.setFont(AppFonts.getUIFont());
+    header.setTextFill(Color.web("#9aa0a6"));
+    header.setPadding(new Insets(body.getChildren().isEmpty() ? 0 : 6, 0, 0, 0));
+    body.getChildren().add(header);
     for (Map.Entry<String, String> entry : fields.entrySet()) {
       body.getChildren().add(kvRow(entry.getKey(), nullToDash(entry.getValue())));
     }
-    return titledPane(title + " (" + fields.size() + ")", body);
+  }
+
+  private static Label statusLabel(String text) {
+    Label label = new Label(text);
+    label.setFont(AppFonts.getUIFont());
+    label.setTextFill(Color.GRAY);
+    label.setWrapText(true);
+    return label;
   }
 
   private static Node buildExpandableOtherSamples(VariantNode node, VariantNode.SampleCall clicked) {

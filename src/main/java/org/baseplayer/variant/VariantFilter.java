@@ -112,9 +112,11 @@ public class VariantFilter {
     private boolean showIntronic = true;
     private boolean showIntergenic = true;
     
-    // Advanced filters for INFO and FILTER fields
+    // Advanced filters for INFO, FILTER, and FORMAT fields
     private Map<String, String> infoFieldFilters = new HashMap<>();  // Field name -> expected value
-    private Set<String> allowedFilterValues = new HashSet<>();        // E.g., "PASS", "LowQual", etc.
+    private Map<String, String> formatFieldFilters = new HashMap<>(); // FORMAT key -> InfoFieldRule encoding
+    private Set<String> allowedFilterValues = new HashSet<>();        // Include: keep if any token matches
+    private Set<String> excludedFilterValues = new HashSet<>();       // Exclude: drop if any token matches
     private boolean filterFieldsActive = false;                       // Whether to apply FILTER field filtering
 
     /**
@@ -771,12 +773,31 @@ public class VariantFilter {
     public boolean isShowIntergenic() { return showIntergenic; }
     
     public Map<String, String> getInfoFieldFilters() { return infoFieldFilters; }
-    public void setInfoFieldFilters(Map<String, String> filters) { this.infoFieldFilters = filters; }
+    public void setInfoFieldFilters(Map<String, String> filters) {
+        this.infoFieldFilters = filters != null ? filters : new HashMap<>();
+    }
+
+    public Map<String, String> getFormatFieldFilters() { return formatFieldFilters; }
+    public void setFormatFieldFilters(Map<String, String> filters) {
+        this.formatFieldFilters = filters != null ? filters : new HashMap<>();
+    }
     
     public Set<String> getAllowedFilterValues() { return allowedFilterValues; }
     public void setAllowedFilterValues(Set<String> values) { 
-        this.allowedFilterValues = values; 
-        this.filterFieldsActive = !values.isEmpty();
+        this.allowedFilterValues = values != null ? values : new HashSet<>();
+        refreshFilterFieldsActive();
+    }
+
+    public Set<String> getExcludedFilterValues() { return excludedFilterValues; }
+    public void setExcludedFilterValues(Set<String> values) {
+        this.excludedFilterValues = values != null ? values : new HashSet<>();
+        refreshFilterFieldsActive();
+    }
+
+    private void refreshFilterFieldsActive() {
+        this.filterFieldsActive =
+            (allowedFilterValues != null && !allowedFilterValues.isEmpty())
+                || (excludedFilterValues != null && !excludedFilterValues.isEmpty());
     }
     
     public boolean isFilterFieldsActive() { return filterFieldsActive; }
@@ -804,11 +825,33 @@ public class VariantFilter {
         return infoKeysToPersistLocal();
     }
 
-    private Set<String> infoKeysToPersistLocal() {
-        Set<String> keys = new HashSet<>();
-        if (infoFieldFilters != null && !infoFieldFilters.isEmpty()) {
-            keys.addAll(infoFieldFilters.keySet());
+    /**
+     * User INFO filter field ids only (excludes canvas CNV draw keys).
+     * Respects point/SV class slices on merged filters.
+     */
+    public Set<String> infoFilterKeys() {
+        if (hasClassSlices()) {
+            Set<String> keys = new HashSet<>();
+            if (pointSlice != null) {
+                keys.addAll(pointSlice.infoFilterKeysLocal());
+            }
+            if (svSlice != null) {
+                keys.addAll(svSlice.infoFilterKeysLocal());
+            }
+            return keys;
         }
+        return infoFilterKeysLocal();
+    }
+
+    private Set<String> infoFilterKeysLocal() {
+        if (infoFieldFilters == null || infoFieldFilters.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(infoFieldFilters.keySet());
+    }
+
+    private Set<String> infoKeysToPersistLocal() {
+        Set<String> keys = new HashSet<>(infoFilterKeysLocal());
         // Canvas CNV metrics — not user filters, but needed to draw.
         for (VcfVariantType type : allowedTypes) {
             if (VariantTypeVisuals.isCnv(type)) {
@@ -817,6 +860,35 @@ public class VariantFilter {
             }
         }
         return keys;
+    }
+
+    /**
+     * FORMAT keys that must be copied onto {@link VariantNode.SampleCall} at load
+     * when custom FORMAT filters are active.
+     */
+    public Set<String> formatKeysToPersist() {
+        if (hasClassSlices()) {
+            Set<String> keys = new HashSet<>();
+            if (pointSlice != null) {
+                keys.addAll(pointSlice.formatKeysToPersistLocal());
+            }
+            if (svSlice != null) {
+                keys.addAll(svSlice.formatKeysToPersistLocal());
+            }
+            return keys;
+        }
+        return formatKeysToPersistLocal();
+    }
+
+    private Set<String> formatKeysToPersistLocal() {
+        if (formatFieldFilters == null || formatFieldFilters.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(formatFieldFilters.keySet());
+    }
+
+    public boolean shouldPersistFormatFields() {
+        return !formatKeysToPersist().isEmpty();
     }
 
     /** Whether VCF FILTER column strings should be stored on nodes (FILTER= rules active). */
@@ -981,7 +1053,9 @@ public class VariantFilter {
         copy.showIntronic = this.showIntronic;
         copy.showIntergenic = this.showIntergenic;
         copy.infoFieldFilters = new HashMap<>(this.infoFieldFilters);
+        copy.formatFieldFilters = new HashMap<>(this.formatFieldFilters);
         copy.allowedFilterValues = new HashSet<>(this.allowedFilterValues);
+        copy.excludedFilterValues = new HashSet<>(this.excludedFilterValues);
         copy.filterFieldsActive = this.filterFieldsActive;
         copy.minSvLengthBp = this.minSvLengthBp;
         copy.maxSvLengthBp = this.maxSvLengthBp;
@@ -1064,8 +1138,6 @@ public class VariantFilter {
             || !showCoding
             || !showIntronic
             || !showIntergenic
-            || !infoFieldFilters.isEmpty()
-            || filterFieldsActive
             || minSvLengthBp > 0
             || maxSvLengthBp < Long.MAX_VALUE;
     }
@@ -1099,15 +1171,11 @@ public class VariantFilter {
         for (VcfVariantType t : allowedTypes) typeNames.add(t.name());
         Collections.sort(typeNames);
 
-        List<String> infoKeys = new ArrayList<>(infoFieldFilters.keySet());
+        // Persist-key sets only (not rule values): changing thresholds must not rematerialize.
+        List<String> infoKeys = new ArrayList<>(infoFilterKeysLocal());
         Collections.sort(infoKeys);
-        List<String> infoPairs = new ArrayList<>();
-        for (String k : infoKeys) {
-            infoPairs.add(k + "=" + infoFieldFilters.get(k));
-        }
-
-        List<String> filterVals = new ArrayList<>(allowedFilterValues);
-        Collections.sort(filterVals);
+        List<String> formatKeys = new ArrayList<>(formatKeysToPersistLocal());
+        Collections.sort(formatKeys);
 
         List<String> effectNames = new ArrayList<>();
         for (VariantEffect e : allowedEffects) {
@@ -1127,9 +1195,9 @@ public class VariantFilter {
             + "|showIntergenic=" + showIntergenic
             + "|effects=" + String.join(",", effectNames)
             + "|types=" + String.join(",", typeNames)
-            + "|info=" + String.join(",", infoPairs)
-            + "|filterActive=" + filterFieldsActive
-            + "|filterValues=" + String.join(",", filterVals)
+            + "|infoKeys=" + String.join(",", infoKeys)
+            + "|formatKeys=" + String.join(",", formatKeys)
+            + "|persistFilterCol=" + filterFieldsActive
             + "|pointSlice=" + (pointSlice == null ? "-" : pointSlice.toLoadIdentityKey())
             + "|svSlice=" + (svSlice == null ? "-" : svSlice.toLoadIdentityKey());
     }
@@ -1295,39 +1363,12 @@ public class VariantFilter {
         // It must not run here: annotate-all / cache retention call this before ClinVar
         // annotation, and rejecting unmatched alleles would empty the chromosome cache.
 
-        if (!f.infoFieldFilters.isEmpty()) {
-            for (Map.Entry<String, String> entry : f.infoFieldFilters.entrySet()) {
-                String expected = entry.getValue();
-                if (expected == null) {
-                    continue;
-                }
-                InfoFieldRule rule = InfoFieldRule.decode(entry.getKey(), expected);
-                if (!rule.matches(node.getInfoValue(entry.getKey()))) {
-                    return false;
-                }
-            }
-        }
-
-        if (f.filterFieldsActive && !f.allowedFilterValues.isEmpty()) {
-            String filterCol = node.vcfFilter;
-            if (filterCol == null || filterCol.isBlank()) {
-                return false;
-            }
-            // VCF FILTER may be semicolon-joined; keep if any token is allowed.
-            boolean any = false;
-            for (String token : filterCol.split(";")) {
-                if (f.allowedFilterValues.contains(token)) {
-                    any = true;
-                    break;
-                }
-            }
-            if (!any) {
-                return false;
-            }
-        }
+        // INFO / FORMAT / FILTER custom field rules are persist-only for now: values are
+        // loaded onto nodes on demand but do not hard-filter cache or chromosome loads.
 
         return true;
     }
+
 
     /**
      * Compare presence / zygosity across named groups using quality/depth/AF thresholds.

@@ -1050,6 +1050,220 @@ public class VcfReader implements AutoCloseable {
     }
     
     /**
+     * INFO + FORMAT string maps for one VCF site (for UI dumps / detail popups).
+     */
+    public record SiteFields(
+            Map<String, String> fixed,
+            Map<String, String> info,
+            Map<String, String> format,
+            String matchedSample) {
+    }
+
+    /**
+     * Look up the VCF record at {@code chromosome}:{@code position} (optionally matching
+     * REF/ALT) and return all fixed / INFO / FORMAT fields as display strings.
+     *
+     * @param preferredSample VCF sample column name when known; otherwise first usable genotype
+     */
+    public SiteFields findSiteFields(
+            String chromosome,
+            long position,
+            long endHint,
+            String ref,
+            String alt,
+            String preferredSample) throws IOException {
+        long queryEnd = Math.max(position, endHint > 0 ? endHint : position);
+        VariantContext[] match = {null};
+        visitOverlappingVariants(chromosome, position, queryEnd, ctx -> {
+            if (match[0] != null) {
+                return;
+            }
+            if (ctx.getStart() != position) {
+                return;
+            }
+            if (!alleleMatches(ctx, ref, alt)) {
+                return;
+            }
+            match[0] = ctx;
+        });
+        if (match[0] == null) {
+            // Fall back: first record at this start position regardless of allele.
+            visitOverlappingVariants(chromosome, position, queryEnd, ctx -> {
+                if (match[0] == null && ctx.getStart() == position) {
+                    match[0] = ctx;
+                }
+            });
+        }
+        if (match[0] == null) {
+            return null;
+        }
+        return toSiteFields(match[0], preferredSample);
+    }
+
+    private static boolean alleleMatches(VariantContext ctx, String ref, String alt) {
+        if (ref != null && !ref.isBlank()) {
+            String ctxRef = ctx.getReference() != null ? ctx.getReference().getDisplayString() : null;
+            if (ctxRef != null && !ctxRef.equalsIgnoreCase(ref.trim())) {
+                // Still allow ALT-only match for symbolic SVs where REF can differ by padding.
+                if (alt == null || alt.isBlank() || !alt.trim().startsWith("<")) {
+                    return false;
+                }
+            }
+        }
+        if (alt == null || alt.isBlank()) {
+            return true;
+        }
+        String want = alt.trim();
+        for (var allele : ctx.getAlternateAlleles()) {
+            if (allele == null) {
+                continue;
+            }
+            String display = allele.getDisplayString();
+            if (display != null && display.equalsIgnoreCase(want)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private SiteFields toSiteFields(VariantContext ctx, String preferredSample) {
+        Map<String, String> fixed = new java.util.LinkedHashMap<>();
+        fixed.put("CHROM", ChromosomeNames.strip(ctx.getContig()));
+        fixed.put("POS", String.valueOf(ctx.getStart()));
+        fixed.put("ID", ctx.hasID() ? ctx.getID() : ".");
+        fixed.put("REF", ctx.getReference() != null ? ctx.getReference().getDisplayString() : ".");
+        String alts = ctx.getAlternateAlleles().stream()
+            .map(a -> a.getDisplayString())
+            .collect(Collectors.joining(","));
+        fixed.put("ALT", alts.isEmpty() ? "." : alts);
+        fixed.put("QUAL", ctx.hasLog10PError()
+            ? formatAttributeValue(ctx.getPhredScaledQual())
+            : ".");
+        fixed.put("FILTER", ctx.isFiltered()
+            ? String.join(";", ctx.getFilters())
+            : (ctx.filtersWereApplied() ? "PASS" : "."));
+
+        Map<String, String> info = new java.util.LinkedHashMap<>();
+        for (String key : ctx.getAttributes().keySet()) {
+            info.put(key, formatAttributeValue(ctx.getAttribute(key)));
+        }
+
+        String matchedSample = null;
+        Map<String, String> format = new java.util.LinkedHashMap<>();
+        if (ctx.hasGenotypes()) {
+            Genotype gt = pickGenotype(ctx, preferredSample);
+            if (gt != null) {
+                matchedSample = gt.getSampleName();
+                format.put("GT", gt.getGenotypeString());
+                if (gt.hasDP()) {
+                    format.put("DP", String.valueOf(gt.getDP()));
+                }
+                if (gt.hasGQ()) {
+                    format.put("GQ", String.valueOf(gt.getGQ()));
+                }
+                if (gt.hasAD()) {
+                    format.put("AD", formatAttributeValue(gt.getAD()));
+                }
+                if (gt.hasPL()) {
+                    format.put("PL", formatAttributeValue(gt.getPL()));
+                }
+                for (String key : gt.getExtendedAttributes().keySet()) {
+                    format.putIfAbsent(key, formatAttributeValue(gt.getExtendedAttribute(key)));
+                }
+            }
+        } else if (siteOnlySamples && !sampleNames.isEmpty()) {
+            matchedSample = sampleNames.get(0);
+        }
+
+        return new SiteFields(
+            Map.copyOf(fixed),
+            Map.copyOf(info),
+            Map.copyOf(format),
+            matchedSample);
+    }
+
+    private static Genotype pickGenotype(VariantContext ctx, String preferredSample) {
+        if (preferredSample != null && !preferredSample.isBlank()) {
+            Genotype exact = ctx.getGenotype(preferredSample);
+            if (exact != null) {
+                return exact;
+            }
+            for (Genotype gt : ctx.getGenotypes()) {
+                if (gt.getSampleName() != null
+                        && gt.getSampleName().equalsIgnoreCase(preferredSample.trim())) {
+                    return gt;
+                }
+            }
+        }
+        for (Genotype gt : ctx.getGenotypes()) {
+            if (gt != null && !gt.isNoCall() && !gt.isHomRef()) {
+                return gt;
+            }
+        }
+        return ctx.getGenotypes().isEmpty() ? null : ctx.getGenotype(0);
+    }
+
+    private static String formatAttributeValue(Object value) {
+        if (value == null) {
+            return ".";
+        }
+        if (value instanceof int[] arr) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(arr[i]);
+            }
+            return sb.toString();
+        }
+        if (value instanceof double[] arr) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(formatNumeric(arr[i]));
+            }
+            return sb.toString();
+        }
+        if (value instanceof float[] arr) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(formatNumeric(arr[i]));
+            }
+            return sb.toString();
+        }
+        if (value instanceof Object[] arr) {
+            return java.util.Arrays.stream(arr)
+                .map(VcfReader::formatAttributeValue)
+                .collect(Collectors.joining(","));
+        }
+        if (value instanceof Collection<?> coll) {
+            return coll.stream()
+                .map(VcfReader::formatAttributeValue)
+                .collect(Collectors.joining(","));
+        }
+        if (value instanceof Number number) {
+            return formatNumeric(number.doubleValue());
+        }
+        return String.valueOf(value);
+    }
+
+    private static String formatNumeric(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            return String.valueOf(value);
+        }
+        if (Math.rint(value) == value) {
+            return String.format("%.0f", value);
+        }
+        return String.format("%.6g", value);
+    }
+
+    /**
      * Get list of chromosomes (contigs) available in the VCF file.
      */
     public List<String> getAvailableChromosomes() {

@@ -696,8 +696,14 @@ public final class SessionDocumentSync {
     if (filter.getInfoFieldFilters() != null) {
       spec.infoFieldFilters = new HashMap<>(filter.getInfoFieldFilters());
     }
+    if (filter.getFormatFieldFilters() != null) {
+      spec.formatFieldFilters = new HashMap<>(filter.getFormatFieldFilters());
+    }
     if (filter.getAllowedFilterValues() != null) {
       spec.allowedFilterValues = new ArrayList<>(filter.getAllowedFilterValues());
+    }
+    if (filter.getExcludedFilterValues() != null) {
+      spec.excludedFilterValues = new ArrayList<>(filter.getExcludedFilterValues());
     }
     spec.filterByControlAf = filter.isFilterByControlAf();
     spec.maxControlAf = filter.getMaxControlAf();

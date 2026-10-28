@@ -77,10 +77,13 @@ public class InitializationService {
       files.filter(f -> {
         String name = f.getFileName().toString().toLowerCase();
         return name.endsWith(".gff3.gz")
+            || name.endsWith(".gff3.bgz")
             || name.endsWith(".gff3")
             || name.endsWith(".gff.gz")
+            || name.endsWith(".gff.bgz")
             || name.endsWith(".gff")
             || name.endsWith(".gtf.gz")
+            || name.endsWith(".gtf.bgz")
             || name.endsWith(".gtf");
       }).forEach(gff3Path -> {
         String filename = gff3Path.getFileName().toString();

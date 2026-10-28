@@ -222,6 +222,9 @@ public class VariantManagerController implements Initializable {
     private Timeline filterDebounceTimer;
     // Short-delay timer for checkbox/filter actions so UI paints first
     private Timeline immediateFilterApplyTimer;
+    /** Coalesce rapid Add-field actions into one on-demand field-value reload. */
+    private Timeline onDemandFieldReloadTimer;
+    private boolean pendingOnDemandFieldReload;
     /** Debounce live point/LOH table search (filter + gene-group rebuild). */
     private Timeline tableSearchDebounceTimer;
     /** Debounce live SV table search. */
@@ -265,6 +268,9 @@ public class VariantManagerController implements Initializable {
         filterDebounceTimer.setCycleCount(1);
         immediateFilterApplyTimer = new Timeline(new KeyFrame(Duration.millis(40), e -> applyFiltersNow()));
         immediateFilterApplyTimer.setCycleCount(1);
+        onDemandFieldReloadTimer = new Timeline(
+            new KeyFrame(Duration.millis(600), e -> runOnDemandFieldReload()));
+        onDemandFieldReloadTimer.setCycleCount(1);
         tableSearchDebounceTimer = new Timeline(
             new KeyFrame(Duration.millis(200), e -> applyPointTableSearchNow()));
         tableSearchDebounceTimer.setCycleCount(1);
@@ -1711,6 +1717,10 @@ public class VariantManagerController implements Initializable {
         if (immediateFilterApplyTimer != null) {
             immediateFilterApplyTimer.stop();
         }
+        if (onDemandFieldReloadTimer != null) {
+            onDemandFieldReloadTimer.stop();
+        }
+        pendingOnDemandFieldReload = false;
     }
 
     private VariantFilter buildFilterFromUI() {
@@ -2053,13 +2063,23 @@ public class VariantManagerController implements Initializable {
     }
 
     private void applyFiltersNow() {
-        if (suppressFilterApplyEvents
-                || isAllChromosomeAnnotationRunning()
-                || controlAnnotationRunning) {
+        if (suppressFilterApplyEvents || controlAnnotationRunning) {
             return;
         }
 
         VariantFilter filter = buildFilterFromUI();
+        // New INFO/FORMAT/FILTER values are not on nodes until reload — coalesce into one load.
+        if (needsOnDemandFieldReload(filter)) {
+            if (vcfManager != null) {
+                vcfManager.setCurrentFilterForNextLoad(filter);
+            }
+            scheduleOnDemandFieldReload();
+        }
+
+        if (isAllChromosomeAnnotationRunning()) {
+            return;
+        }
+
         // Genotype roles (het/hom/present) use the same visible-chain filter path as
         // AF/GQ/etc. LOH region calling is only via Calculate LOH — never on Apply.
         if (vcfManager != null) {
@@ -2074,11 +2094,104 @@ public class VariantManagerController implements Initializable {
                 break;
             }
         }
-        pendingReloadFilter = reloadNeeded ? filter : null;
-        for (VariantClassWorkspace ws : workspaces()) {
-            ws.refreshReloadBannerState(reloadNeeded, "Reload needed");
+        // On-demand field reload owns the banner while pending.
+        if (!pendingOnDemandFieldReload) {
+            pendingReloadFilter = reloadNeeded ? filter : null;
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.refreshReloadBannerState(reloadNeeded, "Reload needed");
+            }
         }
         scheduleRebuild(filter);
+    }
+
+    private void scheduleOnDemandFieldReload() {
+        pendingOnDemandFieldReload = true;
+        for (VariantClassWorkspace ws : workspaces()) {
+            ws.refreshReloadBannerState(true, "Loading filter fields…");
+        }
+        if (onDemandFieldReloadTimer != null) {
+            onDemandFieldReloadTimer.stop();
+            onDemandFieldReloadTimer.playFromStart();
+        } else {
+            runOnDemandFieldReload();
+        }
+    }
+
+    private void runOnDemandFieldReload() {
+        if (!pendingOnDemandFieldReload) {
+            return;
+        }
+        if (suppressFilterApplyEvents || controlAnnotationRunning) {
+            return;
+        }
+        if (isAllChromosomeAnnotationRunning()) {
+            // Retry after the in-flight load finishes (see completeAllChromosomeAnnotation).
+            return;
+        }
+        VariantFilter filter = buildFilterFromUI();
+        if (!needsOnDemandFieldReload(filter)) {
+            pendingOnDemandFieldReload = false;
+            for (VariantClassWorkspace ws : workspaces()) {
+                ws.hideReloadBanner();
+            }
+            return;
+        }
+        pendingOnDemandFieldReload = false;
+        pendingReloadFilter = filter;
+        handleReloadFilteredVariants();
+    }
+
+    /**
+     * True when the UI asks for INFO/FORMAT keys or the FILTER column that were not
+     * persisted on the last load — those values are kept out of memory until requested.
+     */
+    private boolean needsOnDemandFieldReload(VariantFilter filter) {
+        if (filter == null || vcfManager == null) {
+            return false;
+        }
+        VariantFilter loaded = vcfManager.getCurrentLoadedFilter();
+        if (filter.shouldPersistVcfFilter()
+                && (loaded == null || !loaded.shouldPersistVcfFilter())) {
+            return true;
+        }
+        // INFO/FORMAT keys live on point/SV slices of the merged filter — never read the
+        // empty parent maps with getInfoFieldFilters()/getFormatFieldFilters().
+        if (keysMissingIgnoreCase(
+                filter.infoFilterKeys(),
+                loaded != null ? loaded.infoFilterKeys() : Set.of())) {
+            return true;
+        }
+        return keysMissingIgnoreCase(
+            filter.formatKeysToPersist(),
+            loaded != null ? loaded.formatKeysToPersist() : Set.of());
+    }
+
+    private static boolean keysMissingIgnoreCase(Set<String> needed, Set<String> have) {
+        if (needed == null || needed.isEmpty()) {
+            return false;
+        }
+        if (have == null) {
+            have = Set.of();
+        }
+        for (String key : needed) {
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            if (have.contains(key)) {
+                continue;
+            }
+            boolean found = false;
+            for (String existing : have) {
+                if (existing != null && existing.equalsIgnoreCase(key)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @FXML
@@ -3625,16 +3738,21 @@ public class VariantManagerController implements Initializable {
         }
 
         // Annotate-all already materializes every chromosome with the current UI filter,
-        // so a leftover "Reload needed" banner from soft filter apply is stale.
+        // so a leftover "Reload needed" banner from soft filter apply is stale — unless
+        // more INFO/FORMAT/FILTER keys were added while the load was running.
         if (result != null && !result.cancelled()) {
             pendingReloadFilter = null;
-            for (VariantClassWorkspace ws : workspaces()) {
-                ws.hideReloadBanner();
-            }
+            VariantFilter filter = buildFilterFromUI();
             if (vcfManager != null) {
-                VariantFilter filter = buildFilterFromUI();
                 vcfManager.setCurrentFilterForNextLoad(filter);
                 vcfManager.applyFilter(filter);
+            }
+            if (pendingOnDemandFieldReload || needsOnDemandFieldReload(filter)) {
+                scheduleOnDemandFieldReload();
+            } else {
+                for (VariantClassWorkspace ws : workspaces()) {
+                    ws.hideReloadBanner();
+                }
             }
         }
 

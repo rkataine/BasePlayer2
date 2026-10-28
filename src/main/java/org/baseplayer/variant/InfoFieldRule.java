@@ -15,6 +15,11 @@ public final class InfoFieldRule {
     EQUALS,
     /** At least one numeric token falls within {@code [min, max]} (unbounded when null). */
     NUMBER_RANGE,
+    /**
+     * Comma-separated numeric values (e.g. FORMAT {@code PR}): tokens are summed, then
+     * the sum must fall in {@code [min, max]} (unbounded when null).
+     */
+    NUMBER_PAIR,
     /** INFO key must be present (Flag or any typed field). */
     FLAG_PRESENT,
     /** At least one comma/semicolon token equals an expected token. */
@@ -26,6 +31,8 @@ public final class InfoFieldRule {
   /** UI control kind inferred from the VCF header definition. */
   public enum UiKind {
     NUMBER,
+    /** One threshold applied to the sum of comma-separated numeric values. */
+    NUMBER_PAIR,
     TEXT,
     FLAG,
     CSV,
@@ -52,6 +59,11 @@ public final class InfoFieldRule {
 
   public static InfoFieldRule numberRange(String fieldId, Double min, Double max) {
     return new InfoFieldRule(fieldId, Mode.NUMBER_RANGE, "", min, max);
+  }
+
+  /** Thresholds on the sum of comma-separated numeric tokens. */
+  public static InfoFieldRule numberPair(String fieldId, Double minSum, Double maxSum) {
+    return new InfoFieldRule(fieldId, Mode.NUMBER_PAIR, "", minSum, maxSum);
   }
 
   public static InfoFieldRule flagPresent(String fieldId) {
@@ -91,6 +103,7 @@ public final class InfoFieldRule {
       case FLAG_PRESENT -> actual != null;
       case EQUALS -> actual != null && actual.equals(textValue);
       case NUMBER_RANGE -> matchesNumberRange(actual);
+      case NUMBER_PAIR -> matchesNumberPair(actual);
       case CSV_ANY -> matchesCsvAny(actual);
       case CSV_ALL -> matchesCsvAll(actual);
     };
@@ -101,6 +114,10 @@ public final class InfoFieldRule {
       case EQUALS -> textValue;
       case FLAG_PRESENT -> "flag:1";
       case NUMBER_RANGE -> "num:"
+          + (min != null ? formatNum(min) : "")
+          + ":"
+          + (max != null ? formatNum(max) : "");
+      case NUMBER_PAIR -> "pair:"
           + (min != null ? formatNum(min) : "")
           + ":"
           + (max != null ? formatNum(max) : "");
@@ -115,6 +132,20 @@ public final class InfoFieldRule {
     }
     if (encoded.equals("flag:1") || encoded.equals("flag:true")) {
       return flagPresent(fieldId);
+    }
+    if (encoded.startsWith("pair:")) {
+      String rest = encoded.substring(5);
+      int colon = rest.indexOf(':');
+      String first;
+      String second;
+      if (colon < 0) {
+        first = rest;
+        second = "";
+      } else {
+        first = rest.substring(0, colon);
+        second = rest.substring(colon + 1);
+      }
+      return numberPair(fieldId, parseOptionalDouble(first), parseOptionalDouble(second));
     }
     if (encoded.startsWith("num:")) {
       String rest = encoded.substring(4);
@@ -153,7 +184,7 @@ public final class InfoFieldRule {
       return UiKind.FLAG;
     }
     if (isNumericType(def.type())) {
-      return isMultiNumber(def.number()) ? UiKind.CSV : UiKind.NUMBER;
+      return isMultiNumber(def.number()) ? UiKind.NUMBER_PAIR : UiKind.NUMBER;
     }
     if (isMultiNumber(def.number())) {
       return UiKind.CSV;
@@ -197,16 +228,46 @@ public final class InfoFieldRule {
     if (values.isEmpty()) {
       return false;
     }
-    for (double v : values) {
-      if (min != null && v < min) {
-        continue;
-      }
-      if (max != null && v > max) {
-        continue;
-      }
+    // Comma-separated numerics (e.g. PR strand counts): filter on the sum.
+    if (values.size() > 1) {
+      return sumInRange(values);
+    }
+    double v = values.get(0);
+    if (min != null && v < min) {
+      return false;
+    }
+    if (max != null && v > max) {
+      return false;
+    }
+    return true;
+  }
+
+  private boolean matchesNumberPair(String actual) {
+    if (actual == null || actual.isBlank()) {
+      return false;
+    }
+    if (min == null && max == null) {
       return true;
     }
-    return false;
+    List<Double> values = parseNumericTokens(actual);
+    if (values.isEmpty()) {
+      return false;
+    }
+    return sumInRange(values);
+  }
+
+  private boolean sumInRange(List<Double> values) {
+    double sum = 0;
+    for (double v : values) {
+      sum += v;
+    }
+    if (min != null && sum < min) {
+      return false;
+    }
+    if (max != null && sum > max) {
+      return false;
+    }
+    return true;
   }
 
   private boolean matchesCsvAny(String actual) {

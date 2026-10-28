@@ -99,7 +99,9 @@ public class ProjectDocument {
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
+    public Map<String, String> formatFieldFilters = new LinkedHashMap<>();
     public List<String> allowedFilterValues = new ArrayList<>();
+    public List<String> excludedFilterValues = new ArrayList<>();
   }
 
   /** Per-class (point vs structural) filter + sample-comparison settings. */
@@ -122,7 +124,9 @@ public class ProjectDocument {
     public List<String> allowedTypes = new ArrayList<>();
     public List<String> allowedEffects = new ArrayList<>();
     public Map<String, String> infoFieldFilters = new LinkedHashMap<>();
+    public Map<String, String> formatFieldFilters = new LinkedHashMap<>();
     public List<String> allowedFilterValues = new ArrayList<>();
+    public List<String> excludedFilterValues = new ArrayList<>();
     /** Display-time population AF filter (does not affect VCF load cache keys). */
     public boolean filterByControlAf;
     public double maxControlAf = 0.01;

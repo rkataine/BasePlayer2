@@ -38,6 +38,8 @@ public class VariantLoader {
      * if this predicate returns true (typically: not observed in the session before this load).
      */
     private Predicate<VcfVariantType> autoAdmitNewType;
+    /** FORMAT keys to retain on sample calls for the current stream (from load filter). */
+    private Set<String> formatKeysToPersist = Set.of();
     
     public VariantLoader(VcfReader vcfReader) {
         this.vcfReader = vcfReader;
@@ -286,7 +288,7 @@ public class VariantLoader {
         public VariantNode streamChromosomeVariantsToList(String chromosome, VariantList target,
             VariantNode startCursor, java.util.function.BiConsumer<Integer, Integer> onProgress,
             VariantFilter loadFilter, long chromosomeLength) throws IOException {
-        
+        beginFormatPersistKeys(loadFilter);
         VariantNode[] cursor = {startCursor};
         int[] svProcessed = {0};
         java.util.Set<Integer> samplesWithVariants = new java.util.HashSet<>();
@@ -454,7 +456,7 @@ public class VariantLoader {
             VariantList target, VariantNode startCursor,
             java.util.function.BiConsumer<Integer, Integer> onProgress,
             VariantFilter loadFilter) throws IOException {
-        
+        beginFormatPersistKeys(loadFilter);
         VariantNode[] cursor = {startCursor};
         int[] svProcessed = {0};
         java.util.Set<Integer> samplesWithVariants = new java.util.HashSet<>();
@@ -647,8 +649,13 @@ public class VariantLoader {
             node.vcfId = id;
         }
         boolean keepFilter = loadFilter != null && loadFilter.shouldPersistVcfFilter();
-        if (keepFilter && node.vcfFilter == null && filters != null && !filters.isEmpty()) {
-            node.vcfFilter = String.join(";", filters);
+        if (keepFilter && node.vcfFilter == null) {
+            // Always store something when FILTER rules are active so null means "not loaded".
+            if (filters != null && !filters.isEmpty()) {
+                node.vcfFilter = String.join(";", filters);
+            } else {
+                node.vcfFilter = "PASS";
+            }
         }
         if (node.hasInfoFields()) {
             return;
@@ -667,10 +674,24 @@ public class VariantLoader {
         }
         LinkedHashMap<String, String> out = new LinkedHashMap<>();
         for (String key : keys) {
-            if (key == null || key.isBlank() || !info.containsKey(key)) {
+            if (key == null || key.isBlank()) {
                 continue;
             }
-            out.put(key, formatInfoValue(info.get(key)));
+            Object value = info.get(key);
+            String storeKey = key;
+            if (value == null) {
+                for (Map.Entry<String, Object> e : info.entrySet()) {
+                    if (e.getKey() != null && e.getKey().equalsIgnoreCase(key)) {
+                        value = e.getValue();
+                        storeKey = e.getKey();
+                        break;
+                    }
+                }
+            }
+            if (value == null) {
+                continue;
+            }
+            out.put(storeKey, formatInfoValue(value));
         }
         return out.isEmpty() ? Map.of() : out;
     }
@@ -769,10 +790,10 @@ public class VariantLoader {
             double gq = gtMap.containsKey("GQ") ? ((Number) gtMap.get("GQ")).doubleValue() : -1;
             int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
             double af = calculateAlleleFraction(gtMap, altAllele, altIndex1Based);
-            // Skip extra FORMAT maps at load — they dominate per-call RAM (AD, F1R2, SB, …).
-            // GT/GQ/DP/AF cover filters and drawing; details popup can stay lean.
+            // Only selected FORMAT keys (custom filters) — full maps dominate per-call RAM.
             return new VariantNode.SampleCall(
-                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af, null);
+                trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af,
+                extractFormatFields(gtMap));
         }
         
         // GT may be allele bases ("G/AT") or numeric indices ("0/1", "1/2").
@@ -784,7 +805,49 @@ public class VariantLoader {
         int dp = gtMap.containsKey("DP") ? ((Number) gtMap.get("DP")).intValue() : calculateDepthFromAd(gtMap);
         double af = calculateAlleleFraction(gtMap, altAllele, altIndex1Based);
         return new VariantNode.SampleCall(
-            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af, null);
+            trackIndex, resolveVcfSample(trackIndex), gt, gq, dp, af,
+            extractFormatFields(gtMap));
+    }
+
+    /**
+     * Copy only FORMAT keys requested by the load filter into a compact string map.
+     * Returns {@code null} when nothing should be stored.
+     */
+    private void beginFormatPersistKeys(VariantFilter loadFilter) {
+        if (loadFilter == null) {
+            formatKeysToPersist = Set.of();
+            return;
+        }
+        Set<String> keys = loadFilter.formatKeysToPersist();
+        formatKeysToPersist = keys == null || keys.isEmpty() ? Set.of() : Set.copyOf(keys);
+    }
+
+    private Map<String, String> extractFormatFields(Map<String, Object> gtMap) {
+        if (gtMap == null || gtMap.isEmpty() || formatKeysToPersist.isEmpty()) {
+            return null;
+        }
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        for (String key : formatKeysToPersist) {
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            String storeKey = key;
+            Object value = gtMap.get(key);
+            if (value == null) {
+                for (Map.Entry<String, Object> e : gtMap.entrySet()) {
+                    if (e.getKey() != null && e.getKey().equalsIgnoreCase(key)) {
+                        value = e.getValue();
+                        storeKey = e.getKey();
+                        break;
+                    }
+                }
+            }
+            if (value == null) {
+                continue;
+            }
+            out.put(storeKey, formatInfoValue(value));
+        }
+        return out.isEmpty() ? null : out;
     }
 
     /**

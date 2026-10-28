@@ -752,8 +752,14 @@ public final class SessionRuntime {
       if (spec.infoFieldFilters != null) {
         point.setInfoFieldFilters(new HashMap<>(spec.infoFieldFilters));
       }
+      if (spec.formatFieldFilters != null) {
+        point.setFormatFieldFilters(new HashMap<>(spec.formatFieldFilters));
+      }
       if (spec.allowedFilterValues != null) {
         point.setAllowedFilterValues(new HashSet<>(spec.allowedFilterValues));
+      }
+      if (spec.excludedFilterValues != null) {
+        point.setExcludedFilterValues(new HashSet<>(spec.excludedFilterValues));
       }
 
       sv = new VariantFilter();
@@ -923,8 +929,14 @@ public final class SessionRuntime {
     if (spec.infoFieldFilters != null) {
       filter.setInfoFieldFilters(new HashMap<>(spec.infoFieldFilters));
     }
+    if (spec.formatFieldFilters != null) {
+      filter.setFormatFieldFilters(new HashMap<>(spec.formatFieldFilters));
+    }
     if (spec.allowedFilterValues != null) {
       filter.setAllowedFilterValues(new HashSet<>(spec.allowedFilterValues));
+    }
+    if (spec.excludedFilterValues != null) {
+      filter.setExcludedFilterValues(new HashSet<>(spec.excludedFilterValues));
     }
     filter.setFilterByControlAf(spec.filterByControlAf);
     filter.setMaxControlAf(spec.maxControlAf > 0 ? spec.maxControlAf : 0.01);

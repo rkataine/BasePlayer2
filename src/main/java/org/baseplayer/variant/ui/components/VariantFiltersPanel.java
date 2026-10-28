@@ -26,7 +26,6 @@ import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.annotation.VariantEffect;
 
-import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
@@ -46,14 +45,12 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.FlowPane;
-import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.util.Pair;
-import javafx.util.StringConverter;
 
 /**
  * Variant Filters tab UI: type/effect checkboxes, quality/depth/AF sliders,
@@ -281,7 +278,7 @@ public class VariantFiltersPanel {
         reloadBanner.getChildren().addAll(reloadLabel, reloadButton);
 
         VBox advanced = new VBox(4);
-        Button addCustom = new Button("Add custom filter");
+        Button addCustom = new Button("Add field…");
         addCustom.getStyleClass().add("secondary-button");
 
         Label title = new Label("Structural variant filters");
@@ -496,35 +493,14 @@ public class VariantFiltersPanel {
         setupAutoFilterListeners();
 
         if (nodes.addInfoFilterButton() != null) {
-            nodes.addInfoFilterButton().setOnAction(e -> showCustomFilterDialog());
+            nodes.addInfoFilterButton().setText("Add field…");
+            nodes.addInfoFilterButton().setTooltip(new Tooltip(
+                "Add an INFO, FILTER, or FORMAT control below the default sliders"));
+            nodes.addInfoFilterButton().setOnAction(e -> showAddFieldDialog());
         }
         if (nodes.addFilterFieldButton() != null) {
-            nodes.addFilterFieldButton().setOnAction(e -> showCustomFilterDialog());
+            nodes.addFilterFieldButton().setOnAction(e -> showAddFieldDialog(VcfHeaderFieldDef.Kind.FILTER));
         }
-        ensureBrowseHeaderFieldsButton();
-    }
-
-    /**
-     * Inject a "Header fields…" button next to Add custom filter so users can
-     * inspect ##INFO / ##FILTER / ##FORMAT definitions captured from open VCFs.
-     */
-    private void ensureBrowseHeaderFieldsButton() {
-        Button addCustom = nodes != null ? nodes.addInfoFilterButton() : null;
-        if (addCustom == null || !(addCustom.getParent() instanceof HBox row)) {
-            return;
-        }
-        for (javafx.scene.Node child : row.getChildren()) {
-            if ("browseHeaderFieldsButton".equals(child.getId())) {
-                return;
-            }
-        }
-        Button browse = new Button("Header fields…");
-        browse.setId("browseHeaderFieldsButton");
-        browse.getStyleClass().add("secondary-button");
-        browse.setTooltip(new Tooltip(
-            "Browse INFO / FILTER / FORMAT definitions from open VCF headers"));
-        browse.setOnAction(e -> showHeaderFieldsDialog());
-        row.getChildren().add(browse);
     }
 
     public VariantTypeVisuals.VariantClass getVariantClass() {
@@ -598,6 +574,23 @@ public class VariantFiltersPanel {
             "allowedEffects",
             this::currentAllowedEffects,
             f -> f.getAllowedEffects() == null ? Set.of() : Set.copyOf(f.getAllowedEffects()));
+        // New INFO/FORMAT keys (and FILTER column) require a reload so values are persisted.
+        registerSetFilter(
+            "infoKeys",
+            this::currentInfoKeys,
+            f -> {
+                Set<String> keys = f.getInfoFieldFilters() == null
+                    ? Set.of()
+                    : Set.copyOf(f.getInfoFieldFilters().keySet());
+                return keys;
+            });
+        registerSetFilter(
+            "formatKeys",
+            this::currentFormatKeys,
+            f -> {
+                Set<String> keys = f.formatKeysToPersist();
+                return keys == null || keys.isEmpty() ? Set.of() : Set.copyOf(keys);
+            });
 
         registerFlagFilter(
             "cancerOnly",
@@ -670,12 +663,25 @@ public class VariantFiltersPanel {
 
         if (nodes.advancedFiltersContainer() != null) {
             nodes.advancedFiltersContainer().getChildren().clear();
+            if (filter.getAllowedFilterValues() != null) {
+                for (String filterValue : filter.getAllowedFilterValues()) {
+                    addFilterTokenRow(filterValue, true, false);
+                }
+            }
+            if (filter.getExcludedFilterValues() != null) {
+                for (String filterValue : filter.getExcludedFilterValues()) {
+                    addFilterTokenRow(filterValue, true, true);
+                }
+            }
             for (Map.Entry<String, String> entry : filter.getInfoFieldFilters().entrySet()) {
                 addInfoRuleRow(InfoFieldRule.decode(entry.getKey(), entry.getValue()),
                     lookupInfoDef(entry.getKey()));
             }
-            for (String filterValue : filter.getAllowedFilterValues()) {
-                addFilterColumnRow(filterValue);
+            if (filter.getFormatFieldFilters() != null) {
+                for (Map.Entry<String, String> entry : filter.getFormatFieldFilters().entrySet()) {
+                    addFormatRuleRow(InfoFieldRule.decode(entry.getKey(), entry.getValue()),
+                        lookupFormatDef(entry.getKey()));
+                }
             }
         }
 
@@ -723,17 +729,46 @@ public class VariantFiltersPanel {
         }
 
         Map<String, String> infoFilters = new HashMap<>();
-        Set<String> filterValues = new HashSet<>();
+        Map<String, String> formatFilters = new HashMap<>();
+        Set<String> allowedFilters = new HashSet<>();
+        Set<String> excludedFilters = new HashSet<>();
         if (nodes.advancedFiltersContainer() != null) {
             for (javafx.scene.Node node : nodes.advancedFiltersContainer().getChildren()) {
                 Object data = node.getUserData();
                 if (data instanceof CustomFilterRow row) {
-                    row.collectInto(infoFilters, filterValues);
+                    row.collectInto(infoFilters, formatFilters, allowedFilters, excludedFilters);
                 }
             }
         }
+        filter.setAllowedFilterValues(allowedFilters);
+        filter.setExcludedFilterValues(excludedFilters);
         filter.setInfoFieldFilters(infoFilters);
-        filter.setAllowedFilterValues(filterValues);
+        filter.setFormatFieldFilters(formatFilters);
+    }
+
+    private Set<String> currentInfoKeys() {
+        Map<String, String> infoFilters = new HashMap<>();
+        collectCustomFieldMaps(infoFilters, new HashMap<>());
+        return Set.copyOf(infoFilters.keySet());
+    }
+
+    private Set<String> currentFormatKeys() {
+        Map<String, String> formatFilters = new HashMap<>();
+        collectCustomFieldMaps(new HashMap<>(), formatFilters);
+        return Set.copyOf(formatFilters.keySet());
+    }
+
+    private void collectCustomFieldMaps(
+            Map<String, String> infoFilters, Map<String, String> formatFilters) {
+        if (nodes == null || nodes.advancedFiltersContainer() == null) {
+            return;
+        }
+        for (javafx.scene.Node node : nodes.advancedFiltersContainer().getChildren()) {
+            Object data = node.getUserData();
+            if (data instanceof CustomFilterRow row) {
+                row.collectInto(infoFilters, formatFilters, new HashSet<>(), new HashSet<>());
+            }
+        }
     }
 
     private Set<VcfVariantType> currentAllowedTypes() {
@@ -1138,182 +1173,50 @@ public class VariantFiltersPanel {
     }
 
     public void showInfoFilterDialog() {
-        showCustomFilterDialog(null, VcfHeaderFieldDef.Kind.INFO);
+        showAddFieldDialog(VcfHeaderFieldDef.Kind.INFO);
     }
 
     public void showInfoFilterDialog(String prefillFieldId) {
-        showCustomFilterDialog(prefillFieldId, VcfHeaderFieldDef.Kind.INFO);
+        showAddFieldDialog(VcfHeaderFieldDef.Kind.INFO, prefillFieldId);
     }
 
     public void showFilterFieldDialog() {
-        showCustomFilterDialog(null, VcfHeaderFieldDef.Kind.FILTER);
+        showAddFieldDialog(VcfHeaderFieldDef.Kind.FILTER);
     }
 
     public void showFilterFieldDialog(String prefillFilterId) {
-        showCustomFilterDialog(prefillFilterId, VcfHeaderFieldDef.Kind.FILTER);
+        showAddFieldDialog(VcfHeaderFieldDef.Kind.FILTER, prefillFilterId);
     }
 
     public void showCustomFilterDialog() {
-        showCustomFilterDialog(null, null);
+        showAddFieldDialog();
+    }
+
+    public void showHeaderFieldsDialog() {
+        showAddFieldDialog();
+    }
+
+    public void showAddFieldDialog() {
+        showAddFieldDialog(null, null);
+    }
+
+    public void showAddFieldDialog(VcfHeaderFieldDef.Kind preferredKind) {
+        showAddFieldDialog(preferredKind, null);
     }
 
     /**
-     * Pick an INFO or FILTER header field; adds a typed interactive row to the filter panel.
+     * Unified picker for INFO / FILTER / FORMAT header fields. Adds a checkbox or
+     * text control under the default sliders.
      */
-    public void showCustomFilterDialog(String prefillId, VcfHeaderFieldDef.Kind preferredKind) {
+    public void showAddFieldDialog(VcfHeaderFieldDef.Kind preferredKind, String prefillId) {
         Dialog<VcfHeaderFieldDef> dialog = new Dialog<>();
-        dialog.setTitle("Add custom filter");
+        dialog.setTitle("Add field");
         dialog.setHeaderText(
-            "Choose an INFO or FILTER field from the VCF header.\n"
-                + "Controls for the field type are added to the filter panel.");
+            "Choose an INFO, FILTER, or FORMAT field from open VCF headers.\n"
+                + "A checkbox or text control is added below the default sliders.");
 
         ButtonType addButtonType = new ButtonType("Add", ButtonBar.ButtonData.OK_DONE);
         dialog.getDialogPane().getButtonTypes().addAll(addButtonType, ButtonType.CANCEL);
-
-        List<VcfHeaderFieldDef> infoDefs = VcfManager.getInstance().getSessionInfoHeaderFields();
-        List<VcfHeaderFieldDef> filterDefs = VcfManager.getInstance().getSessionFilterHeaderFields();
-
-        ComboBox<String> kindBox = new ComboBox<>();
-        kindBox.getItems().addAll("INFO", "FILTER");
-        kindBox.setValue(preferredKind == VcfHeaderFieldDef.Kind.FILTER ? "FILTER" : "INFO");
-
-        ComboBox<String> fieldBox = new ComboBox<>();
-        fieldBox.setEditable(true);
-        fieldBox.setPrefWidth(300);
-        fieldBox.setPromptText("Field ID");
-
-        Label description = new Label();
-        description.setWrapText(true);
-        description.setStyle("-fx-font-size: 11px; -fx-text-fill: gray;");
-        description.setMaxWidth(420);
-
-        Label typeHint = new Label();
-        typeHint.setWrapText(true);
-        typeHint.setStyle("-fx-font-size: 11px;");
-        typeHint.setMaxWidth(420);
-
-        Map<String, VcfHeaderFieldDef> byId = new LinkedHashMap<>();
-
-        Runnable refillFields = () -> {
-            byId.clear();
-            fieldBox.getItems().clear();
-            boolean filterKind = "FILTER".equals(kindBox.getValue());
-            List<VcfHeaderFieldDef> defs = filterKind ? filterDefs : infoDefs;
-            for (VcfHeaderFieldDef def : defs) {
-                byId.put(def.id(), def);
-                fieldBox.getItems().add(def.id());
-            }
-            if (prefillId != null && !prefillId.isBlank() && byId.containsKey(prefillId)) {
-                fieldBox.setValue(prefillId);
-            } else if (filterKind && byId.containsKey("PASS")) {
-                fieldBox.setValue("PASS");
-            } else if (!fieldBox.getItems().isEmpty()) {
-                fieldBox.setValue(fieldBox.getItems().get(0));
-            } else {
-                fieldBox.setValue(prefillId);
-            }
-            installHeaderFieldCellFactory(fieldBox, byId);
-        };
-
-        Runnable refreshMeta = () -> {
-            String id = comboText(fieldBox);
-            VcfHeaderFieldDef def = byId.get(id);
-            if (def != null) {
-                description.setText(def.tooltipText());
-                InfoFieldRule.UiKind kind = InfoFieldRule.uiKindFor(def);
-                typeHint.setText(switch (kind) {
-                    case NUMBER -> "Adds min/max number fields (any token in range passes).";
-                    case CSV -> "Adds a comma-separated value field (Any / All token match).";
-                    case FLAG -> "Requires the INFO flag to be present.";
-                    case FILTER -> "Allows variants whose FILTER column contains this token.";
-                    case TEXT -> "Adds a text match field (exact value).";
-                });
-            } else if (id.isEmpty()) {
-                description.setText("Pick a field or type a custom ID.");
-                typeHint.setText("");
-            } else {
-                description.setText("Custom ID (not in header): " + id);
-                typeHint.setText("Treated as a text / exact-match filter.");
-            }
-        };
-
-        kindBox.valueProperty().addListener((obs, o, n) -> {
-            refillFields.run();
-            refreshMeta.run();
-        });
-        fieldBox.valueProperty().addListener((obs, o, n) -> refreshMeta.run());
-        fieldBox.getEditor().textProperty().addListener((obs, o, n) -> refreshMeta.run());
-        refillFields.run();
-        refreshMeta.run();
-
-        GridPane grid = new GridPane();
-        grid.setHgap(10);
-        grid.setVgap(10);
-        grid.setPadding(new Insets(16));
-        grid.add(new Label("Source"), 0, 0);
-        grid.add(kindBox, 1, 0);
-        grid.add(new Label("Field"), 0, 1);
-        grid.add(fieldBox, 1, 1);
-        grid.add(description, 1, 2);
-        grid.add(typeHint, 1, 3);
-
-        dialog.getDialogPane().setContent(grid);
-        dialog.getDialogPane().setPrefWidth(520);
-        Platform.runLater(fieldBox::requestFocus);
-
-        dialog.setResultConverter(button -> {
-            if (button != addButtonType) {
-                return null;
-            }
-            String id = comboText(fieldBox);
-            if (id.isEmpty()) {
-                return null;
-            }
-            VcfHeaderFieldDef def = byId.get(id);
-            if (def != null) {
-                return def;
-            }
-            boolean filterKind = "FILTER".equals(kindBox.getValue());
-            return new VcfHeaderFieldDef(
-                filterKind ? VcfHeaderFieldDef.Kind.FILTER : VcfHeaderFieldDef.Kind.INFO,
-                id,
-                null,
-                filterKind ? null : "String",
-                "");
-        });
-
-        dialog.showAndWait().ifPresent(def -> {
-            if (def.kind() == VcfHeaderFieldDef.Kind.FILTER) {
-                addFilterColumnRow(def.id());
-            } else {
-                InfoFieldRule.UiKind ui = InfoFieldRule.uiKindFor(def);
-                InfoFieldRule initial = switch (ui) {
-                    case FLAG -> InfoFieldRule.flagPresent(def.id());
-                    case NUMBER -> InfoFieldRule.numberRange(def.id(), null, null);
-                    case CSV -> InfoFieldRule.csvAny(def.id(), "");
-                    default -> InfoFieldRule.equals(def.id(), "");
-                };
-                addInfoRuleRow(initial, def);
-            }
-            scheduleImmediateChange();
-        });
-    }
-
-    /** Browse captured ##INFO / ##FILTER / ##FORMAT definitions; optionally start a filter rule. */
-    public void showHeaderFieldsDialog() {
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("VCF header fields");
-        dialog.setHeaderText(
-            "Definitions from open VCF headers. Hover a row for the full Description — "
-                + "INFO/FILTER can be added as advanced filter rules.");
-
-        ButtonType closeType = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
-        ButtonType useInfoType = new ButtonType("Use as INFO filter…", ButtonBar.ButtonData.LEFT);
-        ButtonType useFilterType = new ButtonType("Use as FILTER…", ButtonBar.ButtonData.LEFT);
-        dialog.getDialogPane().getButtonTypes().addAll(useInfoType, useFilterType, closeType);
-
-        TabPane tabs = new TabPane();
-        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         ListView<VcfHeaderFieldDef> infoList =
             headerFieldListView(VcfManager.getInstance().getSessionInfoHeaderFields());
@@ -1325,77 +1228,144 @@ public class VariantFiltersPanel {
         TextArea detail = new TextArea();
         detail.setEditable(false);
         detail.setWrapText(true);
-        detail.setPrefRowCount(5);
+        detail.setPrefRowCount(4);
         detail.setPromptText("Select a field to see Type / Number / Description.");
+
+        Label typeHint = new Label();
+        typeHint.setWrapText(true);
+        typeHint.setStyle("-fx-font-size: 11px;");
+        typeHint.setMaxWidth(520);
 
         ChangeListener<VcfHeaderFieldDef> detailListener = (obs, oldVal, newVal) -> {
             if (newVal == null) {
                 detail.clear();
-            } else {
-                detail.setText(newVal.tooltipText());
+                typeHint.setText("");
+                return;
             }
+            detail.setText(newVal.tooltipText());
+            InfoFieldRule.UiKind kind = InfoFieldRule.uiKindFor(newVal);
+            typeHint.setText(switch (newVal.kind()) {
+                case FILTER ->
+                    "Adds a FILTER checkbox (Include / Exclude). Reloads variants to load FILTER values.";
+                case FORMAT -> switch (kind) {
+                    case FLAG -> "Adds a FORMAT present checkbox. Reloads variants to load this field.";
+                    case NUMBER_PAIR -> "Adds one threshold on the sum of comma-separated values (e.g. PR). Reloads to load values.";
+                    case NUMBER -> "Adds min/max number fields. Reloads variants to load this field.";
+                    default -> "Adds a FORMAT text field. Reloads variants to load this field.";
+                };
+                case INFO -> switch (kind) {
+                    case FLAG -> "Adds an INFO present checkbox. Reloads variants to load this field.";
+                    case NUMBER_PAIR -> "Adds one sum≥ threshold. Reloads variants to load this field.";
+                    case NUMBER -> "Adds min/max number fields. Reloads variants to load this field.";
+                    case CSV -> "Adds a comma-separated token field (Any / All). Reloads to load values.";
+                    default -> "Adds an INFO text field. Reloads variants to load this field.";
+                };
+            });
         };
         infoList.getSelectionModel().selectedItemProperty().addListener(detailListener);
         filterList.getSelectionModel().selectedItemProperty().addListener(detailListener);
         formatList.getSelectionModel().selectedItemProperty().addListener(detailListener);
 
+        TabPane tabs = new TabPane();
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         tabs.getTabs().addAll(
             new Tab("INFO (" + infoList.getItems().size() + ")", infoList),
             new Tab("FILTER (" + filterList.getItems().size() + ")", filterList),
             new Tab("FORMAT (" + formatList.getItems().size() + ")", formatList));
+        if (preferredKind == VcfHeaderFieldDef.Kind.FILTER) {
+            tabs.getSelectionModel().select(1);
+        } else if (preferredKind == VcfHeaderFieldDef.Kind.FORMAT) {
+            tabs.getSelectionModel().select(2);
+        } else {
+            tabs.getSelectionModel().select(0);
+        }
+        if (prefillId != null && !prefillId.isBlank()) {
+            ListView<VcfHeaderFieldDef> list = switch (tabs.getSelectionModel().getSelectedIndex()) {
+                case 1 -> filterList;
+                case 2 -> formatList;
+                default -> infoList;
+            };
+            for (VcfHeaderFieldDef def : list.getItems()) {
+                if (prefillId.equalsIgnoreCase(def.id())) {
+                    list.getSelectionModel().select(def);
+                    list.scrollTo(def);
+                    break;
+                }
+            }
+        }
 
-        VBox content = new VBox(10, tabs, detail);
+        VBox content = new VBox(10, tabs, detail, typeHint);
         content.setPadding(new Insets(10));
         VBox.setVgrow(tabs, Priority.ALWAYS);
         dialog.getDialogPane().setContent(content);
-        dialog.getDialogPane().setPrefSize(560, 480);
+        dialog.getDialogPane().setPrefSize(560, 520);
 
-        // Prevent default close on LEFT buttons so we can open the add dialogs.
-        Button useInfoBtn = (Button) dialog.getDialogPane().lookupButton(useInfoType);
-        Button useFilterBtn = (Button) dialog.getDialogPane().lookupButton(useFilterType);
-        useInfoBtn.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
-            e.consume();
-            VcfHeaderFieldDef selected = selectedHeaderField(tabs, infoList, filterList, formatList);
-            if (selected != null && selected.kind() == VcfHeaderFieldDef.Kind.INFO) {
+        Runnable closeWithSelected = () -> {
+            VcfHeaderFieldDef selected = switch (tabs.getSelectionModel().getSelectedIndex()) {
+                case 1 -> filterList.getSelectionModel().getSelectedItem();
+                case 2 -> formatList.getSelectionModel().getSelectedItem();
+                default -> infoList.getSelectionModel().getSelectedItem();
+            };
+            if (selected != null) {
+                dialog.setResult(selected);
                 dialog.close();
-                showCustomFilterDialog(selected.id(), VcfHeaderFieldDef.Kind.INFO);
-            } else if (tabs.getSelectionModel().getSelectedIndex() == 0
-                && infoList.getSelectionModel().getSelectedItem() != null) {
-                dialog.close();
-                showCustomFilterDialog(
-                    infoList.getSelectionModel().getSelectedItem().id(),
-                    VcfHeaderFieldDef.Kind.INFO);
+            }
+        };
+
+        infoList.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                closeWithSelected.run();
             }
         });
-        useFilterBtn.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
-            e.consume();
-            VcfHeaderFieldDef selected = selectedHeaderField(tabs, infoList, filterList, formatList);
-            if (selected != null && selected.kind() == VcfHeaderFieldDef.Kind.FILTER) {
-                dialog.close();
-                showCustomFilterDialog(selected.id(), VcfHeaderFieldDef.Kind.FILTER);
-            } else if (tabs.getSelectionModel().getSelectedIndex() == 1
-                && filterList.getSelectionModel().getSelectedItem() != null) {
-                dialog.close();
-                showCustomFilterDialog(
-                    filterList.getSelectionModel().getSelectedItem().id(),
-                    VcfHeaderFieldDef.Kind.FILTER);
+        filterList.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                closeWithSelected.run();
+            }
+        });
+        formatList.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                closeWithSelected.run();
             }
         });
 
-        dialog.showAndWait();
+        dialog.setResultConverter(button -> {
+            if (button != addButtonType) {
+                return null;
+            }
+            return switch (tabs.getSelectionModel().getSelectedIndex()) {
+                case 1 -> filterList.getSelectionModel().getSelectedItem();
+                case 2 -> formatList.getSelectionModel().getSelectedItem();
+                default -> infoList.getSelectionModel().getSelectedItem();
+            };
+        });
+
+        dialog.showAndWait().ifPresent(def -> {
+            addFieldFromHeader(def);
+            scheduleImmediateChange();
+        });
     }
 
-    private static VcfHeaderFieldDef selectedHeaderField(
-        TabPane tabs,
-        ListView<VcfHeaderFieldDef> infoList,
-        ListView<VcfHeaderFieldDef> filterList,
-        ListView<VcfHeaderFieldDef> formatList) {
-        return switch (tabs.getSelectionModel().getSelectedIndex()) {
-            case 0 -> infoList.getSelectionModel().getSelectedItem();
-            case 1 -> filterList.getSelectionModel().getSelectedItem();
-            case 2 -> formatList.getSelectionModel().getSelectedItem();
-            default -> null;
+    private void addFieldFromHeader(VcfHeaderFieldDef def) {
+        if (def == null) {
+            return;
+        }
+        if (def.kind() == VcfHeaderFieldDef.Kind.FILTER) {
+            addFilterTokenRow(def.id(), true, false);
+            return;
+        }
+        InfoFieldRule.UiKind ui = InfoFieldRule.uiKindFor(def);
+        InfoFieldRule initial = switch (ui) {
+            case FLAG -> InfoFieldRule.flagPresent(def.id());
+            case NUMBER -> InfoFieldRule.numberRange(def.id(), null, null);
+            case NUMBER_PAIR -> InfoFieldRule.numberPair(def.id(), null, null);
+            case CSV -> InfoFieldRule.csvAny(def.id(), "");
+            default -> InfoFieldRule.equals(def.id(), "");
         };
+        if (def.kind() == VcfHeaderFieldDef.Kind.FORMAT) {
+            addFormatRuleRow(initial, def);
+        } else {
+            addInfoRuleRow(initial, def);
+        }
     }
 
     private static ListView<VcfHeaderFieldDef> headerFieldListView(List<VcfHeaderFieldDef> fields) {
@@ -1425,62 +1395,12 @@ public class VariantFiltersPanel {
         return list;
     }
 
-    private static void installHeaderFieldCellFactory(
-        ComboBox<String> combo,
-        Map<String, VcfHeaderFieldDef> byId) {
-        combo.setCellFactory(view -> new ListCell<>() {
-            private final Tooltip tip = new Tooltip();
-            {
-                tip.setWrapText(true);
-                tip.setMaxWidth(420);
-            }
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) {
-                    setText(null);
-                    setTooltip(null);
-                } else {
-                    VcfHeaderFieldDef def = byId.get(item);
-                    setText(def != null ? def.displayLabel() : item);
-                    if (def != null) {
-                        tip.setText(def.tooltipText());
-                        setTooltip(tip);
-                    } else {
-                        setTooltip(null);
-                    }
-                }
-            }
-        });
-        combo.setConverter(new StringConverter<>() {
-            @Override
-            public String toString(String object) {
-                return object != null ? object : "";
-            }
-            @Override
-            public String fromString(String string) {
-                return string != null ? string.trim() : "";
-            }
-        });
-    }
-
-    private static String comboText(ComboBox<String> combo) {
-        if (combo == null) {
-            return "";
-        }
-        String value = combo.getValue();
-        if (value == null || value.isBlank()) {
-            value = combo.getEditor() != null ? combo.getEditor().getText() : "";
-        }
-        return value != null ? value.trim() : "";
-    }
-
     public void addInfoFilterRule(String fieldName, String fieldValue) {
         addInfoRuleRow(InfoFieldRule.decode(fieldName, fieldValue), lookupInfoDef(fieldName));
     }
 
     public void addFilterFieldRule(String filterValue) {
-        addFilterColumnRow(filterValue);
+        addFilterTokenRow(filterValue, true, false);
     }
 
     private void addInfoRuleRow(InfoFieldRule rule, VcfHeaderFieldDef def) {
@@ -1489,12 +1409,7 @@ public class VariantFiltersPanel {
         }
         InfoFieldRule.UiKind ui = def != null
             ? InfoFieldRule.uiKindFor(def)
-            : switch (rule.mode()) {
-                case FLAG_PRESENT -> InfoFieldRule.UiKind.FLAG;
-                case NUMBER_RANGE -> InfoFieldRule.UiKind.NUMBER;
-                case CSV_ANY, CSV_ALL -> InfoFieldRule.UiKind.CSV;
-                default -> InfoFieldRule.UiKind.TEXT;
-            };
+            : uiKindFromRule(rule);
 
         HBox row = new HBox(6);
         row.setAlignment(Pos.CENTER_LEFT);
@@ -1511,17 +1426,76 @@ public class VariantFiltersPanel {
         }
 
         Button removeBtn = removeRowButton(row);
-        CustomFilterRow collector;
+        CustomFilterRow collector = buildTypedRuleCollector(
+            rule, ui, name, removeBtn, row, true);
 
-        switch (ui) {
+        row.setUserData(collector);
+        nodes.advancedFiltersContainer().getChildren().add(row);
+    }
+
+    private void addFormatRuleRow(InfoFieldRule rule, VcfHeaderFieldDef def) {
+        if (nodes == null || nodes.advancedFiltersContainer() == null || rule == null) {
+            return;
+        }
+        InfoFieldRule.UiKind ui = def != null
+            ? InfoFieldRule.uiKindFor(def)
+            : uiKindFromRule(rule);
+
+        HBox row = new HBox(6);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getStyleClass().add("custom-filter-row");
+
+        Label name = new Label("FORMAT." + rule.fieldId());
+        name.getStyleClass().add("filter-slider-label");
+        name.setMinWidth(Region.USE_PREF_SIZE);
+        if (def != null) {
+            Tooltip tip = new Tooltip(def.tooltipText());
+            tip.setWrapText(true);
+            tip.setMaxWidth(420);
+            name.setTooltip(tip);
+        } else {
+            attachHeaderTooltip(name, VcfHeaderFieldDef.Kind.FORMAT, rule.fieldId());
+        }
+
+        Button removeBtn = removeRowButton(row);
+        CustomFilterRow collector = buildTypedRuleCollector(
+            rule, ui, name, removeBtn, row, false);
+
+        row.setUserData(collector);
+        nodes.advancedFiltersContainer().getChildren().add(row);
+    }
+
+    private static InfoFieldRule.UiKind uiKindFromRule(InfoFieldRule rule) {
+        return switch (rule.mode()) {
+            case FLAG_PRESENT -> InfoFieldRule.UiKind.FLAG;
+            case NUMBER_RANGE -> InfoFieldRule.UiKind.NUMBER;
+            case NUMBER_PAIR -> InfoFieldRule.UiKind.NUMBER_PAIR;
+            case CSV_ANY, CSV_ALL -> InfoFieldRule.UiKind.CSV;
+            default -> InfoFieldRule.UiKind.TEXT;
+        };
+    }
+
+    /**
+     * @param toInfo when true write into INFO map; otherwise FORMAT map
+     */
+    private CustomFilterRow buildTypedRuleCollector(
+            InfoFieldRule rule,
+            InfoFieldRule.UiKind ui,
+            Label name,
+            Button removeBtn,
+            HBox row,
+            boolean toInfo) {
+        return switch (ui) {
             case FLAG -> {
                 ColoredToggle present = new ColoredToggle("present");
-                present.setSelected(true);
+                present.setSelected(
+                    rule.mode() == InfoFieldRule.Mode.FLAG_PRESENT || rule.textValue().isBlank());
                 present.selectedProperty().addListener((obs, o, n) -> scheduleImmediateChange());
                 row.getChildren().addAll(name, present, removeBtn);
-                collector = (info, filters) -> {
+                yield (info, format, allowed, excluded) -> {
                     if (present.isSelected()) {
-                        info.put(rule.fieldId(), InfoFieldRule.flagPresent(rule.fieldId()).encode());
+                        putRule(toInfo, info, format, rule.fieldId(),
+                            InfoFieldRule.flagPresent(rule.fieldId()).encode());
                     }
                 };
             }
@@ -1533,7 +1507,6 @@ public class VariantFiltersPanel {
                     maxInit = rule.max() != null ? stripTrailingDotZero(rule.max()) : "";
                 } else if (rule.mode() == InfoFieldRule.Mode.EQUALS
                         && parseOptionalDouble(rule.textValue()) != null) {
-                    // Legacy exact numeric string → seed both ends for a tight range.
                     minInit = rule.textValue().trim();
                     maxInit = minInit;
                 }
@@ -1547,19 +1520,46 @@ public class VariantFiltersPanel {
                 maxField.setPromptText("max");
                 Label dash = new Label("–");
                 dash.getStyleClass().add("subsection-label");
-                Runnable fire = this::scheduleDebouncedChange;
-                minField.textProperty().addListener((obs, o, n) -> fire.run());
-                maxField.textProperty().addListener((obs, o, n) -> fire.run());
+                minField.textProperty().addListener((obs, o, n) -> scheduleDebouncedChange());
+                maxField.textProperty().addListener((obs, o, n) -> scheduleDebouncedChange());
                 minField.setOnAction(e -> scheduleImmediateChange());
                 maxField.setOnAction(e -> scheduleImmediateChange());
                 row.getChildren().addAll(name, minField, dash, maxField, removeBtn);
-                collector = (info, filters) -> {
+                yield (info, format, allowed, excluded) -> {
                     Double min = parseOptionalDouble(minField.getText());
                     Double max = parseOptionalDouble(maxField.getText());
                     if (min == null && max == null) {
+                        // Still register the key so reload can persist values on demand.
+                        putRule(toInfo, info, format, rule.fieldId(),
+                            InfoFieldRule.numberRange(rule.fieldId(), null, null).encode());
                         return;
                     }
-                    info.put(rule.fieldId(), InfoFieldRule.numberRange(rule.fieldId(), min, max).encode());
+                    putRule(toInfo, info, format, rule.fieldId(),
+                        InfoFieldRule.numberRange(rule.fieldId(), min, max).encode());
+                };
+            }
+            case NUMBER_PAIR -> {
+                String minInit = rule.mode() == InfoFieldRule.Mode.NUMBER_PAIR && rule.min() != null
+                    ? stripTrailingDotZero(rule.min()) : "";
+                TextField sumField = new TextField(minInit);
+                sumField.setPrefWidth(72);
+                sumField.getStyleClass().add("filter-field");
+                sumField.setPromptText("sum ≥");
+                sumField.setTooltip(new Tooltip(
+                    "Comma-separated values are summed (e.g. PR strands), then compared to this minimum."));
+                sumField.textProperty().addListener((obs, o, n) -> scheduleDebouncedChange());
+                sumField.setOnAction(e -> scheduleImmediateChange());
+                row.getChildren().addAll(name, sumField, removeBtn);
+                yield (info, format, allowed, excluded) -> {
+                    Double minSum = parseOptionalDouble(sumField.getText());
+                    if (minSum == null) {
+                        // Keep the key registered so a reload can persist values.
+                        putRule(toInfo, info, format, rule.fieldId(),
+                            InfoFieldRule.numberPair(rule.fieldId(), null, null).encode());
+                        return;
+                    }
+                    putRule(toInfo, info, format, rule.fieldId(),
+                        InfoFieldRule.numberPair(rule.fieldId(), minSum, null).encode());
                 };
             }
             case CSV -> {
@@ -1567,26 +1567,21 @@ public class VariantFiltersPanel {
                 mode.getItems().addAll("Any", "All");
                 mode.setValue(rule.mode() == InfoFieldRule.Mode.CSV_ALL ? "All" : "Any");
                 mode.setMaxWidth(72);
-                String csvInit = rule.mode() == InfoFieldRule.Mode.EQUALS
-                    ? rule.textValue()
-                    : rule.textValue();
-                TextField values = new TextField(csvInit);
-                values.setPromptText("e.g. 10,5 or FWD,REV");
+                TextField values = new TextField(rule.textValue());
+                values.setPromptText("e.g. FWD,REV");
                 values.getStyleClass().add("filter-field");
                 HBox.setHgrow(values, Priority.ALWAYS);
                 mode.valueProperty().addListener((obs, o, n) -> scheduleImmediateChange());
                 values.textProperty().addListener((obs, o, n) -> scheduleDebouncedChange());
                 values.setOnAction(e -> scheduleImmediateChange());
                 row.getChildren().addAll(name, mode, values, removeBtn);
-                collector = (info, filters) -> {
+                yield (info, format, allowed, excluded) -> {
                     String csv = values.getText() != null ? values.getText().trim() : "";
-                    if (csv.isEmpty()) {
-                        return;
-                    }
+                    // Empty value still registers the key for on-demand persist/reload.
                     InfoFieldRule encoded = "All".equals(mode.getValue())
                         ? InfoFieldRule.csvAll(rule.fieldId(), csv)
                         : InfoFieldRule.csvAny(rule.fieldId(), csv);
-                    info.put(rule.fieldId(), encoded.encode());
+                    putRule(toInfo, info, format, rule.fieldId(), encoded.encode());
                 };
             }
             default -> {
@@ -1597,50 +1592,88 @@ public class VariantFiltersPanel {
                 value.textProperty().addListener((obs, o, n) -> scheduleDebouncedChange());
                 value.setOnAction(e -> scheduleImmediateChange());
                 row.getChildren().addAll(name, value, removeBtn);
-                collector = (info, filters) -> {
+                yield (info, format, allowed, excluded) -> {
                     String text = value.getText() != null ? value.getText().trim() : "";
-                    if (text.isEmpty()) {
-                        return;
-                    }
-                    info.put(rule.fieldId(), InfoFieldRule.equals(rule.fieldId(), text).encode());
+                    // Empty value still registers the key for on-demand persist/reload.
+                    putRule(toInfo, info, format, rule.fieldId(),
+                        InfoFieldRule.equals(rule.fieldId(), text).encode());
                 };
             }
-        }
-
-        row.setUserData(collector);
-        nodes.advancedFiltersContainer().getChildren().add(row);
+        };
     }
 
-    private void addFilterColumnRow(String filterValue) {
+    private static void putRule(
+            boolean toInfo,
+            Map<String, String> info,
+            Map<String, String> format,
+            String fieldId,
+            String encoded) {
+        if (toInfo) {
+            info.put(fieldId, encoded);
+        } else {
+            format.put(fieldId, encoded);
+        }
+    }
+
+    /**
+     * @param exclude when true, checked token goes to the exclude set
+     */
+    private void addFilterTokenRow(String filterValue, boolean selected, boolean exclude) {
         if (nodes == null || nodes.advancedFiltersContainer() == null
                 || filterValue == null || filterValue.isBlank()) {
             return;
         }
+        for (javafx.scene.Node child : nodes.advancedFiltersContainer().getChildren()) {
+            Object marker = child.getProperties().get(FilterTokenMarker.class);
+            if (marker instanceof FilterTokenMarker token && filterValue.equals(token.token())) {
+                return;
+            }
+        }
+
         HBox row = new HBox(6);
         row.setAlignment(Pos.CENTER_LEFT);
         row.getStyleClass().add("custom-filter-row");
 
-        Label name = new Label("FILTER");
-        name.getStyleClass().add("filter-slider-label");
-        name.setMinWidth(Region.USE_PREF_SIZE);
+        ColoredToggle check = new ColoredToggle("FILTER." + filterValue);
+        check.setSelected(selected);
+        Tooltip tip = new Tooltip("FILTER token: " + filterValue);
+        for (VcfHeaderFieldDef def : VcfManager.getInstance().getSessionFilterHeaderFields()) {
+            if (filterValue.equalsIgnoreCase(def.id())) {
+                tip.setText(def.tooltipText());
+                tip.setWrapText(true);
+                tip.setMaxWidth(420);
+                break;
+            }
+        }
+        check.setTooltip(tip);
+        check.selectedProperty().addListener((obs, o, n) -> scheduleImmediateChange());
 
-        TextField value = new TextField(filterValue);
-        value.setPrefWidth(120);
-        value.getStyleClass().add("filter-field");
-        attachHeaderTooltip(name, VcfHeaderFieldDef.Kind.FILTER, filterValue);
-        value.textProperty().addListener((obs, o, n) -> scheduleDebouncedChange());
-        value.setOnAction(e -> scheduleImmediateChange());
+        ComboBox<String> mode = new ComboBox<>();
+        mode.getItems().addAll("Include", "Exclude");
+        mode.setValue(exclude ? "Exclude" : "Include");
+        mode.setMaxWidth(100);
+        mode.setTooltip(new Tooltip(
+            "Include: keep variants with this FILTER token.\n"
+                + "Exclude: hide variants with this FILTER token."));
+        mode.valueProperty().addListener((obs, o, n) -> scheduleImmediateChange());
+        mode.disableProperty().bind(check.selectedProperty().not());
 
         Button removeBtn = removeRowButton(row);
-        row.getChildren().addAll(name, value, removeBtn);
-        row.setUserData((CustomFilterRow) (info, filters) -> {
-            String text = value.getText() != null ? value.getText().trim() : "";
-            if (!text.isEmpty()) {
-                filters.add(text);
+        row.getChildren().addAll(check, mode, removeBtn);
+        row.setUserData((CustomFilterRow) (info, format, allowed, excluded) -> {
+            if (!check.isSelected()) {
+                return;
+            }
+            if ("Exclude".equals(mode.getValue())) {
+                excluded.add(filterValue);
+            } else {
+                allowed.add(filterValue);
             }
         });
+        row.getProperties().put(FilterTokenMarker.class, new FilterTokenMarker(filterValue));
         nodes.advancedFiltersContainer().getChildren().add(row);
     }
+
 
     private Button removeRowButton(HBox row) {
         Button removeBtn = new Button("×");
@@ -1660,6 +1693,18 @@ public class VariantFiltersPanel {
             return null;
         }
         for (VcfHeaderFieldDef def : VcfManager.getInstance().getSessionInfoHeaderFields()) {
+            if (id.equalsIgnoreCase(def.id())) {
+                return def;
+            }
+        }
+        return null;
+    }
+
+    private static VcfHeaderFieldDef lookupFormatDef(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        for (VcfHeaderFieldDef def : VcfManager.getInstance().getSessionFormatHeaderFields()) {
             if (id.equalsIgnoreCase(def.id())) {
                 return def;
             }
@@ -1687,8 +1732,14 @@ public class VariantFiltersPanel {
 
     @FunctionalInterface
     private interface CustomFilterRow {
-        void collectInto(Map<String, String> infoFilters, Set<String> filterValues);
+        void collectInto(
+            Map<String, String> infoFilters,
+            Map<String, String> formatFilters,
+            Set<String> allowedFilterTokens,
+            Set<String> excludedFilterTokens);
     }
+
+    private record FilterTokenMarker(String token) {}
 
     private static void attachHeaderTooltip(Label label, VcfHeaderFieldDef.Kind kind, String id) {
         if (label == null || id == null || id.isBlank()) {

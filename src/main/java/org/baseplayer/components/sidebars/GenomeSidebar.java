@@ -472,17 +472,18 @@ public class GenomeSidebar extends SidebarBase {
 
       loadAvailableAnnotations(false);
 
-      if (lastAnnotation != null && !lastAnnotation.isBlank()) {
+      if (lastAnnotation != null && !lastAnnotation.isBlank()
+          && annotationComboBox.getItems().contains(lastAnnotation)) {
         suppressAnnotationReload = true;
         try {
-          if (annotationComboBox.getItems().contains(lastAnnotation)) {
-            annotationComboBox.getSelectionModel().select(lastAnnotation);
-          }
+          annotationComboBox.getSelectionModel().select(lastAnnotation);
         } finally {
           suppressAnnotationReload = false;
         }
-        // Keep project annotation even if the file is temporarily missing from the combo.
         Settings.get().setLastAnnotation(lastAnnotation);
+      } else {
+        // Do not keep a filename that is not present for this genome.
+        Settings.get().setLastAnnotation(annotationComboBox.getValue());
       }
       if (lastGenome != null && !lastGenome.isBlank()) {
         Settings.get().setLastGenome(lastGenome);
@@ -506,11 +507,12 @@ public class GenomeSidebar extends SidebarBase {
     suppressAnnotationReload = true;
     try {
       annotationComboBox.getItems().clear();
+      annotationComboBox.getSelectionModel().clearSelection();
       List<String> annotations = initializationService.loadAvailableAnnotations(genomeName);
       annotationComboBox.getItems().addAll(annotations);
 
       if (!annotations.isEmpty()) {
-        // Restore last used annotation if it belongs to this genome
+        // Restore last used annotation only if it belongs to this genome's files.
         String lastAnnotation = Settings.get().getLastAnnotation();
         if (lastAnnotation != null && annotations.contains(lastAnnotation)) {
           annotationComboBox.getSelectionModel().select(lastAnnotation);
@@ -521,8 +523,12 @@ public class GenomeSidebar extends SidebarBase {
           }
         }
       }
-      if (persistSelection) {
+      // Always bind Settings to this genome's selection (null when none available).
+      // Keeping another assembly's filename caused GRCh38 genes to load under T2T.
+      if (persistSelection || annotationComboBox.getValue() != null || annotations.isEmpty()) {
         Settings.get().setLastAnnotation(annotationComboBox.getValue());
+      }
+      if (persistSelection) {
         ReferenceGenome currentGenome = referenceComboBox.getValue();
         org.baseplayer.project.SessionDocumentSync.writeGenome(
             currentGenome != null ? currentGenome.getName() : Settings.get().getLastGenome(),
@@ -537,6 +543,8 @@ public class GenomeSidebar extends SidebarBase {
     ReferenceGenome genome = referenceComboBox.getValue();
     if (genome == null) return;
     Settings.get().setLastGenome(genome.getName());
+    // Drop previous genome's annotation filename before resolving files for this one.
+    Settings.get().setLastAnnotation(null);
     initializationService.selectReferenceGenome(genome);
     loadAvailableAnnotations();
     AnnotationLoader.loadCytobands();

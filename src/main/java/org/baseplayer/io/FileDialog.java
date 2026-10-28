@@ -91,7 +91,7 @@ public class FileDialog {
     filefilters.put("VCF", "*.vcf.gz");
     filefilters.put("BAM", "*.bam, *.cram");
     filefilters.put("CTRL", "*.vcf.gz");
-    filefilters.put("BED", "*.bed, *.bed.gz, *.bedgraph.gz, *.gff.gz, *.gff3.gz, *.bigwig, *.bw, *.bigbed, *.bb");
+    filefilters.put("BED", "*.bed, *.bed.gz, *.bedgraph.gz, *.gff.gz, *.gff.bgz, *.gff3.gz, *.gff3.bgz, *.bigwig, *.bw, *.bigbed, *.bb");
     filefilters.put("AB1", "*.ab1");
     filefilters.put("JSON", "*.json");
     filefilters.put("XLSX", "*.xlsx");
