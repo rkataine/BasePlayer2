@@ -2,14 +2,14 @@ plugins {
     id 'java'
     id 'application'
     id 'org.openjfx.javafxplugin' version '0.1.0'
-    id 'com.github.johnrengelman.shadow' version '8.1.1'
+    id 'com.gradleup.shadow' version '9.6.1'
 }
 
 import java.util.Locale
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(23)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
@@ -35,8 +35,9 @@ application {
 shadowJar {
     mergeServiceFiles()
     zip64 true
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
     configurations = [project.configurations.runtimeClasspath]
-    version = '1.0.0'
+    archiveVersion = '1.0.0'
     manifest {
         attributes(
             'Main-Class': 'org.baseplayer.Launcher'
