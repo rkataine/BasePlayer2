@@ -427,6 +427,104 @@ public class VariantLoader {
     }
 
     /**
+     * Probe whether inter-chrom TRA/BNDs are recorded once (mate only in INFO/ALT).
+     * Requires an open {@link #vcfReader}.
+     */
+    public VcfReader.InterChromBreakendStyle detectInterChromBreakendStyle() throws IOException {
+        if (vcfReader == null) {
+            throw new IOException("No VCF reader bound for breakend probe");
+        }
+        return vcfReader.detectInterChromBreakendStyle();
+    }
+
+    /**
+     * Full-file scan of inter-chrom TRA/BND mates into a {@link MateBreakpointIndex}.
+     * Requires {@link #setVcfReader} to point at an open reader. Sample→track mapping
+     * should already be resolved; when GT filtering yields no calls, a soft call is
+     * still attached so mates are never dropped from the index.
+     */
+    public MateBreakpointIndex buildMateBreakpointIndex() throws IOException {
+        if (vcfReader == null) {
+            throw new IOException("No VCF reader bound for mate-index build");
+        }
+        beginFormatPersistKeys(null);
+        List<MateBreakpointIndex.IndexedHit> hits = new ArrayList<>();
+        int[] visited = { 0 };
+        int[] droppedNoCalls = { 0 };
+        vcfReader.visitInterChromosomalBreakends(sv -> {
+            observeType(sv.getType());
+            String mateChrom = sv.getChr2();
+            Long matePosObj = sv.getEnd2();
+            if (mateChrom == null || matePosObj == null || matePosObj < 0) {
+                return;
+            }
+            visited[0]++;
+            long matePos = matePosObj;
+            List<String> alts = sv.getAlt();
+            if (alts == null || alts.isEmpty()) {
+                return;
+            }
+            for (int altIdx = 0; altIdx < alts.size(); altIdx++) {
+                String alt = alts.get(altIdx);
+                List<VariantNode.SampleCall> calls = new ArrayList<>();
+                for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
+                    VariantNode.SampleCall call = getSampleCallForAllele(
+                        sv, entry.getKey(), entry.getValue(), alt, altIdx + 1);
+                    if (call != null) {
+                        calls.add(call);
+                    }
+                }
+                // Never drop a mate just because GT filtering was strict / unmapped.
+                if (calls.isEmpty()) {
+                    softFillMateCalls(calls);
+                }
+                if (calls.isEmpty()) {
+                    droppedNoCalls[0]++;
+                    continue;
+                }
+                String vcfId = sv.getId();
+                if (vcfId != null && (vcfId.isBlank() || ".".equals(vcfId))) {
+                    vcfId = null;
+                }
+                MateBreakpointIndex.Hit hit = new MateBreakpointIndex.Hit(
+                    matePos,
+                    sv.getChromosome(),
+                    sv.getPosition(),
+                    sv.getRef(),
+                    alt,
+                    sv.getType() == VcfVariantType.SV_BREAKEND
+                        ? VcfVariantType.SV_TRANSLOCATION
+                        : sv.getType(),
+                    vcfId,
+                    calls);
+                hits.add(new MateBreakpointIndex.IndexedHit(mateChrom, hit));
+            }
+        });
+        MateBreakpointIndex index = MateBreakpointIndex.fromHits(hits);
+        if (visited[0] > 0 && index.isEmpty()) {
+            System.err.printf(
+                "[VariantLoader] mate index empty after %d inter-chrom BNDs "
+                    + "(droppedNoCalls=%d mappedSamples=%d) — check sample mapping%n",
+                visited[0],
+                droppedNoCalls[0],
+                getMappedSampleCount());
+        }
+        return index;
+    }
+
+    /** Attach a soft present-call for every mapped track so mate glyphs still draw. */
+    private void softFillMateCalls(List<VariantNode.SampleCall> calls) {
+        if (calls == null || vcfSampleToTrackIndex.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Integer> entry : vcfSampleToTrackIndex.entrySet()) {
+            int trackIndex = entry.getValue();
+            calls.add(new VariantNode.SampleCall(
+                trackIndex, resolveVcfSample(trackIndex), "0/1", -1, -1, -1.0));
+        }
+    }
+
+    /**
      * Stream variants for a specific genomic region directly into {@code target}.
      * Uses VCF index (.tbi/.csi) for efficient region seeking instead of scanning entire chromosome.
      * Useful for loading specific regions like gene coordinates or narrowly-focused searches.

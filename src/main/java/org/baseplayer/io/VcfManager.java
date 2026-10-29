@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
@@ -30,6 +31,7 @@ import org.baseplayer.services.RegionFetchCache;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.MateBreakpointIndex;
 import org.baseplayer.variant.SomaticSampleResolver;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -116,6 +118,13 @@ public class VcfManager {
 
     // Track whether we've set up the update listener
     private boolean updateListenerInitialized = false;
+
+    /**
+     * Once any open SV VCF is probed as single-sided TRA/BND (mate only in INFO/ALT),
+     * treat later SV VCFs the same and build mate indexes without re-probing.
+     * Cleared when all VCFs are closed.
+     */
+    private volatile boolean sessionForceSingleSidedBreakends = false;
     
     private VcfManager() {
         // Singleton
@@ -148,6 +157,9 @@ public class VcfManager {
      * Register a loaded VCF (used by batch loading to add VcfData to the registry).
      * The reader should already have been opened and parsed.
      * Returns the VcfData so the caller can manage reader lifecycle (close + null).
+     * Does <strong>not</strong> build the mate index — callers must invoke
+     * {@link #prepareMateSupportInline} after sample→track mapping is ready and
+     * while the reader is still open (or use {@link #finishOpenAfterMateIndex}).
      */
     public synchronized VcfData registerLoadedVcf(VcfReader reader, VariantLoader loader, File file) {
         String normalizedPath = normalizeVcfPath(file);
@@ -158,6 +170,14 @@ public class VcfManager {
         loadedVcfs.add(vcfData);
         initializeUpdateListener();
         return vcfData;
+    }
+
+    /**
+     * Remove a previously registered VCF from the session (tests / failed open cleanup).
+     * Does not close the reader — caller owns that.
+     */
+    public synchronized boolean unregisterLoadedVcf(VcfData vcfData) {
+        return vcfData != null && loadedVcfs.remove(vcfData);
     }
     
     /**
@@ -288,13 +308,13 @@ public class VcfManager {
                 try { vcfData.reader.close(); } catch (IOException ignored) {}
                 vcfData.reader = null;
                 vcfData.loader.setVcfReader(null);
-                
+
                 UserPreferences.addRecentFile("VCF", file);
                 ProjectSessionState.get().markDirty();
-                
-                if (onComplete != null) {
-                    Platform.runLater(onComplete);
-                }
+
+                // Quiet mate-index prep, then fire onComplete so the first chrom load
+                // already has TRA mates — avoids a second loading flash afterward.
+                finishOpenAfterMateIndex(vcfData, onComplete);
             });
     }
 
@@ -378,6 +398,8 @@ public class VcfManager {
         
         if (shouldReuseCachedVariants(chromosome, start, end, cachedVariants, requestFilterSnapshot)) {
             putVariantList(chromosome, cachedVariants);
+            // Mate index may have finished after this chrom was first cached — project now.
+            projectMateBreakpoints(chromosome, cachedVariants, start, end);
             markVcfRegionFetched(chromosome, start, end, cachedVariants);
             displayCachedVariants(chromosome, cachedVariants);
             return;
@@ -418,6 +440,7 @@ public class VcfManager {
             && variantList.isAnnotated()
             && vcfCountMatches
             && !variantList.isEmpty()) {
+            projectMateBreakpoints(chromosome, variantList, start, end);
             markVcfRegionFetched(chromosome, start, end, variantList);
             displayCachedVariants(chromosome, variantList);
             return;
@@ -444,6 +467,7 @@ public class VcfManager {
                 start = 1;
                 end = fullEnd;
             }
+            clearOverlapScanFlags(chromosome);
             variantList.clear();
         } else if (incrementalAppend) {
             // New VCFs only: cover whatever the list already claims so cache stays consistent.
@@ -526,6 +550,9 @@ public class VcfManager {
                         () -> regionLoadGeneration != chromosomeLoadGeneration.get()
                             || Thread.currentThread().isInterrupted(),
                         null);
+                    // TRA/BND records live on their primary contig; project mate breakpoints
+                    // from already-cached chromosomes so the mate stack can draw them.
+                    projectMateBreakpoints(targetChromosome, mergedList, regionStart, regionEnd);
 
                     VariantList result = mergedList;
                     long streamNs = System.nanoTime() - phaseStartNs;
@@ -965,6 +992,7 @@ public class VcfManager {
             }
         }
         loadedVcfs.clear();
+        sessionForceSingleSidedBreakends = false;
 
         // Break node chains while lists may still be held by density threads / disposed UI.
         for (VariantList list : variantCache.values()) {
@@ -1348,6 +1376,7 @@ public class VcfManager {
             streamFromIndex = previouslyLoaded;
             variants.setAnnotated(false);
         } else {
+            clearOverlapScanFlags(chromosome);
             variants.clear();
             previouslyLoaded = 0;
             streamFromIndex = 0;
@@ -1385,6 +1414,8 @@ public class VcfManager {
             Thread.currentThread().interrupt();
             return 0;
         }
+
+        projectMateBreakpoints(chromosome, variants, 1, loadEnd);
 
         if (Thread.currentThread().isInterrupted() || variants.isEmpty()) {
             return 0;
@@ -1457,6 +1488,9 @@ public class VcfManager {
             onSampleProgress.accept(0, samplesTotal);
         }
 
+        final String chromKey = ChromosomeNames.strip(chromosome);
+        final long chromEnd = resolveChromosomeLoadEnd(chromosome);
+
         for (VcfData vcfData : vcfs) {
             if (abortRequested != null && abortRequested.getAsBoolean()) {
                 throw new InterruptedException("Variant stream aborted");
@@ -1466,6 +1500,24 @@ public class VcfManager {
             }
 
             int mappedForFile = Math.max(1, vcfData.loader.getMappedSampleCount());
+            boolean overlapAware = vcfNeedsOverlapAwareLoad(vcfData);
+            // SV/CNV spans (and TRA mates on this chrom) are not guaranteed by a narrow
+            // tabix locus hit — stream the whole chromosome once, then skip on later pans.
+            long fileStart = start;
+            long fileEnd = end;
+            if (overlapAware) {
+                if (chromKey != null && vcfData.overlapScanChromsLoaded.contains(chromKey)
+                        && !target.isEmpty()) {
+                    samplesDone = Math.min(samplesTotal, samplesDone + mappedForFile);
+                    if (onSampleProgress != null) {
+                        onSampleProgress.accept(samplesDone, samplesTotal);
+                    }
+                    continue;
+                }
+                fileStart = 1;
+                fileEnd = Math.max(end, chromEnd);
+            }
+
             try (VcfReader reader = new VcfReader(vcfData.file.toPath())) {
                 vcfData.loader.setVcfReader(reader);
                 vcfData.loader.setTypeObserver(vcfData::noteType);
@@ -1482,11 +1534,15 @@ public class VcfManager {
                 });
                 final int fileBase = samplesDone;
                 cursor = vcfData.loader.streamRegionVariantsToList(
-                    chromosome, start, end, target, cursor,
+                    chromosome, fileStart, fileEnd, target, cursor,
                     onSampleProgress == null ? null : (cur, tot) -> onSampleProgress.accept(
                         Math.min(samplesTotal, fileBase + Math.max(0, cur)),
                         samplesTotal),
                     loadFilter);
+                if (overlapAware && chromKey != null && fileStart <= 1
+                        && fileEnd >= Math.max(2L, chromEnd - 1)) {
+                    vcfData.overlapScanChromsLoaded.add(chromKey);
+                }
             } catch (IOException e) {
                 if (warningsOut != null) {
                     warningsOut.add("Load failed for " + vcfData.file.getName()
@@ -1501,6 +1557,405 @@ public class VcfManager {
             samplesDone = Math.min(samplesTotal, samplesDone + mappedForFile);
             if (onSampleProgress != null) {
                 onSampleProgress.accept(samplesDone, samplesTotal);
+            }
+        }
+    }
+
+    /**
+     * Materialize TRA/BND mate breakpoints onto {@code target} from each open SV VCF's
+     * {@link MateBreakpointIndex}. Does not depend on other chromosomes being cached.
+     * Allele merge is idempotent against reciprocal BNDs already streamed onto this chrom.
+     * When new mates are inserted, invalidates the visible-chain filter key so
+     * {@link VariantList#ensureVisibleChain} rebuilds before draw.
+     */
+    private void projectMateBreakpoints(
+            String chromosome, VariantList target, long start, long end) {
+        if (target == null || chromosome == null || chromosome.isBlank()) {
+            return;
+        }
+        long lo = Math.min(start, end);
+        long hi = Math.max(start, end);
+        // SV sessions: accept every mate on this contig (index is chrom-wide).
+        if (sessionHasOverlapAwareVcf() || isFullChromosomeRequest(chromosome, lo, hi)) {
+            lo = 1;
+            hi = Math.max(hi, resolveChromosomeLoadEnd(chromosome));
+        }
+
+        List<VcfData> vcfs;
+        synchronized (this) {
+            vcfs = new ArrayList<>(loadedVcfs);
+        }
+
+        int sizeBefore = target.size();
+        VariantNode cursor = null;
+        for (VcfData vcfData : vcfs) {
+            MateBreakpointIndex index = vcfData != null ? vcfData.mateIndex : null;
+            if (index == null || index.isEmpty()) {
+                continue;
+            }
+            for (MateBreakpointIndex.Hit hit : index.query(chromosome, lo, hi)) {
+                if (hit == null || hit.calls().isEmpty()) {
+                    continue;
+                }
+                // Prefer a streamed reciprocal BND already at this allele.
+                if (hasAlleleAt(target, hit.matePos(), hit.ref(), hit.alt())) {
+                    continue;
+                }
+                for (VariantNode.SampleCall call : hit.calls()) {
+                    if (call == null) {
+                        continue;
+                    }
+                    cursor = target.addVariantWithCursor(
+                        cursor, hit.matePos(), hit.ref(), hit.alt(), hit.type(), call);
+                    if (cursor == null) {
+                        continue;
+                    }
+                    cursor.svEnd = hit.matePos();
+                    cursor.svChr2 = hit.primaryChrom();
+                    cursor.svEnd2 = hit.primaryPos();
+                    if (hit.vcfId() != null && cursor.vcfId == null) {
+                        cursor.vcfId = hit.vcfId();
+                    }
+                }
+            }
+        }
+        if (target.size() != sizeBefore) {
+            target.invalidateVisibleFilterKey();
+        }
+    }
+
+    /** True when {@code target} already has the same (pos, ref, alt) allele. */
+    private static boolean hasAlleleAt(VariantList target, long pos, String ref, String alt) {
+        if (target == null) {
+            return false;
+        }
+        for (VariantNode node = target.getFirst(); node != null; node = node.next) {
+            if (node.position < pos) {
+                continue;
+            }
+            if (node.position > pos) {
+                return false;
+            }
+            if (sameAlleleString(node.ref, ref) && sameAlleleString(node.alt, alt)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean sameAlleleString(String a, String b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return a.equals(b);
+    }
+
+    private boolean sessionHasOverlapAwareVcf() {
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfNeedsOverlapAwareLoad(vcfData)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * After sample mapping on open: probe TRA recording style (and build a full mate
+     * index only when single-sided), quietly, then run {@code onComplete} so the first
+     * chrom load already includes mates when needed.
+     */
+    private void finishOpenAfterMateIndex(VcfData vcfData, Runnable onComplete) {
+        Runnable done = () -> {
+            if (onComplete != null) {
+                if (Platform.isFxApplicationThread()) {
+                    onComplete.run();
+                } else {
+                    Platform.runLater(onComplete);
+                }
+            }
+        };
+        if (vcfData == null) {
+            done.run();
+            return;
+        }
+        if (!vcfNeedsOverlapAwareLoad(vcfData)) {
+            vcfData.mateIndex = MateBreakpointIndex.empty();
+            done.run();
+            return;
+        }
+        if (vcfData.mateIndex != null) {
+            done.run();
+            return;
+        }
+        scheduleMateSupportQuiet(vcfData, done);
+    }
+
+    /**
+     * On the current thread: tabix-probe whether TRA/BNDs are single-sided; only then
+     * scan the whole file into {@link VcfData#mateIndex}. Prefers an already-open reader.
+     * Call only after sample→track mapping is ready — an empty map yields zero hits.
+     * When mapping is still empty, returns without marking the index complete so a later
+     * call can succeed.
+     */
+    public void prepareMateSupportInline(VcfData vcfData) {
+        if (vcfData == null) {
+            return;
+        }
+        if (!vcfNeedsOverlapAwareLoad(vcfData)) {
+            vcfData.mateIndex = MateBreakpointIndex.empty();
+            return;
+        }
+        if (vcfData.mateIndex != null) {
+            return;
+        }
+        // Without mapped tracks, softFill drops every BND — do not sticky-empty the index.
+        if (vcfData.loader == null || vcfData.loader.getMappedSampleCount() == 0) {
+            System.err.printf(
+                "[VcfManager] mate index deferred file=%s mappedSamples=0%n",
+                vcfData.file != null ? vcfData.file.getName() : "?");
+            return;
+        }
+        if (!vcfData.mateIndexBuildStarted.compareAndSet(false, true)) {
+            return;
+        }
+        VcfReader tempReader = null;
+        try {
+            if (vcfData.reader != null) {
+                vcfData.loader.setVcfReader(vcfData.reader);
+            } else if (vcfData.file != null && vcfData.file.exists()) {
+                tempReader = new VcfReader(vcfData.file.toPath());
+                vcfData.loader.setVcfReader(tempReader);
+            } else {
+                vcfData.mateIndex = MateBreakpointIndex.empty();
+                return;
+            }
+            vcfData.loader.setTypeObserver(vcfData::noteType);
+            applyMateSupportAfterProbe(vcfData);
+        } catch (IOException e) {
+            System.err.println(
+                "Mate support failed for "
+                    + (vcfData.file != null ? vcfData.file.getName() : "?")
+                    + ": " + e.getMessage());
+            vcfData.mateIndex = MateBreakpointIndex.empty();
+        } finally {
+            vcfData.loader.setTypeObserver(null);
+            if (tempReader != null) {
+                try {
+                    tempReader.close();
+                } catch (IOException ignored) {
+                }
+                vcfData.loader.setVcfReader(null);
+            }
+        }
+    }
+
+    /**
+     * Probe the first SV file (unless the session already forced single-sided), then
+     * full mate-index scan when single-sided. Later files in a multi-VCF open inherit
+     * the first single-sided result and skip the tabix probe. Loader must already have
+     * a bound reader and a non-empty sample map. Sets {@link VcfData#mateIndex}.
+     */
+    private void applyMateSupportAfterProbe(VcfData vcfData) throws IOException {
+        VcfReader.InterChromBreakendStyle style;
+        int mapped = vcfData.loader != null ? vcfData.loader.getMappedSampleCount() : 0;
+        if (sessionForceSingleSidedBreakends) {
+            style = VcfReader.InterChromBreakendStyle.SINGLE_SIDED;
+            vcfData.breakendStyle = style;
+            System.err.printf(
+                "[VcfManager] mate index forced (session) file=%s mappedSamples=%d%n",
+                vcfData.file != null ? vcfData.file.getName() : "?",
+                mapped);
+        } else {
+            style = vcfData.loader.detectInterChromBreakendStyle();
+            vcfData.breakendStyle = style;
+            if (style == VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
+                sessionForceSingleSidedBreakends = true;
+            }
+        }
+        if (style != VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
+            vcfData.mateIndex = MateBreakpointIndex.empty();
+            System.err.printf(
+                "[VcfManager] mate index skipped file=%s style=%s mappedSamples=%d%n",
+                vcfData.file != null ? vcfData.file.getName() : "?",
+                style,
+                mapped);
+            return;
+        }
+        vcfData.mateIndex = vcfData.loader.buildMateBreakpointIndex();
+        System.err.printf(
+            "[VcfManager] mate index ready file=%s style=SINGLE_SIDED hits=%d mappedSamples=%d%n",
+            vcfData.file != null ? vcfData.file.getName() : "?",
+            vcfData.mateIndex.size(),
+            mapped);
+    }
+
+    /**
+     * Quiet background probe (+ optional full mate scan). Invokes {@code onDone} on the
+     * FX thread when finished — chrom load must wait for this when single-sided.
+     */
+    private void scheduleMateSupportQuiet(VcfData vcfData, Runnable onDone) {
+        Runnable finish = onDone != null ? onDone : () -> {};
+        if (vcfData == null || vcfData.file == null || !vcfData.file.exists()) {
+            finish.run();
+            return;
+        }
+        if (!vcfNeedsOverlapAwareLoad(vcfData)) {
+            vcfData.mateIndex = MateBreakpointIndex.empty();
+            finish.run();
+            return;
+        }
+        if (vcfData.mateIndex != null) {
+            finish.run();
+            return;
+        }
+        if (vcfData.loader == null || vcfData.loader.getMappedSampleCount() == 0) {
+            System.err.printf(
+                "[VcfManager] mate index deferred (quiet) file=%s mappedSamples=0%n",
+                vcfData.file.getName());
+            finish.run();
+            return;
+        }
+        if (!vcfData.mateIndexBuildStarted.compareAndSet(false, true)) {
+            finish.run();
+            return;
+        }
+        final File file = vcfData.file;
+        ThreadRunner.get().submitQuiet(
+            "mate-support:" + file.getName(),
+            () -> {
+                try (VcfReader reader = new VcfReader(file.toPath())) {
+                    vcfData.loader.setVcfReader(reader);
+                    vcfData.loader.setTypeObserver(vcfData::noteType);
+                    applyMateSupportAfterProbe(vcfData);
+                    return vcfData.mateIndex;
+                } catch (IOException e) {
+                    System.err.println(
+                        "Mate support failed for " + file.getName() + ": " + e.getMessage());
+                    vcfData.mateIndex = MateBreakpointIndex.empty();
+                    return vcfData.mateIndex;
+                } finally {
+                    vcfData.loader.setTypeObserver(null);
+                    vcfData.loader.setVcfReader(null);
+                }
+            },
+            index -> {
+                synchronized (this) {
+                    if (!loadedVcfs.contains(vcfData)) {
+                        finish.run();
+                        return;
+                    }
+                }
+                if (vcfData.mateIndex == null) {
+                    vcfData.mateIndex = index != null ? index : MateBreakpointIndex.empty();
+                }
+                softRefreshMateProjections();
+                finish.run();
+            });
+    }
+
+    /**
+     * Project mates into already-cached chrom lists without starting a new region load
+     * (avoids loading-popup flash). Upcoming loads pick up the index via
+     * {@link #projectMateBreakpoints}.
+     */
+    private void softRefreshMateProjections() {
+        syncCurrentFilterFromOpenVariantManager();
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        if (stackManager == null || stackManager.isEmpty()) {
+            return;
+        }
+        VariantFilter filter = currentFilter != null ? currentFilter.copy() : new VariantFilter();
+        boolean anyChanged = false;
+        for (DrawStack stack : stackManager.getStacks()) {
+            String chrom = stack.getChromosome();
+            if (chrom == null || chrom.isBlank()) {
+                continue;
+            }
+            VariantList list = findCachedVariantList(chrom);
+            if (list == null) {
+                continue;
+            }
+            int before = list.size();
+            long qEnd = resolveChromosomeLoadEnd(chrom);
+            projectMateBreakpoints(chrom, list, 1, qEnd);
+            if (list.size() != before) {
+                list.rebuildVisibleChain(filter);
+                anyChanged = true;
+            }
+        }
+        if (anyChanged) {
+            updateCanvasesWithVariants(null);
+            calculateDensityOnAllCanvases();
+            variantsRevision.incrementAndGet();
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+        }
+    }
+
+    /**
+     * SV/CNV files cannot rely on a tabix locus query alone: a DEL/DUP/INV/CNV may start
+     * upstream of the view (or a TRA may be recorded on another contig) while still
+     * overlapping the requested region. Detect via observed types, INFO headers, or
+     * common SV/CNV filename patterns.
+     */
+    private static boolean vcfNeedsOverlapAwareLoad(VcfData vcfData) {
+        if (vcfData == null) {
+            return false;
+        }
+        for (VcfVariantType type : vcfData.observedTypes) {
+            if (VariantTypeVisuals.isStructural(type)) {
+                return true;
+            }
+        }
+        if (vcfData.infoHeaderFields != null) {
+            for (VcfHeaderFieldDef field : vcfData.infoHeaderFields) {
+                if (field == null || field.id() == null) {
+                    continue;
+                }
+                String id = field.id();
+                if (id.equalsIgnoreCase("SVTYPE")
+                        || id.equalsIgnoreCase("SVLEN")
+                        || id.equalsIgnoreCase("CHR2")
+                        || id.equalsIgnoreCase("END2")) {
+                    return true;
+                }
+            }
+        }
+        String name = vcfData.file != null ? vcfData.file.getName().toLowerCase() : "";
+        return name.contains(".sv.")
+            || name.contains(".cnv.")
+            || name.contains("_sv.")
+            || name.contains("_cnv.")
+            || name.contains("cuddlysv")
+            || name.contains("manta")
+            || name.contains("delly")
+            || name.endsWith(".sv.vcf.gz")
+            || name.endsWith(".cnv.vcf.gz");
+    }
+
+    /**
+     * Ready non-empty mate-breakpoint indexes from open SV VCFs (for Circos / mate views).
+     * Snapshot is safe to use off the FX thread.
+     */
+    public synchronized List<MateBreakpointIndex> getReadyMateBreakpointIndexes() {
+        List<MateBreakpointIndex> out = new ArrayList<>();
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null || vcfData.mateIndex == null || vcfData.mateIndex.isEmpty()) {
+                continue;
+            }
+            out.add(vcfData.mateIndex);
+        }
+        return out;
+    }
+
+    /** Drop per-file "SV chrom already scanned" flags when the chromosome list is rematerialized. */
+    private void clearOverlapScanFlags(String chromosome) {
+        String key = ChromosomeNames.strip(chromosome);
+        if (key == null || key.isBlank()) {
+            return;
+        }
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData != null) {
+                vcfData.overlapScanChromsLoaded.remove(key);
             }
         }
     }
@@ -1979,6 +2434,7 @@ public class VcfManager {
             it.remove();
         }
         if (loadedVcfs.isEmpty()) {
+            sessionForceSingleSidedBreakends = false;
             variantCache.clear();
             lastLoadedChromosome = null;
             clearCanvasTypeVisibility();
@@ -2490,6 +2946,26 @@ public class VcfManager {
         final Set<VcfVariantType> observedTypes = EnumSet.noneOf(VcfVariantType.class);
         /** Annotation effects seen on alleles from this file. */
         final Set<VariantEffect> observedEffects = EnumSet.noneOf(VariantEffect.class);
+        /**
+         * Chromosomes for which this SV/CNV file has already been streamed as a full-chrom
+         * overlap scan. Avoids re-reading the whole contig on every pan.
+         */
+        final Set<String> overlapScanChromsLoaded = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        /**
+         * Inter-chrom TRA/BND mate index. Built only when {@link #breakendStyle} is
+         * {@link VcfReader.InterChromBreakendStyle#SINGLE_SIDED}. Null while probing/building;
+         * {@link MateBreakpointIndex#empty()} when dual-sided or no inter-chrom breaks.
+         */
+        volatile MateBreakpointIndex mateIndex;
+        /** Result of the one-time tabix mate probe; null until probed. */
+        volatile VcfReader.InterChromBreakendStyle breakendStyle;
+        /** Ensures at most one mate-support probe/scan is scheduled per file. */
+        final AtomicBoolean mateIndexBuildStarted = new AtomicBoolean(false);
+
+        /** Mate-breakpoint index, or null while deferred / not yet built. */
+        public MateBreakpointIndex getMateBreakpointIndex() {
+            return mateIndex;
+        }
         
         public VcfData(VcfReader reader, VariantLoader loader, File file) {
             this.reader = reader;

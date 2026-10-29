@@ -446,6 +446,150 @@ public class VcfReader implements AutoCloseable {
         return variants;
     }
 
+    /**
+     * How inter-chrom TRA/BND mates are recorded in this VCF.
+     * <ul>
+     *   <li>{@link #NONE} — no inter-chrom breakends found in the probe</li>
+     *   <li>{@link #DUAL_SIDED} — mate loci also have a VCF record (reciprocal BND/TRA)</li>
+     *   <li>{@link #SINGLE_SIDED} — mate only in INFO/ALT; needs a full mate index</li>
+     * </ul>
+     */
+    public enum InterChromBreakendStyle {
+        NONE,
+        DUAL_SIDED,
+        SINGLE_SIDED
+    }
+
+    private static final int MATE_PROBE_WINDOW_BP = 50;
+    private static final int DEFAULT_BREAKEND_PROBE_COUNT = 8;
+
+    /**
+     * Probe the first few inter-chrom TRA/BNDs and tabix-query each mate locus.
+     * If any mate has no nearby TRA/BND record, the file is {@link InterChromBreakendStyle#SINGLE_SIDED}.
+     * Without tabix, any inter-chrom break is treated as single-sided (safe / load-all).
+     */
+    public InterChromBreakendStyle detectInterChromBreakendStyle() throws IOException {
+        return detectInterChromBreakendStyle(DEFAULT_BREAKEND_PROBE_COUNT);
+    }
+
+    public InterChromBreakendStyle detectInterChromBreakendStyle(int maxProbe) throws IOException {
+        int limit = Math.max(1, maxProbe);
+        int probed = 0;
+
+        if (!canTabixQuery) {
+            // Can't cheaply verify reciprocal records — if any inter-chrom break exists, load all.
+            try (var iterator = reader.iterator()) {
+                while (iterator.hasNext()) {
+                    VariantContext ctx = iterator.next();
+                    VcfStructuralVariant sv = asInterChromBreakend(ctx);
+                    if (sv != null) {
+                        return InterChromBreakendStyle.SINGLE_SIDED;
+                    }
+                }
+            } catch (Exception e) {
+                throw new IOException("Failed probing breakends: " + e.getMessage(), e);
+            }
+            return InterChromBreakendStyle.NONE;
+        }
+
+        try (var iterator = reader.iterator()) {
+            while (iterator.hasNext() && probed < limit) {
+                VariantContext ctx = iterator.next();
+                VcfStructuralVariant sv = asInterChromBreakend(ctx);
+                if (sv == null) {
+                    continue;
+                }
+                probed++;
+                String mateChrom = sv.getChr2();
+                long matePos = sv.getEnd2();
+                // Require a reciprocal record that points back to the primary — any
+                // unrelated BND near the mate locus must not count as dual-sided.
+                if (!hasReciprocalBreakend(sv.getChromosome(), sv.getPosition(), mateChrom, matePos)) {
+                    return InterChromBreakendStyle.SINGLE_SIDED;
+                }
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed probing breakends: " + e.getMessage(), e);
+        }
+        return probed == 0 ? InterChromBreakendStyle.NONE : InterChromBreakendStyle.DUAL_SIDED;
+    }
+
+    /** Parse {@code ctx} as an inter-chrom TRA/BND with resolved mate, or null. */
+    private VcfStructuralVariant asInterChromBreakend(VariantContext ctx) {
+        if (ctx == null || !isStructuralVariant(ctx)) {
+            return null;
+        }
+        VcfVariantType type = classifyStructuralVariant(ctx);
+        if (type != VcfVariantType.SV_TRANSLOCATION && type != VcfVariantType.SV_BREAKEND) {
+            return null;
+        }
+        VcfStructuralVariant sv = parseStructuralVariant(ctx, type);
+        String chr2 = sv.getChr2();
+        Long end2 = sv.getEnd2();
+        if (chr2 == null || chr2.isBlank() || end2 == null || end2 < 0) {
+            return null;
+        }
+        if (ChromosomeNames.equals(chr2, sv.getChromosome())) {
+            return null;
+        }
+        return sv;
+    }
+
+    /**
+     * True when a TRA/BND near {@code matePos} on {@code mateChrom} mates back to
+     * {@code primaryChrom}:{@code primaryPos} (reciprocal / dual-sided recording).
+     */
+    private boolean hasReciprocalBreakend(
+            String primaryChrom, long primaryPos, String mateChrom, long matePos) {
+        long start = Math.max(1L, matePos - MATE_PROBE_WINDOW_BP);
+        long end = matePos + MATE_PROBE_WINDOW_BP;
+        boolean[] found = { false };
+        try {
+            visitOverlappingVariants(mateChrom, start, end, ctx -> {
+                if (found[0]) {
+                    return;
+                }
+                VcfStructuralVariant other = asInterChromBreakend(ctx);
+                if (other == null) {
+                    return;
+                }
+                if (!ChromosomeNames.equals(other.getChr2(), primaryChrom)) {
+                    return;
+                }
+                Long back = other.getEnd2();
+                if (back != null && Math.abs(back - primaryPos) <= MATE_PROBE_WINDOW_BP) {
+                    found[0] = true;
+                }
+            });
+        } catch (Exception e) {
+            return false;
+        }
+        return found[0];
+    }
+
+    /**
+     * Full-file scan yielding inter-chromosomal TRA/BND records that have a resolved
+     * mate ({@code CHR2}/{@code END2} or breakend ALT). Used once per SV VCF to build
+     * {@link org.baseplayer.variant.MateBreakpointIndex}.
+     */
+    public void visitInterChromosomalBreakends(Consumer<VcfStructuralVariant> consumer)
+            throws IOException {
+        if (consumer == null) {
+            return;
+        }
+        try (var iterator = reader.iterator()) {
+            while (iterator.hasNext()) {
+                VariantContext ctx = iterator.next();
+                VcfStructuralVariant sv = asInterChromBreakend(ctx);
+                if (sv != null) {
+                    consumer.accept(sv);
+                }
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed scanning inter-chrom breakends: " + e.getMessage(), e);
+        }
+    }
+
     public void iterateChromosomeVariants(String chromosome,
             Consumer<VcfSnvIndel> snvConsumer,
             Consumer<VcfStructuralVariant> svConsumer,

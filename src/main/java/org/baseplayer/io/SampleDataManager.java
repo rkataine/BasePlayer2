@@ -1091,6 +1091,8 @@ public class SampleDataManager {
                 }
                 loader.setVcfReader(null);
               } else {
+                // Mate index needs sample→track map; build while reader is still open.
+                VcfManager.getInstance().prepareMateSupportInline(vcfData);
                 try {
                   reader.close();
                 } catch (IOException ignored) {
@@ -1803,6 +1805,9 @@ public class SampleDataManager {
 
           attachVcfSamplesToMappedTracks(loader, vcfPath);
 
+          // Mate index after mapping, while reader is still open.
+          VcfManager.getInstance().prepareMateSupportInline(vcfData);
+
           try { reader.close(); } catch (IOException ignored) {}
           vcfData.reader = null;
           loader.setVcfReader(null);
@@ -1883,6 +1888,9 @@ public class SampleDataManager {
     if (loader.getMappedSampleCount() == 0) {
       System.err.println("Warning: Could not create or map any VCF samples from: " + file);
     }
+
+    // Mate index after sample→track mapping, while reader is still open.
+    VcfManager.getInstance().prepareMateSupportInline(vcfData);
 
     final boolean createdTracks = addedTracks;
     if (!deferUi) {

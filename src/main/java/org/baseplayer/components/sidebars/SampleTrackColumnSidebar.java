@@ -28,6 +28,7 @@ import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.baseplayer.variant.MateBreakpointIndex;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
@@ -974,6 +975,11 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
         ? new ArrayList<>(vcfManager.getCachedVariantListsInOrder(chromNames))
         : List.of();
     final VariantFilter vcfFilter = vcfManager.hasVcfLoaded() ? vcfManager.getCurrentFilter().copy() : null;
+    // Single-sided TRA mates (e.g. chr12→chr14 only in VCF) live in the mate index;
+    // include them so Circos on the mate chrom is not empty.
+    final List<MateBreakpointIndex> mateIndexes = vcfManager.hasVcfLoaded()
+        ? new ArrayList<>(vcfManager.getReadyMateBreakpointIndexes())
+        : List.of();
 
     Thread t = new Thread(() -> {
       List<CircosPlot.Link> links = new ArrayList<>();
@@ -1006,6 +1012,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       for (VcfManager.CachedChromosomeVariants entry : vcfLists) {
         extractVcfLinks(entry.chromosome(), entry.variants(), vcfFilter, viewWindows, links);
       }
+      extractMateIndexLinks(mateIndexes, viewWindows, links);
 
       Platform.runLater(() -> {
         CircosPlot plot = new CircosPlot(
@@ -1124,6 +1131,49 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       }
     }
     return false;
+  }
+
+  /**
+   * Emit Circos links for single-sided TRA mates whose mate breakpoint falls in a
+   * visible window (primary record lives on another contig).
+   */
+  private static void extractMateIndexLinks(
+      List<MateBreakpointIndex> mateIndexes, List<ViewWindow> viewWindows, List<CircosPlot.Link> out) {
+    if (mateIndexes == null || mateIndexes.isEmpty() || viewWindows == null || viewWindows.isEmpty()) {
+      return;
+    }
+    for (ViewWindow window : viewWindows) {
+      if (window == null || window.chrom() == null || window.chrom().isBlank()) {
+        continue;
+      }
+      for (MateBreakpointIndex index : mateIndexes) {
+        if (index == null || index.isEmpty()) {
+          continue;
+        }
+        for (MateBreakpointIndex.Hit hit : index.query(window.chrom(), window.start(), window.end())) {
+          if (hit == null || hit.calls().isEmpty()) {
+            continue;
+          }
+          if (sameChromosomeName(window.chrom(), hit.primaryChrom())) {
+            continue;
+          }
+          int posA = clampGenomicPos(hit.matePos());
+          int posB = clampGenomicPos(hit.primaryPos());
+          for (VariantNode.SampleCall call : hit.calls()) {
+            if (call == null) {
+              continue;
+            }
+            out.add(new CircosPlot.Link(
+                window.chrom(),
+                posA,
+                hit.primaryChrom(),
+                posB,
+                CircosPlot.LinkType.VCF_TRA,
+                circosSampleName(call)));
+          }
+        }
+      }
+    }
   }
 
   private static String circosSampleName(VariantNode.SampleCall call) {

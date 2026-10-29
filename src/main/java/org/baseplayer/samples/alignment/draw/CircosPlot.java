@@ -2,11 +2,18 @@ package org.baseplayer.samples.alignment.draw;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
+import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.genome.gene.Gene;
+import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.utils.AppFonts;
+import org.baseplayer.utils.GeneColors;
+import org.baseplayer.variant.annotation.VariantAnnotator;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -59,10 +66,18 @@ public final class CircosPlot {
     };
 
     // Layout is defined as fractions of the canvas size.
-    private static final double R_OUTER_FRAC   = 0.41;
-    private static final double R_INNER_FRAC   = 0.39;
-    private static final double R_LABEL_FRAC   = 0.455;
-    private static final double GAP_ANGLE_DEG  = 1.0;
+    private static final double R_OUTER_FRAC      = 0.34;
+    private static final double R_INNER_FRAC      = 0.32;
+    private static final double R_LABEL_FRAC      = 0.375; // chromosome names
+    private static final double R_GENE_BASE_FRAC  = 0.42;  // innermost gene-label ring
+    private static final double R_GENE_STEP_FRAC  = 0.028; // radial stack step
+    private static final int    R_GENE_MAX_LEVEL  = 3;
+    private static final double GAP_ANGLE_DEG     = 1.0;
+
+    /** Bucket size for treating nearby breakpoints as the same locus. */
+    private static final long BREAK_BUCKET = 5_000_000L;
+    /** Max distance (bp) from a breakpoint to count a COSMIC gene as "near". */
+    private static final long NEAR_GENE_BP = 2_000_000L;
 
     private static final double COMBINED_SIZE   = 780;
     private static final double PER_SAMPLE_SIZE = 340;
@@ -363,8 +378,6 @@ public final class CircosPlot {
             g.setLineWidth(1);
 
             // 2) Chords — bucket nearby links so thickness encodes read count
-            final long BUCKET = 5_000_000L;
-
             record BucketKey(String cA, long bA, String cB, long bB) {}
             Map<BucketKey, List<Link>> grouped = new LinkedHashMap<>();
             for (Link l : links) {
@@ -372,7 +385,7 @@ public final class CircosPlot {
                 ChromArc arcB = arcs.get(normalize(l.chrB));
                 if (arcA == null || arcB == null) continue;
                 String nA = arcA.name, nB = arcB.name;
-                long bA = l.posA / BUCKET, bB = l.posB / BUCKET;
+                long bA = l.posA / BREAK_BUCKET, bB = l.posB / BREAK_BUCKET;
                 BucketKey key = (nA.compareTo(nB) < 0 || (nA.equals(nB) && bA <= bB))
                         ? new BucketKey(nA, bA, nB, bB)
                         : new BucketKey(nB, bB, nA, bA);
@@ -432,8 +445,216 @@ public final class CircosPlot {
                 hitRegions.add(new HitRegion(rep, false, bx, by, dotR + 2, splitCount, discordantCount, vcfCount, sampleCount));
             }
             g.setLineWidth(1);
+
+            // 3) Cancer-gene labels near unique breakpoint loci
+            if (showLabels && AnnotationData.isGenesLoaded()) {
+                drawCancerGeneLabels(g, cx, cy, rOuter, size);
+            }
+        }
+
+        /**
+         * Label COSMIC census genes near breakpoints. Breakpoints in the same
+         * {@link #BREAK_BUCKET} locus are collapsed so each location contributes
+         * at most one gene, and each gene is drawn at most once. Nearby labels
+         * are stacked on successive radial rings to avoid overlap.
+         */
+        private void drawCancerGeneLabels(GraphicsContext g, double cx, double cy,
+                                          double rOuter, double size) {
+            Map<String, List<Gene>> byChrom = AnnotationData.getGenesByChrom();
+            if (byChrom == null || byChrom.isEmpty()) return;
+
+            Map<LocusBucket, long[]> locusSum = new LinkedHashMap<>();
+            for (Link l : links) {
+                addBreakLocus(locusSum, l.chrA, l.posA);
+                addBreakLocus(locusSum, l.chrB, l.posB);
+            }
+
+            double fontSize = size >= 600 ? 10 : 8;
+            javafx.scene.text.Font bold = AppFonts.getBoldFont(fontSize);
+            g.setFont(bold);
+
+            Set<String> seenGenes = new LinkedHashSet<>();
+            List<GeneLabel> labels = new ArrayList<>();
+            for (Map.Entry<LocusBucket, long[]> e : locusSum.entrySet()) {
+                LocusBucket key = e.getKey();
+                ChromArc arc = arcs.get(key.chrom());
+                if (arc == null) continue;
+
+                long sum = e.getValue()[0];
+                long n = e.getValue()[1];
+                long avgPos = n <= 0 ? 0 : sum / n;
+
+                List<Gene> genes = genesForChrom(byChrom, key.chrom());
+                String geneName = VariantAnnotator.nearestCensusGeneAnySide(genes, avgPos);
+                if (geneName == null || !seenGenes.add(geneName)) continue;
+
+                long labelPos;
+                GeneLocation loc = AnnotationData.getGeneLocation(geneName);
+                if (loc != null && normalize(loc.chrom()).equals(key.chrom())) {
+                    if (distanceToInterval(avgPos, loc.start(), loc.end()) > NEAR_GENE_BP) {
+                        seenGenes.remove(geneName);
+                        continue;
+                    }
+                    labelPos = (loc.start() + loc.end()) / 2;
+                } else {
+                    Gene geneModel = findGene(genes, geneName);
+                    if (geneModel == null) {
+                        seenGenes.remove(geneName);
+                        continue;
+                    }
+                    if (distanceToInterval(avgPos, geneModel.start(), geneModel.end()) > NEAR_GENE_BP) {
+                        seenGenes.remove(geneName);
+                        continue;
+                    }
+                    labelPos = (geneModel.start() + geneModel.end()) / 2;
+                }
+
+                javafx.scene.text.Text measure = new javafx.scene.text.Text(geneName);
+                measure.setFont(bold);
+                double textW = measure.getLayoutBounds().getWidth();
+                labels.add(new GeneLabel(geneName, arc.angleFor(labelPos), textW));
+            }
+            if (labels.isEmpty()) return;
+
+            labels.sort(java.util.Comparator.comparingDouble(l -> l.angle));
+            assignGeneLabelLevels(labels, size);
+
+            double rBase = size * R_GENE_BASE_FRAC;
+            double rStep = size * R_GENE_STEP_FRAC;
+            Color leader = GeneColors.COSMIC_COLOR.deriveColor(0, 1, 1, 0.55);
+            g.setLineWidth(0.9);
+
+            for (GeneLabel lab : labels) {
+                double r = rBase + lab.level * rStep;
+                double ax = cx + Math.cos(lab.angle) * rOuter;
+                double ay = cy + Math.sin(lab.angle) * rOuter;
+                double mx = cx + Math.cos(lab.angle) * (rOuter + (r - rOuter) * 0.45);
+                double my = cy + Math.sin(lab.angle) * (rOuter + (r - rOuter) * 0.45);
+                double lx = cx + Math.cos(lab.angle) * r;
+                double ly = cy + Math.sin(lab.angle) * r;
+
+                g.setStroke(leader);
+                g.beginPath();
+                g.moveTo(ax, ay);
+                g.lineTo(mx, my);
+                g.lineTo(lx, ly);
+                g.stroke();
+
+                double tx = lx - lab.textW / 2;
+                double ty = ly + fontSize * 0.35;
+                // Dark halo so bold orange text stays readable over chords / labels.
+                g.setFill(Color.web("#1a1a1a"));
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        if (dx == 0 && dy == 0) continue;
+                        g.fillText(lab.name, tx + dx, ty + dy);
+                    }
+                }
+                g.setFill(GeneColors.COSMIC_COLOR);
+                g.fillText(lab.name, tx, ty);
+            }
+            g.setLineWidth(1);
+        }
+
+        /**
+         * Greedy radial stacking: place each label on the lowest ring where its
+         * angular footprint does not collide with already-placed labels.
+         */
+        private static void assignGeneLabelLevels(List<GeneLabel> labels, double size) {
+            double rBase = size * R_GENE_BASE_FRAC;
+            double rStep = size * R_GENE_STEP_FRAC;
+            double padPx = 4;
+
+            List<List<GeneLabel>> byLevel = new ArrayList<>(R_GENE_MAX_LEVEL + 1);
+            for (int i = 0; i <= R_GENE_MAX_LEVEL; i++) {
+                byLevel.add(new ArrayList<>());
+            }
+
+            for (GeneLabel lab : labels) {
+                int placed = R_GENE_MAX_LEVEL;
+                for (int level = 0; level <= R_GENE_MAX_LEVEL; level++) {
+                    double r = rBase + level * rStep;
+                    double halfSpan = (lab.textW / 2.0 + padPx) / Math.max(1.0, r);
+                    boolean ok = true;
+                    for (GeneLabel other : byLevel.get(level)) {
+                        if (angularDistance(lab.angle, other.angle) < halfSpan + other.halfSpan) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (ok) {
+                        lab.level = level;
+                        lab.halfSpan = halfSpan;
+                        placed = level;
+                        break;
+                    }
+                }
+                if (lab.halfSpan <= 0) {
+                    double r = rBase + placed * rStep;
+                    lab.level = placed;
+                    lab.halfSpan = (lab.textW / 2.0 + padPx) / Math.max(1.0, r);
+                }
+                byLevel.get(lab.level).add(lab);
+            }
+        }
+
+        /** Smallest absolute angle between two radians on the circle. */
+        private static double angularDistance(double a, double b) {
+            double d = Math.abs(a - b) % (2 * Math.PI);
+            if (d > Math.PI) d = 2 * Math.PI - d;
+            return d;
+        }
+
+        private static final class GeneLabel {
+            final String name;
+            final double angle;
+            final double textW;
+            int level;
+            double halfSpan;
+
+            GeneLabel(String name, double angle, double textW) {
+                this.name = name;
+                this.angle = angle;
+                this.textW = textW;
+            }
+        }
+
+        private void addBreakLocus(Map<LocusBucket, long[]> locusSum, String chrom, int pos) {
+            String n = normalize(chrom);
+            if (n.isEmpty() || arcs.get(n) == null) return;
+            LocusBucket key = new LocusBucket(n, Math.max(0, pos) / BREAK_BUCKET);
+            long[] acc = locusSum.computeIfAbsent(key, k -> new long[2]);
+            acc[0] += Math.max(0, pos);
+            acc[1] += 1;
+        }
+
+        private static List<Gene> genesForChrom(Map<String, List<Gene>> byChrom, String chrom) {
+            List<Gene> genes = byChrom.getOrDefault(chrom, List.of());
+            if (!genes.isEmpty()) return genes;
+            return byChrom.getOrDefault(
+                org.baseplayer.utils.ChromosomeNames.forData(
+                    chrom, org.baseplayer.utils.ChromosomeNames.CHR_PREFIX),
+                List.of());
+        }
+
+        private static Gene findGene(List<Gene> genes, String name) {
+            if (genes == null || name == null) return null;
+            for (Gene gene : genes) {
+                if (name.equals(gene.name())) return gene;
+            }
+            return null;
+        }
+
+        private static long distanceToInterval(long pos, long start, long end) {
+            if (pos >= start && pos <= end) return 0;
+            if (pos < start) return start - pos;
+            return pos - end;
         }
     }
+
+    /** Chromosome + position-bucket key for collapsing co-located breakpoints. */
+    private record LocusBucket(String chrom, long bucket) {}
+
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

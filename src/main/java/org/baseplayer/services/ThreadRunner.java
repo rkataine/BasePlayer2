@@ -83,11 +83,32 @@ public final class ThreadRunner {
   public <T> RunnerTask submit(String description,
                                Supplier<T> supplier,
                                Consumer<T> onSuccess) {
+    return submit(description, supplier, onSuccess, true);
+  }
+
+  /**
+   * Like {@link #submit} but does not register with the loading popup.
+   * Use for silent background prep (e.g. TRA mate index) that must not flash the UI.
+   */
+  public <T> RunnerTask submitQuiet(String description,
+                                    Supplier<T> supplier,
+                                    Consumer<T> onSuccess) {
+    return submit(description, supplier, onSuccess, false);
+  }
+
+  private <T> RunnerTask submit(String description,
+                                Supplier<T> supplier,
+                                Consumer<T> onSuccess,
+                                boolean showInLoadingUi) {
     RunnerTask task = new RunnerTask(description);
 
     // Register before submitting so UI can show the task immediately and
     // early progress updates are not missed by the popup.
-    register(task);
+    if (showInLoadingUi) {
+      register(task);
+    } else {
+      task.setOnComplete(() -> {});
+    }
 
     Future<?> future = pool.submit(() -> {
       T result = null;

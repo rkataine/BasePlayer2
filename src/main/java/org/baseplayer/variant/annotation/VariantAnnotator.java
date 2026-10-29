@@ -434,7 +434,7 @@ public class VariantAnnotator {
     }
 
     /** Closest CGC on either side (or overlapping). */
-    static String nearestCensusGeneAnySide(List<Gene> genes, long pos) {
+    public static String nearestCensusGeneAnySide(List<Gene> genes, long pos) {
         String up = nearestCensusGene(genes, pos, Direction.UPSTREAM);
         String down = nearestCensusGene(genes, pos, Direction.DOWNSTREAM);
         if (up == null) {
