@@ -6,3 +6,5 @@
 /testdata/
 refactor*
 code_qual*
+.vscode/
+.settings/
