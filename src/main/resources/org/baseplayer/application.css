@@ -1734,6 +1734,142 @@ VBox {
     -fx-text-fill: -bp-text;
 }
 
+/* Genome catalog (Add genome dialog) — match variant-table dark surfaces */
+.genome-catalog-root {
+    -fx-background-color: -bp-surface;
+}
+
+.genome-catalog-scroll {
+    -fx-background-color: -bp-surface;
+    -fx-border-color: -bp-control;
+    -fx-border-width: 1;
+    -fx-border-radius: 4;
+    -fx-background-radius: 4;
+}
+
+.genome-catalog-scroll > .viewport {
+    -fx-background-color: -bp-surface;
+}
+
+.genome-catalog-list {
+    -fx-background-color: -bp-surface;
+    -fx-padding: 4;
+}
+
+.genome-catalog-row {
+    -fx-background-color: -bp-surface;
+    -fx-background-radius: 3;
+    -fx-border-color: transparent;
+    -fx-border-radius: 3;
+}
+
+.genome-catalog-row:hover .genome-catalog-header {
+    -fx-background-color: -bp-control;
+}
+
+.genome-catalog-row-expanded {
+    -fx-background-color: -bp-panel;
+    -fx-border-color: -bp-control;
+    -fx-border-width: 1;
+}
+
+.genome-catalog-header {
+    -fx-background-color: -bp-surface;
+    -fx-cursor: hand;
+    -fx-background-radius: 3;
+}
+
+.genome-catalog-row-odd .genome-catalog-header {
+    -fx-background-color: -bp-panel;
+}
+
+.genome-catalog-name {
+    -fx-text-fill: -bp-text;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-min-width: 180;
+}
+
+.genome-catalog-assembly {
+    -fx-text-fill: #7fdbff;
+    -fx-font-size: 12px;
+    -fx-min-width: 100;
+}
+
+.genome-catalog-size {
+    -fx-text-fill: -bp-muted;
+    -fx-font-size: 11px;
+}
+
+.genome-catalog-status {
+    -fx-text-fill: -bp-muted;
+    -fx-font-size: 11px;
+}
+
+.genome-catalog-status-ok {
+    -fx-text-fill: #7ED321;
+}
+
+.genome-catalog-detail {
+    -fx-background-color: -bp-panel;
+}
+
+.genome-catalog-link-label {
+    -fx-text-fill: -bp-muted;
+    -fx-font-size: 11px;
+}
+
+.genome-catalog-link {
+    -fx-text-fill: #7fdbff;
+    -fx-font-size: 11px;
+    -fx-border-color: transparent;
+}
+
+.genome-catalog-link:hover {
+    -fx-text-fill: #ffffff;
+}
+
+.genome-catalog-copy-btn {
+    -fx-background-color: -bp-control;
+    -fx-text-fill: -bp-text;
+    -fx-font-size: 11px;
+    -fx-padding: 4 10 4 10;
+    -fx-background-radius: 3;
+    -fx-border-color: -bp-stroke;
+    -fx-border-radius: 3;
+    -fx-cursor: hand;
+    -fx-min-width: 72;
+}
+
+.genome-catalog-copy-btn:hover {
+    -fx-background-color: -bp-focus;
+    -fx-text-fill: #ffffff;
+}
+
+.genome-catalog-muted {
+    -fx-text-fill: -bp-muted;
+    -fx-font-size: 11px;
+}
+
+.genome-catalog-manual {
+    -fx-background-color: -bp-panel;
+    -fx-padding: 10;
+    -fx-background-radius: 4;
+    -fx-border-color: -bp-control;
+    -fx-border-radius: 4;
+    -fx-border-width: 1;
+}
+
+.genome-catalog-field {
+    -fx-control-inner-background: -bp-surface;
+    -fx-text-fill: -bp-text;
+    -fx-prompt-text-fill: -bp-muted;
+    -fx-background-color: -bp-surface;
+    -fx-border-color: -bp-control;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+}
+
 /* =============================================================================
    AGENT TAB
    ============================================================================= */

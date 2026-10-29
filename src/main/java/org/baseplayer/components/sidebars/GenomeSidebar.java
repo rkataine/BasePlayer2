@@ -6,6 +6,7 @@ import java.util.Map;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.annotation.AnnotationLoader;
+import org.baseplayer.components.AddGenomeDialog;
 import org.baseplayer.components.AnnotationOptionsDialog;
 import org.baseplayer.genome.ReferenceGenome;
 import org.baseplayer.io.Settings;
@@ -32,6 +33,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Polyline;
 import javafx.scene.shape.Rectangle;
+import javafx.stage.Window;
 
 /**
  * Sidebar for genome configuration — extends {@link SidebarBase}.
@@ -124,7 +126,8 @@ public class GenomeSidebar extends SidebarBase {
   }
 
   @Override protected void onAddClicked(double screenX, double screenY) {
-    // No-op for now — could open a genome-browser / genome-download dialog
+    Window owner = headerPane.getScene() != null ? headerPane.getScene().getWindow() : MainApp.stage;
+    AddGenomeDialog.show(owner, this::reloadGenomesAfterInstall);
   }
 
   @Override protected void drawContent() {
@@ -445,6 +448,50 @@ public class GenomeSidebar extends SidebarBase {
     // Wire action after initial select so programmatic select does not double-load genes.
     referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
     onReferenceGenomeSelected();
+  }
+
+  /**
+   * Reload genome/annotation combos after a curated Ensembl install and select
+   * the newly installed folder when present.
+   */
+  private void reloadGenomesAfterInstall(String folderId) {
+    Runnable reload = () -> {
+      referenceComboBox.setOnAction(null);
+      try {
+        List<ReferenceGenome> genomes = initializationService.loadAvailableGenomes();
+        referenceComboBox.getItems().setAll(genomes);
+
+        ReferenceGenome match = null;
+        if (folderId != null && !folderId.isBlank()) {
+          match = genomes.stream()
+              .filter(g -> folderId.equals(g.getName()))
+              .findFirst()
+              .orElse(null);
+        }
+        if (match == null && !genomes.isEmpty()) {
+          String lastGenome = Settings.get().getLastGenome();
+          if (lastGenome != null) {
+            match = genomes.stream()
+                .filter(g -> lastGenome.equals(g.getName()))
+                .findFirst()
+                .orElse(null);
+          }
+        }
+        if (match != null) {
+          referenceComboBox.getSelectionModel().select(match);
+        } else if (!genomes.isEmpty()) {
+          referenceComboBox.getSelectionModel().selectFirst();
+        }
+      } finally {
+        referenceComboBox.setOnAction(e -> onReferenceGenomeSelected());
+      }
+      onReferenceGenomeSelected();
+    };
+    if (Platform.isFxApplicationThread()) {
+      reload.run();
+    } else {
+      Platform.runLater(reload);
+    }
   }
 
   /**
