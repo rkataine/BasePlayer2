@@ -95,6 +95,7 @@ public final class SessionDocumentSync {
     writeVariantFilterFromRuntime(VcfManager.getInstance());
     writeControlFilesFromRuntime();
     writeSampleGroupsFromRegistry();
+    org.baseplayer.analysis.ComparisonContext.get().writeToDocument(live());
     writeSampleTracksFromRuntime(projectFile);
     writeFeatureTracksFromRuntime(projectFile);
     writeStacksFromRuntime();

@@ -3,6 +3,7 @@ package org.baseplayer.variant.draw;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.CnvMagnitude;
 import org.baseplayer.variant.VariantDrawSeek;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -74,11 +75,12 @@ public class VariantDrawer {
 
     // Quality thresholds
     private static final double MIN_QUALITY_FULL_OPACITY = 30.0;
-    /** |CNLR_MEDIAN| that maps to full half-height. */
-    private static final double CNV_LOGR_FULL_SCALE = 1.0;
-    /** |TCN−2| that maps to full half-height when logR is absent. */
-    private static final double CNV_TCN_FULL_SCALE = 4.0;
     private static final double CNV_SCALE_W = 28;
+    /**
+     * Below this row height, +unit / 0 / −unit labels and tick marks overlap and
+     * stop being readable — skip the left CNV scale chrome.
+     */
+    private static final double MIN_SAMPLE_HEIGHT_FOR_CNV_SCALE = 36;
     /** Soft gray for CNV midlines / left-scale ticks (less stark than pure white). */
     private static final Color CNV_SCALE_INK = Color.rgb(186, 186, 186);
 
@@ -770,8 +772,8 @@ public class VariantDrawer {
 
         double midY = y + sampleHeight * 0.5;
         double halfH = Math.max(2.0, sampleHeight * 0.5 - 1.5);
-        double signed = cnvSignedMagnitude(variant);
-        double unit = cnvDisplayUnit(variant);
+        double signed = CnvMagnitude.signed(variant);
+        double unit = CnvMagnitude.displayUnit(variant);
         double amp = Math.min(1.0, Math.abs(signed) / unit);
         // Keep a visible stub even for near-neutral called gain/loss.
         if (amp < 0.08 && variant.type != VcfVariantType.SV_CNV_NEUTRAL && signed != 0) {
@@ -815,62 +817,6 @@ public class VariantDrawer {
         }
     }
 
-    /** Signed amplitude: logR when present, else TCN relative to diploid (2). */
-    private static double cnvSignedMagnitude(VariantNode node) {
-        if (node == null) {
-            return 0;
-        }
-        Double logr = parseInfoDouble(node, "CNLR_MEDIAN");
-        if (logr == null) {
-            logr = parseInfoDouble(node, "CNLR_MEDIAN_CLUST");
-        }
-        if (logr != null) {
-            return logr;
-        }
-        Double tcn = parseInfoDouble(node, "TCN_EM");
-        if (tcn == null) {
-            tcn = parseInfoDouble(node, "TCN");
-        }
-        if (tcn == null) {
-            tcn = parseInfoDouble(node, "CN");
-        }
-        if (tcn != null) {
-            return tcn - 2.0;
-        }
-        if (node.type == VcfVariantType.SV_CNV_GAIN) {
-            return 1.0;
-        }
-        if (node.type == VcfVariantType.SV_CNV_LOSS) {
-            return -1.0;
-        }
-        return 0;
-    }
-
-    /** Full half-height maps to this |magnitude| (logR ±1 or |TCN−2| = 4). */
-    private static double cnvDisplayUnit(VariantNode node) {
-        if (node != null
-            && (node.getInfoValue("CNLR_MEDIAN") != null
-                || node.getInfoValue("CNLR_MEDIAN_CLUST") != null)) {
-            return CNV_LOGR_FULL_SCALE;
-        }
-        return CNV_TCN_FULL_SCALE;
-    }
-
-    private static Double parseInfoDouble(VariantNode node, String key) {
-        if (node == null || key == null) {
-            return null;
-        }
-        String raw = node.getInfoValue(key);
-        if (raw == null || raw.isBlank() || ".".equals(raw) || "NA".equalsIgnoreCase(raw)) {
-            return null;
-        }
-        try {
-            return Double.parseDouble(raw.trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
     private static boolean sessionHasCanvasCnv(
             VcfManager vcfManager,
             java.util.Set<VcfVariantType> legendTypes) {
@@ -883,15 +829,17 @@ public class VariantDrawer {
     }
 
     /**
-     * Per-sample CNV guide: faint white midline across the row and a left scale
-     * (+unit / 0 / −unit) matching the aggregate density chrome layout.
+     * Per-sample CNV left scale (+unit / 0 / −unit) matching the aggregate
+     * density chrome layout. Omitted when rows are too short for readable ticks.
      */
     private void drawCnvSampleGuides(
             GraphicsContext gc,
             int sampleCount,
             double[] yPositions,
             double sampleHeight) {
-        if (sampleCount <= 0 || yPositions == null || sampleHeight < 10) {
+        if (sampleCount <= 0
+            || yPositions == null
+            || sampleHeight < MIN_SAMPLE_HEIGHT_FOR_CNV_SCALE) {
             return;
         }
         boolean useLogr = sessionPrefersLogrScale();

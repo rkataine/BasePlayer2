@@ -19,6 +19,7 @@ import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantTypeVisuals;
+import org.baseplayer.variant.VcfAlleleNormalizer;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.ClinVarAnnotator;
 import org.baseplayer.variant.annotation.VariantAnnotation;
@@ -98,8 +99,8 @@ public class VariantInfoPopup extends InfoPopup {
     c.section("Variant");
     c.row("Chromosome", ChromosomeNames.forDisplay(chromosome));
     c.row("Position", formatPosition(node));
-    c.row("REF", nullToDash(node.ref));
-    c.row("ALT", nullToDash(node.alt));
+    c.row("REF", VcfAlleleNormalizer.formatSequenceForDisplay(node.ref));
+    c.row("ALT", VcfAlleleNormalizer.formatSequenceForDisplay(node.alt));
     c.row("Type", typeLabel(node.type));
     if (node.vcfId != null && !node.vcfId.isBlank()) {
       c.row("ID", node.vcfId);
@@ -480,7 +481,9 @@ public class VariantInfoPopup extends InfoPopup {
   }
 
   private static String formatAllele(VariantNode node) {
-    return nullToDash(node.ref) + " → " + nullToDash(node.alt);
+    return VcfAlleleNormalizer.formatSequenceForDisplay(node.ref)
+        + " → "
+        + VcfAlleleNormalizer.formatSequenceForDisplay(node.alt);
   }
 
   private static String formatPosition(VariantNode node) {

@@ -442,7 +442,7 @@
         <StackPane.margin>
             <Insets top="8" left="8"/>
         </StackPane.margin>
-        <Label text="Variant Manager" style="-fx-text-fill: #cccccc; -fx-font-size: 11px; -fx-font-weight: bold;"/>
+        <Label text="Analysis" style="-fx-text-fill: #cccccc; -fx-font-size: 11px; -fx-font-weight: bold;"/>
         <Button fx:id="minimizedExpandButton" text="▲" styleClass="secondary-button"
                 style="-fx-font-size: 9px; -fx-padding: 2 6 2 6;"
                 onAction="#handleExpandMinimized"/>

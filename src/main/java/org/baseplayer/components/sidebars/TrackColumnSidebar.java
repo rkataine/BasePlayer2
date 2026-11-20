@@ -352,9 +352,14 @@ public abstract class TrackColumnSidebar extends SidebarBase {
       return;
     }
     double delta = screenY - dragStartScreenY;
+    double sceneH = 0;
+    if (masterHeaderCanvas != null && masterHeaderCanvas.getScene() != null) {
+      sceneH = masterHeaderCanvas.getScene().getHeight();
+    }
+    double maxH = TrackViewportRegistry.maxMasterBandHeightForScene(sceneH);
     double newHeight = Math.max(
         TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
-        Math.min(200, dragStartHeight + delta));
+        Math.min(maxH, dragStartHeight + delta));
     trackViewportRegistry.setMasterBandHeightPixels(newHeight);
     // Dragging above title height turns aggregates on; snapping back to title turns them off.
     if (newHeight > TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {

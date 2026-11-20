@@ -334,6 +334,13 @@ public final class ZoomController {
     }
     final double targetStart = start;
     final double targetEnd = end;
+    // navigateTo() often setStartEnd before calling us — already at the gene.
+    // Skip snapshot/animation so BAM open work does not delay the jump.
+    if (Math.abs(stack.start - targetStart) < 0.5 && Math.abs(stack.end - targetEnd) < 0.5) {
+      pendingZoomStart = Double.NaN;
+      pendingZoomEnd = Double.NaN;
+      return;
+    }
     if (shouldSkipZoomAnimation(targetStart, targetEnd)) {
       cancelZoomAnimation(true);
       canvas.setStartEnd(targetStart, targetEnd);

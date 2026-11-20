@@ -45,6 +45,10 @@ public final class AnnotationLoader {
   /** genome/annotation key that already failed — avoids ChromosomeCanvas retry loops. */
   private static volatile String lastFailedAnnotationKey;
   private static volatile String lastNotifiedFailureKey;
+  /** Selection key currently being loaded — suppresses duplicate background starts. */
+  private static volatile String inFlightAnnotationKey;
+  /** Last successfully published genome/annotation key (skip reload when unchanged). */
+  private static volatile String loadedAnnotationKey;
   
   private AnnotationLoader() {} // Utility class
   
@@ -101,8 +105,23 @@ public final class AnnotationLoader {
       // Already failed for this genome/annotation — do not retry from draw loops.
       return;
     }
+    // Same annotation already in memory — project reopen / sidebar sync must not clear it.
+    if (AnnotationData.isGenesLoaded()
+        && requestKey != null
+        && requestKey.equals(loadedAnnotationKey)) {
+      return;
+    }
+    // Already loading this selection — do not clearGenes() / bump generation (that
+    // restarts the worker forever when SessionRuntime + sidebars both call us).
+    if (AnnotationData.isGenesLoading()
+        && requestKey != null
+        && requestKey.equals(inFlightAnnotationKey)) {
+      return;
+    }
 
     final int generation = geneLoadGeneration.incrementAndGet();
+    inFlightAnnotationKey = requestKey;
+    loadedAnnotationKey = null;
     // Drop previous assembly's genes immediately so they never paint under a new reference.
     AnnotationData.clearGenes();
     AnnotationData.setGenesLoading(true);
@@ -151,7 +170,8 @@ public final class AnnotationLoader {
       String detail = missingAnnotationMessage(genome, annotation, gff3File);
       System.err.println(detail);
       AnnotationData.clearGenes();
-      AnnotationData.setGenesLoading(false);
+      loadedAnnotationKey = null;
+      finishGeneLoad();
       markAnnotationLoadFailed(selectionKey, "Gene annotation not loaded", detail);
       return;
     }
@@ -167,7 +187,8 @@ public final class AnnotationLoader {
           if (loadGenesFromCache(cacheFile)) {
             lastFailedAnnotationKey = null;
             lastNotifiedFailureKey = null;
-            AnnotationData.setGenesLoading(false);
+            loadedAnnotationKey = selectionKey;
+            finishGeneLoad();
             return;
           }
         }
@@ -214,6 +235,7 @@ public final class AnnotationLoader {
           snapshot.byChrom, snapshot.searchMap, snapshot.biotypeMap, snapshot.names);
       lastFailedAnnotationKey = null;
       lastNotifiedFailureKey = null;
+      loadedAnnotationKey = selectionKey;
       
       // Save to cache for faster subsequent loads
       saveGenesToCache(cacheFile);
@@ -224,13 +246,19 @@ public final class AnnotationLoader {
     } catch (IOException e) {
       System.err.println("Failed to load genes from " + gff3File + ": " + e.getMessage());
       AnnotationData.clearGenes();
+      loadedAnnotationKey = null;
       markAnnotationLoadFailed(
           selectionKey,
           "Gene annotation failed to load",
           "Could not read:\n" + gff3File + "\n\n" + e.getMessage());
     } finally {
-      AnnotationData.setGenesLoading(false);
+      finishGeneLoad();
     }
+  }
+
+  private static void finishGeneLoad() {
+    inFlightAnnotationKey = null;
+    AnnotationData.setGenesLoading(false);
   }
 
   /**

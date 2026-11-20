@@ -200,6 +200,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
       suppressClickFromScrollbar = true;
       if (isPointInTrackScrollbarThumb(event.getX(), event.getY())) {
         trackScrollbarDragging = true;
+        trackViewportRegistry.beginSampleListScroll();
         trackScrollbarDragOffsetY = event.getY() - trackScrollbarThumbY;
         int[] baseRange = getBaseRange();
         dragScrollbarWindowSize = Math.max(1, baseRange[1] - baseRange[0] + 1);
@@ -221,6 +222,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
         return;
       }
       event.consume();
+      trackViewportRegistry.noteSampleListScroll();
       double nextFirstPosition =
           firstSlotPositionFromScrollbarThumbTop(event.getY() - trackScrollbarDragOffsetY);
       previewIntervalAtFirstSlot(nextFirstPosition);
@@ -229,6 +231,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
     reactiveCanvas.setOnMouseReleased(event -> {
       if (trackScrollbarDragging) {
         finishContinuousScrollbarDrag();
+        trackViewportRegistry.endSampleListScroll();
       }
       trackScrollbarDragging = false;
       trackScrollbarDragOffsetY = 0;
@@ -386,10 +389,12 @@ public abstract class TrackListPanel extends SidebarContentPanel {
       trackViewportRegistry.setVerticalScrollOffsetPixels(targetScroll, viewportHeight);
       trackViewportRegistry.unlockTrackRowHeight();
       clearAnimationTargets();
+      trackViewportRegistry.endSampleListScroll();
       onAfterVisibleTrackRangeChanged();
       return;
     }
 
+    trackViewportRegistry.beginSampleListScroll();
     scrollAnimationStartNanoseconds = System.nanoTime();
     scrollAnimation = new AnimationTimer() {
       @Override
@@ -402,6 +407,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
           clearAnimationTargets();
           stop();
           scrollAnimation = null;
+          trackViewportRegistry.endSampleListScroll();
           onAfterVisibleTrackRangeChanged();
           return;
         }
@@ -409,6 +415,7 @@ public abstract class TrackListPanel extends SidebarContentPanel {
         double easedProgress = EASE_OUT_CUBIC.applyAsDouble(Math.max(0.0, progress));
         double currentScroll = startScroll + (targetScroll - startScroll) * easedProgress;
         trackViewportRegistry.setVerticalScrollOffsetPixels(currentScroll, viewportHeight);
+        trackViewportRegistry.noteSampleListScroll();
         onAfterVisibleTrackRangeChanged();
       }
     };

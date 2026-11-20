@@ -20,7 +20,6 @@ package org.baseplayer.io.bbreader;
 import java.util.zip.Inflater;
 import java.util.zip.Deflater;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 
 /*
 *   Compression/Decompression Utillity adapted to BigBed/BigWig Compression formats.
@@ -56,13 +55,9 @@ public class BBCompressionUtils {
         byte[] outbuf = new byte[uncompressBufSize];
 
         while (rem > 0) {
-
-            // Create the decompressor and give it the data to compress
-            Inflater decompressor = new Inflater();
-            decompressor.setInput(inbuf);
-
-            try {
-                //byte[] outbuf = new byte[uncompressBufSize];
+            // Create the decompressor and give it the data to decompress
+            try (Inflater decompressor = new Inflater()) {
+                decompressor.setInput(inbuf);
                 uncompressBufSize = outbuf.length;
                 count = decompressor.inflate(outbuf, 0, uncompressBufSize);
 
@@ -75,15 +70,10 @@ public class BBCompressionUtils {
                 }
 
                 bos.write(outbuf, 0, count);
-
             } catch (Exception _) {
                 // ignore decompression errors for this chunk
+                break;
             }
-        }
-
-        try {
-            bos.close();
-        } catch (IOException _) {
         }
 
         // Get the decompressed data
@@ -92,33 +82,25 @@ public class BBCompressionUtils {
     /*
     * */
     public static byte[] compress(byte[] data, int compressBufSize) {
-        Deflater compressor = new Deflater();
-        compressor.setLevel(Deflater.DEFAULT_COMPRESSION);
-
-        // Give the compressor the data to compress
-        compressor.setInput(data);
-        compressor.finish();
-
         // Create an expandable byte array to hold the compressed data.
         // You cannot use an array that's the same size as the orginal because
         // there is no guarantee that the compressed data will be smaller than
         // the uncompressed data.
         ByteArrayOutputStream bos = new ByteArrayOutputStream(data.length);
-
-        // Compress the data
         byte[] buf = new byte[compressBufSize];
-        while (!compressor.finished()) {
-            int count = compressor.deflate(buf);
-            bos.write(buf, 0, count);
-        }
-        try {
-            bos.close();
-        } catch (IOException _) {
+
+        try (Deflater compressor = new Deflater()) {
+            compressor.setLevel(Deflater.DEFAULT_COMPRESSION);
+            compressor.setInput(data);
+            compressor.finish();
+
+            while (!compressor.finished()) {
+                int count = compressor.deflate(buf);
+                bos.write(buf, 0, count);
+            }
         }
 
-        byte[] compressedData = bos.toByteArray();
-        return compressedData;
-
+        return bos.toByteArray();
     }
 
     

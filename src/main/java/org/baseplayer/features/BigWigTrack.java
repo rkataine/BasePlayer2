@@ -65,6 +65,54 @@ public class BigWigTrack extends AbstractTrack {
 
   public record WigBin(int start, int end, double value) {}
 
+  public Path getFilePath() {
+    return filePath;
+  }
+
+  /**
+   * Mean signal over inclusive genomic interval (blocking). Returns null when empty.
+   * When {@link SignalDisplayMode#COPY_RATIO} with log₂ display, returns the same
+   * transformed value used for canvas drawing.
+   */
+  public Double meanValue(String chromosome, long start1Based, long end1Based) {
+    if (chromosome == null || reader == null) {
+      return null;
+    }
+    long start = Math.max(0, Math.min(start1Based, end1Based) - 1); // BigWig uses 0-based
+    long end = Math.max(start + 1, Math.max(start1Based, end1Based));
+    List<WigBin> bins;
+    try {
+      // gen=-1: synchronous analysis query — ignore display-load cancellation.
+      bins = fetchFullResolution(toDataChrom(chromosome), start, end, -1);
+      if (bins.isEmpty()) {
+        String alt = alternateChrom(toDataChrom(chromosome));
+        if (alt != null) {
+          bins = fetchFullResolution(alt, start, end, -1);
+        }
+      }
+    } catch (RuntimeException ex) {
+      return null;
+    }
+    if (bins == null || bins.isEmpty()) {
+      return null;
+    }
+    double sum = 0;
+    double weight = 0;
+    for (WigBin bin : bins) {
+      if (bin == null || Double.isNaN(bin.value())) {
+        continue;
+      }
+      double v = bin.value();
+      if (displayMode == SignalDisplayMode.COPY_RATIO) {
+        v = toCopyRatioDisplay(v);
+      }
+      double w = Math.max(1, bin.end() - bin.start());
+      sum += v * w;
+      weight += w;
+    }
+    return weight > 0 ? sum / weight : null;
+  }
+
   private final Path filePath;
   private final BBFileReader reader;
   private final AtomicInteger loadGeneration = new AtomicInteger();
@@ -73,6 +121,10 @@ public class BigWigTrack extends AbstractTrack {
   private volatile String loadedChrom = "";
   private volatile long loadedStart = 0;
   private volatile long loadedEnd = 0;
+  /** Region the in-flight fetch was started for (dedupe overlapping requests). */
+  private volatile String pendingChrom = "";
+  private volatile long pendingStart = 0;
+  private volatile long pendingEnd = 0;
   private volatile boolean loading = false;
   private volatile String loadError = null;
 
@@ -100,11 +152,6 @@ public class BigWigTrack extends AbstractTrack {
       setCopyRatioLog2(true);
     }
 
-    System.err.println("[BigWig] Opening via BBFileReader: " + this.filePath
-        + " mode=" + displayMode
-        + (displayMode == SignalDisplayMode.COPY_RATIO
-            ? (copyRatioLog2 ? " log2" : " linear")
-            : ""));
     this.reader = new BBFileReader(this.filePath.toString());
     if (!reader.isBigWigFile()) {
       reader.close();
@@ -114,14 +161,7 @@ public class BigWigTrack extends AbstractTrack {
     List<String> chroms = reader.getChromosomeNames();
     if (chroms != null && !chroms.isEmpty()) {
       setChromPrefix(ChromosomeNames.detectPrefix(chroms));
-      int show = Math.min(chroms.size(), 12);
-      System.err.println("[BigWig] chroms=" + chroms.size()
-          + " prefix='" + getChromPrefix() + "'"
-          + " first=" + chroms.subList(0, show));
     }
-    BBZoomLevels zooms = reader.getZoomLevels();
-    System.err.println("[BigWig] zoomLevels=" + reader.getZoomLevelCount()
-        + (zooms != null ? (" headers=" + zooms.getZoomHeaderCount()) : ""));
   }
 
   /** Heuristic: DRAGEN / Illumina {@code *.baf*.bw} companions. */
@@ -238,32 +278,44 @@ public class BigWigTrack extends AbstractTrack {
       return;
     }
 
-    // Skip reload if we already cover this region at a suitable zoom.
-    if (!loading
-        && chromosome.equals(loadedChrom)
-        && start >= loadedStart
-        && end <= loadedEnd
-        && (loadedEnd - loadedStart) <= Math.max(1, (end - start) * 3)) {
-      return;
-    }
-
-    final int gen = loadGeneration.incrementAndGet();
     final String chrom = chromosome;
     final long viewStart = Math.max(0, start);
     final long viewEnd = Math.max(viewStart + 1, end);
-    final double pixelSize = drawStack != null ? Math.max(1e-9, drawStack.getPixelSize()) : 1.0;
-    final double basesPerPixel = 1.0 / pixelSize;
-    // Approximate paint width for per-column thinning (fallback if canvas unknown).
-    final int approxPixels = Math.max(100, (int) Math.round((viewEnd - viewStart) * pixelSize));
 
     // Pad fetch window slightly so pan stays covered.
     long pad = Math.max(1, (viewEnd - viewStart) / 4);
     final long fetchStart = Math.max(0, viewStart - pad);
     final long fetchEnd = viewEnd + pad;
+
+    // Skip reload if we already cover this region at a suitable zoom.
+    if (!loading
+        && chrom.equals(loadedChrom)
+        && start >= loadedStart
+        && end <= loadedEnd
+        && (loadedEnd - loadedStart) <= Math.max(1, (end - start) * 3)) {
+      return;
+    }
+    // Don't cancel+restart an in-flight fetch for the same region (multi-open storm).
+    if (loading
+        && chrom.equals(pendingChrom)
+        && fetchStart == pendingStart
+        && fetchEnd == pendingEnd) {
+      return;
+    }
+
+    final int gen = loadGeneration.incrementAndGet();
+    final double pixelSize = drawStack != null ? Math.max(1e-9, drawStack.getPixelSize()) : 1.0;
+    final double basesPerPixel = 1.0 / pixelSize;
+    // Approximate paint width for per-column thinning (fallback if canvas unknown).
+    final int approxPixels = Math.max(100, (int) Math.round((viewEnd - viewStart) * pixelSize));
+
     final boolean baf = displayMode == SignalDisplayMode.BAF;
     final boolean copyRatio = displayMode == SignalDisplayMode.COPY_RATIO;
     final int zoomLevel = chooseZoomLevel(basesPerPixel, baf, copyRatio);
 
+    pendingChrom = chrom;
+    pendingStart = fetchStart;
+    pendingEnd = fetchEnd;
     loading = true;
     loadError = null;
     notifyLoaded();
@@ -271,7 +323,7 @@ public class BigWigTrack extends AbstractTrack {
     Thread t = new Thread(() -> {
       try {
         List<WigBin> fetched = fetchBins(
-            chrom, fetchStart, fetchEnd, zoomLevel, baf, basesPerPixel, approxPixels);
+            chrom, fetchStart, fetchEnd, zoomLevel, baf, basesPerPixel, approxPixels, gen);
         if (gen != loadGeneration.get()) {
           return;
         }
@@ -327,21 +379,12 @@ public class BigWigTrack extends AbstractTrack {
           loadedStart = fetchStart;
           loadedEnd = fetchEnd;
           loading = false;
-          System.err.println("[BigWig] loaded " + result.size() + " bins"
-              + " chrom=" + chrom
-              + " dataChrom=" + toDataChrom(chrom)
-              + " " + fetchStart + "-" + fetchEnd
-              + " zoom=" + zoomLevel
-              + (baf ? " (BAF min/max or full)" : "")
-              + " scale=" + scale);
           notifyLoaded();
         });
       } catch (Exception e) {
         if (gen != loadGeneration.get()) {
           return;
         }
-        System.err.println("[BigWig] fetch failed: " + e.getMessage());
-        e.printStackTrace(System.err);
         Platform.runLater(() -> {
           if (gen != loadGeneration.get()) {
             return;
@@ -394,15 +437,16 @@ public class BigWigTrack extends AbstractTrack {
       int zoomLevel,
       boolean bafMode,
       double basesPerPixel,
-      int approxPixels) {
+      int approxPixels,
+      int gen) {
     String dataChrom = toDataChrom(chromosome);
 
     if (zoomLevel <= 1) {
-      List<WigBin> full = fetchFullResolution(dataChrom, start, end);
+      List<WigBin> full = fetchFullResolution(dataChrom, start, end, gen);
       if (full.isEmpty()) {
         String alt = alternateChrom(dataChrom);
         if (alt != null) {
-          List<WigBin> altFull = fetchFullResolution(alt, start, end);
+          List<WigBin> altFull = fetchFullResolution(alt, start, end, gen);
           if (!altFull.isEmpty()) {
             applyChromPrefixFromName(alt);
             full = altFull;
@@ -415,11 +459,11 @@ public class BigWigTrack extends AbstractTrack {
       return full;
     }
 
-    List<WigBin> zoomBins = fetchZoomBins(dataChrom, start, end, zoomLevel, bafMode);
+    List<WigBin> zoomBins = fetchZoomBins(dataChrom, start, end, zoomLevel, bafMode, gen);
     if (zoomBins.isEmpty()) {
       String alt = alternateChrom(dataChrom);
       if (alt != null) {
-        zoomBins = fetchZoomBins(alt, start, end, zoomLevel, bafMode);
+        zoomBins = fetchZoomBins(alt, start, end, zoomLevel, bafMode, gen);
         if (!zoomBins.isEmpty()) {
           applyChromPrefixFromName(alt);
         }
@@ -427,19 +471,30 @@ public class BigWigTrack extends AbstractTrack {
     }
     if (zoomBins.isEmpty()) {
       // Fall back to full-res (possibly thinned) rather than empty.
-      return fetchBins(chromosome, start, end, 1, bafMode, basesPerPixel, approxPixels);
+      return fetchBins(chromosome, start, end, 1, bafMode, basesPerPixel, approxPixels, gen);
     }
     return zoomBins;
   }
 
-  private List<WigBin> fetchFullResolution(String dataChrom, long start, long end) {
+  private boolean loadSuperseded(int gen) {
+    if (gen < 0) {
+      return Thread.currentThread().isInterrupted();
+    }
+    return gen != loadGeneration.get() || Thread.currentThread().isInterrupted();
+  }
+
+  private List<WigBin> fetchFullResolution(String dataChrom, long start, long end, int gen) {
     List<WigBin> out = new ArrayList<>();
     BigWigIterator it = reader.getBigWigIterator(
         dataChrom, (int) start, dataChrom, (int) end, false);
     if (it == null) {
       return out;
     }
+    int n = 0;
     while (it.hasNext()) {
+      if ((n++ & 0x3FF) == 0 && loadSuperseded(gen)) {
+        return List.of();
+      }
       WigItem item = it.next();
       if (item == null) {
         continue;
@@ -456,20 +511,23 @@ public class BigWigTrack extends AbstractTrack {
   }
 
   private List<WigBin> fetchZoomBins(
-      String dataChrom, long start, long end, int zoomLevel, boolean bafMode) {
+      String dataChrom, long start, long end, int zoomLevel, boolean bafMode, int gen) {
     List<WigBin> out = new ArrayList<>();
     ZoomLevelIterator zit;
     try {
       zit = reader.getZoomLevelIterator(
           zoomLevel, dataChrom, (int) start, dataChrom, (int) end, false);
     } catch (RuntimeException e) {
-      System.err.println("[BigWig] zoom iterator failed: " + e.getMessage());
       return out;
     }
     if (zit == null) {
       return out;
     }
+    int n = 0;
     while (zit.hasNext()) {
+      if ((n++ & 0xFF) == 0 && loadSuperseded(gen)) {
+        return List.of();
+      }
       ZoomDataRecord rec = zit.next();
       if (rec == null) {
         continue;

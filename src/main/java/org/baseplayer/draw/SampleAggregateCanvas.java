@@ -81,9 +81,11 @@ public class SampleAggregateCanvas extends AggregateBandCanvas {
       return;
     }
     double delta = event.getScreenY() - resizeStartScreenY;
+    double maxH = SampleRegistry.maxMasterBandHeightForScene(
+        getScene() != null ? getScene().getHeight() : 0);
     double newHeight = Math.max(
         SampleRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS,
-        Math.min(200, resizeStartMasterHeight + delta));
+        Math.min(maxH, resizeStartMasterHeight + delta));
     sampleRegistry.setMasterTrackHeight(newHeight);
     if (newHeight > SampleRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS + 1) {
       if (!sampleRegistry.isMasterAggregatesEnabled()) {

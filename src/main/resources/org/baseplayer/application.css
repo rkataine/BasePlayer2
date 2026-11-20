@@ -82,6 +82,14 @@
   -fx-border-insets: 0 0 0 30;
 }
 
+/* Circos Options: ensure check/radio glyphs paint in the left strip. */
+.check-menu-item > .left-container,
+.radio-menu-item > .left-container {
+  -fx-min-width: 30;
+  -fx-pref-width: 30;
+  -fx-alignment: center;
+}
+
 .flat-combo-box .list-cell {
   -fx-padding: 4px;
   padding: 4px;
@@ -831,8 +839,13 @@ VBox {
 }
 
 .filter-tabs > .tab-header-area > .headers-region > .tab .tab-label {
-  -fx-text-fill: -bp-muted;
+  /* Prefer text-muted over muted — unselected mode tabs must stay readable. */
+  -fx-text-fill: -bp-text-muted;
   -fx-font-size: 12px;
+}
+
+.filter-tabs > .tab-header-area > .headers-region > .tab:hover .tab-label {
+  -fx-text-fill: -bp-text;
 }
 
 .filter-tabs > .tab-header-area > .headers-region > .tab:selected .tab-label {
@@ -928,8 +941,12 @@ VBox {
 }
 
 .results-tabs > .tab-header-area > .headers-region > .tab .tab-label {
-  -fx-text-fill: -bp-muted;
+  -fx-text-fill: -bp-text-muted;
   -fx-font-size: 11px;
+}
+
+.results-tabs > .tab-header-area > .headers-region > .tab:hover .tab-label {
+  -fx-text-fill: -bp-text;
 }
 
 .results-tabs > .tab-header-area > .headers-region > .tab:selected .tab-label {
@@ -1942,10 +1959,6 @@ VBox {
 }
 
 /* ── Start Hub ───────────────────────────────────────────────────────────── */
-
-.start-hub-backdrop {
-  -fx-background-color: rgba(8, 10, 12, 0.72);
-}
 
 .start-hub-panel {
   -fx-background-color: linear-gradient(to bottom, #2a2e33 0%, #1f2328 55%, #1a1d21 100%);

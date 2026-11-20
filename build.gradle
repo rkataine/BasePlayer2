@@ -34,7 +34,7 @@ application {
 }
 shadowJar {
     mergeServiceFiles()
-    zip64 true
+    zip64 = true
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
     configurations = [project.configurations.runtimeClasspath]
     archiveVersion = '1.0.0'
@@ -163,12 +163,10 @@ tasks.register('cnvProbe', JavaExec) {
 }
 
 dependencies {
-    implementation(
-        [group: 'com.google.code.gson', name: 'gson', version: '2.11.0'],
-        [group: 'com.github.samtools', name: 'htsjdk', version: '4.1.3'],
-        [group: 'com.github.luben', name: 'zstd-jni', version: '1.5.6-9']
-    )
-    
+    implementation 'com.google.code.gson:gson:2.11.0'
+    implementation 'com.github.samtools:htsjdk:4.1.3'
+    implementation 'com.github.luben:zstd-jni:1.5.6-9'
+
     // Ikonli icon font library for JavaFX
     implementation 'org.kordamp.ikonli:ikonli-javafx:12.3.1'
     implementation 'org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1'
@@ -394,3 +392,4 @@ task jpackageMacPkg(dependsOn: jpackageImage) {
         println "\n✓ macOS PKG created in: ${outputDir.absolutePath}"
     }
 }
+

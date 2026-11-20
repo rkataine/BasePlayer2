@@ -12,8 +12,11 @@ import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.samples.alignment.AlignmentFile;
 import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.samples.alignment.BamCoverageQueue;
 import org.baseplayer.samples.alignment.BaseModification;
 import org.baseplayer.samples.alignment.CoverageCalculator;
+import org.baseplayer.samples.alignment.MethylSiteContext;
+import org.baseplayer.samples.alignment.MethylationCanvasFilter;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.TrackViewportRegistry;
@@ -78,6 +81,8 @@ public class CoverageDrawer {
     public int methylColorIndex;
     /** True if this row is only for the master track (sample not in visible range) */
     public boolean masterTrackOnly;
+    /** False while BAM coverage cache is still streaming from region start. */
+    public boolean coverageComplete = true;
 
     SampleRow(Sample sample, int sampleIndex, int numColumns) {
       this.sample = sample;
@@ -184,7 +189,8 @@ public class CoverageDrawer {
     int start = Math.max(0, (int) drawStack.getViewStart());
     int end = (int) drawStack.getViewEnd();
     // Within read-zoom: build coverage from reads; otherwise coverage-cache path.
-    boolean coverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
+    // Per-file coverageOnlyMode also forces the matrix path (no packed reads).
+    boolean zoomCoverageOnly = drawStack.getViewLength() > Settings.get().getMaxReadViewLength();
     boolean isHoverStack = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
 
     // Count visible methylation samples for color assignment
@@ -203,7 +209,8 @@ public class CoverageDrawer {
         if (!sf.visible) continue;
         processedFiles.add(sf);
 
-        // sampleIndex is the display slot used for Y placement (not backing index).
+        boolean coverageOnly = zoomCoverageOnly || isSampleCoverageOnlyMode(sf);
+        // Never ensureOpen on the FX paint path — that OOMs on gene jump.
         SampleRow row = buildRow(sf, slot, chrom, start, end, coverageOnly, isHoverStack);
         if (row != null) {
           if (sf.isMethylationData()) {
@@ -214,14 +221,17 @@ public class CoverageDrawer {
       }
     }
 
-    // Off-viewport methylation for master band: coverage only — never fetch reads.
+    // Off-screen methylation for master-band: parked caches only.
     java.util.List<Integer> displayedTrackIndices = sampleRegistry.getDisplayedTrackIndices();
     for (int slot = 0; slot < displayedTrackIndices.size(); slot++) {
-      if (slot >= sampleRegistry.getFirstVisibleSample() && slot <= sampleRegistry.getLastVisibleSample()) {
+      int sIdx = displayedTrackIndices.get(slot);
+      if (sIdx < 0 || sIdx >= sampleRegistry.getSampleTracks().size()) {
         continue;
       }
-      int sIdx = displayedTrackIndices.get(slot);
       SampleTrack track = sampleRegistry.getSampleTracks().get(sIdx);
+      if (track == null) {
+        continue;
+      }
 
       for (Sample sf : track.getSamples()) {
         if (!sf.visible || !sf.isMethylationData() || processedFiles.contains(sf)) continue;
@@ -250,15 +260,63 @@ public class CoverageDrawer {
     return max;
   }
 
+  private static boolean isSampleCoverageOnlyMode(Sample sample) {
+    return sample != null && sample.isCoverageOnlyMode();
+  }
+
   private SampleRow buildRow(Sample sample, int sampleIndex, String chrom,
                              int start, int end, boolean coverageOnly, boolean isHoverStack) {
-    boolean isMethyl = sample.isMethylationData();
+    if (sample == null || sample.getDataType() != Sample.DataType.BAM) {
+      return null;
+    }
 
     if (coverageOnly) {
-      return buildRowCoverageOnly(sample, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
-    } else {
-      return buildRowFromReads(sample, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
+      SampleRow parked = buildRowFromParked(
+          sample, sampleIndex, chrom, start, end, sample.isMethylationData());
+      if (parked != null) {
+        return parked;
+      }
+      if (sample.getBamFile() != null) {
+        return buildRowCoverageOnly(
+            sample, sampleIndex, chrom, start, end, sample.isMethylationData(), isHoverStack);
+      }
+      // Background fill — ephemeral open, does not disturb read-pile handles.
+      BamCoverageQueue.get().enqueue(sample, chrom, start, end, drawStack, numColumns);
+      return null;
     }
+
+    // Read-zoom: TrackBodyCanvas ensureOpen + getReads. Do not enqueue coverage.
+    if (sample.getBamFile() == null) {
+      return null;
+    }
+    boolean isMethyl = sample.isMethylationData();
+    return buildRowFromReads(sample, sampleIndex, chrom, start, end, isMethyl, isHoverStack);
+  }
+
+  private SampleRow buildRowFromParked(Sample sample, int sampleIndex, String chrom,
+                                       int start, int end, boolean isMethyl) {
+    AlignmentFile.CoverageCache cache = sample.getParkedCoverageCache();
+    if (cache == null || cache.chrom == null || !cache.chrom.equals(chrom)) {
+      return null;
+    }
+    int cacheEnd = (int) (cache.genomicStart + cache.numBins * cache.binSize);
+    if (start < cache.genomicStart || end > cacheEnd) {
+      return null;
+    }
+    // Reuse coverage-only mapper by temporarily requiring bamFile — map inline.
+    return mapParkedCache(sample, sampleIndex, chrom, start, end, isMethyl, cache);
+  }
+
+  private static boolean hasAnyMethylValue(double[] ratios) {
+    if (ratios == null) {
+      return false;
+    }
+    for (double v : ratios) {
+      if (v >= 0.0 && Double.isFinite(v)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -403,8 +461,15 @@ public class CoverageDrawer {
         }
         
         if (sequence != null) {
+          MethylationCanvasFilter methylFilter = MethylationCanvasFilter.get();
+          if (bamFile != null) {
+            bamFile.noteObservedModTypes(read.baseModifications);
+          }
           for (BaseModification mod : read.baseModifications) {
             char modKey = mod.modCode.length() > 0 ? mod.modCode.charAt(0) : '?';
+            if (!methylFilter.isModTypeVisible(modKey)) {
+              continue;
+            }
             if (!row.modTypeCounts.containsKey(modKey)) {
               row.modTypeCounts.put(modKey, new double[numColumns]);
               row.modTypeProbSums.put(modKey, new double[numColumns]);
@@ -518,6 +583,7 @@ public class CoverageDrawer {
         refBases = referenceGenomeService.getBases(chrom, Math.max(1, start), start + regionLen - 1);
         if (refBases != null && refBases.isEmpty()) refBases = null;
       }
+      MethylationCanvasFilter methylFilter = MethylationCanvasFilter.get();
 
       // Build per-base coverage from base events
       int[] baseCov = new int[regionLen];
@@ -535,6 +601,8 @@ public class CoverageDrawer {
         if (refBases != null && i < refBases.length()) {
           char base = Character.toUpperCase(refBases.charAt(i));
           if (base == 'A' || base == 'T') continue;
+          MethylSiteContext ctx = MethylSiteContext.fromRef(refBases, i);
+          if (!methylFilter.isSiteDrawn(ctx)) continue;
         }
         double ratio = 1.0 - (double) bisConv[i] / baseCov[i];
         ratio = Math.max(0, Math.min(1, ratio));
@@ -589,12 +657,26 @@ public class CoverageDrawer {
     int cacheGenomicEnd = (int) (cache.genomicStart + cache.numBins * cache.binSize);
     if (start < cache.genomicStart || end > cacheGenomicEnd) return null;
 
-    // Don't create row if coverage is effectively zero (below rendering threshold)
-    if (cache.scaleMax < 0.5) return null;
+    if (cache.complete) {
+      sample.parkCoverageCache(cache);
+    }
+    return mapParkedCache(sample, sampleIndex, chrom, start, end, isMethyl, cache);
+  }
+
+  private SampleRow mapParkedCache(Sample sample, int sampleIndex, String chrom,
+                                   int start, int end, boolean isMethyl,
+                                   AlignmentFile.CoverageCache cache) {
+    boolean hasMethylData = isMethyl
+        && cache.methylRatio != null
+        && hasAnyMethylValue(cache.methylRatio);
+    // Don't create row if coverage is effectively zero — unless methylation
+    // ratios are present (sparse methyl can sit under a low coverage scale).
+    if (cache.scaleMax < 0.5 && !hasMethylData) return null;
 
     // Map cached bins to SampleRow at screen-pixel resolution
     SampleRow row = new SampleRow(sample, sampleIndex, numColumns);
     row.maxCoverage = cache.scaleMax;
+    row.coverageComplete = cache.complete;
 
     int firstBin = Math.max(0, (int)((start - cache.genomicStart) / cache.binSize) - 1);
     int lastBin = Math.min(cache.numBins - 1, (int)((end - cache.genomicStart) / cache.binSize) + 1);
@@ -711,7 +793,8 @@ public class CoverageDrawer {
     for (SampleRow row : currentRows) {
       if (row.masterTrackOnly) continue;
       double sampleY = row.sampleIndex * sampleHeight - scrollBarPosition;
-      double covH = coverageOnly ? sampleHeight : coverageFractionH;
+      boolean rowCoverageOnly = coverageOnly || isSampleCoverageOnlyMode(row.sample);
+      double covH = rowCoverageOnly ? sampleHeight : coverageFractionH;
       double yBottom = sampleY + covH - 1;
       double scale = row.maxCoverage > 0 ? (covH - 14) / row.maxCoverage : 0;
       double barW = Math.max(1, drawStack.getPixelSize());
@@ -747,8 +830,12 @@ public class CoverageDrawer {
         }
       } else if (dataType == CoverageDataType.MODIFICATION && !row.modTypeCounts.isEmpty()) {
         ModificationColorScheme modScheme = Settings.get().getModificationColorScheme();
+        MethylationCanvasFilter methylFilter = MethylationCanvasFilter.get();
         for (java.util.Map.Entry<Character, double[]> entry : row.modTypeCounts.entrySet()) {
           char modKey = entry.getKey();
+          if (!methylFilter.isModTypeVisible(modKey)) {
+            continue;
+          }
           double[] counts = entry.getValue();
           double[] probSums = row.modTypeProbSums.get(modKey);
 
@@ -823,7 +910,7 @@ public class CoverageDrawer {
         double methylTop = sampleY + 2;
         double methylBottom = sampleY + covH - 2;
         double methylH = methylBottom - methylTop;
-        double baseOffset = coverageOnly ? 0 : drawStack.getPixelSize() / 2.0;
+        double baseOffset = rowCoverageOnly ? 0 : drawStack.getPixelSize() / 2.0;
 
         gc.setStroke(DrawColors.METHYL_LINE);
         gc.setLineWidth(1.5);

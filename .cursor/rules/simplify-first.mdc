@@ -1,0 +1,19 @@
+---
+description: Prefer simple, removable fixes over layered complexity
+alwaysApply: true
+---
+
+# Simplify first
+
+When fixing or changing behavior in this repo:
+
+1. **Prefer deleting complexity** over adding guards, flags, sweeps, retries, or “belt-and-suspenders” paths.
+2. **One clear ownership model** for UI lifecycle (show/hide, open/close). Avoid static overlays racing animations and deferred `runLater` show/dismiss pairs.
+3. **Reuse existing patterns** (e.g. owned `Stage` + `Modality` like `AppDialog`) instead of inventing a second mechanism.
+4. **Slow, small refactors**: each change should leave the code simpler and more bulletproof than before.
+5. **Do not paper over races** with timers, suppress flags, or orphan-node sweeps — fix the structure that creates the race.
+
+```text
+❌ BAD: dismiss() + allowShow() + AnimationTimer orphan sweep + intro onFinished cleanup
+✅ GOOD: stage.hide() / stage.show() with a single owner
+```

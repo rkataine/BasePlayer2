@@ -81,6 +81,16 @@ public abstract class AbstractNestedVariantTable {
         return t;
     });
 
+    /** Which point-results bucket the shared search box currently filters. */
+    public enum SearchBucket {
+        ALL,
+        CODING,
+        INTRONIC,
+        INTERGENIC,
+        /** Show every bucket unfiltered (search targets another results tab). */
+        NONE
+    }
+
     /** Variant-row column set for nested detail lines. */
     public enum VariantDetailLayout {
         POINT_CODING,
@@ -102,6 +112,7 @@ public abstract class AbstractNestedVariantTable {
     private ObservableList<TableRow> allIntronicItems = FXCollections.observableArrayList();
     private ObservableList<TableRow> allIntergenicItems = FXCollections.observableArrayList();
     private String tableSearchQuery = "";
+    private SearchBucket searchBucket = SearchBucket.ALL;
     private final AtomicInteger searchEpoch = new AtomicInteger();
     /** Last search-filtered coding rows (avoids re-scanning on export / feature tabs). */
     private List<TableRow> displayedCodingCache = List.of();
@@ -386,10 +397,12 @@ public abstract class AbstractNestedVariantTable {
         allCodingItems = codingItems != null ? codingItems : FXCollections.observableArrayList();
         allIntronicItems = intronicItems != null ? intronicItems : FXCollections.observableArrayList();
         allIntergenicItems = intergenicItems != null ? intergenicItems : FXCollections.observableArrayList();
-        String q = normalizeSearchQuery(tableSearchQuery);
-        displayedCodingCache = rowsMatchingSearch(allCodingItems, q, displayFilter);
-        displayedIntronicCache = rowsMatchingSearch(allIntronicItems, q, displayFilter);
-        displayedIntergenicCache = rowsMatchingSearch(allIntergenicItems, q, displayFilter);
+        String codingQ = queryForBucket(SearchBucket.CODING);
+        String intronicQ = queryForBucket(SearchBucket.INTRONIC);
+        String intergenicQ = queryForBucket(SearchBucket.INTERGENIC);
+        displayedCodingCache = rowsMatchingSearch(allCodingItems, codingQ, displayFilter);
+        displayedIntronicCache = rowsMatchingSearch(allIntronicItems, intronicQ, displayFilter);
+        displayedIntergenicCache = rowsMatchingSearch(allIntergenicItems, intergenicQ, displayFilter);
         if (backend != null) {
             backend.setPrebuiltGroups(codingGroups, intronicGroups, intergenicGroups);
         }
@@ -477,7 +490,16 @@ public abstract class AbstractNestedVariantTable {
      * @param onApplied optional FX-thread callback after groups are bound
      */
     public void setTableSearchQuery(String query, Runnable onApplied) {
+        setTableSearchQuery(query, SearchBucket.ALL, onApplied);
+    }
+
+    /**
+     * Filter only the given results bucket; other Gene/Intronic/Intergenic tabs stay full.
+     * Use {@link SearchBucket#NONE} to clear gene-tab search when another results tab is active.
+     */
+    public void setTableSearchQuery(String query, SearchBucket bucket, Runnable onApplied) {
         rememberSearchQuery(query);
+        searchBucket = bucket != null ? bucket : SearchBucket.ALL;
         applyTableSearchAsync(onApplied);
     }
 
@@ -487,6 +509,10 @@ public abstract class AbstractNestedVariantTable {
 
     public String getTableSearchQuery() {
         return tableSearchQuery;
+    }
+
+    public SearchBucket getSearchBucket() {
+        return searchBucket;
     }
 
     /** Post-search coding rows currently shown in the Gene tab. */
@@ -504,12 +530,33 @@ public abstract class AbstractNestedVariantTable {
         return FXCollections.observableArrayList(displayedIntergenicCache);
     }
 
+    /** Unfiltered point rows across Coding + Intronic + Intergenic (for feature-tab search). */
+    public List<TableRow> snapshotAllPointRows() {
+        List<TableRow> out = new ArrayList<>(
+            allCodingItems.size() + allIntronicItems.size() + allIntergenicItems.size());
+        out.addAll(allCodingItems);
+        out.addAll(allIntronicItems);
+        out.addAll(allIntergenicItems);
+        return out;
+    }
+
     public VariantFilter getDisplayFilter() {
         return displayFilter;
     }
 
+    private String queryForBucket(SearchBucket bucket) {
+        if (searchBucket == SearchBucket.NONE) {
+            return "";
+        }
+        if (searchBucket == SearchBucket.ALL || searchBucket == bucket) {
+            return normalizeSearchQuery(tableSearchQuery);
+        }
+        return "";
+    }
+
     private void applyTableSearchAsync(Runnable onApplied) {
         final int epoch = searchEpoch.incrementAndGet();
+        final SearchBucket bucket = searchBucket;
         final String query = tableSearchQuery;
         final VariantFilter filter = displayFilter != null ? displayFilter.copy() : new VariantFilter();
         final List<TableRow> codingSnap = List.copyOf(allCodingItems);
@@ -520,11 +567,17 @@ public abstract class AbstractNestedVariantTable {
             if (epoch != searchEpoch.get()) {
                 return;
             }
-            String q = normalizeSearchQuery(query);
+            String activeQ = normalizeSearchQuery(query);
+            String codingQ = (bucket == SearchBucket.NONE
+                || (bucket != SearchBucket.ALL && bucket != SearchBucket.CODING)) ? "" : activeQ;
+            String intronicQ = (bucket == SearchBucket.NONE
+                || (bucket != SearchBucket.ALL && bucket != SearchBucket.INTRONIC)) ? "" : activeQ;
+            String intergenicQ = (bucket == SearchBucket.NONE
+                || (bucket != SearchBucket.ALL && bucket != SearchBucket.INTERGENIC)) ? "" : activeQ;
             // Live search keeps groups collapsed — expanding every match is too costly.
-            List<TableRow> codingMatched = rowsMatchingSearch(codingSnap, q, filter);
-            List<TableRow> intronicMatched = rowsMatchingSearch(intronicSnap, q, filter);
-            List<TableRow> intergenicMatched = rowsMatchingSearch(intergenicSnap, q, filter);
+            List<TableRow> codingMatched = rowsMatchingSearch(codingSnap, codingQ, filter);
+            List<TableRow> intronicMatched = rowsMatchingSearch(intronicSnap, intronicQ, filter);
+            List<TableRow> intergenicMatched = rowsMatchingSearch(intergenicSnap, intergenicQ, filter);
             if (epoch != searchEpoch.get()) {
                 return;
             }
@@ -2762,7 +2815,9 @@ public abstract class AbstractNestedVariantTable {
             return "";
         }
         var alleles = org.baseplayer.variant.VcfAlleleNormalizer.normalize(node);
-        return alleles.ref() + " → " + alleles.alt();
+        return org.baseplayer.variant.VcfAlleleNormalizer.formatSequenceForDisplay(alleles.ref())
+            + " → "
+            + org.baseplayer.variant.VcfAlleleNormalizer.formatSequenceForDisplay(alleles.alt());
     }
 
     private static String effectStyleClass(TableRow row) {

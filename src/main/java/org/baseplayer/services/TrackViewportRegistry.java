@@ -3,12 +3,17 @@ package org.baseplayer.services;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.draw.GenomicCanvas;
+
+import javafx.animation.PauseTransition;
+import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
+import javafx.util.Duration;
 
 public abstract class TrackViewportRegistry {
 
@@ -27,6 +32,13 @@ public abstract class TrackViewportRegistry {
   public static final double EXPANDED_MASTER_BAND_HEIGHT_PIXELS = 82;
   /** Comfortable height for aggregate density when the slider is not needed. */
   public static final double AGGREGATE_MASTER_BAND_HEIGHT_PIXELS = 60;
+  /**
+   * Fallback max when scene height is unknown. Drag handlers prefer
+   * {@link #maxMasterBandHeightForScene(double)} so many group stacks can grow.
+   */
+  public static final double FALLBACK_MAX_MASTER_BAND_HEIGHT_PIXELS = 1200;
+  /** Minimum pixels reserved below the aggregate for sample/feature tracks + chrome. */
+  public static final double MIN_TRACK_AREA_BELOW_MASTER_BAND_PIXELS = 120;
   public static final double DEFAULT_TRACK_ROW_HEIGHT_PIXELS = 20;
   public static final double MINIMUM_TRACK_ROW_HEIGHT_PIXELS = 1;
   /**
@@ -54,9 +66,65 @@ public abstract class TrackViewportRegistry {
   private boolean trackRowHeightLocked = false;
   private boolean pendingDefaultRowHeightFit = false;
 
+  /**
+   * True while the sample/feature list scrollbar is being dragged or is mid
+   * page-animation. Defers BAM open/fetch so fast scrolling stays responsive.
+   */
+  private volatile boolean sampleListScrolling;
+  private PauseTransition sampleListScrollSettle;
+
   public abstract int getDisplayedTrackCount();
 
   protected abstract void onVisibleTrackRangeOrRowHeightChanged();
+
+  public boolean isSampleListScrolling() {
+    return sampleListScrolling;
+  }
+
+  /** Call while the track-list scrollbar thumb is dragged. */
+  public void beginSampleListScroll() {
+    sampleListScrolling = true;
+    cancelSampleListScrollSettle();
+  }
+
+  /** Call when scrollbar drag ends — arms a short settle before BAM loads. */
+  public void endSampleListScroll() {
+    sampleListScrolling = true;
+    armSampleListScrollSettle();
+  }
+
+  /**
+   * Call on each animated/paged scroll step. Keeps scrolling true and resets
+   * the settle timer so quick scrubbing does not open BAMs mid-flight.
+   */
+  public void noteSampleListScroll() {
+    sampleListScrolling = true;
+    armSampleListScrollSettle();
+  }
+
+  private void armSampleListScrollSettle() {
+    Runnable arm = () -> {
+      if (sampleListScrollSettle == null) {
+        sampleListScrollSettle = new PauseTransition(Duration.millis(200));
+        sampleListScrollSettle.setOnFinished(e -> {
+          sampleListScrolling = false;
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+        });
+      }
+      sampleListScrollSettle.playFromStart();
+    };
+    if (Platform.isFxApplicationThread()) {
+      arm.run();
+    } else {
+      Platform.runLater(arm);
+    }
+  }
+
+  private void cancelSampleListScrollSettle() {
+    if (sampleListScrollSettle != null) {
+      sampleListScrollSettle.stop();
+    }
+  }
 
   public int getHoveredTrackIndex() {
     return hoveredTrackIndex.get();
@@ -441,6 +509,19 @@ public abstract class TrackViewportRegistry {
   public void setMasterBandHeightPixels(double heightPixels) {
     masterBandHeightPixels.set(Math.max(0, heightPixels));
     onVisibleTrackRangeOrRowHeightChanged();
+  }
+
+  /**
+   * Max drag height for the master aggregate band: nearly the full scene, leaving
+   * a thin track area so sample/feature rows stay reachable.
+   */
+  public static double maxMasterBandHeightForScene(double sceneHeightPixels) {
+    if (!(sceneHeightPixels > 0) || Double.isNaN(sceneHeightPixels)) {
+      return FALLBACK_MAX_MASTER_BAND_HEIGHT_PIXELS;
+    }
+    return Math.max(
+        EXPANDED_MASTER_BAND_HEIGHT_PIXELS,
+        sceneHeightPixels - MIN_TRACK_AREA_BELOW_MASTER_BAND_PIXELS);
   }
 
   public boolean isMasterAggregatesEnabled() {

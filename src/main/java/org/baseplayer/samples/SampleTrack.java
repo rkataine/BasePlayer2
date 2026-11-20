@@ -217,11 +217,23 @@ public class SampleTrack implements Closeable {
 
   // ── Convenience accessors ──
 
+  /** Already-open BAM only — never opens an index (use {@link Sample#ensureOpen()} explicitly). */
   public AlignmentFile getFirstBam() {
     for (Sample s : samples) {
-      if (s.getBamFile() != null) return s.getBamFile();
+      if (s.getDataType() == Sample.DataType.BAM && s.getBamFile() != null) {
+        return s.getBamFile();
+      }
     }
     return null;
+  }
+
+  public boolean hasBamSample() {
+    for (Sample s : samples) {
+      if (s.getDataType() == Sample.DataType.BAM) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Whether any sample in this track has methylation data. */

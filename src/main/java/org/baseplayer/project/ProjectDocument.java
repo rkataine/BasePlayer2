@@ -56,6 +56,8 @@ public class ProjectDocument {
   public List<StackSpec> stacks = new ArrayList<>();
   /** Named sample groups (sidebar colors); membership is on {@link SampleTrackSpec#groupIds}. */
   public List<SampleGroupSpec> sampleGroups = new ArrayList<>();
+  /** Analysis Manager Signal settings (+ mirror of current groups; groups always = all). */
+  public AnalysisComparisonSpec analysisComparison = new AnalysisComparisonSpec();
   public List<SampleTrackSpec> sampleTracks = new ArrayList<>();
   /** Legacy top-level VCF list; new saves omit this and nest VCFs under samples. */
   @Deprecated
@@ -197,6 +199,33 @@ public class ProjectDocument {
     /** Fixed tag name ({@code MOTHER}, {@code CHILD}, …). */
     public String tag;
     public String role;
+  }
+
+  /** Analysis Manager Signal settings. Group id fields are a mirror only (always all groups). */
+  public static class AnalysisComparisonSpec {
+    public List<Integer> participatingGroupIds = new ArrayList<>();
+    public Integer baselineGroupId;
+
+    public String signalValueKind;
+    public String comparisonUnit;
+    public String genomicScope;
+    public String valueAggregation;
+    public String bigWigCompanionRule;
+    public String bigWigNameContains;
+    public Integer windowBp;
+    public Boolean requireBedScores;
+
+    public Boolean thresholdsEnabled;
+    public Double minAbsLog2Fc;
+    public Double maxQ;
+    public Integer minNPerGroup;
+    public Integer maxRows;
+    public Boolean showUpDifferences;
+    public Boolean showDownDifferences;
+    public Boolean showSimilarDifferences;
+    public Boolean showOnAggregate;
+    /** {@link org.baseplayer.analysis.GroupStatTest} name; null = AUTO. */
+    public String groupStatTest;
   }
 
   public static class SampleGroupSpec {

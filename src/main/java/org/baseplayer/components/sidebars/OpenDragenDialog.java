@@ -20,6 +20,8 @@ import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -92,7 +94,9 @@ public final class OpenDragenDialog {
       dialog.initOwner(resolved);
     }
     dialog.setTitle("Open DRAGEN");
-    dialog.setResizable(false);
+    dialog.setResizable(true);
+    dialog.setMinWidth(420);
+    dialog.setMinHeight(320);
 
     Label title = new Label("Open DRAGEN");
     title.getStyleClass().add("panel-title");
@@ -105,7 +109,7 @@ public final class OpenDragenDialog {
     Label hint = new Label(hintText);
     hint.getStyleClass().add("value-label");
     hint.setWrapText(true);
-    hint.setMaxWidth(420);
+    hint.setMaxWidth(Double.MAX_VALUE);
 
     Label analysesHeader = new Label("Analyses");
     analysesHeader.getStyleClass().add("section-header");
@@ -126,7 +130,7 @@ public final class OpenDragenDialog {
       CheckBox box = new CheckBox(boxText);
       box.setSelected(false);
       box.setWrapText(true);
-      box.setMaxWidth(400);
+      box.setMaxWidth(Double.MAX_VALUE);
       box.getStyleClass().add("filter-checkbox");
       boxes.put(kind, box);
       analysesBox.getChildren().add(box);
@@ -146,7 +150,7 @@ public final class OpenDragenDialog {
     VBox optionalBox = new VBox(8);
     Label optionalHeader = null;
     if (!optionalByName.isEmpty()) {
-      optionalHeader = new Label("Optional CNV tracks");
+      optionalHeader = new Label("Optional CNV tracks (" + optionalByName.size() + ")");
       optionalHeader.getStyleClass().add("section-header");
       Label optionalHint = new Label(
           folderCount > 1
@@ -154,13 +158,13 @@ public final class OpenDragenDialog {
               : "Unchecked by default. Add tn / target counts / extras if needed.");
       optionalHint.getStyleClass().add("value-label");
       optionalHint.setWrapText(true);
-      optionalHint.setMaxWidth(420);
+      optionalHint.setMaxWidth(Double.MAX_VALUE);
       optionalBox.getChildren().add(optionalHint);
       for (Map.Entry<String, File> entry : optionalByName.entrySet()) {
         CheckBox box = new CheckBox(entry.getKey());
         box.setSelected(false);
         box.setWrapText(true);
-        box.setMaxWidth(400);
+        box.setMaxWidth(Double.MAX_VALUE);
         box.getStyleClass().add("filter-checkbox");
         box.setUserData(entry.getValue());
         CheckBox cnvBox = boxes.get(DragenAnalysisKind.CNV);
@@ -171,6 +175,20 @@ public final class OpenDragenDialog {
         optionalBox.getChildren().add(box);
       }
     }
+
+    VBox scrollContent = new VBox(12);
+    scrollContent.getChildren().addAll(analysesHeader, analysesBox);
+    if (optionalHeader != null) {
+      scrollContent.getChildren().addAll(optionalHeader, optionalBox);
+    }
+    scrollContent.setPadding(new Insets(0, 4, 8, 0));
+
+    ScrollPane scroll = new ScrollPane(scrollContent);
+    scroll.setFitToWidth(true);
+    scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    scroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+    scroll.getStyleClass().add("dialog-scroll");
+    VBox.setVgrow(scroll, Priority.ALWAYS);
 
     final var chosen = new Object() {
       Result value;
@@ -206,23 +224,25 @@ public final class OpenDragenDialog {
     HBox.setHgrow(spacer, Priority.ALWAYS);
     HBox buttons = new HBox(8, spacer, cancel, open);
     buttons.setAlignment(Pos.CENTER_RIGHT);
+    buttons.setPadding(new Insets(8, 0, 0, 0));
 
-    VBox root = new VBox(12);
-    root.getChildren().addAll(title, hint, analysesHeader, analysesBox);
-    if (optionalHeader != null) {
-      root.getChildren().addAll(optionalHeader, optionalBox);
-    }
-    root.getChildren().add(buttons);
+    VBox header = new VBox(8, title, hint);
+    BorderPane root = new BorderPane();
+    root.setTop(header);
+    root.setCenter(scroll);
+    root.setBottom(buttons);
+    BorderPane.setMargin(header, new Insets(0, 0, 12, 0));
     root.setPadding(new Insets(16));
     root.getStyleClass().addAll("filter-panel", "dialog-surface");
 
-    int height = Math.min(640, 180 + boxes.size() * 48 + optionalBoxes.size() * 28
-        + (optionalHeader != null ? 60 : 0)
-        + (folderCount > 1 ? 24 : 0));
-    Scene scene = new Scene(root, 460, height);
+    // Cap initial height so a long optional list scrolls instead of hiding Open.
+    double screenH = javafx.stage.Screen.getPrimary().getVisualBounds().getHeight();
+    double initialH = Math.min(560, Math.max(360, screenH * 0.7));
+    Scene scene = new Scene(root, 480, initialH);
     applyTheme(scene);
     scene.setFill(AppTheme.chrome().panel());
     dialog.setScene(scene);
+    dialog.setMaxHeight(screenH * 0.9);
     dialog.showAndWait();
     return Optional.ofNullable(chosen.value);
   }

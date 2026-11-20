@@ -9,11 +9,10 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -84,8 +83,8 @@ public class AlignmentFile implements Closeable {
     return Settings.get().isSampleHeightEnoughForReads(sampleH);
   }
 
-  // Per-file fetch executor — each file gets its own thread so BAM and CRAM don't block each other
-  private final ExecutorService fetchPool;
+  /** Shared single-thread fetch pool — only one BAM/CRAM fetch runs at a time. */
+  private final AlignmentFetchPool fetchPool;
   
   // Status message shown in the track (e.g., "No reads found", "Loaded 123 reads")
   private volatile String statusMessage = null;
@@ -94,6 +93,16 @@ public class AlignmentFile implements Closeable {
   // first read-fetch attempt completes (whether successful, empty, or error).
   private volatile Runnable onFirstLoadComplete;
   private final AtomicBoolean firstLoadFired = new AtomicBoolean(false);
+  /**
+   * True after in-memory auto-detection (methyl / HP / RG / base-mods) from loaded
+   * {@link BAMRecord}s. Safe to set mid-stream — does not touch the BAM reader.
+   */
+  private final AtomicBoolean recordAutoDetectionDone = new AtomicBoolean(false);
+  /**
+   * True after {@link #detectSignalTags} nested BAM probes. Must only flip after the
+   * active {@code queryStreaming} has finished.
+   */
+  private final AtomicBoolean signalTagDetectionDone = new AtomicBoolean(false);
 
   /** When true, {@link #getReads} returns empty immediately and no new fetches are started. */
   private volatile boolean suspended = false;
@@ -114,8 +123,16 @@ public class AlignmentFile implements Closeable {
   private volatile boolean ucTagDetected = false;  // uc:B:s signal tag present
   private volatile boolean udTagDetected = false;  // ud:B:s signal tag present
   private volatile boolean ulTagDetected = false;  // ul:B:s signal tag present
+  /** Mod-type codes (first char of MM modCode) seen during detection / coverage. */
+  private final Set<Character> observedModTypes =
+      java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
   /** User can override: true = suppress methyl mismatches, null = auto (use methylationDetected). */
   private volatile Boolean suppressMethylMismatches = null;
+  /**
+   * When true, never pack/cache individual reads — coverage (+ methylation) matrix only.
+   * Saves memory for methylation analysis while still allowing zoomed-in coverage lines.
+   */
+  private volatile boolean coverageOnlyMode = false;
   
   // Read group support
   /** Detected read group names (populated from first batch). */
@@ -150,6 +167,10 @@ public class AlignmentFile implements Closeable {
     public double binSize;
     public int numBins;
     public double scaleMax;
+    /** False while streaming partial snapshots (data only filled from region start). */
+    public boolean complete;
+    /** {@link MethylationCanvasFilter#getContextRevision()} when this cache was built. */
+    public int methylContextRevision;
   }
   private final ConcurrentHashMap<DrawStack, CoverageCache> coverageCaches = new ConcurrentHashMap<>();
   private final ConcurrentHashMap<DrawStack, Future<?>> coverageFetches = new ConcurrentHashMap<>();
@@ -274,11 +295,61 @@ public class AlignmentFile implements Closeable {
     return null;
   }
 
+  /**
+   * Build coverage on the calling thread (for {@link BamCoverageQueue}).
+   * Bypasses height / navigation gates. Must not be called from the FX thread.
+   */
+  public CoverageCache computeCoverageNow(
+      String chrom, int start, int end, DrawStack stack, boolean isMethyl, int numColumns) {
+    if (suspended || stack == null || numColumns <= 0 || end <= start) {
+      return null;
+    }
+    int viewLength = end - start;
+    if (viewLength > getMaxBamViewLength()) {
+      return null;
+    }
+    double binSize = (double) viewLength / Math.max(1, numColumns);
+    int fetchStart = Math.max(0, start);
+    int fetchEnd = end;
+    int numBins = Math.max(1, (int) ((fetchEnd - fetchStart) / binSize) + 1);
+
+    CoverageCache existing = coverageCaches.get(stack);
+    if (isCoverageCacheValid(existing, chrom, start, end, binSize, isMethyl)
+        && existing.complete) {
+      return existing;
+    }
+
+    CoverageRequest req = new CoverageRequest(
+        chrom, start, end, fetchStart, fetchEnd, binSize, numBins, isMethyl);
+    StackCache sc = getCache(stack);
+    synchronized (sc) {
+      Future<?> inFlight = coverageFetches.get(stack);
+      if (inFlight != null && !inFlight.isDone()) {
+        inFlight.cancel(true);
+      }
+      if (!sc.cachedReads.get().isEmpty()) {
+        sc.cachedReads.set(Collections.emptyList());
+      }
+      sc.loading = true;
+      coverageRequests.put(stack, req);
+      coverageFetches.remove(stack);
+    }
+    computeCoverageCacheAsync(stack, req);
+    if (!isMethyl && isMethylationData()) {
+      return computeCoverageNow(chrom, start, end, stack, true, numColumns);
+    }
+    return coverageCaches.get(stack);
+  }
+
   private boolean isCoverageCacheValid(CoverageCache cache, String chrom, int start, int end,
                                        double binSize, boolean isMethyl) {
     if (cache == null || cache.chrom == null) return false;
     if (!cache.chrom.equals(chrom)) return false;
     if (isMethyl && cache.methylRatio == null) return false;
+    if (isMethyl
+        && cache.methylContextRevision != MethylationCanvasFilter.get().getContextRevision()) {
+      return false;
+    }
     if (relativeDifference(cache.binSize, binSize) >= 0.01) return false;
     double cacheEnd = cache.genomicStart + cache.numBins * cache.binSize;
     return start >= cache.genomicStart && end <= cacheEnd;
@@ -286,10 +357,27 @@ public class AlignmentFile implements Closeable {
 
   private void cancelCoverageFetch(DrawStack stack) {
     Future<?> fetch = coverageFetches.remove(stack);
+    CoverageRequest removed = coverageRequests.remove(stack);
     if (fetch != null && !fetch.isDone()) {
       fetch.cancel(true);
     }
-    coverageRequests.remove(stack);
+    // Coverage and reads share StackCache.loading. When we cancel coverage for a
+    // zoom-into-reads handoff, clear the flag unless a read fetch already owns it —
+    // otherwise early-return paths in getReads leave "Loading…" stuck forever.
+    if (fetch != null || removed != null) {
+      clearLoadingIfIdle(stackCaches.get(stack));
+    }
+  }
+
+  /** Clear {@link StackCache#loading} when no read fetch is in flight. */
+  private static void clearLoadingIfIdle(StackCache sc) {
+    if (sc == null) {
+      return;
+    }
+    Future<?> pendingRead = sc.pendingFetch;
+    if (pendingRead == null || pendingRead.isDone()) {
+      sc.loading = false;
+    }
   }
 
   // --- Chromosome-level sampled coverage ---
@@ -431,6 +519,8 @@ public class AlignmentFile implements Closeable {
     // Reset so the callbacks can be re-armed when the user reloads
     firstLoadFired.set(false);
     firstFetchStartedFired.set(false);
+    recordAutoDetectionDone.set(false);
+    signalTagDetectionDone.set(false);
   }
 
   /** Clear the suspension flag so the draw loop can trigger new read fetches. */
@@ -448,6 +538,29 @@ public class AlignmentFile implements Closeable {
     Boolean override = suppressMethylMismatches;
     return (override != null) ? override : methylationDetected;
   }
+
+  /** Whether MM/ML base modifications were detected on this file. */
+  public boolean hasBaseModifications() {
+    return baseModificationsDetected;
+  }
+
+  /** First-char MM mod codes observed so far (for aggregate legend). */
+  public Set<Character> getObservedModTypes() {
+    synchronized (observedModTypes) {
+      return new java.util.LinkedHashSet<>(observedModTypes);
+    }
+  }
+
+  public void noteObservedModTypes(Iterable<BaseModification> mods) {
+    if (mods == null) {
+      return;
+    }
+    for (BaseModification mod : mods) {
+      if (mod != null && mod.modCode != null && !mod.modCode.isEmpty()) {
+        observedModTypes.add(Character.toLowerCase(mod.modCode.charAt(0)));
+      }
+    }
+  }
   
   /** Whether this file contains haplotype/phasing data (HP tags detected). */
   public boolean isHaplotypeData() {
@@ -462,6 +575,35 @@ public class AlignmentFile implements Closeable {
   /** User override for methylation mismatch suppression; {@code null} means auto-detect. */
   public Boolean getSuppressMethylMismatches() {
     return suppressMethylMismatches;
+  }
+
+  /**
+   * When true, skip packing individual reads and use the coverage-matrix path only
+   * (coverage + methylation ratios). Does not block {@link #requestCoverageCache}.
+   */
+  public boolean isCoverageOnlyMode() {
+    return coverageOnlyMode;
+  }
+
+  /**
+   * Enable/disable coverage-only mode. Enabling clears packed read caches to free memory.
+   */
+  public void setCoverageOnlyMode(boolean coverageOnlyMode) {
+    if (this.coverageOnlyMode == coverageOnlyMode) {
+      return;
+    }
+    this.coverageOnlyMode = coverageOnlyMode;
+    if (coverageOnlyMode) {
+      clearAllReadCaches();
+    }
+    Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+  }
+
+  /** Drop packed reads for every stack without cancelling coverage fetches. */
+  public void clearAllReadCaches() {
+    for (DrawStack stack : stackCaches.keySet()) {
+      clearReadCache(stack);
+    }
   }
 
   /**
@@ -535,10 +677,9 @@ public class AlignmentFile implements Closeable {
     this.name = reader.getSampleName();
     this.chromPrefix = reader.getChromPrefix();
     this.readColorMode = Settings.get().getReadColorMode();
-    this.fetchPool = Executors.newSingleThreadExecutor(
-        r -> { Thread t = new Thread(r, "fetch-" + this.name); t.setDaemon(true); return t; }
-    );
-    this.coverageCalculator = new CoverageCalculator(reader, name, fetchPool, this);
+    this.fetchPool = AlignmentFetchPool.get();
+    this.coverageCalculator = new CoverageCalculator(
+        reader, name, fetchPool.executor(), this);
   }
 
   /** Contig prefix used by this alignment file ({@code ""} or {@code "chr"}). */
@@ -571,12 +712,22 @@ public class AlignmentFile implements Closeable {
     // If reads are suspended (cancelled by user), return nothing until resumed
     if (suspended) return Collections.emptyList();
 
+    // Coverage-only mode: never pack reads, and do not cancel coverage fetches.
+    if (coverageOnlyMode) {
+      StackCache sc = stackCaches.get(stack);
+      if (sc != null && !sc.cachedReads.get().isEmpty()) {
+        clearReadCache(stack);
+      }
+      return Collections.emptyList();
+    }
+
     StackCache sc = getCache(stack);
     cancelCoverageFetch(stack);
     int viewLength = end - start;
     
     // Block all fetches during line zoom - just return cached data
     if (stack.nav.lineZoomerActive) {
+      clearLoadingIfIdle(sc);
       return sc.cachedReads.get();
     }
 
@@ -633,17 +784,20 @@ public class AlignmentFile implements Closeable {
     // region. (The post-fetch repack below handles the case where new reads
     // come in.)
     if (chrom.equals(sc.cachedChrom) && start >= sc.cachedStart && end <= sc.cachedEnd) {
+      clearLoadingIfIdle(sc);
       return sc.cachedReads.get();
     }
 
     // Block all new fetches during zoom animation or cytoband dragging
     if (stack.nav.animationRunning || CytobandCanvas.isDragging) {
+      clearLoadingIfIdle(sc);
       return sc.cachedReads.get(); // return stale or empty, no new fetches
     }
     
     // During active navigation, callers that request blocking should reuse cached
     // data only and defer any new fetch start until navigation settles.
     if (blockDuringNavigation && stack.nav.navigating) {
+      clearLoadingIfIdle(sc);
       return sc.cachedReads.get();
     }
 
@@ -741,8 +895,15 @@ public class AlignmentFile implements Closeable {
         if (cb != null) Platform.runLater(cb);
       }
 
-      sc.pendingFetch = fetchPool.submit(() -> {
-        FetchManager.FetchTicket ticket = fm.acquire(FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd);
+      // Holder so the worker can tell whether it is still the current pending fetch
+      // (a newer submit may have replaced it while this one was cancelled on the same pool).
+      final Future<?>[] fetchHolder = new Future<?>[1];
+      fetchHolder[0] = fetchPool.submit(() -> {
+        FetchManager.FetchTicket ticket = fm.acquire(
+            FetchManager.FetchType.READS, AlignmentFile.this, stack, chrom, fetchStart, fetchEnd);
+        // Always show the app loading modal for read fetches (same as coverage).
+        ThreadRunner.RunnerTask runnerTask = ThreadRunner.get().track(
+            "Loading reads: " + name, () -> ticket.cancelled = true);
         try {
           // Enable signal tag parsing only when UC/UD color mode is active
           ReadColorMode colorMode = getReadColorMode();
@@ -762,8 +923,9 @@ public class AlignmentFile implements Closeable {
           // Pixel-based gap: 3 pixels converted to genomic coordinates (matches ReadPacker.MIN_PIXEL_GAP)
           int gap = Math.max(1, (int)(3 * stack.scale));
           long[] lastUpdate = {System.nanoTime()};
-          boolean[] detectionDone = {methylationDetected || haplotypeDetected || !detectedReadGroups.isEmpty()};
           final int maxReadCoverage = Settings.get().getMaxReadCoverage();
+          // Preserve active signal-tag mode across deferred detectSignalTags().
+          final char restoreSignalTag = signalTag;
 
           reader.queryStreaming(chrom, fetchStart, fetchEnd, record -> {
             if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) {
@@ -807,29 +969,35 @@ public class AlignmentFile implements Closeable {
               ReadPacker.updatePendingPlacement(splitMateRow, record);
             }
             reads.add(record);
-            
-            // Auto-detect on first 200 reads BEFORE any UI updates
-            if (!detectionDone[0] && reads.size() == 200) {
-              runAutoDetection(reads);
-              detectionDone[0] = true;
+
+            // In-memory methyl/HP/RG detection from the first 200 records — no BAM I/O.
+            // Progressive paint waits until this so methyl data is not briefly shown as
+            // normal mismatches then flipped after the full load.
+            if (!recordAutoDetectionDone.get() && reads.size() == 200) {
+              runRecordAutoDetection(reads);
             }
 
-            // Progressive display every ~100 ms (but only after detection on first batch)
             long now = System.nanoTime();
-            if (now - lastUpdate[0] > 100_000_000L
-                && (detectionDone[0] || reads.size() > 200)) {
-              sc.maxRow = maxRowLocal[0];
-              sc.cachedReads.set(new ArrayList<>(reads));
-              sc.cachedSignalTag = signalTag;
-              Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+            if (now - lastUpdate[0] > 100_000_000L && recordAutoDetectionDone.get()) {
+              // Ignore progressive writes from a superseded/cancelled fetch.
+              if (sc.pendingFetch == fetchHolder[0]
+                  && !Thread.currentThread().isInterrupted()
+                  && !ticket.isCancelled()) {
+                sc.maxRow = maxRowLocal[0];
+                sc.cachedReads.set(new ArrayList<>(reads));
+                sc.cachedSignalTag = signalTag;
+                Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+              }
               lastUpdate[0] = now;
             }
 
             return true;
           });
 
-          // Final state - only update if not cancelled
-          if (!Thread.currentThread().isInterrupted() && !ticket.isCancelled()) {
+          // Final state - only update if not cancelled and still the active fetch
+          if (!Thread.currentThread().isInterrupted()
+              && !ticket.isCancelled()
+              && sc.pendingFetch == fetchHolder[0]) {
             sc.cachedReads.set(reads);
             sc.cachedChrom = chrom;
             sc.cachedStart = fetchStart;
@@ -840,11 +1008,13 @@ public class AlignmentFile implements Closeable {
             sc.cachedSignalTag = signalTag;
             consecutiveErrors = 0;
             System.out.println("Fetched BAM (" + name + "): " + reads.size() + " reads");
-            
-            // Run auto-detection if not done yet (e.g., if fewer than 200 reads total)
-            if (!methylationDetected && !haplotypeDetected && detectedReadGroups.isEmpty() && !reads.isEmpty()) {
-              runAutoDetection(reads);
+
+            // Fewer than 200 reads: finish in-memory detection now.
+            if (!reads.isEmpty()) {
+              runRecordAutoDetection(reads);
             }
+            // Nested BAM probes only after the outer stream has released the reader.
+            ensureSignalTagDetection(restoreSignalTag);
             
             // Show status message in the track
             if (reads.isEmpty()) {
@@ -868,6 +1038,7 @@ public class AlignmentFile implements Closeable {
             }, 5000);
             
             // Repack to optimize row usage now that all reads are loaded
+            // (and after auto-detection may have enabled haplotype/RG layouts).
             repackReads(stack);
           }
         } catch (IOException e) {
@@ -877,20 +1048,32 @@ public class AlignmentFile implements Closeable {
             System.err.println("Suppressing further BAM errors for " + name);
           }
           consecutiveErrors++;
-          sc.fetchingChrom = "";
-          sc.fetchingStart = -1;
-          sc.fetchingEnd = -1;
+          if (sc.pendingFetch == fetchHolder[0]) {
+            sc.fetchingChrom = "";
+            sc.fetchingStart = -1;
+            sc.fetchingEnd = -1;
+          }
         } catch (RuntimeException e) {
           System.err.println("Runtime error in BAM fetch (" + name + "): " + e.getMessage());
-          sc.fetchingChrom = "";
-          sc.fetchingStart = -1;
-          sc.fetchingEnd = -1;
+          if (sc.pendingFetch == fetchHolder[0]) {
+            sc.fetchingChrom = "";
+            sc.fetchingStart = -1;
+            sc.fetchingEnd = -1;
+          }
         } finally {
           fm.release(ticket);
-          sc.loading = false;
-          // Fire the first-load callback once — but not if we are suspended (cancelled),
-          // to prevent a racing cancelled fetch from prematurely completing a reload task.
-          if (!suspended && firstLoadFired.compareAndSet(false, true)) {
+          runnerTask.complete();
+          boolean stillCurrent;
+          synchronized (sc) {
+            stillCurrent = sc.pendingFetch == fetchHolder[0];
+            if (stillCurrent) {
+              sc.loading = false;
+              sc.pendingFetch = null;
+            }
+          }
+          // Fire the first-load callback once for the active fetch (including empty /
+          // cancelled outcomes). Superseded jobs must not complete a reload task early.
+          if (stillCurrent && !suspended && firstLoadFired.compareAndSet(false, true)) {
             Runnable cb = onFirstLoadComplete;
             onFirstLoadComplete = null;
             if (cb != null) Platform.runLater(cb);
@@ -900,6 +1083,7 @@ public class AlignmentFile implements Closeable {
           });
         }
       });
+      sc.pendingFetch = fetchHolder[0];
     }
 
     // Return stale cached reads (or empty) so the draw call doesn't block
@@ -971,13 +1155,15 @@ public class AlignmentFile implements Closeable {
       double[] mmG = new double[req.numBins];
       double[] mmT = new double[req.numBins];
       double[] bisulfiteBin = req.methyl ? new double[req.numBins] : null;
-      int[] cgCount = req.methyl ? computeCGBinCounts(req) : null;
+      String methylRefBases = req.methyl ? loadMethylRefBases(req) : null;
+      int[] cgCount = req.methyl ? computeCGBinCounts(req, methylRefBases) : null;
+      MethylationCanvasFilter methylFilter = MethylationCanvasFilter.get();
 
       @SuppressWarnings({"unchecked"})
       java.util.HashMap<Integer, int[]>[] posMM = new java.util.HashMap[req.numBins];
 
       List<BAMRecord> detectionReads = new ArrayList<>();
-      boolean[] detectionDone = {methylationDetected || haplotypeDetected || !detectedReadGroups.isEmpty()};
+      boolean[] needRecordDetection = {!recordAutoDetectionDone.get()};
       long[] lastProgressPublishNs = {System.nanoTime()};
 
       reader.setActiveSignalTag('\0');
@@ -987,12 +1173,16 @@ public class AlignmentFile implements Closeable {
 
         addBinCoverageEvents(record, binCov, req.numBins, req.fetchStart, req.binSize);
 
-        if (!detectionDone[0] && detectionReads.size() < 200) {
+        // Collect / run in-memory detection only — never nested BAM probes mid-stream.
+        if (needRecordDetection[0] && detectionReads.size() < 200) {
           detectionReads.add(record);
           if (detectionReads.size() == 200) {
-            runAutoDetection(detectionReads);
-            detectionDone[0] = true;
+            runRecordAutoDetection(detectionReads);
+            needRecordDetection[0] = false;
           }
+        }
+        if (record.baseModifications != null && !record.baseModifications.isEmpty()) {
+          noteObservedModTypes(record.baseModifications);
         }
 
         if (record.mismatches != null) {
@@ -1005,7 +1195,9 @@ public class AlignmentFile implements Closeable {
               char readB = Character.toUpperCase((char) record.mismatches[m + 1]);
               char refB = Character.toUpperCase((char) record.mismatches[m + 2]);
               if ((refB == 'C' && readB == 'T') || (refB == 'G' && readB == 'A')) {
-                bisulfiteBin[bin]++;
+                if (isMethylSiteVisible(methylRefBases, req, pos, methylFilter)) {
+                  bisulfiteBin[bin]++;
+                }
                 continue;
               }
             }
@@ -1047,9 +1239,10 @@ public class AlignmentFile implements Closeable {
 
       if (Thread.currentThread().isInterrupted() || ticket.isCancelled()) return;
 
-      if (!detectionDone[0] && !detectionReads.isEmpty()) {
-        runAutoDetection(detectionReads);
+      if (!detectionReads.isEmpty()) {
+        runRecordAutoDetection(detectionReads);
       }
+      ensureSignalTagDetection('\0');
 
       // Publish an immediate near-final snapshot before methylation post-processing.
       MethylSnapshot partialMethyl = buildMethylSnapshot(req, binCov, bisulfiteBin, cgCount);
@@ -1089,18 +1282,47 @@ public class AlignmentFile implements Closeable {
     }
   }
 
-  private int[] computeCGBinCounts(CoverageRequest req) {
-    if (!req.methyl || !referenceGenomeService.hasGenome()) return null;
+  private String loadMethylRefBases(CoverageRequest req) {
+    if (!req.methyl || !referenceGenomeService.hasGenome()) {
+      return null;
+    }
+    // Cover fetch range so bisulfite sites outside the view still classify.
+    int start = Math.max(1, req.fetchStart);
+    int end = Math.max(start, req.fetchEnd);
+    String bases = referenceGenomeService.getBases(req.chrom, start, end);
+    return (bases == null || bases.isEmpty()) ? null : bases;
+  }
 
-    String covRefBases = referenceGenomeService.getBases(req.chrom, Math.max(1, req.viewStart), req.viewEnd);
-    if (covRefBases == null || covRefBases.isEmpty()) return null;
+  private static boolean isMethylSiteVisible(
+      String methylRefBases,
+      CoverageRequest req,
+      int genomicPos,
+      MethylationCanvasFilter filter) {
+    if (filter == null) {
+      return true;
+    }
+    if (methylRefBases == null) {
+      return true;
+    }
+    int refStart = Math.max(1, req.fetchStart);
+    int idx = genomicPos - refStart;
+    MethylSiteContext ctx = MethylSiteContext.fromRef(methylRefBases, idx);
+    return filter.isSiteDrawn(ctx);
+  }
 
+  private int[] computeCGBinCounts(CoverageRequest req, String covRefBases) {
+    if (!req.methyl || covRefBases == null || covRefBases.isEmpty()) return null;
+
+    MethylationCanvasFilter filter = MethylationCanvasFilter.get();
+    int refStart = Math.max(1, req.fetchStart);
     int[] cgCount = new int[req.numBins];
     for (int i = 0; i < covRefBases.length(); i++) {
       char base = Character.toUpperCase(covRefBases.charAt(i));
       if (base != 'C' && base != 'G') continue;
+      MethylSiteContext ctx = MethylSiteContext.fromRef(covRefBases, i);
+      if (!filter.isSiteDrawn(ctx)) continue;
 
-      int gpos = req.viewStart + i;
+      int gpos = refStart + i;
       int bin = (int) ((gpos - req.fetchStart) / req.binSize);
       if (bin >= 0 && bin < req.numBins) cgCount[bin]++;
     }
@@ -1169,6 +1391,10 @@ public class AlignmentFile implements Closeable {
     cache.binSize = req.binSize;
     cache.numBins = req.numBins;
     cache.scaleMax = Math.max(maxDisplay, maxRaw);
+    cache.complete = finalSnapshot;
+    cache.methylContextRevision = req.methyl
+        ? MethylationCanvasFilter.get().getContextRevision()
+        : 0;
 
     coverageCaches.put(stack, cache);
     Platform.runLater(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
@@ -1461,10 +1687,16 @@ public class AlignmentFile implements Closeable {
   }
 
   /**
-   * Auto-detect methylation, haplotype, base modifications, and read group data from a sample of reads.
-   * Called once on the first 200 reads, before any UI updates.
+   * In-memory auto-detection from already decoded reads (methyl / HP / RG / base-mods).
+   * Safe to call mid-stream — does not issue BAM I/O. Idempotent after first success.
    */
-  private void runAutoDetection(List<BAMRecord> reads) {
+  private void runRecordAutoDetection(List<BAMRecord> reads) {
+    if (reads == null || reads.isEmpty()) {
+      return;
+    }
+    if (!recordAutoDetectionDone.compareAndSet(false, true)) {
+      return;
+    }
     int methylTagCount = 0, hpCount = 0;
     int baseModCount = 0;
     int totalMismatches = 0, bisulfiteMismatches = 0;
@@ -1479,7 +1711,10 @@ public class AlignmentFile implements Closeable {
       if (r.hasMethylTag) methylTagCount++;
       
       // Check for base modification tags (MM/ML)
-      if (r.baseModifications != null && !r.baseModifications.isEmpty()) baseModCount++;
+      if (r.baseModifications != null && !r.baseModifications.isEmpty()) {
+        baseModCount++;
+        noteObservedModTypes(r.baseModifications);
+      }
       
       // Check XM:Z string for bisulfite signature (faster than mismatch analysis)
       // XM:Z format: '.'=match, 'x'=mismatch, 'h'/'z'/'Z'=methylation calls
@@ -1550,14 +1785,29 @@ public class AlignmentFile implements Closeable {
       detectedReadGroups = new ArrayList<>(rgSet);
       System.out.println("  → Single read group: " + rgSet.iterator().next());
     }
-    
-    // Detect signal tags (UC, UD, UL) by checking a small sample
-    detectSignalTags();
+  }
+
+  /**
+   * Run {@link #detectSignalTags} once the active stream has finished, then restore
+   * {@code restoreSignalTag} on the reader (probes leave it at {@code '\0'}).
+   */
+  private void ensureSignalTagDetection(char restoreSignalTag) {
+    if (!signalTagDetectionDone.compareAndSet(false, true)) {
+      return;
+    }
+    try {
+      detectSignalTags();
+    } finally {
+      if (reader != null) {
+        reader.setActiveSignalTag(restoreSignalTag);
+      }
+    }
   }
 
   /**
    * Detect which signal tags (uc, ud, ul) are present in the data.
    * This requires fetching a few reads with each signal tag type enabled.
+   * Must not run while another {@code queryStreaming} owns this reader.
    */
   private void detectSignalTags() {
     if (reader == null) return;
@@ -1606,7 +1856,7 @@ public class AlignmentFile implements Closeable {
       }
     }
     
-    // Reset signal tag to none after detection
+    // Reset signal tag to none after detection (caller may restore)
     reader.setActiveSignalTag('\0');
   }
 
@@ -1647,27 +1897,53 @@ public class AlignmentFile implements Closeable {
 
   public AlignmentReader getReader() { return reader; }
 
+  /**
+   * Remove and return one coverage cache (prefer complete) so it can be parked
+   * on {@link org.baseplayer.samples.Sample} before closing the reader/index.
+   */
+  public CoverageCache detachAnyCoverageCache() {
+    CoverageCache best = null;
+    DrawStack bestKey = null;
+    for (var e : coverageCaches.entrySet()) {
+      CoverageCache c = e.getValue();
+      if (c == null) {
+        continue;
+      }
+      if (best == null || (c.complete && !best.complete)) {
+        best = c;
+        bestKey = e.getKey();
+      }
+    }
+    if (bestKey != null) {
+      coverageCaches.remove(bestKey);
+    }
+    return best;
+  }
+
   @Override
   public void close() throws IOException {
-    if (reader != null) {
-      try (reader) {
-          for (StackCache sc : stackCaches.values()) {
-              Future<?> f = sc.pendingFetch;
-              if (f != null) f.cancel(true);
-          }
-            for (Future<?> f : coverageFetches.values()) {
-              if (f != null) f.cancel(true);
-            }
-            coverageFetches.clear();
-            coverageRequests.clear();
-          coverageCalculator.cancelSampling();
-          stackCaches.clear();
-          coverageCaches.clear();
-          coverageCalculator.clearSampledCoverageCache();
-          if (fetchPool != null) {
-            fetchPool.shutdownNow();
-          }
+    for (StackCache sc : stackCaches.values()) {
+      Future<?> f = sc.pendingFetch;
+      if (f != null) {
+        f.cancel(true);
       }
+    }
+    for (Future<?> f : coverageFetches.values()) {
+      if (f != null) {
+        f.cancel(true);
+      }
+    }
+    coverageFetches.clear();
+    coverageRequests.clear();
+    if (coverageCalculator != null) {
+      coverageCalculator.cancelSampling();
+      coverageCalculator.clearSampledCoverageCache();
+    }
+    stackCaches.clear();
+    coverageCaches.clear();
+    // Do not shut down the shared AlignmentFetchPool.
+    if (reader != null) {
+      reader.close();
     }
   }
 }

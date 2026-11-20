@@ -1,23 +1,36 @@
 package org.baseplayer.components;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
+import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.baseplayer.analysis.AnalysisSession;
+import org.baseplayer.analysis.ComparisonContext;
+import org.baseplayer.analysis.allelecn.AlleleCnSegment;
+import org.baseplayer.analysis.allelecn.LohFromAlleleCn;
 import org.baseplayer.draw.CanvasColorLegend;
 import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.io.table.MappedTableData;
+import org.baseplayer.io.table.MappedTableRow;
+import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.samples.alignment.MethylSiteContext;
+import org.baseplayer.samples.alignment.MethylationCanvasFilter;
+import org.baseplayer.samples.alignment.MethylationVisuals;
 import org.baseplayer.samples.alignment.draw.CoverageDrawer;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
-import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.VariantComparisonClusters;
 import org.baseplayer.variant.VariantDensityPyramid;
 import org.baseplayer.variant.VariantDrawSeek;
@@ -47,6 +60,8 @@ public class MasterTrackPainter {
   private volatile int pyramidGeneration = 0;
 
   private final CanvasColorLegend colorLegend = new CanvasColorLegend();
+  /** Site-context + mod-type toggles for methylation aggregates / marks. */
+  private final CanvasColorLegend methylColorLegend = new CanvasColorLegend();
 
   /**
    * Zoomed-in precise bars — reuse across paints while view/filter/chain stay put.
@@ -76,6 +91,14 @@ public class MasterTrackPainter {
       double x, double y, double w, double h,
       VariantComparisonClusters.ComparisonCluster cluster) {}
   private List<ClusterHit> clusterHits = List.of();
+
+  /** Clickable group stack row labels (toggle aggregate group visibility). */
+  private record GroupLabelHit(double x, double y, double w, double h, int groupId) {
+    boolean contains(double px, double py) {
+      return px >= x && px <= x + w && py >= y && py <= y + h;
+    }
+  }
+  private List<GroupLabelHit> groupLabelHits = List.of();
 
   public MasterTrackPainter(CoverageDrawer coverageDrawer, Runnable redrawCallback) {
     this.sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
@@ -145,6 +168,19 @@ public class MasterTrackPainter {
    * select them in Variant Manager.
    */
   public boolean handleLegendClick(double x, double y) {
+    GroupLabelHit groupHit = hitGroupLabel(x, y);
+    if (groupHit != null) {
+      org.baseplayer.analysis.AnalysisSession.get()
+          .toggleAggregateGroupVisible(groupHit.groupId());
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      if (redrawCallback != null) {
+        redrawCallback.run();
+      }
+      return true;
+    }
+    if (handleMethylLegendClick(x, y)) {
+      return true;
+    }
     Object hitId = colorLegend.hitTest(x, y);
     if (hitId == null) {
       return false;
@@ -174,6 +210,34 @@ public class MasterTrackPainter {
 
     vcfManager.toggleCanvasTypeVisibility(linked);
     return true;
+  }
+
+  private boolean handleMethylLegendClick(double x, double y) {
+    Object hitId = methylColorLegend.hitTest(x, y);
+    if (hitId == null) {
+      return false;
+    }
+    MethylationCanvasFilter filter = MethylationCanvasFilter.get();
+    if (CanvasColorLegend.isSelectAll(hitId)) {
+      boolean showContexts = methylRowsPresent();
+      Set<Character> mods = filter.collectPresentModTypes();
+      boolean allOn = (!showContexts || filter.allContextsVisible())
+          && filter.allModTypesVisible(mods);
+      if (showContexts) {
+        filter.setAllContextsVisible(!allOn);
+      }
+      filter.setAllModTypesVisible(mods, !allOn);
+      return true;
+    }
+    if (hitId instanceof MethylSiteContext context) {
+      filter.toggleContext(context);
+      return true;
+    }
+    if (hitId instanceof Character modCode) {
+      filter.toggleModType(modCode);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -226,9 +290,21 @@ public class MasterTrackPainter {
     }
   }
 
-  /** Cursor hint when hovering a clickable density legend. */
+  /** Cursor hint when hovering a clickable density legend or group stack label. */
   public boolean isOverLegend(double x, double y) {
-    return colorLegend.isOver(x, y);
+    return hitGroupLabel(x, y) != null
+        || colorLegend.isOver(x, y)
+        || methylColorLegend.isOver(x, y);
+  }
+
+  private GroupLabelHit hitGroupLabel(double x, double y) {
+    for (int i = groupLabelHits.size() - 1; i >= 0; i--) {
+      GroupLabelHit hit = groupLabelHits.get(i);
+      if (hit != null && hit.contains(x, y)) {
+        return hit;
+      }
+    }
+    return null;
   }
 
   /** Cursor hint when hovering a comparison-cluster highlight/tag. */
@@ -306,6 +382,10 @@ public class MasterTrackPainter {
       double masterTrackHeight) {
     drawVariantDensityOverview(gc, drawStack, canvasWidth, masterTrackHeight);
     renderMasterMethylation(gc, canvasWidth, masterTrackHeight);
+    drawMethylFilterLegend(gc, canvasWidth, masterTrackHeight);
+    renderMasterMappedTable(gc, drawStack, canvasWidth, masterTrackHeight);
+    // Significance ticks (renderAnalysisGroupDiff) disabled for now — confusing next to
+    // group density stacks; method kept for a later opt-in.
 
     if (!sampleRegistry.getDisplayedTrackIndices().isEmpty() && masterTrackHeight > 1) {
       // Inside the band (y == height is clipped); separates aggregate from track body.
@@ -324,7 +404,9 @@ public class MasterTrackPainter {
 
     List<CoverageDrawer.SampleRow> methylRows = new ArrayList<>();
     for (CoverageDrawer.SampleRow row : currentRows) {
-      if (row.sample.isMethylationData() && row.smoothedMethylRatio != null) {
+      if (row.sample != null
+          && row.sample.isMethylationData()
+          && row.smoothedMethylRatio != null) {
         methylRows.add(row);
       }
     }
@@ -332,47 +414,1402 @@ public class MasterTrackPainter {
       return;
     }
 
+    Map<Sample, SampleTrack> sampleToTrack = methylSampleTrackIndex();
+    AnalysisSession session = AnalysisSession.get();
+    LinkedHashMap<Integer, List<CoverageDrawer.SampleRow>> groupRows = new LinkedHashMap<>();
+    List<Integer> analysisIds = ComparisonContext.analysisGroupIds(sampleRegistry);
+    for (int groupId : analysisIds) {
+      if (!session.isAggregateGroupVisible(groupId)) {
+        continue;
+      }
+      List<CoverageDrawer.SampleRow> members = new ArrayList<>();
+      for (CoverageDrawer.SampleRow row : methylRows) {
+        SampleTrack track = sampleToTrack.get(row.sample);
+        if (trackInAnalysisGroup(track, groupId)) {
+          members.add(row);
+        }
+      }
+      if (!members.isEmpty()) {
+        groupRows.put(groupId, members);
+      }
+    }
+    // Aggregate band: group means when ≥2 cohorts have methyl data; else one cohort mean.
+    // Never draw per-sample traces here.
+    boolean showGroupMeans = groupRows.size() >= 2
+        || (groupRows.size() == 1 && analysisIds.size() >= 2);
+
     double margin = 2;
     double plotH = masterTrackHeight - 2 * margin;
-    for (CoverageDrawer.SampleRow row : methylRows) {
-      Color color = DrawColors.SAMPLE_METHYL_COLORS[row.methylColorIndex % DrawColors.SAMPLE_METHYL_COLORS.length];
-      gc.setStroke(color);
-      gc.setLineWidth(1.5);
-      gc.beginPath();
-      boolean started = false;
 
-      for (int px = 0; px < row.smoothedMethylRatio.length; px++) {
-        double val = row.smoothedMethylRatio[px];
-        if (val < 0) {
-          started = false;
+    if (showGroupMeans) {
+      drawMethylGroupRows(gc, canvasWidth, margin, plotH, groupRows);
+    } else {
+      double[] cohortMean = meanMethylSeries(methylRows);
+      if (cohortMean != null) {
+        strokeMethylSeries(gc, cohortMean, Color.rgb(40, 180, 180, 0.95), 2.8, margin, plotH);
+      }
+    }
+  }
+
+  /**
+   * One equal-height row per analysis group (CNV-style stacks): label + mean methylation.
+   */
+  private void drawMethylGroupRows(
+      GraphicsContext gc,
+      double canvasWidth,
+      double top,
+      double h,
+      LinkedHashMap<Integer, List<CoverageDrawer.SampleRow>> groupRows) {
+    if (groupRows == null || groupRows.isEmpty() || h < 8 || canvasWidth < 40) {
+      return;
+    }
+    List<Map.Entry<Integer, List<CoverageDrawer.SampleRow>>> rows =
+        new ArrayList<>(groupRows.entrySet());
+    int n = rows.size();
+    double rowH = h / n;
+    double labelW = 72;
+    double plotLeft = 4 + labelW;
+    double plotW = Math.max(8, canvasWidth - plotLeft - 4);
+
+    gc.setFont(AppFonts.getFont("Segoe UI", 10));
+    gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+    Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
+
+    for (int ri = 0; ri < n; ri++) {
+      Map.Entry<Integer, List<CoverageDrawer.SampleRow>> entry = rows.get(ri);
+      int groupId = entry.getKey();
+      List<CoverageDrawer.SampleRow> members = entry.getValue();
+      double rowTop = top + ri * rowH;
+      double midY = rowTop + rowH * 0.5;
+
+      if (ri > 0) {
+        gc.setStroke(Color.rgb(120, 120, 120, 0.35));
+        gc.setLineWidth(1.0);
+        gc.strokeLine(plotLeft, rowTop + 0.5, canvasWidth - 2, rowTop + 0.5);
+      }
+
+      Color gColor = ComparisonContext.groupColor(sampleRegistry, groupId);
+      String name = truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 12);
+      int memberCount = members != null ? members.size() : 0;
+      double sw = 8;
+      double sh = 7;
+      double labelX = 4;
+      gc.setFill(Color.color(gColor.getRed(), gColor.getGreen(), gColor.getBlue(), 0.95));
+      gc.fillRoundRect(labelX, midY - sh * 0.5, sw, sh, 2, 2);
+      gc.setFill(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.9));
+      gc.fillText(name + " · n=" + memberCount, labelX + sw + 4, midY);
+
+      if (rowH < 6 || members == null || members.isEmpty()) {
+        continue;
+      }
+
+      double seriesTop = rowTop + 2;
+      double seriesH = Math.max(4, rowH - 4);
+      // 0.5 guide within the row
+      if (rowH >= 18) {
+        double guideY = seriesTop + seriesH * 0.5;
+        gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.28));
+        gc.setLineDashes(3, 3);
+        gc.setLineWidth(1);
+        gc.strokeLine(plotLeft, guideY, canvasWidth - 2, guideY);
+        gc.setLineDashes();
+      }
+
+      double[] mean = meanMethylSeries(members);
+      if (mean == null) {
+        continue;
+      }
+      // Stroke in the full canvas X, but clip Y to this row via seriesTop/seriesH.
+      // Shift series horizontally by drawing into a translated clip region.
+      gc.save();
+      try {
+        gc.beginPath();
+        gc.rect(plotLeft, rowTop, plotW, rowH);
+        gc.clip();
+        Color stroke = Color.color(gColor.getRed(), gColor.getGreen(), gColor.getBlue(), 0.95);
+        strokeMethylSeriesInPlot(
+            gc, mean, stroke, 2.4, plotLeft, seriesTop, plotW, seriesH);
+      } finally {
+        gc.restore();
+      }
+    }
+  }
+
+  /**
+   * Like {@link #strokeMethylSeries} but maps series x into {@code [plotLeft, plotLeft+plotW]}
+   * and y into {@code [seriesTop, seriesTop+seriesH]} (methyl fraction 0 bottom → 1 top).
+   */
+  private static void strokeMethylSeriesInPlot(
+      GraphicsContext gc,
+      double[] series,
+      Color color,
+      double lineWidth,
+      double plotLeft,
+      double seriesTop,
+      double plotW,
+      double seriesH) {
+    if (series == null || series.length == 0 || !(seriesH > 0) || !(plotW > 0)) {
+      return;
+    }
+    gc.setStroke(color);
+    gc.setFill(color);
+    gc.setLineWidth(lineWidth);
+    gc.beginPath();
+    boolean started = false;
+    boolean hasStroke = false;
+    double lastX = 0;
+    double lastY = 0;
+    int n = series.length;
+    for (int i = 0; i < n; i++) {
+      double val = series[i];
+      if (!(val >= 0.0) || !Double.isFinite(val)) {
+        if (started && !hasStroke) {
+          double r = Math.max(1.5, lineWidth);
+          gc.fillOval(lastX - r, lastY - r, r * 2, r * 2);
+          gc.beginPath();
+        } else if (hasStroke) {
+          gc.stroke();
+          gc.beginPath();
+        }
+        started = false;
+        hasStroke = false;
+        continue;
+      }
+      double x = plotLeft + (i + 0.5) * plotW / n;
+      double y = seriesTop + seriesH * (1.0 - Math.min(1.0, val));
+      if (!Double.isFinite(x) || !Double.isFinite(y)) {
+        started = false;
+        hasStroke = false;
+        continue;
+      }
+      if (!started) {
+        gc.moveTo(x, y);
+        started = true;
+        hasStroke = false;
+      } else {
+        gc.lineTo(x, y);
+        hasStroke = true;
+      }
+      lastX = x;
+      lastY = y;
+    }
+    if (hasStroke) {
+      gc.stroke();
+    } else if (started) {
+      double r = Math.max(1.5, lineWidth);
+      gc.fillOval(lastX - r, lastY - r, r * 2, r * 2);
+    }
+  }
+
+  private Map<Sample, SampleTrack> methylSampleTrackIndex() {
+    Map<Sample, SampleTrack> index = new IdentityHashMap<>();
+    for (SampleTrack track : sampleRegistry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample != null) {
+          index.put(sample, track);
+        }
+      }
+    }
+    return index;
+  }
+
+  private static final Color TABLE_GAIN_COLOR = Color.rgb(45, 95, 210, 0.88);
+  private static final Color TABLE_LOH_COLOR = Color.rgb(210, 55, 55, 0.88);
+  private static final LohFromAlleleCn TABLE_LOH_POLICY = LohFromAlleleCn.binary();
+  /** Total CN above this counts as gain in the ASCAT recurrence aggregate. */
+  private static final double TABLE_GAIN_CN_THRESHOLD = 2.5;
+
+  /**
+   * Aggregate mapped tables on the master band.
+   * Allele-CN (ASCAT…): CNV-style recurrence — gain counts up, LOH counts down
+   * (peaks = shared / minimal regions). VALUE tables: single cohort/group mean.
+   */
+  private void renderMasterMappedTable(
+      GraphicsContext gc,
+      DrawStack drawStack,
+      double canvasWidth,
+      double masterTrackHeight) {
+    if (drawStack == null || canvasWidth < 8 || masterTrackHeight < 12) {
+      return;
+    }
+    String chrom = drawStack.getChromosome();
+    if (chrom == null || chrom.isBlank()) {
+      return;
+    }
+    int width = Math.max(1, (int) Math.floor(canvasWidth));
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    long vStart = (long) viewStart;
+    long vEnd = (long) viewEnd;
+
+    List<AlleleCnMask> alleleMasks = new ArrayList<>();
+    List<TableSeries> valueSeries = new ArrayList<>();
+    Map<Sample, SampleTrack> sampleToTrack = new IdentityHashMap<>();
+    int colorIdx = 0;
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    List<SampleTrack> allTracks = sampleRegistry.getSampleTracks();
+    for (int idx : displayed) {
+      if (idx < 0 || idx >= allTracks.size()) {
+        continue;
+      }
+      SampleTrack track = allTracks.get(idx);
+      if (track == null || !track.isVisible()) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null || !sample.visible || sample.getDataType() != Sample.DataType.TABLE) {
           continue;
         }
-        double y = margin + plotH * (1.0 - val);
-        if (!started) {
-          gc.moveTo(px, y);
-          started = true;
-        } else {
-          gc.lineTo(px, y);
+        MappedTableData table = sample.getMappedTable();
+        if (table == null) {
+          continue;
+        }
+        sampleToTrack.put(sample, track);
+        if (table.hasAlleleCn()) {
+          AlleleCnMask mask = rasterizeAlleleCnMasks(
+              table, chrom, vStart, vEnd, width, viewStart, viewEnd);
+          if (mask != null) {
+            alleleMasks.add(new AlleleCnMask(sample, mask.loh(), mask.gain()));
+          }
+        } else if (table.hasValueColumn()) {
+          double[] series = rasterizeMappedTableValueSeries(
+              table, chrom, vStart, vEnd, width, viewStart, viewEnd);
+          if (series != null) {
+            valueSeries.add(new TableSeries(sample, series, colorIdx++));
+          }
         }
       }
-      gc.stroke();
     }
 
-    gc.setLineWidth(1.0);
-    gc.setFont(AppFonts.getFont("Segoe UI", 8));
-    double legendX = 4;
-    for (CoverageDrawer.SampleRow row : methylRows) {
-      Color color = DrawColors.SAMPLE_METHYL_COLORS[row.methylColorIndex % DrawColors.SAMPLE_METHYL_COLORS.length];
-      String label = row.sample.getName();
-      if (label.length() > 20) {
-        label = label.substring(0, 18) + "..";
-      }
-      gc.setFill(color);
-      gc.fillRect(legendX, masterTrackHeight - 10, 8, 6);
-      gc.setFill(Color.rgb(200, 200, 200, 0.9));
-      gc.fillText(label, legendX + 10, masterTrackHeight - 4);
-      legendX += 14 + label.length() * 5;
+    if (!alleleMasks.isEmpty()) {
+      renderAlleleCnRecurrence(
+          gc, canvasWidth, masterTrackHeight, width, alleleMasks, sampleToTrack);
+    } else if (!valueSeries.isEmpty()) {
+      renderMappedValueMean(
+          gc, canvasWidth, masterTrackHeight, valueSeries, sampleToTrack);
     }
+  }
+
+  private record TableSeries(Sample sample, double[] series, int colorIndex) {}
+
+  private record AlleleCnMask(Sample sample, boolean[] loh, boolean[] gain) {}
+
+  /**
+   * CNV-style summary: per-pixel sample counts for gain (up) and LOH (down).
+   * Shared peaks highlight minimal recurrent regions.
+   */
+  private void renderAlleleCnRecurrence(
+      GraphicsContext gc,
+      double canvasWidth,
+      double masterTrackHeight,
+      int width,
+      List<AlleleCnMask> masks,
+      Map<Sample, SampleTrack> sampleToTrack) {
+    AnalysisSession session = AnalysisSession.get();
+    List<Integer> groupIds = new ArrayList<>();
+    for (int groupId : ComparisonContext.analysisGroupIds(sampleRegistry)) {
+      if (session.isAggregateGroupVisible(groupId)) {
+        groupIds.add(groupId);
+      }
+    }
+    boolean byGroup = !groupIds.isEmpty() && session.isShowOnAggregate();
+
+    double margin = 2;
+    double plotH = masterTrackHeight - 2 * margin;
+    double midY = margin + plotH * 0.5;
+    double halfH = plotH * 0.5;
+    boolean drawScale = masterTrackHeight >= 28;
+
+    int maxCount = 1;
+    if (byGroup) {
+      // Per-group count arrays, then stack within gain/LOH halves.
+      List<int[]> groupLoh = new ArrayList<>(groupIds.size());
+      List<int[]> groupGain = new ArrayList<>(groupIds.size());
+      for (int groupId : groupIds) {
+        int[] loh = new int[width];
+        int[] gain = new int[width];
+        for (AlleleCnMask mask : masks) {
+          SampleTrack track = sampleToTrack.get(mask.sample());
+          if (!trackInAnalysisGroup(track, groupId)) {
+            continue;
+          }
+          addMaskCounts(loh, mask.loh());
+          addMaskCounts(gain, mask.gain());
+        }
+        groupLoh.add(loh);
+        groupGain.add(gain);
+        maxCount = Math.max(maxCount, maxArray(loh));
+        maxCount = Math.max(maxCount, maxArray(gain));
+      }
+      maxCount = Math.max(1, maxCount);
+
+      if (drawScale) {
+        drawRecurrenceScale(gc, canvasWidth, margin, midY, halfH, maxCount);
+      }
+
+      for (int px = 0; px < width; px++) {
+        double yUp = midY;
+        double yDown = midY;
+        for (int g = 0; g < groupIds.size(); g++) {
+          Color base = ComparisonContext.groupColor(sampleRegistry, groupIds.get(g));
+          int gainC = groupGain.get(g)[px];
+          int lohC = groupLoh.get(g)[px];
+          if (gainC > 0) {
+            double h = (gainC / (double) maxCount) * halfH;
+            gc.setFill(Color.color(base.getRed(), base.getGreen(), base.getBlue(), 0.9));
+            gc.fillRect(px, yUp - h, 1, Math.max(1, h));
+            yUp -= h;
+          }
+          if (lohC > 0) {
+            double h = (lohC / (double) maxCount) * halfH;
+            // Slightly darker for LOH half so group stacks stay distinguishable.
+            gc.setFill(Color.color(
+                base.getRed() * 0.85, base.getGreen() * 0.55, base.getBlue() * 0.55, 0.9));
+            gc.fillRect(px, yDown, 1, Math.max(1, h));
+            yDown += h;
+          }
+        }
+      }
+    } else {
+      int[] lohCount = new int[width];
+      int[] gainCount = new int[width];
+      for (AlleleCnMask mask : masks) {
+        addMaskCounts(lohCount, mask.loh());
+        addMaskCounts(gainCount, mask.gain());
+      }
+      maxCount = Math.max(1, Math.max(maxArray(lohCount), maxArray(gainCount)));
+
+      if (drawScale) {
+        drawRecurrenceScale(gc, canvasWidth, margin, midY, halfH, maxCount);
+      }
+
+      for (int px = 0; px < width; px++) {
+        int gainC = gainCount[px];
+        int lohC = lohCount[px];
+        if (gainC > 0) {
+          double h = (gainC / (double) maxCount) * halfH;
+          gc.setFill(TABLE_GAIN_COLOR);
+          gc.fillRect(px, midY - h, 1, Math.max(1, h));
+        }
+        if (lohC > 0) {
+          double h = (lohC / (double) maxCount) * halfH;
+          gc.setFill(TABLE_LOH_COLOR);
+          gc.fillRect(px, midY, 1, Math.max(1, h));
+        }
+      }
+    }
+
+    // Midline
+    Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
+    gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.55));
+    gc.setLineWidth(1);
+    gc.setLineDashes(3, 3);
+    gc.strokeLine(0, midY, canvasWidth, midY);
+    gc.setLineDashes();
+
+    drawAlleleCnRecurrenceLegend(
+        gc, canvasWidth, masterTrackHeight, masks.size(), groupIds, byGroup, maxCount);
+  }
+
+  private void renderMappedValueMean(
+      GraphicsContext gc,
+      double canvasWidth,
+      double masterTrackHeight,
+      List<TableSeries> valueSeries,
+      Map<Sample, SampleTrack> sampleToTrack) {
+    double min = Double.POSITIVE_INFINITY;
+    double max = Double.NEGATIVE_INFINITY;
+    for (TableSeries ts : valueSeries) {
+      for (double v : ts.series()) {
+        if (!Double.isFinite(v)) {
+          continue;
+        }
+        min = Math.min(min, v);
+        max = Math.max(max, v);
+      }
+    }
+    if (!(max > min) || !Double.isFinite(min)) {
+      min = -1.5;
+      max = 1.5;
+    } else {
+      double pad = Math.max(0.1, (max - min) * 0.08);
+      min -= pad;
+      max += pad;
+    }
+    double midDisplay = (min <= 0 && max >= 0) ? 0 : (min + max) * 0.5;
+
+    AnalysisSession session = AnalysisSession.get();
+    LinkedHashMap<Integer, List<TableSeries>> groupSeries = new LinkedHashMap<>();
+    for (int groupId : ComparisonContext.analysisGroupIds(sampleRegistry)) {
+      if (!session.isAggregateGroupVisible(groupId)) {
+        continue;
+      }
+      List<TableSeries> members = new ArrayList<>();
+      for (TableSeries ts : valueSeries) {
+        if (trackInAnalysisGroup(sampleToTrack.get(ts.sample()), groupId)) {
+          members.add(ts);
+        }
+      }
+      if (!members.isEmpty()) {
+        groupSeries.put(groupId, members);
+      }
+    }
+    boolean showGroupMeans = groupSeries.size() >= 1 && session.isShowOnAggregate();
+
+    double margin = 2;
+    double plotH = masterTrackHeight - 2 * margin;
+    if (masterTrackHeight >= 28) {
+      drawMappedValueAggregateScale(gc, canvasWidth, margin, plotH, min, max, midDisplay);
+    }
+
+    if (showGroupMeans) {
+      for (Map.Entry<Integer, List<TableSeries>> entry : groupSeries.entrySet()) {
+        double[] mean = averageFiniteSeries(entry.getValue());
+        if (mean == null) {
+          continue;
+        }
+        Color groupColor = ComparisonContext.groupColor(sampleRegistry, entry.getKey());
+        strokeScaledSeries(
+            gc, mean,
+            Color.color(groupColor.getRed(), groupColor.getGreen(), groupColor.getBlue(), 0.95),
+            2.8, margin, plotH, min, max);
+      }
+    } else {
+      double[] cohortMean = averageFiniteSeries(valueSeries);
+      if (cohortMean != null) {
+        strokeScaledSeries(
+            gc, cohortMean, Color.rgb(55, 120, 200, 0.95), 2.8, margin, plotH, min, max);
+      }
+    }
+
+    drawMappedValueAggregateLegend(
+        gc, canvasWidth, masterTrackHeight, valueSeries.size(), groupSeries.keySet(), showGroupMeans);
+  }
+
+  /** Per-pixel LOH / gain masks for one allele-CN table (last segment wins). */
+  private static AlleleCnMask rasterizeAlleleCnMasks(
+      MappedTableData table,
+      String chrom,
+      long viewStart,
+      long viewEnd,
+      int width,
+      double viewStartD,
+      double viewEndD) {
+    List<MappedTableRow> rows = table.rowsOverlapping(chrom, viewStart, viewEnd);
+    if (rows.isEmpty() || width <= 0) {
+      return null;
+    }
+    double viewLen = Math.max(1e-9, viewEndD - viewStartD);
+    boolean[] loh = new boolean[width];
+    boolean[] gain = new boolean[width];
+    boolean any = false;
+    for (MappedTableRow row : rows) {
+      if (!row.hasAlleleCn()) {
+        continue;
+      }
+      AlleleCnSegment seg = new AlleleCnSegment(
+          row.chromosome(),
+          row.start1Based(),
+          row.end1Based(),
+          row.sampleId(),
+          row.minorCn(),
+          row.majorCn(),
+          row.totalCn(),
+          row.score());
+      boolean isLoh = TABLE_LOH_POLICY.isLoh(seg);
+      double total = row.totalCn() != null && Double.isFinite(row.totalCn())
+          ? row.totalCn()
+          : row.minorCn() + row.majorCn();
+      boolean isGain = total > TABLE_GAIN_CN_THRESHOLD;
+
+      double x1d = ((Math.max(row.start1Based(), viewStartD) - viewStartD) / viewLen) * width;
+      double x2d = ((Math.min(row.end1Based(), viewEndD) - viewStartD) / viewLen) * width;
+      if (x2d < x1d) {
+        double tmp = x1d;
+        x1d = x2d;
+        x2d = tmp;
+      }
+      int x1 = Math.max(0, (int) Math.floor(x1d));
+      int x2 = Math.min(width - 1, (int) Math.floor(x2d));
+      if (x2 < x1) {
+        x2 = x1;
+      }
+      for (int px = x1; px <= x2; px++) {
+        loh[px] = isLoh;
+        gain[px] = isGain;
+        any = true;
+      }
+    }
+    return any ? new AlleleCnMask(null, loh, gain) : null;
+  }
+
+  private static double[] rasterizeMappedTableValueSeries(
+      MappedTableData table,
+      String chrom,
+      long viewStart,
+      long viewEnd,
+      int width,
+      double viewStartD,
+      double viewEndD) {
+    List<MappedTableRow> rows = table.rowsOverlapping(chrom, viewStart, viewEnd);
+    if (rows.isEmpty() || width <= 0) {
+      return null;
+    }
+    double viewLen = Math.max(1e-9, viewEndD - viewStartD);
+    double[] series = new double[width];
+    Arrays.fill(series, Double.NaN);
+    boolean any = false;
+    for (MappedTableRow row : rows) {
+      double value = row.analysisValue();
+      if (!Double.isFinite(value)) {
+        continue;
+      }
+      double x1d = ((Math.max(row.start1Based(), viewStartD) - viewStartD) / viewLen) * width;
+      double x2d = ((Math.min(row.end1Based(), viewEndD) - viewStartD) / viewLen) * width;
+      if (x2d < x1d) {
+        double tmp = x1d;
+        x1d = x2d;
+        x2d = tmp;
+      }
+      int x1 = Math.max(0, (int) Math.floor(x1d));
+      int x2 = Math.min(width - 1, (int) Math.floor(x2d));
+      if (x2 < x1) {
+        x2 = x1;
+      }
+      for (int px = x1; px <= x2; px++) {
+        series[px] = value;
+        any = true;
+      }
+    }
+    return any ? series : null;
+  }
+
+  private static void addMaskCounts(int[] counts, boolean[] mask) {
+    if (counts == null || mask == null) {
+      return;
+    }
+    int n = Math.min(counts.length, mask.length);
+    for (int i = 0; i < n; i++) {
+      if (mask[i]) {
+        counts[i]++;
+      }
+    }
+  }
+
+  private static int maxArray(int[] a) {
+    int m = 0;
+    if (a == null) {
+      return 0;
+    }
+    for (int v : a) {
+      if (v > m) {
+        m = v;
+      }
+    }
+    return m;
+  }
+
+  private static double[] averageFiniteSeries(List<TableSeries> source) {
+    if (source == null || source.isEmpty()) {
+      return null;
+    }
+    int width = 0;
+    for (TableSeries ts : source) {
+      if (ts != null && ts.series() != null) {
+        width = Math.max(width, ts.series().length);
+      }
+    }
+    if (width <= 0) {
+      return null;
+    }
+    double[] sum = new double[width];
+    int[] count = new int[width];
+    for (TableSeries ts : source) {
+      if (ts == null || ts.series() == null) {
+        continue;
+      }
+      double[] series = ts.series();
+      int n = Math.min(width, series.length);
+      for (int px = 0; px < n; px++) {
+        double val = series[px];
+        if (Double.isFinite(val)) {
+          sum[px] += val;
+          count[px]++;
+        }
+      }
+    }
+    double[] mean = new double[width];
+    boolean any = false;
+    for (int px = 0; px < width; px++) {
+      if (count[px] > 0) {
+        mean[px] = sum[px] / count[px];
+        any = true;
+      } else {
+        mean[px] = Double.NaN;
+      }
+    }
+    return any ? mean : null;
+  }
+
+  private static void strokeScaledSeries(
+      GraphicsContext gc,
+      double[] series,
+      Color color,
+      double lineWidth,
+      double margin,
+      double plotH,
+      double dispMin,
+      double dispMax) {
+    if (series == null || series.length == 0 || !(plotH > 0) || !(dispMax > dispMin)) {
+      return;
+    }
+    gc.setStroke(color);
+    gc.setFill(color);
+    gc.setLineWidth(lineWidth);
+    gc.beginPath();
+    boolean started = false;
+    boolean hasStroke = false;
+    double lastX = 0;
+    double lastY = 0;
+    for (int px = 0; px < series.length; px++) {
+      double val = series[px];
+      if (!Double.isFinite(val)) {
+        if (started && !hasStroke) {
+          double r = Math.max(1.5, lineWidth);
+          gc.fillOval(lastX - r, lastY - r, r * 2, r * 2);
+          gc.beginPath();
+        } else if (hasStroke) {
+          gc.stroke();
+          gc.beginPath();
+        }
+        started = false;
+        hasStroke = false;
+        continue;
+      }
+      double frac = (val - dispMin) / (dispMax - dispMin);
+      frac = Math.max(0, Math.min(1, frac));
+      double y = margin + plotH * (1.0 - frac);
+      if (!Double.isFinite(y)) {
+        started = false;
+        hasStroke = false;
+        continue;
+      }
+      if (!started) {
+        gc.moveTo(px, y);
+        started = true;
+        hasStroke = false;
+      } else {
+        gc.lineTo(px, y);
+        hasStroke = true;
+      }
+      lastX = px;
+      lastY = y;
+    }
+    if (hasStroke) {
+      gc.stroke();
+    } else if (started) {
+      double r = Math.max(1.5, lineWidth);
+      gc.fillOval(lastX - r, lastY - r, r * 2, r * 2);
+    }
+  }
+
+  private void drawRecurrenceScale(
+      GraphicsContext gc,
+      double canvasWidth,
+      double margin,
+      double midY,
+      double halfH,
+      int maxCount) {
+    Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
+    Color faint = Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.2);
+    gc.setLineWidth(1);
+    gc.setFont(AppFonts.getFont("Segoe UI", 9));
+    gc.setFill(axis);
+    gc.fillText("Gain " + maxCount, 3, margin + 9);
+    gc.fillText("LOH " + maxCount, 3, margin + halfH * 2 - 2);
+    // Half-count guides
+    if (maxCount >= 2) {
+      double halfFrac = 0.5;
+      gc.setStroke(faint);
+      gc.strokeLine(0, midY - halfH * halfFrac, canvasWidth, midY - halfH * halfFrac);
+      gc.strokeLine(0, midY + halfH * halfFrac, canvasWidth, midY + halfH * halfFrac);
+      gc.setFill(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.7));
+      int half = Math.max(1, maxCount / 2);
+      gc.fillText(String.valueOf(half), 3, midY - halfH * halfFrac - 1);
+      gc.fillText(String.valueOf(half), 3, midY + halfH * halfFrac + 9);
+    }
+  }
+
+  private void drawAlleleCnRecurrenceLegend(
+      GraphicsContext gc,
+      double canvasWidth,
+      double masterTrackHeight,
+      int sampleCount,
+      List<Integer> groupIds,
+      boolean byGroup,
+      int maxCount) {
+    gc.setLineWidth(1.0);
+    gc.setFont(AppFonts.getFont("Segoe UI", 9));
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
+
+    double rowH = 12;
+    double pad = 6;
+    double sw = 10;
+    double sh = 7;
+    double maxLabel = 120;
+    List<String> lines = new ArrayList<>();
+    List<Color> colors = new ArrayList<>();
+
+    lines.add("ASCAT recurrence (" + sampleCount + ")");
+    colors.add(null);
+    lines.add("Gain ↑  (n≤" + maxCount + ")");
+    colors.add(TABLE_GAIN_COLOR);
+    lines.add("LOH ↓  (n≤" + maxCount + ")");
+    colors.add(TABLE_LOH_COLOR);
+    if (byGroup && groupIds != null) {
+      lines.add("Stacked by group");
+      colors.add(null);
+      for (int groupId : groupIds) {
+        lines.add(truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 18));
+        colors.add(ComparisonContext.groupColor(sampleRegistry, groupId));
+      }
+    }
+
+    double textW = 0;
+    for (String line : lines) {
+      textW = Math.max(textW, Math.min(maxLabel, line.length() * 5.6));
+    }
+    double boxW = pad * 2 + sw + 4 + textW;
+    double boxH = pad * 2 + lines.size() * rowH;
+    if (boxH > masterTrackHeight - 4) {
+      boxH = masterTrackHeight - 4;
+    }
+    double boxX = Math.max(4, canvasWidth - boxW - 4);
+    double boxY = Math.max(2, masterTrackHeight - boxH - 2);
+
+    var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
+    gc.setFill(Color.color(
+        chrome.elevated().getRed(),
+        chrome.elevated().getGreen(),
+        chrome.elevated().getBlue(),
+        org.baseplayer.ui.theme.AppTheme.isDark() ? 0.72 : 0.9));
+    gc.fillRoundRect(boxX, boxY, boxW, boxH, 4, 4);
+
+    double y = boxY + pad;
+    double maxY = boxY + boxH - 2;
+    for (int i = 0; i < lines.size(); i++) {
+      if (y + rowH > maxY) {
+        break;
+      }
+      String label = lines.get(i);
+      Color color = colors.get(i);
+      double x = boxX + pad;
+      if (color != null) {
+        gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.95));
+        gc.fillRoundRect(x, y + 1, sw, sh, 2, 2);
+        x += sw + 4;
+      }
+      gc.setFill(color == null
+          ? Color.rgb(180, 180, 180, 0.95)
+          : Color.rgb(220, 220, 220, 0.95));
+      gc.fillText(label, x, y);
+      y += rowH;
+    }
+  }
+
+  private void drawMappedValueAggregateScale(
+      GraphicsContext gc,
+      double canvasWidth,
+      double margin,
+      double plotH,
+      double dispMin,
+      double dispMax,
+      double midDisplay) {
+    Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
+    Color faint = Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.22);
+    gc.setLineWidth(1);
+    gc.setFont(AppFonts.getFont("Segoe UI", 9));
+    double midY = margin + plotH * (1.0 - ((midDisplay - dispMin) / (dispMax - dispMin)));
+    midY = Math.max(margin, Math.min(margin + plotH, midY));
+    gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.5));
+    gc.setLineDashes(3, 3);
+    gc.strokeLine(0, midY, canvasWidth, midY);
+    gc.setLineDashes();
+    gc.setStroke(faint);
+    gc.strokeLine(0, margin, canvasWidth, margin);
+    gc.strokeLine(0, margin + plotH, canvasWidth, margin + plotH);
+    gc.setFill(axis);
+    gc.fillText(formatAggregateTick(dispMax), 3, margin + 9);
+    gc.fillText(formatAggregateTick(midDisplay), 3, midY - 1);
+    gc.fillText(formatAggregateTick(dispMin), 3, margin + plotH - 1);
+  }
+
+  private void drawMappedValueAggregateLegend(
+      GraphicsContext gc,
+      double canvasWidth,
+      double masterTrackHeight,
+      int sampleCount,
+      Set<Integer> groupIds,
+      boolean showGroupMeans) {
+    gc.setLineWidth(1.0);
+    gc.setFont(AppFonts.getFont("Segoe UI", 9));
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
+
+    double rowH = 12;
+    double pad = 6;
+    double sw = 10;
+    double sh = 7;
+    double maxLabel = 110;
+    List<String> lines = new ArrayList<>();
+    List<Color> colors = new ArrayList<>();
+
+    if (showGroupMeans && groupIds != null && !groupIds.isEmpty()) {
+      lines.add("Mean value by group");
+      colors.add(null);
+      for (int groupId : groupIds) {
+        lines.add(truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 18));
+        colors.add(ComparisonContext.groupColor(sampleRegistry, groupId));
+      }
+    } else {
+      lines.add("Mean value (" + sampleCount + " samples)");
+      colors.add(Color.rgb(55, 120, 200));
+    }
+
+    double textW = 0;
+    for (String line : lines) {
+      textW = Math.max(textW, Math.min(maxLabel, line.length() * 5.6));
+    }
+    double boxW = pad * 2 + sw + 4 + textW;
+    double boxH = pad * 2 + lines.size() * rowH;
+    if (boxH > masterTrackHeight - 4) {
+      boxH = masterTrackHeight - 4;
+    }
+    double boxX = Math.max(4, canvasWidth - boxW - 4);
+    double boxY = Math.max(2, masterTrackHeight - boxH - 2);
+
+    var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
+    gc.setFill(Color.color(
+        chrome.elevated().getRed(),
+        chrome.elevated().getGreen(),
+        chrome.elevated().getBlue(),
+        org.baseplayer.ui.theme.AppTheme.isDark() ? 0.72 : 0.9));
+    gc.fillRoundRect(boxX, boxY, boxW, boxH, 4, 4);
+
+    double y = boxY + pad;
+    double maxY = boxY + boxH - 2;
+    for (int i = 0; i < lines.size(); i++) {
+      if (y + rowH > maxY) {
+        break;
+      }
+      String label = lines.get(i);
+      Color color = colors.get(i);
+      double x = boxX + pad;
+      if (color != null) {
+        gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.95));
+        gc.fillRoundRect(x, y + 1, sw, sh, 2, 2);
+        x += sw + 4;
+      }
+      gc.setFill(color == null
+          ? Color.rgb(180, 180, 180, 0.95)
+          : Color.rgb(220, 220, 220, 0.95));
+      gc.fillText(label, x, y);
+      y += rowH;
+    }
+  }
+
+  private static String formatAggregateTick(double v) {
+    if (!Double.isFinite(v)) {
+      return "";
+    }
+    if (Math.abs(v - Math.rint(v)) < 1e-6) {
+      return String.valueOf((long) Math.rint(v));
+    }
+    return String.format(Locale.ROOT, "%.1f", v);
+  }
+
+  private static boolean trackInAnalysisGroup(SampleTrack track, int groupId) {
+    if (track == null) {
+      return false;
+    }
+    if (ComparisonContext.isOtherGroupId(groupId)) {
+      return !track.hasGroup();
+    }
+    return track.isInGroup(groupId);
+  }
+
+  /** Per-pixel mean of valid smoothed ratios; {@code null} when nothing usable. */
+  private static double[] meanMethylSeries(List<CoverageDrawer.SampleRow> rows) {
+    if (rows == null || rows.isEmpty()) {
+      return null;
+    }
+    // Average every member so groups with still-streaming caches are not dropped
+    // relative to a sibling group that finished first.
+    return averageMethylSeries(rows);
+  }
+
+  private static double[] averageMethylSeries(List<CoverageDrawer.SampleRow> source) {
+    if (source == null || source.isEmpty()) {
+      return null;
+    }
+    int width = 0;
+    for (CoverageDrawer.SampleRow row : source) {
+      if (row != null && row.smoothedMethylRatio != null) {
+        width = Math.max(width, row.smoothedMethylRatio.length);
+      }
+    }
+    if (width <= 0) {
+      return null;
+    }
+    double[] sum = new double[width];
+    int[] count = new int[width];
+    for (CoverageDrawer.SampleRow row : source) {
+      if (row == null) {
+        continue;
+      }
+      double[] series = row.smoothedMethylRatio;
+      if (series == null) {
+        continue;
+      }
+      int n = Math.min(width, series.length);
+      for (int px = 0; px < n; px++) {
+        double val = series[px];
+        if (val >= 0.0 && Double.isFinite(val)) {
+          sum[px] += val;
+          count[px]++;
+        }
+      }
+    }
+    double[] mean = new double[width];
+    boolean any = false;
+    for (int px = 0; px < width; px++) {
+      if (count[px] > 0) {
+        mean[px] = sum[px] / count[px];
+        any = true;
+      } else {
+        mean[px] = Double.NaN;
+      }
+    }
+    return any ? mean : null;
+  }
+
+  private static void strokeMethylSeries(
+      GraphicsContext gc,
+      double[] series,
+      Color color,
+      double lineWidth,
+      double margin,
+      double plotH) {
+    if (series == null || series.length == 0 || !(plotH > 0)) {
+      return;
+    }
+    gc.setStroke(color);
+    gc.setFill(color);
+    gc.setLineWidth(lineWidth);
+    gc.beginPath();
+    boolean started = false;
+    boolean hasStroke = false;
+    double lastX = 0;
+    double lastY = 0;
+    for (int px = 0; px < series.length; px++) {
+      double val = series[px];
+      // NaN / negative = no data; NaN geometry corrupts NGCanvas buffers.
+      if (!(val >= 0.0) || !Double.isFinite(val)) {
+        if (started && !hasStroke) {
+          // Sparse CpG / single-pixel mean — path stroke alone draws nothing.
+          double r = Math.max(1.5, lineWidth);
+          gc.fillOval(lastX - r, lastY - r, r * 2, r * 2);
+          gc.beginPath();
+        } else if (hasStroke) {
+          gc.stroke();
+          gc.beginPath();
+        }
+        started = false;
+        hasStroke = false;
+        continue;
+      }
+      double y = margin + plotH * (1.0 - Math.min(1.0, val));
+      if (!Double.isFinite(y)) {
+        started = false;
+        hasStroke = false;
+        continue;
+      }
+      if (!started) {
+        gc.moveTo(px, y);
+        started = true;
+        hasStroke = false;
+      } else {
+        gc.lineTo(px, y);
+        hasStroke = true;
+      }
+      lastX = px;
+      lastY = y;
+    }
+    if (hasStroke) {
+      gc.stroke();
+    } else if (started) {
+      double r = Math.max(1.5, lineWidth);
+      gc.fillOval(lastX - r, lastY - r, r * 2, r * 2);
+    }
+  }
+
+  /**
+   * Clickable methylation filter legend (CpG/CHG/CHH + MM mod types), same
+   * interaction model as variant-type density swatches.
+   */
+  private void drawMethylFilterLegend(
+      GraphicsContext gc, double canvasWidth, double masterTrackHeight) {
+    methylColorLegend.clear();
+    List<CanvasColorLegend.Item> items = buildMethylLegendItems();
+    if (items.isEmpty() || masterTrackHeight < 16 || canvasWidth < 80) {
+      return;
+    }
+    // Bottom of the aggregate band so it stays clear of variant density chrome.
+    double legendTop = Math.max(2, masterTrackHeight - 20);
+    methylColorLegend.draw(
+        gc, items, 8, legendTop, canvasWidth - 8, masterTrackHeight - 2, "All methyl");
+  }
+
+  private List<CanvasColorLegend.Item> buildMethylLegendItems() {
+    List<CanvasColorLegend.Item> items = new ArrayList<>();
+    MethylationCanvasFilter filter = MethylationCanvasFilter.get();
+    if (methylRowsPresent()) {
+      for (MethylSiteContext context : EnumSet.allOf(MethylSiteContext.class)) {
+        items.add(new CanvasColorLegend.Item(
+            context,
+            MethylationVisuals.contextLabel(context),
+            MethylationVisuals.contextColor(context),
+            filter.isContextVisible(context)));
+      }
+    }
+    Set<Character> mods = filter.collectPresentModTypes();
+    // Also include mods seen in the current coverage matrix (viewport).
+    CoverageDrawer.SampleRow[] rows = coverageDrawer.getRows();
+    if (rows != null) {
+      for (CoverageDrawer.SampleRow row : rows) {
+        if (row == null || row.modTypeCounts == null) {
+          continue;
+        }
+        mods.addAll(row.modTypeCounts.keySet());
+      }
+    }
+    Set<Character> ordered = new LinkedHashSet<>();
+    for (char c : new char[] {'m', 'h', 'f', 'c', 'a', 'g', 'e', 'b', 'o', 'n'}) {
+      if (mods.contains(c) || mods.contains(Character.toUpperCase(c))) {
+        ordered.add(Character.toLowerCase(c));
+      }
+    }
+    for (Character c : mods) {
+      if (c != null) {
+        ordered.add(Character.toLowerCase(c));
+      }
+    }
+    for (Character modCode : ordered) {
+      items.add(new CanvasColorLegend.Item(
+          modCode,
+          MethylationVisuals.modLabel(modCode),
+          MethylationVisuals.modColor(modCode),
+          filter.isModTypeVisible(modCode)));
+    }
+    return items;
+  }
+
+  private boolean methylRowsPresent() {
+    CoverageDrawer.SampleRow[] rows = coverageDrawer.getRows();
+    if (rows == null) {
+      return false;
+    }
+    for (CoverageDrawer.SampleRow row : rows) {
+      if (row != null && row.sample != null && row.sample.isMethylationData()
+          && row.smoothedMethylRatio != null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String truncateLegendLabel(String label, int maxChars) {
+    if (label == null || label.isEmpty()) {
+      return "?";
+    }
+    if (label.length() <= maxChars) {
+      return label;
+    }
+    return label.substring(0, Math.max(1, maxChars - 2)) + "..";
+  }
+
+  /** True when sample groups exist and aggregate should show per-group stacks. */
+  private boolean groupAggregateModeActive() {
+    return org.baseplayer.analysis.AnalysisSession.get().isShowOnAggregate()
+        && !ComparisonContext.analysisGroupIds(sampleRegistry).isEmpty();
+  }
+
+  private static int indexOfLevel(VariantDensityPyramid pyr, VariantDensityPyramid.Level level) {
+    if (pyr == null || level == null || pyr.levels() == null) {
+      return -1;
+    }
+    VariantDensityPyramid.Level[] levels = pyr.levels();
+    for (int i = 0; i < levels.length; i++) {
+      if (levels[i] == level) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private static VariantDensityPyramid.GroupDensity groupDensityForId(
+      VariantDensityPyramid pyr, int groupId) {
+    if (pyr == null) {
+      return null;
+    }
+    for (VariantDensityPyramid.GroupDensity gd : pyr.groupDensities()) {
+      if (gd.groupId() == groupId) {
+        return gd;
+      }
+    }
+    return null;
+  }
+
+  private static VcfVariantType typeForPyramidChannel(VariantDensityPyramid.Channel ch) {
+    if (ch == null) {
+      return null;
+    }
+    return switch (ch) {
+      case SNV -> VcfVariantType.SNV;
+      case INDEL -> VcfVariantType.DELETION;
+      case DEL -> VcfVariantType.SV_DELETION;
+      case CNV_LOSS -> VcfVariantType.SV_CNV_LOSS;
+      case INV -> VcfVariantType.SV_INVERSION;
+      case DUP -> VcfVariantType.SV_DUPLICATION;
+      case CNV_GAIN -> VcfVariantType.SV_CNV_GAIN;
+      case INS -> VcfVariantType.SV_INSERTION;
+      case TRA -> VcfVariantType.SV_TRANSLOCATION;
+      case BND -> VcfVariantType.SV_BREAKEND;
+      case LOH_AA -> VcfVariantType.LOH_AA;
+      case LOH_BB -> VcfVariantType.LOH_BB;
+    };
+  }
+
+  /**
+   * Equal-height group stack rows with a shared Y scale (sum of visible type counts).
+   * Bars use type colors; group identity is only in the clickable row label.
+   */
+  private int drawGroupStackRows(
+      GraphicsContext gc,
+      DrawStack drawStack,
+      double canvasWidth,
+      double top,
+      double h,
+      VariantDensityPyramid pyr) {
+    groupLabelHits = List.of();
+    if (pyr == null || h < 10 || canvasWidth < 40 || drawStack.getViewLength() <= 0) {
+      return 1;
+    }
+    VariantDensityPyramid.Level level = pyr.pickLevel(drawStack.getViewLength(), canvasWidth);
+    if (level == null) {
+      return 1;
+    }
+    int levelIndex = indexOfLevel(pyr, level);
+    if (levelIndex < 0) {
+      return 1;
+    }
+
+    org.baseplayer.analysis.AnalysisSession session =
+        org.baseplayer.analysis.AnalysisSession.get();
+    List<Integer> groupIds = ComparisonContext.analysisGroupIds(sampleRegistry);
+    List<VariantDensityPyramid.GroupDensity> rows = new ArrayList<>();
+    for (Integer gid : groupIds) {
+      if (gid == null) {
+        continue;
+      }
+      VariantDensityPyramid.GroupDensity gd = groupDensityForId(pyr, gid);
+      if (gd != null) {
+        rows.add(gd);
+      }
+    }
+    if (rows.isEmpty()) {
+      return 1;
+    }
+
+    VcfManager vcf = VcfManager.getInstance();
+    boolean[] visible = visiblePyramidChannels(vcf);
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double viewLen = Math.max(1.0, viewEnd - viewStart);
+    int maxC = Math.max(1, maxStackedGroupDensityInView(
+        pyr, level, levelIndex, rows, session, visible, viewStart, viewEnd));
+
+    int n = rows.size();
+    double rowH = h / n;
+    double labelW = 72;
+    double plotLeft = 36 + labelW;
+    double plotW = Math.max(8, canvasWidth - plotLeft - 4);
+    List<GroupLabelHit> hits = new ArrayList<>(n);
+    gc.setFont(AppFonts.getFont("Segoe UI", 10));
+    gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+
+    for (int ri = 0; ri < n; ri++) {
+      VariantDensityPyramid.GroupDensity gd = rows.get(ri);
+      int groupId = gd.groupId();
+      boolean shown = session.isAggregateGroupVisible(groupId);
+      double rowTop = top + ri * rowH;
+      double rowBottom = rowTop + rowH;
+      double midY = rowTop + rowH * 0.5;
+
+      // Separators between stacks
+      if (ri > 0) {
+        gc.setStroke(Color.rgb(120, 120, 120, 0.35));
+        gc.setLineWidth(1.0);
+        gc.strokeLine(plotLeft, rowTop + 0.5, canvasWidth - 2, rowTop + 0.5);
+      }
+
+      String name = truncateLegendLabel(
+          ComparisonContext.groupName(sampleRegistry, groupId), 12);
+      Color gColor = ComparisonContext.groupColor(sampleRegistry, groupId);
+      double sw = 8;
+      double sh = 7;
+      double labelX = 36;
+      gc.setFill(Color.color(
+          gColor.getRed(), gColor.getGreen(), gColor.getBlue(), shown ? 0.95 : 0.35));
+      gc.fillRoundRect(labelX, midY - sh * 0.5, sw, sh, 2, 2);
+      gc.setFill(shown
+          ? Color.rgb(220, 220, 220, 0.95)
+          : Color.rgb(160, 160, 160, 0.7));
+      gc.fillText(name, labelX + sw + 4, midY);
+      hits.add(new GroupLabelHit(labelX, rowTop, labelW, rowH, groupId));
+
+      if (!shown || rowH < 4) {
+        continue;
+      }
+
+      double maxBarH = Math.max(1, rowH - 2);
+      int width = (int) Math.floor(plotW);
+      for (int px = 0; px < width; px++) {
+        double g0 = viewStart + px * viewLen / plotW;
+        double g1 = viewStart + (px + 1) * viewLen / plotW;
+        int b0 = pyr.genomicToBin(g0, level);
+        int b1 = pyr.genomicToBin(g1, level);
+        if (b1 < b0) {
+          int tmp = b0;
+          b0 = b1;
+          b1 = tmp;
+        }
+        int stack = 0;
+        double yCursor = rowBottom - 1;
+        for (VariantDensityPyramid.Channel ch : VariantDensityPyramid.Channel.values()) {
+          if (!visible[ch.ordinal()]) {
+            continue;
+          }
+          VcfVariantType type = typeForPyramidChannel(ch);
+          if (type == null) {
+            continue;
+          }
+          int[] counts = gd.channelCounts(levelIndex, ch);
+          int val = channelMaxInBins(counts, b0, b1);
+          if (val <= 0) {
+            continue;
+          }
+          double bh = maxBarH * (val / (double) maxC);
+          if (bh < 0.5) {
+            bh = 0.5;
+          }
+          Color c = VariantTypeVisuals.color(type);
+          gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.55));
+          gc.fillRect(plotLeft + px, yCursor - bh, 1, bh);
+          yCursor -= bh;
+          stack += val;
+          if (stack >= maxC && yCursor <= rowTop + 1) {
+            break;
+          }
+        }
+      }
+    }
+    groupLabelHits = hits;
+    return maxC;
+  }
+
+  private static boolean[] visiblePyramidChannels(VcfManager vcfManager) {
+    boolean[] visible = new boolean[VariantDensityPyramid.Channel.values().length];
+    visible[VariantDensityPyramid.Channel.SNV.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SNV);
+    visible[VariantDensityPyramid.Channel.INDEL.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.INSERTION)
+            || vcfManager.isCanvasTypeDrawn(VcfVariantType.DELETION)
+            || vcfManager.isCanvasTypeDrawn(VcfVariantType.MNV)
+            || vcfManager.isCanvasTypeDrawn(VcfVariantType.COMPLEX);
+    visible[VariantDensityPyramid.Channel.DEL.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DELETION);
+    visible[VariantDensityPyramid.Channel.CNV_LOSS.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_LOSS);
+    visible[VariantDensityPyramid.Channel.INV.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INVERSION);
+    visible[VariantDensityPyramid.Channel.DUP.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_DUPLICATION);
+    visible[VariantDensityPyramid.Channel.CNV_GAIN.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_CNV_GAIN);
+    visible[VariantDensityPyramid.Channel.INS.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_INSERTION);
+    visible[VariantDensityPyramid.Channel.TRA.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_TRANSLOCATION);
+    visible[VariantDensityPyramid.Channel.BND.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.SV_BREAKEND);
+    visible[VariantDensityPyramid.Channel.LOH_AA.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_AA);
+    visible[VariantDensityPyramid.Channel.LOH_BB.ordinal()] =
+        vcfManager.isCanvasTypeDrawn(VcfVariantType.LOH_BB);
+    return visible;
+  }
+
+  private static int channelMaxInBins(int[] counts, int b0, int b1) {
+    if (counts == null) {
+      return 0;
+    }
+    int val = 0;
+    for (int b = Math.max(0, b0); b <= Math.min(counts.length - 1, b1); b++) {
+      val = Math.max(val, counts[b]);
+    }
+    return val;
+  }
+
+  /** Shared scale: max over visible groups of per-bin sum of visible channel counts. */
+  private static int maxStackedGroupDensityInView(
+      VariantDensityPyramid pyr,
+      VariantDensityPyramid.Level level,
+      int levelIndex,
+      List<VariantDensityPyramid.GroupDensity> rows,
+      org.baseplayer.analysis.AnalysisSession session,
+      boolean[] visible,
+      double viewStart,
+      double viewEnd) {
+    int max = 1;
+    int b0 = pyr.genomicToBin(viewStart, level);
+    int b1 = pyr.genomicToBin(viewEnd, level);
+    if (b1 < b0) {
+      int tmp = b0;
+      b0 = b1;
+      b1 = tmp;
+    }
+    for (VariantDensityPyramid.GroupDensity gd : rows) {
+      if (!session.isAggregateGroupVisible(gd.groupId())) {
+        continue;
+      }
+      for (int b = Math.max(0, b0); b <= b1; b++) {
+        int sum = 0;
+        for (VariantDensityPyramid.Channel ch : VariantDensityPyramid.Channel.values()) {
+          if (!visible[ch.ordinal()]) {
+            continue;
+          }
+          int[] counts = gd.channelCounts(levelIndex, ch);
+          if (counts != null && b < counts.length) {
+            sum += counts[b];
+          }
+        }
+        max = Math.max(max, sum);
+      }
+    }
+    return max;
   }
 
   private void drawVariantDensityOverview(
@@ -404,12 +1841,15 @@ public class MasterTrackPainter {
     long finestBinBp = VariantDensityPyramid.BIN_SIZES_BP[
         VariantDensityPyramid.BIN_SIZES_BP.length - 1];
     boolean zoomedInPrecise = pxPerBp * finestBinBp > 2.0;
-    if (!zoomedInPrecise) {
+    // Pyramid also feeds whole-chromosome group density curves — keep it warm
+    // even at close zoom when comparison groups exist.
+    if (!zoomedInPrecise || !ComparisonContext.analysisGroupIds(sampleRegistry).isEmpty()) {
       ensurePyramidAsync(drawStack, false);
     }
 
     colorLegend.clear();
     clusterHits = List.of();
+    groupLabelHits = List.of();
 
     double areaH = masterTrackHeight - 4;
     VariantDensityPyramid pyr = this.pyramid;
@@ -417,17 +1857,26 @@ public class MasterTrackPainter {
     boolean hasLiveLohSpans = hasVisibleLohRegions(variants);
     double svH = (hasCachedSpans || hasLiveLohSpans) ? Math.min(10, areaH * 0.22) : 0;
     double densH = areaH - svH;
+    boolean groupStacks = groupAggregateModeActive()
+        && pyr != null
+        && !pyr.groupDensities().isEmpty();
 
     VariantFilter activeFilter = org.baseplayer.io.VcfManager.getInstance().getCurrentFilter();
     // Cluster bands only at close zoom (same gate as precise density bars) —
     // at chrom / gene-far zoom they clutter the pyramid overview.
-    List<ClusterHit> pendingClusterTags = zoomedInPrecise
+    List<ClusterHit> pendingClusterTags = zoomedInPrecise && !groupStacks
         ? drawClusterBackgrounds(
             gc, drawStack, canvasWidth, 2, densH, variants, activeFilter)
         : List.of();
 
     int scaleMax = 1;
-    if (zoomedInPrecise) {
+    if (groupStacks) {
+      // Leave a strip for the type legend above the equal-height group rows.
+      double legendReserve = Math.min(18, densH * 0.22);
+      double stacksTop = 2 + legendReserve;
+      double stacksH = densH - legendReserve;
+      scaleMax = drawGroupStackRows(gc, drawStack, canvasWidth, stacksTop, stacksH, pyr);
+    } else if (zoomedInPrecise) {
       scaleMax = drawPreciseDensityBars(
           gc, drawStack, canvasWidth, 2, densH, variants, activeFilter);
     } else if (pyr != null) {
@@ -554,7 +2003,8 @@ public class MasterTrackPainter {
     VcfManager vcfMgr = VcfManager.getInstance();
     int filterGen = vcfMgr.getFilterGeneration();
     List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
-    int displayedFp = VariantDensityPyramid.fingerprintDisplayedTracks(displayed);
+    int groupsRev = sampleRegistry.sampleGroupsRevisionProperty().get();
+    int displayedFp = 31 * VariantDensityPyramid.fingerprintDisplayedTracks(displayed) + groupsRev;
     variants.ensureVisibleChain(vcfMgr.getCurrentFilter());
     int chainGen = variants.getVisibleChainGeneration();
 
@@ -586,7 +2036,7 @@ public class MasterTrackPainter {
       try {
         VariantDensityPyramid built = VariantDensityPyramid.build(
             variants, filter, displayedMap, chromLen,
-            buildFilterGen, buildChainGen, buildDisplayedFp);
+            buildFilterGen, buildChainGen, buildDisplayedFp, sampleRegistry);
         Platform.runLater(() -> {
           if (myGeneration != pyramidGeneration) {
             return;
@@ -1011,7 +2461,7 @@ public class MasterTrackPainter {
     }
     gc.setGlobalAlpha(1.0);
 
-    // Color legends to the right of the scale
+    // Color legends to the right of the scale (all-sample types; also filter group series).
     List<CanvasColorLegend.Item> items = new ArrayList<>(legendTypes.size());
     for (VcfVariantType type : legendTypes) {
       Set<VcfVariantType> linked = VariantTypeVisuals.linkedTypes(type, present);

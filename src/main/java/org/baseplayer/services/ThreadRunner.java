@@ -50,9 +50,20 @@ public final class ThreadRunner {
   private final List<RunnerTask> activeTasks =
       Collections.synchronizedList(new ArrayList<>());
 
+  /** Every submitted Future (including quiet) — cancelled by {@link #cancelAll()}. */
+  private final List<Future<?>> allFutures =
+      Collections.synchronizedList(new ArrayList<>());
+
+  private static final ThreadLocal<RunnerTask> CURRENT_TASK = new ThreadLocal<>();
+
   private volatile Runnable onTasksChanged;
 
   private ThreadRunner() {}
+
+  /** Task running on this pool thread, if any. */
+  public static RunnerTask currentTask() {
+    return CURRENT_TASK.get();
+  }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -110,12 +121,24 @@ public final class ThreadRunner {
       task.setOnComplete(() -> {});
     }
 
-    Future<?> future = pool.submit(() -> {
+    final Future<?>[] futureHolder = new Future<?>[1];
+    futureHolder[0] = pool.submit(() -> {
+      CURRENT_TASK.set(task);
       T result = null;
       try {
         result = supplier.get();
       } catch (Exception e) {
-        System.err.println("ThreadRunner [" + description + "]: " + e.getMessage());
+        if (!(e instanceof java.util.concurrent.CancellationException)
+            && !task.isCancelled()
+            && !(e.getCause() instanceof java.util.concurrent.CancellationException)) {
+          System.err.println("ThreadRunner [" + description + "]: " + e.getMessage());
+        }
+      } finally {
+        CURRENT_TASK.remove();
+        Future<?> mine = futureHolder[0];
+        if (mine != null) {
+          allFutures.remove(mine);
+        }
       }
       final T finalResult = result;
       if (!task.isCancelled()) {
@@ -142,7 +165,8 @@ public final class ThreadRunner {
       }
     });
 
-    task.setFuture(future);
+    task.setFuture(futureHolder[0]);
+    allFutures.add(futureHolder[0]);
     return task;
   }
 
@@ -165,7 +189,10 @@ public final class ThreadRunner {
     return task;
   }
 
-  /** Cancel all currently active tasks. */
+  /**
+   * Cancel every tracked task and interrupt every submitted pool Future
+   * (including quiet). Also aborts in-flight BAM/coverage fetches.
+   */
   public void cancelAll() {
     List<RunnerTask> snapshot;
     synchronized (activeTasks) {
@@ -173,6 +200,21 @@ public final class ThreadRunner {
     }
     for (RunnerTask t : snapshot) {
       t.cancel();
+    }
+    List<Future<?>> futures;
+    synchronized (allFutures) {
+      futures = new ArrayList<>(allFutures);
+      allFutures.clear();
+    }
+    for (Future<?> f : futures) {
+      if (f != null) {
+        f.cancel(true);
+      }
+    }
+    try {
+      org.baseplayer.samples.alignment.FetchManager.get().cancelAll();
+    } catch (Throwable ignored) {
+      // FetchManager may be unavailable in early tests.
     }
   }
 
@@ -260,15 +302,32 @@ public final class ThreadRunner {
       this.detailMessage = detail != null ? detail : "";
     }
 
-    /** Cancel this task. Interrupts the pool thread (if any) and calls the extra cancel action. Thread-safe. */
+    /**
+     * Cancel this task. Interrupts the pool thread (if any), runs the extra
+     * cancel action, and removes the task from the loading UI. Cooperative
+     * workers must still check {@link #isCancelled()} / interrupt status.
+     */
     public void cancel() {
       if (cancelled.compareAndSet(false, true)) {
         Future<?> f = future;
-        if (f != null) f.cancel(true);
+        if (f != null) {
+          f.cancel(true);
+        }
         Runnable ec = extraCancel;
-        if (ec != null) ec.run();
+        if (ec != null) {
+          try {
+            ec.run();
+          } catch (Throwable ignored) {
+            // Keep cancelling other tasks.
+          }
+        }
         complete();
       }
+    }
+
+    /** Public hook for Analysis / loaders that need an additional cancel action. */
+    public void onCancel(Runnable cancelAction) {
+      setExternalCancel(cancelAction);
     }
 
     /**
@@ -287,7 +346,26 @@ public final class ThreadRunner {
     }
 
     void setExternalCancel(Runnable cancelAction) {
-      this.extraCancel = cancelAction;
+      if (cancelAction == null) {
+        return;
+      }
+      Runnable previous = this.extraCancel;
+      if (previous == null) {
+        this.extraCancel = cancelAction;
+        return;
+      }
+      this.extraCancel = () -> {
+        try {
+          previous.run();
+        } catch (Throwable ignored) {
+          // Keep chained cancel actions running.
+        }
+        try {
+          cancelAction.run();
+        } catch (Throwable ignored) {
+          // Keep chained cancel actions running.
+        }
+      };
     }
 
     void setOnComplete(Runnable onComplete) {

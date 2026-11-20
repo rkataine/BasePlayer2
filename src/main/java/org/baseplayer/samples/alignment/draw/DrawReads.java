@@ -3,7 +3,12 @@ package org.baseplayer.samples.alignment.draw;
 import java.util.List;
 
 import org.baseplayer.draw.DrawStack;
+import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.samples.alignment.BAMRecord;
+import org.baseplayer.samples.alignment.BaseModification;
+import org.baseplayer.samples.alignment.MethylSiteContext;
+import org.baseplayer.samples.alignment.MethylationCanvasFilter;
+import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.AppFonts;
 import org.baseplayer.utils.ArrowShape;
 import org.baseplayer.utils.DrawColors;
@@ -790,6 +795,18 @@ class DrawReads {
     // Get color scheme from settings
     org.baseplayer.samples.alignment.draw.ModificationColorScheme colorScheme = 
         org.baseplayer.io.Settings.get().getModificationColorScheme();
+    MethylationCanvasFilter methylFilter = MethylationCanvasFilter.get();
+    String refBases = null;
+    int refWindowStart = Math.max(1, read.pos);
+    int refWindowEnd = Math.max(refWindowStart, read.end);
+    ReferenceGenomeService refSvc =
+        ServiceRegistry.getInstance().getReferenceGenomeService();
+    if (refSvc != null && refSvc.hasGenome()) {
+      refBases = refSvc.getBases(drawStack.getChromosome(), refWindowStart, refWindowEnd);
+      if (refBases != null && refBases.isEmpty()) {
+        refBases = null;
+      }
+    }
 
     // First, draw the base read shape with a neutral gray
     double x1 = toScreenX(read.pos);
@@ -814,6 +831,9 @@ class DrawReads {
 
     // Process each modification type
     for (org.baseplayer.samples.alignment.BaseModification mod : read.baseModifications) {
+      if (!methylFilter.isModTypeVisible(mod.modCode)) {
+        continue;
+      }
       // Map modification positions to read indices
       int[] readIndices = mod.mapToReadIndices(sequence, read.isReverseStrand());
       
@@ -834,6 +854,10 @@ class DrawReads {
               // Check if this read index has a modification
               int modIndex = findModificationIndex(readIndices, currentReadIdx);
               if (modIndex >= 0) {
+                int genomicPos = refPos + j;
+                if (!isCytosineModSiteVisible(mod, genomicPos, refBases, refWindowStart, methylFilter)) {
+                  continue;
+                }
                 // Get probability for this modification
                 double prob = mod.getProbability(modIndex);
                 if (prob >= 0) {
@@ -841,8 +865,8 @@ class DrawReads {
                   Color modColor = colorScheme.getColor(mod.modCode, prob, mod.baseType);
                   
                   // Draw colored rectangle for this base
-                  double bx = toScreenX(refPos + j);
-                  double bx2 = toScreenX(refPos + j + 1);
+                  double bx = toScreenX(genomicPos);
+                  double bx2 = toScreenX(genomicPos + 1);
                   if (bx < canvasWidth && bx2 > 0) {
                     double bw = Math.max(1, bx2 - bx);
                     gc.setFill(modColor);
@@ -882,6 +906,31 @@ class DrawReads {
       if (readIndices[i] == readPos) return i;
     }
     return -1;
+  }
+
+  /**
+   * Site-context filter applies to cytosine modifications only (C / G base types).
+   * Adenine / other mods stay visible when their mod-type swatch is on.
+   */
+  private static boolean isCytosineModSiteVisible(
+      BaseModification mod,
+      int genomicPos,
+      String refBases,
+      int refWindowStart,
+      MethylationCanvasFilter filter) {
+    if (mod == null || filter == null) {
+      return true;
+    }
+    char base = Character.toUpperCase(mod.baseType);
+    if (base != 'C' && base != 'G') {
+      return true;
+    }
+    if (refBases == null) {
+      return true;
+    }
+    int idx = genomicPos - refWindowStart;
+    MethylSiteContext ctx = MethylSiteContext.fromRef(refBases, idx);
+    return filter.isSiteDrawn(ctx);
   }
 
   private static void fillMergedRunWithArrowCap(GraphicsContext gc, Color fill,

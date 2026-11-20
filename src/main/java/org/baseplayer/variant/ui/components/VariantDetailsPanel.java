@@ -17,6 +17,7 @@ import org.baseplayer.utils.ChromosomeNames;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VariantOddsRatio;
 import org.baseplayer.variant.VariantTypeVisuals;
+import org.baseplayer.variant.VcfAlleleNormalizer;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.ClinVarAnnotator;
 import org.baseplayer.variant.annotation.ClinVarAnnotator.SignificanceClass;
@@ -212,8 +213,8 @@ public final class VariantDetailsPanel {
     int r = 0;
     r = addKv(variantGrid, r, "Chromosome", chromDisplay);
     r = addKv(variantGrid, r, "Position", formatPosition(node));
-    r = addKv(variantGrid, r, "REF", nullToDash(node.ref));
-    r = addKv(variantGrid, r, "ALT", nullToDash(node.alt));
+    r = addKv(variantGrid, r, "REF", VcfAlleleNormalizer.formatSequenceForDisplay(node.ref));
+    r = addKv(variantGrid, r, "ALT", VcfAlleleNormalizer.formatSequenceForDisplay(node.alt));
     r = addKv(variantGrid, r, "Type", typeLabel(node.type),
         toHex(VariantTypeVisuals.color(node.type)), true);
     if (node.vcfId != null && !node.vcfId.isBlank()) {
@@ -780,10 +781,9 @@ public final class VariantDetailsPanel {
 
   private static String shortTitle(String chromosome, VariantNode node) {
     String chrom = ChromosomeNames.forDisplay(chromosome);
-    String allele = nullToDash(node.ref) + ">" + nullToDash(node.alt);
-    if (allele.length() > 16) {
-      allele = allele.substring(0, 14) + "…";
-    }
+    String allele = VcfAlleleNormalizer.formatSequenceForDisplay(node.ref)
+        + ">"
+        + VcfAlleleNormalizer.formatSequenceForDisplay(node.alt);
     String title = chrom + ":" + node.position + " " + allele;
     if (title.length() > 28) {
       return title.substring(0, 26) + "…";

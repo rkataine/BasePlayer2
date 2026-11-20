@@ -74,6 +74,7 @@ public class MenuBarController {
   @FXML private MenuItem openBigwigMenuItem;
   @FXML private MenuItem openDirMenuItem;
   @FXML private MenuItem openDragenMenuItem;
+  @FXML private MenuItem importSampleGroupsMenuItem;
   @FXML private Menu recentFilesMenu;
   @FXML private MenuItem saveProjectMenuItem;
   @FXML private MenuItem saveProjectAsMenuItem;
@@ -571,6 +572,7 @@ public class MenuBarController {
     MenuIcons.bigwig(openBigwigMenuItem);
     MenuIcons.directory(openDirMenuItem);
     MenuIcons.directory(openDragenMenuItem);
+    MenuIcons.apply(importSampleGroupsMenuItem, FontAwesomeSolid.USERS, "#d0a050");
     MenuIcons.apply(recentFilesMenu, FontAwesomeSolid.HISTORY, "#8a94a6");
     MenuIcons.apply(saveProjectMenuItem, FontAwesomeSolid.SAVE, "#6aab73");
     MenuIcons.apply(saveProjectAsMenuItem, FontAwesomeSolid.FILE_EXPORT, "#5b9bd5");
@@ -647,7 +649,7 @@ public class MenuBarController {
     variantManagerIcon = new FontIcon(FontAwesomeSolid.TABLE);
     variantManagerIcon.setIconSize(13);
     variantManagerIcon.setIconColor(VARIANT_MANAGER_ICON);
-    variantManagerButton.setText("Variant Manager");
+    variantManagerButton.setText("Analysis");
     variantManagerButton.setGraphic(variantManagerIcon);
     variantManagerButton.setContentDisplay(javafx.scene.control.ContentDisplay.LEFT);
     variantManagerButton.setGraphicTextGap(6);
@@ -656,6 +658,11 @@ public class MenuBarController {
     if (MainApp.stage != null) {
       MainApp.stage.focusedProperty().addListener((obs, o, n) -> updateVariantManagerButtonVisibility());
     }
+    ServiceRegistry.getInstance().getSampleRegistry().getSampleTracks()
+        .addListener((javafx.collections.ListChangeListener<org.baseplayer.samples.SampleTrack>) c ->
+            // Always defer: running inside the list-change notification iterates a
+            // list that is still mid-mutation and throws ConcurrentModificationException.
+            Platform.runLater(MenuBarController::updateVariantManagerButtonVisibility));
     updateVariantManagerButtonVisibility();
   }
 
@@ -724,6 +731,12 @@ public class MenuBarController {
   private void openSampleGroups() {
     Window owner = MainApp.stage;
     org.baseplayer.components.sidebars.SampleOrganizationWindow.show(owner);
+  }
+
+  @FXML
+  private void importSampleGroups() {
+    org.baseplayer.io.SampleGroupMappingImporter.chooseAndImport(MainApp.stage);
+    updateSampleGroupsButtonVisibility();
   }
 
   private void setupThemeToggleButton() {

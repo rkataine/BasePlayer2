@@ -27,7 +27,6 @@ import org.baseplayer.samples.alignment.draw.ReadColorMode;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
-import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.variant.MateBreakpointIndex;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
@@ -628,9 +627,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       for (Sample sample : sampleTrack.getSamples()) {
         if (sample.isSuspended()) {
           sample.resume();
-          ThreadRunner.RunnerTask readTask =
-              ThreadRunner.get().track("Loading reads: " + sample.getName(), sample::cancelAndSuspend);
-          sample.setOnFirstLoadComplete(readTask::complete);
+          // AlignmentFile tracks "Loading reads" for each fetch (cancel stops that fetch).
         }
       }
     }
@@ -669,6 +666,10 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     MenuIcons.bed(bedItem);
     bedItem.setOnAction(e -> SampleDataManager.addBedSampleFile());
 
+    MenuItem tableItem = new MenuItem("Table / segments…");
+    MenuIcons.bed(tableItem);
+    tableItem.setOnAction(e -> SampleDataManager.addTableSampleFiles());
+
     MenuItem bigwigItem = new MenuItem("BigWig");
     MenuIcons.bigwig(bigwigItem);
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
@@ -679,7 +680,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
     menu.getItems().addAll(
         vcfItem, bamItem, directoryItem, dragenItem,
-        new SeparatorMenuItem(), bedItem, bigwigItem, ab1Item);
+        new SeparatorMenuItem(), bedItem, tableItem, bigwigItem, ab1Item);
     return menu;
   }
 
@@ -692,6 +693,33 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     settingsMenu.getItems().addAll(
         new CustomMenuItem(titleLabel, false),
         new SeparatorMenuItem());
+
+    // Aggregate band: group comparison overlay
+    VBox aggregateBox = new VBox(4);
+    aggregateBox.setPadding(new Insets(4, 8, 4, 8));
+    Label aggregateLabel = new Label("Aggregate band");
+    aggregateLabel.setStyle(
+        "-fx-text-fill: " + AppTheme.chrome().textHex()
+            + "; -fx-font-size: 12; -fx-font-weight: bold;");
+    CheckBox groupCmpCb = new CheckBox("Show group comparison overlay");
+    groupCmpCb.setSelected(org.baseplayer.analysis.AnalysisSession.get().isShowOnAggregate());
+    groupCmpCb.getStyleClass().add("dark-checkbox");
+    groupCmpCb.setStyle("-fx-font-size: 12;");
+    groupCmpCb.selectedProperty().addListener((obs, o, n) -> {
+      org.baseplayer.analysis.AnalysisSession.get().setShowOnAggregate(Boolean.TRUE.equals(n));
+      org.baseplayer.analysis.ComparisonContext.get()
+          .writeToDocument(org.baseplayer.project.ProjectSessionState.get().getDocument());
+      org.baseplayer.project.ProjectSessionState.get().markDirty();
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    });
+    Label groupCmpHint = new Label(
+        "When a group comparison has been run, ticks use each group's color for the higher side.");
+    groupCmpHint.setWrapText(true);
+    groupCmpHint.setStyle(
+        "-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
+    aggregateBox.getChildren().addAll(aggregateLabel, groupCmpCb, groupCmpHint);
+    settingsMenu.getItems().add(new CustomMenuItem(aggregateBox, false));
+    settingsMenu.getItems().add(new SeparatorMenuItem());
 
     // VCF allele-frequency display (BAF dots on sample rows)
     VBox vcfDisplayBox = new VBox(4);
@@ -724,18 +752,18 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     settingsMenu.getItems().add(new CustomMenuItem(vcfDisplayBox, false));
     settingsMenu.getItems().add(new SeparatorMenuItem());
 
-    // Gather BAM files once for global controls.
-    List<AlignmentFile> bamFiles = new ArrayList<>();
+    // Gather BAM samples once for global controls (path-only until opened).
+    List<Sample> bamSamples = new ArrayList<>();
     for (SampleTrack strack : sampleRegistry.getSampleTracks()) {
       for (Sample s : strack.getSamples()) {
-        if (s.getBamFile() != null) {
-          bamFiles.add(s.getBamFile());
+        if (s.getDataType() == Sample.DataType.BAM) {
+          bamSamples.add(s);
         }
       }
     }
 
     // Sampled coverage settings (BAM-specific)
-    if (!bamFiles.isEmpty()) {
+    if (!bamSamples.isEmpty()) {
       VBox sampledCoverageBox = new VBox(4);
       sampledCoverageBox.setPadding(new Insets(4, 8, 4, 8));
 
@@ -782,7 +810,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     }
 
     // Mismatch filtering controls (apply to all BAM files)
-    if (!bamFiles.isEmpty()) {
+    if (!bamSamples.isEmpty()) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
       VBox mismatchBox = new VBox(4);
       mismatchBox.setPadding(new Insets(4, 8, 4, 8));
@@ -791,13 +819,25 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       mismatchLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 12; -fx-font-weight: bold;");
 
       CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C->T / G->A)");
-      boolean anyMethylSuppressed = bamFiles.stream().anyMatch(AlignmentFile::isMethylationData);
+      boolean anyMethylSuppressed = bamSamples.stream().anyMatch(Sample::isMethylationData);
       suppressMethylCb.setSelected(anyMethylSuppressed);
       suppressMethylCb.getStyleClass().add("dark-checkbox");
       suppressMethylCb.setStyle("-fx-font-size: 11;");
       suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
-        for (AlignmentFile bam : bamFiles) {
-          bam.setSuppressMethylMismatches(n);
+        for (Sample s : bamSamples) {
+          s.setSuppressMethylMismatches(n);
+        }
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      });
+
+      CheckBox coverageOnlyCb = new CheckBox("Coverage only (skip reads — saves memory)");
+      boolean anyCoverageOnly = bamSamples.stream().anyMatch(Sample::isCoverageOnlyMode);
+      coverageOnlyCb.setSelected(anyCoverageOnly);
+      coverageOnlyCb.getStyleClass().add("dark-checkbox");
+      coverageOnlyCb.setStyle("-fx-font-size: 11;");
+      coverageOnlyCb.selectedProperty().addListener((obs, o, n) -> {
+        for (Sample s : bamSamples) {
+          s.setCoverageOnlyMode(Boolean.TRUE.equals(n));
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
@@ -845,13 +885,14 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       Label mismatchInfo = new Label("Use for emSeq/WGBS to suppress bisulfite-conversion mismatches.");
       mismatchInfo.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 10;");
 
-      mismatchBox.getChildren().addAll(mismatchLabel, suppressMethylCb, mmFractionRow, mmCountRow,
+      mismatchBox.getChildren().addAll(
+          mismatchLabel, suppressMethylCb, coverageOnlyCb, mmFractionRow, mmCountRow,
           applyMismatchButton, mismatchInfo);
       settingsMenu.getItems().add(new CustomMenuItem(mismatchBox, false));
     }
 
     // Read coloring + stacking controls (apply to all BAM files)
-    if (!bamFiles.isEmpty()) {
+    if (!bamSamples.isEmpty()) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
       VBox readRenderBox = new VBox(6);
       readRenderBox.setPadding(new Insets(4, 8, 4, 8));
@@ -863,16 +904,16 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       Label colorLabel = new Label("Read color:");
       colorLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       ComboBox<ReadColorMode> colorCombo = new ComboBox<>();
-      colorCombo.getItems().setAll(bamFiles.get(0).getAvailableColorModes());
-      colorCombo.setValue(bamFiles.get(0).getReadColorMode());
+      colorCombo.getItems().setAll(ReadColorMode.values());
+      colorCombo.setValue(bamSamples.get(0).getReadColorMode());
       colorCombo.setPrefWidth(200);
       PopupComboBoxStyler.styleDarkComboBox(colorCombo, settingsMenu);
       colorCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
         if (newMode == null) {
           return;
         }
-        for (AlignmentFile bam : bamFiles) {
-          bam.setReadColorMode(newMode);
+        for (Sample s : bamSamples) {
+          s.setReadColorMode(newMode);
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
@@ -883,15 +924,15 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       stackLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11;");
       ComboBox<AlignmentFile.ReadStackingMode> stackCombo = new ComboBox<>();
       stackCombo.getItems().setAll(AlignmentFile.ReadStackingMode.values());
-      stackCombo.setValue(bamFiles.get(0).getReadStackingMode());
+      stackCombo.setValue(bamSamples.get(0).getReadStackingMode());
       stackCombo.setPrefWidth(200);
       PopupComboBoxStyler.styleDarkComboBox(stackCombo, settingsMenu);
       stackCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
         if (newMode == null) {
           return;
         }
-        for (AlignmentFile bam : bamFiles) {
-          bam.setReadStackingMode(newMode);
+        for (Sample s : bamSamples) {
+          s.setReadStackingMode(newMode);
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
@@ -904,7 +945,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     }
 
     boolean hasVcfData = VcfManager.getInstance().hasVcfLoaded();
-    if (!bamFiles.isEmpty() || hasVcfData) {
+    if (!bamSamples.isEmpty() || hasVcfData) {
       settingsMenu.getItems().add(new SeparatorMenuItem());
       MenuItem circosItem = new MenuItem("Circos plot (reads + VCF translocations)...");
       circosItem.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + ";");

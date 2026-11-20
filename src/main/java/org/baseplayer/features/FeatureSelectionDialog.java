@@ -460,6 +460,7 @@ public final class FeatureSelectionDialog {
         liveBinder.accept(liveSession);
       }
     });
+    AppDialog.focusWhenShown(dialog, search, false);
     dialog.setOnHidden(e -> liveSession.markClosed());
     dialog.showAndWait();
     return Optional.ofNullable(chosen[0]);

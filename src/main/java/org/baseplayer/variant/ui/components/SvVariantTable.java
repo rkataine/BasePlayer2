@@ -48,9 +48,23 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     private final Map<VcfVariantType, Tab> typeTabs = new EnumMap<>(VcfVariantType.class);
     private final Map<VcfVariantType, NestedPanel> typePanels = new EnumMap<>(VcfVariantType.class);
 
+    /** Which SV results tab the shared search box currently filters. */
+    public enum SearchScope {
+        /** Filter All + every type tab (legacy / rebuild). */
+        ALL_PANELS,
+        /** Only the All tab. */
+        ALL_TAB,
+        /** Only one per-type tab. */
+        TYPE,
+        /** Clear search; show every panel unfiltered. */
+        NONE
+    }
+
     private ObservableList<TableRow> allItems = FXCollections.observableArrayList();
     private final Map<VcfVariantType, ObservableList<TableRow>> typeItems = new EnumMap<>(VcfVariantType.class);
     private String searchQuery = "";
+    private SearchScope searchScope = SearchScope.ALL_PANELS;
+    private VcfVariantType searchType;
     private final AtomicInteger searchEpoch = new AtomicInteger();
     private List<TableRow> displayedAllCache = List.of();
 
@@ -161,11 +175,22 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     }
 
     public void setSearchQuery(String query) {
-        setSearchQuery(query, null);
+        setSearchQuery(query, SearchScope.ALL_PANELS, null, null);
     }
 
     public void setSearchQuery(String query, Runnable onApplied) {
+        setSearchQuery(query, SearchScope.ALL_PANELS, null, onApplied);
+    }
+
+    /**
+     * Filter only the selected SV results tab; other type tabs stay full.
+     * Use {@link SearchScope#NONE} when Group comparison (or another non-SV table) is selected.
+     */
+    public void setSearchQuery(
+            String query, SearchScope scope, VcfVariantType type, Runnable onApplied) {
         rememberSearchQuery(query);
+        searchScope = scope != null ? scope : SearchScope.ALL_PANELS;
+        searchType = type;
         applySearchAsync(onApplied);
     }
 
@@ -201,6 +226,8 @@ public class SvVariantTable extends AbstractNestedVariantTable {
     private void applySearchAsync(Runnable onApplied) {
         final int epoch = searchEpoch.incrementAndGet();
         final String query = searchQuery;
+        final SearchScope scope = searchScope;
+        final VcfVariantType scopedType = searchType;
         final VariantFilter filter = displayFilter != null ? displayFilter.copy() : new VariantFilter();
         final List<TableRow> allSnap = List.copyOf(allItems);
         final Map<VcfVariantType, List<TableRow>> typeSnap = new EnumMap<>(VcfVariantType.class);
@@ -214,13 +241,18 @@ public class SvVariantTable extends AbstractNestedVariantTable {
             if (epoch != searchEpoch.get()) {
                 return;
             }
-            String q = normalizeSearchQuery(query);
-            List<TableRow> allMatched = rowsMatchingSearch(allSnap, q, filter);
+            String activeQ = normalizeSearchQuery(query);
+            boolean filterAll = scope == SearchScope.ALL_PANELS || scope == SearchScope.ALL_TAB;
+            String allQ = (scope != SearchScope.NONE && filterAll) ? activeQ : "";
+            List<TableRow> allMatched = rowsMatchingSearch(allSnap, allQ, filter);
             List<GeneGroup> allGroups = buildGeneGroups(allMatched, false, filter, false);
             Map<VcfVariantType, List<GeneGroup>> byTypeGroups = new HashMap<>();
             Map<VcfVariantType, Integer> typeCounts = new EnumMap<>(VcfVariantType.class);
             for (VcfVariantType type : TYPE_ORDER) {
-                List<TableRow> filtered = rowsMatchingSearch(typeSnap.get(type), q, filter);
+                boolean filterType = scope == SearchScope.ALL_PANELS
+                    || (scope == SearchScope.TYPE && type == scopedType);
+                String typeQ = (scope != SearchScope.NONE && filterType) ? activeQ : "";
+                List<TableRow> filtered = rowsMatchingSearch(typeSnap.get(type), typeQ, filter);
                 byTypeGroups.put(type, buildGeneGroups(filtered, false, filter, false));
                 typeCounts.put(type, countUniqueNodes(filtered));
             }

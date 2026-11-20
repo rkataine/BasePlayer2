@@ -2,24 +2,18 @@ package org.baseplayer;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 import org.baseplayer.controllers.commands.FileCommands;
 import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.UserPreferences.RecentFile;
 
-import javafx.animation.AnimationTimer;
-import javafx.animation.FadeTransition;
 import javafx.animation.Interpolator;
-import javafx.animation.ParallelTransition;
-import javafx.animation.ScaleTransition;
 import javafx.animation.TranslateTransition;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Node;
-import javafx.scene.Parent;
+import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
@@ -28,10 +22,8 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
-import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
@@ -44,219 +36,116 @@ import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
+import javafx.stage.Modality;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
+import javafx.stage.Window;
 import javafx.util.Duration;
 
 /**
- * Cubase-style start hub: brand + tips on the left, recent projects and
- * primary actions on the right. Overlay on the main stage after splash.
+ * Start hub: brand + tips on the left, recent projects and actions on the right.
+ * Owned modal {@link Stage} — {@link #show} / {@link #dismiss} only.
  */
 public final class StartHub {
 
   private static final double PANEL_WIDTH = 920;
   private static final double PANEL_HEIGHT = 560;
-  private static final String BACKDROP_STYLE = "start-hub-backdrop";
 
-  private static StackPane activeOverlay;
-  private static VBox activeRecentList;
-  /**
-   * When true, {@link #show} is a no-op. Set by {@link #dismiss()} so project load /
-   * splash finish cannot put the hub back up. Cleared only by {@link #allowShow()}.
-   */
-  private static volatile boolean suppressed;
+  private static Stage hubStage;
+  private static VBox recentList;
 
   private StartHub() {}
 
   public static boolean isShowing() {
-    return activeOverlay != null && activeOverlay.getParent() != null;
+    return hubStage != null && hubStage.isShowing();
   }
 
-  public static boolean isSuppressed() {
-    return suppressed;
-  }
-
-  /** Allow the hub to be shown again (File → Open Project). */
-  public static void allowShow() {
-    suppressed = false;
-  }
-
-  public static void show(Stage stage) {
-    if (suppressed) {
-      return;
-    }
-    if (stage == null || stage.getScene() == null) {
-      return;
-    }
-    Runnable show = () -> showOnFxThread(stage);
+  /** Show the hub (or refresh recent projects if already open). */
+  public static void show(Window owner) {
+    Runnable run = () -> showOnFxThread(owner);
     if (Platform.isFxApplicationThread()) {
-      show.run();
+      run.run();
     } else {
-      Platform.runLater(show);
+      Platform.runLater(run);
     }
   }
 
-  private static void showOnFxThread(Stage stage) {
-    if (suppressed || stage == null || stage.getScene() == null) {
-      return;
+  /** Hide the hub if open. Safe from any thread. */
+  public static void dismiss() {
+    Runnable run = StartHub::dismissOnFxThread;
+    if (Platform.isFxApplicationThread()) {
+      run.run();
+    } else {
+      Platform.runLater(run);
     }
-    // Drop any orphan backdrops before deciding whether to refresh or build.
-    removeAllHubOverlays(stage.getScene().getRoot());
+  }
 
-    if (activeOverlay != null && activeOverlay.getParent() != null) {
-      if (activeRecentList != null) {
-        populateRecentList(activeRecentList);
+  private static void showOnFxThread(Window owner) {
+    Window resolved = owner != null ? owner : MainApp.stage;
+    if (hubStage != null && hubStage.isShowing()) {
+      if (recentList != null) {
+        populateRecentList(recentList);
       }
-      activeOverlay.toFront();
-      return;
-    }
-    activeOverlay = null;
-    activeRecentList = null;
-
-    Parent sceneRoot = stage.getScene().getRoot();
-    if (!(sceneRoot instanceof AnchorPane rootPane)) {
-      System.err.println("StartHub: expected AnchorPane scene root, got "
-          + (sceneRoot == null ? "null" : sceneRoot.getClass().getName()));
+      hubStage.toFront();
+      hubStage.requestFocus();
       return;
     }
 
-    StackPane backdrop = new StackPane();
-    backdrop.getStyleClass().add(BACKDROP_STYLE);
-    backdrop.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
-    AnchorPane.setTopAnchor(backdrop, 0.0);
-    AnchorPane.setRightAnchor(backdrop, 0.0);
-    AnchorPane.setBottomAnchor(backdrop, 0.0);
-    AnchorPane.setLeftAnchor(backdrop, 0.0);
+    if (hubStage != null) {
+      hubStage.close();
+      hubStage = null;
+      recentList = null;
+    }
 
-    BorderPane panel = buildPanel(backdrop);
-    panel.setMaxSize(PANEL_WIDTH, PANEL_HEIGHT);
+    Stage stage = new Stage(StageStyle.UTILITY);
+    stage.initModality(Modality.WINDOW_MODAL);
+    if (resolved != null) {
+      stage.initOwner(resolved);
+    }
+    stage.setTitle("BasePlayer 2");
+    stage.setResizable(false);
+
+    BorderPane panel = buildPanel();
     panel.setPrefSize(PANEL_WIDTH, PANEL_HEIGHT);
+    panel.setMinSize(PANEL_WIDTH, PANEL_HEIGHT);
     panel.getStyleClass().add("start-hub-panel");
-    StackPane.setAlignment(panel, Pos.CENTER);
 
-    backdrop.getChildren().add(panel);
-    rootPane.getChildren().add(backdrop);
-    activeOverlay = backdrop;
-
-    if (!stage.isMaximized()) {
-      stage.setMaximized(true);
+    Scene scene = new Scene(panel, PANEL_WIDTH, PANEL_HEIGHT);
+    scene.setFill(Color.web("#1a1d21"));
+    if (resolved instanceof Stage ownerStage
+        && ownerStage.getScene() != null
+        && !ownerStage.getScene().getStylesheets().isEmpty()) {
+      scene.getStylesheets().addAll(ownerStage.getScene().getStylesheets());
+    } else if (MainApp.stage != null && MainApp.stage.getScene() != null) {
+      scene.getStylesheets().addAll(MainApp.stage.getScene().getStylesheets());
     }
 
-    backdrop.setOpacity(0);
-    panel.setScaleX(0.96);
-    panel.setScaleY(0.96);
-
-    FadeTransition fadeIn = new FadeTransition(Duration.millis(280), backdrop);
-    fadeIn.setToValue(1);
-    ScaleTransition scale = new ScaleTransition(Duration.millis(280), panel);
-    scale.setToX(1);
-    scale.setToY(1);
-    scale.setInterpolator(Interpolator.EASE_OUT);
-    ParallelTransition intro = new ParallelTransition(fadeIn, scale);
-    // If dismiss raced the intro, do not leave a half-faded blocker.
-    intro.setOnFinished(e -> {
-      if (suppressed || activeOverlay != backdrop) {
-        forceRemoveNode(backdrop);
+    stage.setScene(scene);
+    stage.setOnCloseRequest(e -> dismissOnFxThread());
+    scene.setOnKeyPressed(e -> {
+      if (e.getCode() == KeyCode.ESCAPE) {
+        dismissOnFxThread();
+        e.consume();
       }
     });
-    intro.play();
 
+    hubStage = stage;
+    stage.show();
+    stage.centerOnScreen();
     Platform.runLater(panel::requestFocus);
   }
 
-  /**
-   * Remove the hub immediately so it can never stay up and block the UI.
-   * Suppresses further {@link #show} until {@link #allowShow()}. Safe from any thread.
-   */
-  public static void dismiss() {
-    suppressed = true;
-    Runnable hide = StartHub::dismissOnFxThread;
-    if (Platform.isFxApplicationThread()) {
-      hide.run();
-    } else {
-      Platform.runLater(hide);
-    }
-  }
-
   private static void dismissOnFxThread() {
-    StackPane overlay = activeOverlay;
-    activeOverlay = null;
-    activeRecentList = null;
-
-    if (overlay != null) {
-      forceRemoveNode(overlay);
-    }
-
-    Stage stage = MainApp.stage;
-    if (stage != null && stage.getScene() != null) {
-      removeAllHubOverlays(stage.getScene().getRoot());
-    }
-
-    // Project open / paint errors can leave an orphan backdrop if dismiss raced
-    // the intro animation. Sweep for a short window while suppressed.
-    scheduleSuppressedOverlaySweep();
-  }
-
-  private static AnimationTimer suppressedSweep;
-
-  private static void scheduleSuppressedOverlaySweep() {
-    if (suppressedSweep != null) {
-      return;
-    }
-    final long deadlineNanos = System.nanoTime() + 2_000_000_000L;
-    suppressedSweep = new AnimationTimer() {
-      @Override
-      public void handle(long now) {
-        if (!suppressed || now > deadlineNanos) {
-          stop();
-          suppressedSweep = null;
-          return;
-        }
-        Stage stage = MainApp.stage;
-        if (stage != null && stage.getScene() != null) {
-          removeAllHubOverlays(stage.getScene().getRoot());
-        }
-      }
-    };
-    suppressedSweep.start();
-  }
-
-  private static void forceRemoveNode(Node overlay) {
-    if (overlay == null) {
-      return;
-    }
-    overlay.setMouseTransparent(true);
-    overlay.setVisible(false);
-    Parent parent = overlay.getParent();
-    if (parent instanceof Pane pane) {
-      pane.getChildren().remove(overlay);
+    Stage stage = hubStage;
+    hubStage = null;
+    recentList = null;
+    if (stage != null) {
+      stage.hide();
+      stage.close();
     }
   }
 
-  /** Remove every hub backdrop under {@code root} (handles orphans after races). */
-  private static void removeAllHubOverlays(Parent root) {
-    if (!(root instanceof Pane pane)) {
-      return;
-    }
-    List<Node> toRemove = new ArrayList<>();
-    for (Node child : pane.getChildren()) {
-      if (child.getStyleClass().contains(BACKDROP_STYLE)) {
-        toRemove.add(child);
-      }
-    }
-    if (!toRemove.isEmpty()) {
-      for (Node n : toRemove) {
-        n.setMouseTransparent(true);
-        n.setVisible(false);
-      }
-      pane.getChildren().removeAll(toRemove);
-    }
-    if (activeOverlay != null && activeOverlay.getParent() == null) {
-      activeOverlay = null;
-      activeRecentList = null;
-    }
-  }
-
-  private static BorderPane buildPanel(StackPane backdrop) {
+  private static BorderPane buildPanel() {
     BorderPane panel = new BorderPane();
     panel.setFocusTraversable(true);
 
@@ -274,7 +163,6 @@ public final class StartHub {
 
     HBox body = new HBox(0, left, right);
     body.setFillHeight(true);
-    HBox.setHgrow(right, Priority.ALWAYS);
 
     HBox topBar = new HBox();
     topBar.setAlignment(Pos.CENTER_RIGHT);
@@ -283,32 +171,11 @@ public final class StartHub {
     Button close = new Button("✕");
     close.getStyleClass().add("start-hub-close");
     close.setFocusTraversable(false);
-    close.setOnAction(e -> {
-      dismiss();
-      allowShow(); // user closed manually — File → Open Project may show again
-    });
+    close.setOnAction(e -> dismiss());
     topBar.getChildren().add(close);
 
-    VBox chrome = new VBox(body);
     panel.setTop(topBar);
-    panel.setCenter(chrome);
-
-    panel.setOnKeyPressed(e -> {
-      if (e.getCode() == KeyCode.ESCAPE) {
-        dismiss();
-        allowShow();
-        e.consume();
-      }
-    });
-
-    backdrop.setOnMouseClicked(e -> {
-      if (e.getTarget() == backdrop) {
-        dismiss();
-        allowShow();
-        e.consume();
-      }
-    });
-
+    panel.setCenter(new VBox(body));
     return panel;
   }
 
@@ -421,12 +288,12 @@ public final class StartHub {
     Label projectsHeader = new Label("Projects");
     projectsHeader.getStyleClass().add("start-hub-section-title");
 
-    VBox recentList = new VBox(4);
-    recentList.getStyleClass().add("start-hub-recent-list");
-    activeRecentList = recentList;
-    populateRecentList(recentList);
+    VBox list = new VBox(4);
+    list.getStyleClass().add("start-hub-recent-list");
+    recentList = list;
+    populateRecentList(list);
 
-    ScrollPane scroll = new ScrollPane(recentList);
+    ScrollPane scroll = new ScrollPane(list);
     scroll.setFitToWidth(true);
     scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
     scroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
@@ -441,11 +308,9 @@ public final class StartHub {
     Button openOther = new Button("Open other…");
     openOther.getStyleClass().addAll("start-hub-button", "start-hub-button-secondary");
     openOther.setOnAction(e -> {
-      // Hide immediately so chooser / load never leave a blocker behind.
       dismiss();
       boolean started = FileCommands.openSessionFromChooser();
       if (!started) {
-        allowShow();
         show(MainApp.stage);
       }
     });
@@ -455,9 +320,7 @@ public final class StartHub {
     createEmpty.setDefaultButton(true);
     createEmpty.setOnAction(e -> {
       dismiss();
-      // Same path as File → New Project (clear tracks / session), not overlay-only.
       if (!FileCommands.newProject()) {
-        allowShow();
         show(MainApp.stage);
       }
     });
@@ -476,23 +339,24 @@ public final class StartHub {
     return right;
   }
 
-  private static void populateRecentList(VBox recentList) {
-    recentList.getChildren().clear();
+  private static void populateRecentList(VBox list) {
+    list.getChildren().clear();
     List<RecentFile> projects = UserPreferences.getRecentProjects();
     if (projects.isEmpty()) {
-      Label empty = new Label("No recent projects yet.\nSave a project (File → Save Project) to see it here.");
+      Label empty = new Label(
+          "No recent projects yet.\nSave a project (File → Save Project) to see it here.");
       empty.getStyleClass().add("start-hub-empty");
       empty.setWrapText(true);
-      recentList.getChildren().add(empty);
+      list.getChildren().add(empty);
       return;
     }
 
     for (RecentFile rf : projects) {
-      recentList.getChildren().add(recentRow(rf, recentList));
+      list.getChildren().add(recentRow(rf, list));
     }
   }
 
-  private static HBox recentRow(RecentFile rf, VBox recentList) {
+  private static HBox recentRow(RecentFile rf, VBox list) {
     Path path = Path.of(rf.path());
     String name = path.getFileName() != null ? path.getFileName().toString() : rf.path();
     int dot = name.lastIndexOf('.');
@@ -518,14 +382,12 @@ public final class StartHub {
       File file = path.toFile();
       if (!file.exists() || !file.isFile()) {
         UserPreferences.removeRecentProject(rf.path());
-        populateRecentList(recentList);
+        populateRecentList(list);
         return;
       }
-      // Dismiss first so dirty-confirm / load / paint errors never leave a blocker.
       dismiss();
       boolean started = FileCommands.openSession(path);
       if (!started) {
-        allowShow();
         show(MainApp.stage);
       }
     };

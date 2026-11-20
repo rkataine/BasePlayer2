@@ -70,13 +70,11 @@ public final class SessionRuntime {
       return;
     }
 
-    // Belt-and-suspenders: never leave the start hub up over a restoring session.
     org.baseplayer.StartHub.dismiss();
 
     List<String> warnings = new ArrayList<>();
 
     Platform.runLater(() -> {
-      org.baseplayer.StartHub.dismiss();
       ProjectSessionState.get().setSuppressDirty(true);
       SampleDataManager.clearAllData();
       // clearAllData resets the live document — reinstall the project doc.
@@ -207,6 +205,8 @@ public final class SessionRuntime {
       ProjectDocument document, Path projectFile, List<String> warnings) {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
     restoreSampleGroups(document, registry);
+    org.baseplayer.analysis.ComparisonContext.get().ensureBound();
+    org.baseplayer.analysis.ComparisonContext.get().loadFromDocument(document);
     if (document.sampleTracks == null) {
       return;
     }

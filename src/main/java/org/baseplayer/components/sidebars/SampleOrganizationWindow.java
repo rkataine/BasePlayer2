@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.AppDialog;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
@@ -110,7 +111,8 @@ public final class SampleOrganizationWindow {
 
     BorderPane root = new BorderPane();
     root.setPadding(new Insets(12));
-    root.getStyleClass().add("filter-panel");
+    // Opaque chrome surface — .filter-panel alone is transparent and shows a white scene fill.
+    root.getStyleClass().addAll("root-pane", "dialog-surface", "filter-panel");
 
     Label title = new Label("Sample Groups & Tags");
     title.getStyleClass().add("panel-title");
@@ -133,6 +135,7 @@ public final class SampleOrganizationWindow {
 
     Scene scene = new Scene(root, 960, 620);
     applyTheme(scene);
+    scene.setFill(AppTheme.chrome().panel());
     stage.setScene(scene);
 
     groupList.getSelectionModel().selectedItemProperty().addListener((obs, o, n) -> {
@@ -267,13 +270,17 @@ public final class SampleOrganizationWindow {
     deleteGroup.setOnAction(e -> deleteSelectedGroup());
     Button fromFolders = secondaryButton("Create from parent folders");
     fromFolders.setOnAction(e -> createFromParentFolders());
+    Button fromFile = secondaryButton("Import from file…");
+    fromFile.setTooltip(new Tooltip(
+        "Text/TSV/CSV with sample name and group name columns"));
+    fromFile.setOnAction(e -> importFromMappingFile());
 
     HBox renameRow = new HBox(8, renameField, groupColorPicker);
     HBox.setHgrow(renameField, Priority.ALWAYS);
     renameRow.setAlignment(Pos.CENTER_LEFT);
 
     HBox row1 = new HBox(8, newGroup, deleteGroup);
-    VBox pane = new VBox(8, heading, groupList, renameRow, row1, fromFolders);
+    VBox pane = new VBox(8, heading, groupList, renameRow, row1, fromFolders, fromFile);
     VBox.setVgrow(groupList, Priority.ALWAYS);
     pane.setPadding(new Insets(0, 6, 0, 0));
     return pane;
@@ -713,15 +720,14 @@ public final class SampleOrganizationWindow {
         new VBox(2, colorLabel, colorPicker),
         buttons);
     root.setPadding(new Insets(14));
-    root.getStyleClass().add("filter-panel");
+    // Opaque chrome — filter-panel alone is transparent and shows a white scene fill.
+    root.getStyleClass().addAll("root-pane", "dialog-surface", "filter-panel");
 
     Scene scene = new Scene(root, 340, 200);
     applyTheme(scene);
+    scene.setFill(AppTheme.chrome().panel());
     dialog.setScene(scene);
-    dialog.setOnShown(e -> {
-      nameField.requestFocus();
-      nameField.selectAll();
-    });
+    AppDialog.focusWhenShown(dialog, nameField, true);
     dialog.showAndWait();
     if (!created[0]) {
       return;
@@ -753,6 +759,22 @@ public final class SampleOrganizationWindow {
         touched == 0
             ? "No groups created (no usable sample paths)."
             : "Created/updated " + touched + " group(s) from parent folders.");
+    refreshAll(preserveSelection());
+  }
+
+  private void importFromMappingFile() {
+    var result = org.baseplayer.io.SampleGroupMappingImporter.chooseAndImport(stage);
+    if (result == null) {
+      return;
+    }
+    statusLabel.setText(
+        "Imported mapping: "
+            + result.groupsCreated() + " created, "
+            + result.groupsUpdated() + " existing, "
+            + result.tracksAssigned() + " assigned"
+            + (result.unmatchedSamples().isEmpty()
+                ? "."
+                : ", " + result.unmatchedSamples().size() + " unmatched."));
     refreshAll(preserveSelection());
   }
 

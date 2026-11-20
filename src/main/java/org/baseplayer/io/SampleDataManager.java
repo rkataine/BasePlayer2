@@ -27,6 +27,9 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.io.table.MappedTableData;
+import org.baseplayer.io.table.MappedTableOpen;
+import org.baseplayer.io.table.MappedTableReader;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.dragen.DragenAnalysisKind;
 import org.baseplayer.io.dragen.DragenFolderScan;
@@ -204,73 +207,109 @@ public class SampleDataManager {
             available,
             primary.previewByKind(),
             optionalUnion)
-        .ifPresent(result -> {
-          for (DragenFolderScan scan : scans) {
-            loadDragenFolder(scan, result);
-          }
-        });
+        .ifPresent(result -> loadDragenFolders(scans, result));
   }
 
-  private static void loadDragenFolder(DragenFolderScan scan, OpenDragenDialog.Result selection) {
-    Set<DragenAnalysisKind> selected = selection.kinds();
-    DragenLoadPlan plan = DragenFolderScanner.resolveLoadPlan(
-        scan, selected, selection.optionalBigWigs());
-    if (plan.isEmpty()) {
+  /**
+   * Load every selected DRAGEN folder in one background task, then register tracks
+   * once. Avoids N× {@code forceNotifyRegionChanged} storms that restart whole-chrom
+   * BigWig fetches for every already-open sample.
+   */
+  private static void loadDragenFolders(
+      List<DragenFolderScan> scans, OpenDragenDialog.Result selection) {
+    if (scans == null || scans.isEmpty() || selection == null) {
       return;
     }
-    String stem = plan.stem().isBlank()
-        ? (scan.directory() != null ? scan.directory().getName() : "DRAGEN")
-        : plan.stem();
+    List<DragenFolderWork> work = new ArrayList<>();
+    for (DragenFolderScan scan : scans) {
+      DragenLoadPlan plan = DragenFolderScanner.resolveLoadPlan(
+          scan, selection.kinds(), selection.optionalBigWigs());
+      if (plan == null || plan.isEmpty()) {
+        continue;
+      }
+      String stem = plan.stem().isBlank()
+          ? (scan.directory() != null ? scan.directory().getName() : "DRAGEN")
+          : plan.stem();
+      work.add(new DragenFolderWork(stem, plan));
+    }
+    if (work.isEmpty()) {
+      return;
+    }
 
     SampleOpenFailuresDialog failures = SampleOpenFailuresDialog.create();
-    List<File> bamFiles = plan.bamFiles();
-    List<File> vcfFiles = plan.vcfFiles();
-    List<File> bigWigFiles = plan.bigWigFiles();
+    int totalFiles = 0;
+    for (DragenFolderWork folder : work) {
+      totalFiles += folder.plan.bamFiles().size() + folder.plan.bigWigFiles().size();
+    }
+    final int progressTotal = Math.max(1, totalFiles);
 
     ThreadRunner.get().submit(
-        "Loading DRAGEN samples",
+        work.size() == 1 ? "Loading DRAGEN samples" : "Loading " + work.size() + " DRAGEN folders",
         () -> {
-          record DragenLoaded(List<Sample> bams, List<Sample> bigWigs) {}
-          List<Sample> loadedBams = new ArrayList<>();
-          List<Sample> loadedBigWigs = new ArrayList<>();
-          int total = Math.max(1, bamFiles.size() + bigWigFiles.size());
+          List<DragenFolderLoaded> loadedFolders = new ArrayList<>();
           int index = 0;
-          for (File bam : bamFiles) {
-            if (bam == null) {
-              continue;
+          for (DragenFolderWork folder : work) {
+            if (Thread.currentThread().isInterrupted()) {
+              break;
             }
-            index++;
-            org.baseplayer.services.LoadingManager.get().setProgress(index, total);
-            try {
+            List<Sample> loadedBams = new ArrayList<>();
+            List<Sample> loadedBigWigs = new ArrayList<>();
+            for (File bam : folder.plan.bamFiles()) {
+              if (bam == null) {
+                continue;
+              }
+              if (Thread.currentThread().isInterrupted()) {
+                break;
+              }
+              index++;
+              org.baseplayer.services.LoadingManager.get().setProgress(index, progressTotal);
+              ThreadRunner.RunnerTask task = ThreadRunner.currentTask();
+              if (task != null) {
+                task.setProgressSuffix(folder.stem + " · " + bam.getName());
+                ThreadRunner.get().notifyDescriptionChanged();
+              }
               loadedBams.add(new Sample(bam.toPath()));
-            } catch (IOException e) {
-              System.err.println("Failed to open BAM: " + bam + " - " + e.getMessage());
-              failures.add(bam, e.getMessage());
             }
+            for (File bigWig : folder.plan.bigWigFiles()) {
+              if (bigWig == null) {
+                continue;
+              }
+              if (Thread.currentThread().isInterrupted()) {
+                break;
+              }
+              index++;
+              org.baseplayer.services.LoadingManager.get().setProgress(index, progressTotal);
+              ThreadRunner.RunnerTask task = ThreadRunner.currentTask();
+              if (task != null) {
+                task.setProgressSuffix(folder.stem + " · " + bigWig.getName());
+                ThreadRunner.get().notifyDescriptionChanged();
+              }
+              try {
+                BigWigTrack bw = new BigWigTrack(bigWig.toPath());
+                loadedBigWigs.add(new Sample(bigWig.toPath(), bw));
+              } catch (IOException e) {
+                System.err.println("Failed to open BigWig: " + bigWig + " - " + e.getMessage());
+                failures.add(bigWig, e.getMessage());
+              }
+            }
+            loadedFolders.add(new DragenFolderLoaded(
+                folder.stem, folder.plan.vcfFiles(), loadedBams, loadedBigWigs));
           }
-          for (File bigWig : bigWigFiles) {
-            if (bigWig == null) {
-              continue;
-            }
-            index++;
-            org.baseplayer.services.LoadingManager.get().setProgress(index, total);
-            try {
-              BigWigTrack bw = new BigWigTrack(bigWig.toPath());
-              loadedBigWigs.add(new Sample(bigWig.toPath(), bw));
-            } catch (IOException e) {
-              System.err.println("Failed to open BigWig: " + bigWig + " - " + e.getMessage());
-              failures.add(bigWig, e.getMessage());
-            }
-          }
-          return new DragenLoaded(loadedBams, loadedBigWigs);
+          return loadedFolders;
         },
-        loaded -> {
+        loadedFolders -> {
+          if (loadedFolders == null || loadedFolders.isEmpty()) {
+            failures.commitAndShowLater();
+            return;
+          }
           SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-          SampleTrack track = new SampleTrack(stem);
-          track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
-          registry.getSampleTracks().add(track);
-          registry.getSampleList().add(stem);
-          if (loaded != null) {
+          List<Sample> newBigWigs = new ArrayList<>();
+          List<File> allVcfs = new ArrayList<>();
+          for (DragenFolderLoaded loaded : loadedFolders) {
+            SampleTrack track = new SampleTrack(loaded.stem());
+            track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
+            registry.getSampleTracks().add(track);
+            registry.getSampleList().add(loaded.stem());
             if (loaded.bams() != null) {
               for (Sample sample : loaded.bams()) {
                 if (sample != null) {
@@ -288,10 +327,14 @@ public class SampleDataManager {
                 if (bw != null) {
                   bw.setVisible(true);
                   bw.setOnDataLoaded(() -> GenomicCanvas.update.set(!GenomicCanvas.update.get()));
+                  newBigWigs.add(sample);
                 }
                 track.addSample(sample);
                 UserPreferences.addRecentFile("BIGWIG", sample.getPath().toFile());
               }
+            }
+            if (loaded.vcfFiles() != null) {
+              allVcfs.addAll(loaded.vcfFiles());
             }
           }
           registry.includeNewTracksAtEndResetHeight();
@@ -299,21 +342,45 @@ public class SampleDataManager {
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
           MainController.initializeLoadRegionButton();
           MainController.addLoadRegionButtonToViewport();
-          // Kick sample-body BigWig region load once the track is registered.
-          for (org.baseplayer.draw.DrawStack stack :
-              ServiceRegistry.getInstance().getDrawStackManager().getStacks()) {
-            if (stack.sampleTrackCanvas != null) {
-              stack.sampleTrackCanvas.forceNotifyRegionChanged();
-            }
-          }
+          // One region notify for newly added BigWigs only — not a forced reload of all.
+          requestBigWigRegionForSamples(newBigWigs);
 
-          if (!vcfFiles.isEmpty()) {
-            loadDirectoryVcfs(vcfFiles, false, Map.of(), failures);
+          if (!allVcfs.isEmpty()) {
+            loadDirectoryVcfs(allVcfs, false, Map.of(), failures);
           } else {
             failures.commitAndShowLater();
           }
         });
   }
+
+  /** Ask visible stacks to fetch the current viewport for the given BigWig samples. */
+  private static void requestBigWigRegionForSamples(List<Sample> samples) {
+    if (samples == null || samples.isEmpty()) {
+      return;
+    }
+    for (DrawStack stack : ServiceRegistry.getInstance().getDrawStackManager().getStacks()) {
+      if (stack == null || stack.sampleTrackCanvas == null) {
+        continue;
+      }
+      String chrom = stack.getChromosome();
+      if (chrom == null || chrom.isBlank()) {
+        continue;
+      }
+      long start = (long) stack.getViewStart();
+      long end = (long) stack.getViewEnd();
+      for (Sample sample : samples) {
+        if (sample == null || sample.getBigWigTrack() == null) {
+          continue;
+        }
+        sample.getBigWigTrack().onRegionChanged(chrom, start, end, stack);
+      }
+    }
+  }
+
+  private record DragenFolderWork(String stem, DragenLoadPlan plan) {}
+
+  private record DragenFolderLoaded(
+      String stem, List<File> vcfFiles, List<Sample> bams, List<Sample> bigWigs) {}
 
   /** One directory with samples, or immediate subfolders that contain samples. */
   static List<File> resolveDirectoryBatch(File chosen) {
@@ -487,14 +554,7 @@ public class SampleDataManager {
       for (File file : entry.getValue()) {
         index++;
         org.baseplayer.services.LoadingManager.get().setProgress(index, Math.max(1, total));
-        try {
-          samples.add(new Sample(file.toPath()));
-        } catch (IOException e) {
-          System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
-          if (failures != null) {
-            failures.add(file, e.getMessage());
-          }
-        }
+        samples.add(new Sample(file.toPath()));
       }
       if (!samples.isEmpty()) {
         bamSamplesByDir.put(entry.getKey(), samples);
@@ -859,12 +919,7 @@ public class SampleDataManager {
               // Update progress bar
               org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
               
-              try {
-                loaded.add(new Sample(file.toPath()));
-              } catch (IOException e) {
-                System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
-                failures.add(file, e.getMessage());
-              }
+              loaded.add(new Sample(file.toPath()));
             }
             return loaded;
         },
@@ -1009,23 +1064,14 @@ public class SampleDataManager {
     ThreadRunner runner = ThreadRunner.get();
     runner.submit("Opening " + file.getName() + "\u2026",
         () -> {
-          try { return new Sample(file.toPath()); }
-          catch (IOException e) {
-            System.err.println("Failed to open BAM: " + file + " - " + e.getMessage());
-            SampleOpenFailuresDialog.create().add(file, e.getMessage()).commitAndShowLater();
-            return null;
-          }
+          return new Sample(file.toPath());
         },
         newSample -> {
           if (newSample == null) return;
           track.addSample(newSample);
           UserPreferences.addRecentFile("BAM", file);
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
-          newSample.setOnFirstFetchStarted(() -> {
-            ThreadRunner.RunnerTask readTask =
-                runner.track("Loading reads: " + newSample.getName(), newSample::cancelAndSuspend);
-            newSample.setOnFirstLoadComplete(readTask::complete);
-          });
+          // Read-fetch LoadingPopup is tracked inside AlignmentFile.getReads for every fetch.
         });
   }
 
@@ -1200,6 +1246,152 @@ public class SampleDataManager {
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
     ProjectSessionState.get().markDirty();
+  }
+
+  /**
+   * Add a user-mapped table (TSV/CSV/…) to an existing individual's track.
+   * Column mapping is remembered by header fingerprint for later similar files.
+   */
+  public static void addTableToTrack(int sampleIndex) {
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (sampleIndex < 0 || sampleIndex >= sampleRegistry.getSampleTracks().size()) {
+      return;
+    }
+    SampleTrack track = sampleRegistry.getSampleTracks().get(sampleIndex);
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Add table to " + track.getDisplayName());
+    File lastDir = UserPreferences.getLastDirectory("TABLE");
+    if (lastDir == null) {
+      lastDir = UserPreferences.getLastDirectory("BED");
+    }
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new ExtensionFilter("Tables", "*.tsv", "*.csv", "*.txt", "*.segments", "*.bed"),
+        new ExtensionFilter("All files", "*.*"));
+    File file = fileChooser.showOpenDialog(MainApp.stage);
+    if (file == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("TABLE", file.getParentFile());
+    openTableOntoTrack(track, file);
+  }
+
+  /** Open mapped tables as new sample tracks (merge by name when possible). */
+  public static void addTableSampleFiles() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open table files");
+    File lastDir = UserPreferences.getLastDirectory("TABLE");
+    if (lastDir == null) {
+      lastDir = UserPreferences.getLastDirectory("BED");
+    }
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new ExtensionFilter("Tables", "*.tsv", "*.csv", "*.txt", "*.segments", "*.bed"),
+        new ExtensionFilter("All files", "*.*"));
+    List<File> files = fileChooser.showOpenMultipleDialog(MainApp.stage);
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+    UserPreferences.setLastDirectory("TABLE", files.get(0).getParentFile());
+    for (File file : files) {
+      addTableSampleFile(file);
+    }
+  }
+
+  public static void addTableSampleFile(File file) {
+    if (file == null) {
+      return;
+    }
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    String stem = MappedTableReader.fileStem(file.toPath());
+    SampleTrack existing = findTrackByName(sampleRegistry, stem);
+    if (existing != null) {
+      openTableOntoTrack(existing, file);
+      return;
+    }
+    MappedTableData data = MappedTableOpen.openWithMapping(
+            MainApp.stage, file.toPath(), stem)
+        .orElse(null);
+    if (data == null) {
+      return;
+    }
+    Sample newSample = new Sample(file.toPath(), data);
+    boolean created = addSampleMergingByName(sampleRegistry, newSample);
+    if (created) {
+      sampleRegistry.includeNewTracksAtEndResetHeight();
+    }
+    UserPreferences.addRecentFile("TABLE", file);
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    ProjectSessionState.get().markDirty();
+    afterTableSampleOpened();
+  }
+
+  private static void openTableOntoTrack(SampleTrack track, File file) {
+    if (track == null || file == null) {
+      return;
+    }
+    MappedTableData data = MappedTableOpen.openWithMapping(
+            MainApp.stage, file.toPath(), track.getDisplayName())
+        .orElse(null);
+    if (data == null) {
+      return;
+    }
+    track.addSample(new Sample(file.toPath(), data));
+    UserPreferences.addRecentFile("TABLE", file);
+    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+    ProjectSessionState.get().markDirty();
+    afterTableSampleOpened();
+  }
+
+  /** Show Analysis for mapped tables and focus Signal (LOH / table values). */
+  private static void afterTableSampleOpened() {
+    org.baseplayer.controllers.MenuBarController.updateVariantManagerButtonVisibility();
+    javafx.application.Platform.runLater(() -> {
+      if (org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton()) {
+        org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+      }
+    });
+  }
+
+  private static SampleTrack findTrackByName(SampleRegistry registry, String stem) {
+    if (registry == null || stem == null || stem.isBlank()) {
+      return null;
+    }
+    String needle = stem.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "");
+    SampleTrack best = null;
+    int bestScore = 0;
+    for (SampleTrack track : registry.getSampleTracks()) {
+      String a = track.getDisplayName() != null
+          ? track.getDisplayName().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "")
+          : "";
+      String b = track.getName() != null
+          ? track.getName().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "")
+          : "";
+      int score = 0;
+      if (needle.equals(a) || needle.equals(b)) {
+        score = 3;
+      } else if (needle.length() >= 3 && (a.contains(needle) || needle.contains(a)
+          || b.contains(needle) || needle.contains(b))) {
+        score = 2;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = track;
+      }
+    }
+    return bestScore >= 2 ? best : null;
   }
 
   /**
@@ -1978,18 +2170,9 @@ public class SampleDataManager {
       if (!claimedBamPaths.add(pathKey) || isBamPathAlreadyOpen(registry, bamPath)) {
         continue;
       }
-      try {
-        track.addSample(new Sample(bamPath));
-        preferShorterTrackName(track, SampleRegistry.normalizeNameKey(bamPath.getFileName().toString()));
-        UserPreferences.addRecentFile("BAM", bamPath.toFile());
-      } catch (IOException e) {
-        System.err.println("Failed to auto-open matching BAM: " + bamPath + " - " + e.getMessage());
-        if (failures != null) {
-          failures.add(bamPath, e.getMessage());
-        } else {
-          SampleOpenFailuresDialog.create().add(bamPath, e.getMessage()).commitAndShowLater();
-        }
-      }
+      track.addSample(new Sample(bamPath));
+      preferShorterTrackName(track, SampleRegistry.normalizeNameKey(bamPath.getFileName().toString()));
+      UserPreferences.addRecentFile("BAM", bamPath.toFile());
     }
   }
 
@@ -2009,22 +2192,13 @@ public class SampleDataManager {
     if (bamPath == null || isBamPathAlreadyOpen(registry, bamPath)) {
       return;
     }
-    try {
-      track.addSample(new Sample(bamPath));
-      preferShorterTrackName(track, SampleRegistry.normalizeNameKey(bamPath.getFileName().toString()));
-      UserPreferences.addRecentFile("BAM", bamPath.toFile());
-    } catch (IOException e) {
-      System.err.println("Failed to auto-open matching BAM: " + bamPath + " - " + e.getMessage());
-      if (failures != null) {
-        failures.add(bamPath, e.getMessage());
-      } else {
-        SampleOpenFailuresDialog.create().add(bamPath, e.getMessage()).commitAndShowLater();
-      }
-    }
+    track.addSample(new Sample(bamPath));
+    preferShorterTrackName(track, SampleRegistry.normalizeNameKey(bamPath.getFileName().toString()));
+    UserPreferences.addRecentFile("BAM", bamPath.toFile());
   }
 
   private static boolean trackHasBam(SampleTrack track) {
-    return track != null && track.getFirstBam() != null;
+    return track != null && track.hasBamSample();
   }
 
   private static boolean isBamPathAlreadyOpen(SampleRegistry registry, Path bamPath) {
@@ -2311,6 +2485,7 @@ public class SampleDataManager {
           toBam.setReadColorMode(fromBam.getReadColorMode());
           toBam.setReadStackingMode(fromBam.getReadStackingMode());
           toBam.setSuppressMethylMismatches(fromBam.getSuppressMethylMismatches());
+          toBam.setCoverageOnlyMode(fromBam.isCoverageOnlyMode());
         }
       }
       for (int i = 0; i < targetBeds.size() && i < sourceBeds.size(); i++) {

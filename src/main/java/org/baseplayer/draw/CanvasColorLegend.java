@@ -72,6 +72,20 @@ public final class CanvasColorLegend {
       double startY,
       double maxRight,
       double maxBottom) {
+    draw(gc, items, startX, startY, maxRight, maxBottom, "All");
+  }
+
+  /**
+   * @param allLabel leading select-all checkbox text ({@code "All"} or e.g. {@code "All types"})
+   */
+  public void draw(
+      GraphicsContext gc,
+      List<Item> items,
+      double startX,
+      double startY,
+      double maxRight,
+      double maxBottom,
+      String allLabel) {
     clear();
     if (gc == null || items == null || items.isEmpty()) {
       return;
@@ -106,13 +120,13 @@ public final class CanvasColorLegend {
     }
 
     // Leading select/deselect-all checkbox
-    String allLabel = "All";
-    double allTextW = Math.max(18, allLabel.length() * 7.2);
+    String selectLabel = (allLabel != null && !allLabel.isBlank()) ? allLabel : "All";
+    double allTextW = Math.max(18, selectLabel.length() * 7.2);
     double allItemW = swatchW + 5 + allTextW;
     if (legendY + swatchH <= maxBottom && legendX + allItemW <= maxRight) {
       drawCheckbox(gc, legendX, legendY, swatchW, swatchH, allEnabled, chrome, canvas);
       gc.setFill(allEnabled ? canvas.axisInk() : chrome.muted());
-      gc.fillText(allLabel, legendX + swatchW + 4, legendY - 1);
+      gc.fillText(selectLabel, legendX + swatchW + 4, legendY - 1);
       hits.add(new Hit(SELECT_ALL, legendX - 2, legendY - 2, allItemW + 4, swatchH + 4));
       legendX += allItemW + gap;
     }

@@ -74,6 +74,24 @@ public final class VcfAlleleNormalizer {
     return allele == null || allele.isEmpty() || "-".equals(allele) || ".".equals(allele);
   }
 
+  /** Visible bases kept when truncating long REF/ALT for UI labels. */
+  public static final int DISPLAY_MAX_BASES = 10;
+
+  /**
+   * Compact allele text for UI. Long sequences become {@code GGCATCAGGG... +56bp}.
+   * Symbolic / breakend alleles are left unchanged.
+   */
+  public static String formatSequenceForDisplay(String seq) {
+    if (seq == null || seq.isBlank()) {
+      return "—";
+    }
+    if (isSymbolicOrBreakend(seq) || seq.length() <= DISPLAY_MAX_BASES) {
+      return seq;
+    }
+    int hidden = seq.length() - DISPLAY_MAX_BASES;
+    return seq.substring(0, DISPLAY_MAX_BASES) + "... +" + hidden + "bp";
+  }
+
   private static boolean isSymbolicOrBreakend(String allele) {
     if (allele == null || allele.isEmpty()) {
       return false;

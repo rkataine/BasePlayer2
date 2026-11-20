@@ -5,12 +5,14 @@ import java.util.Optional;
 import org.baseplayer.MainApp;
 import org.baseplayer.ui.theme.AppTheme;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextInputControl;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -19,6 +21,7 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.stage.Window;
+import javafx.stage.WindowEvent;
 
 /**
  * Base class for dark-themed modal info / confirm dialogs.
@@ -172,10 +175,71 @@ public class AppDialog {
     return button;
   }
 
+  /**
+   * Ensure a modal Stage receives OS keyboard focus, then focus {@code input}.
+   * On Linux, {@code Node.requestFocus()} alone often paints a caret while key
+   * events still go to the owner window until the user clicks the dialog.
+   *
+   * <p>Uses {@link Stage#addEventHandler} so existing {@code setOnShown} handlers
+   * are preserved.
+   */
+  public static void focusWhenShown(Stage stage, Node input) {
+    focusWhenShown(stage, input, false);
+  }
+
+  /** Like {@link #focusWhenShown(Stage, Node)} and optionally select-all text. */
+  public static void focusWhenShown(Stage stage, Node input, boolean selectAll) {
+    if (stage == null) {
+      return;
+    }
+    stage.addEventHandler(WindowEvent.WINDOW_SHOWN, e -> scheduleInputFocus(stage, input, selectAll));
+  }
+
+  /**
+   * Take window focus then input focus (double {@link Platform#runLater} so the
+   * window manager has finished activating the stage).
+   */
+  public static void scheduleInputFocus(Window window, Node input, boolean selectAll) {
+    Platform.runLater(() -> {
+      if (window instanceof Stage stage) {
+        stage.toFront();
+        stage.requestFocus();
+      } else if (window != null) {
+        window.requestFocus();
+      }
+      Platform.runLater(() -> {
+        applyInputFocus(window, input, selectAll);
+        // Third pulse: some WMs steal focus once after show.
+        Platform.runLater(() -> {
+          if (input != null && input.getScene() != null && !input.isFocused()) {
+            applyInputFocus(window, input, selectAll);
+          }
+        });
+      });
+    });
+  }
+
+  private static void applyInputFocus(Window window, Node input, boolean selectAll) {
+    if (window instanceof Stage stage) {
+      stage.toFront();
+      stage.requestFocus();
+    } else if (window != null) {
+      window.requestFocus();
+    }
+    if (input == null) {
+      return;
+    }
+    input.requestFocus();
+    if (selectAll && input instanceof TextInputControl field) {
+      field.selectAll();
+    }
+  }
+
   /** Show modally and wait; returns whether the primary button was used. */
   protected boolean showAndWaitConfirmed() {
     confirmed = false;
     stage.sizeToScene();
+    focusWhenShown(stage, null, false);
     stage.showAndWait();
     return confirmed;
   }

@@ -159,6 +159,8 @@ public class BAMFileReader implements AlignmentReader {
     // For records without MD tag, compute mismatches by comparing SEQ against reference
     resolveSeqMismatches(records, chrom);
 
+    // Drop per-chromosome BAI block; path stays for the next query.
+    index.unload();
     return records;
   }
 
@@ -224,6 +226,8 @@ public class BAMFileReader implements AlignmentReader {
         }
       }
     }
+    // Drop per-chromosome BAI block; path stays for the next query.
+    index.unload();
   }
 
   // BAM 4-bit base encoding: =ACMGRSVTWYHKDBN → index 0-15
@@ -800,6 +804,9 @@ public class BAMFileReader implements AlignmentReader {
 
   @Override
   public void close() throws IOException {
+    if (index != null) {
+      index.unload();
+    }
     bgzf.close();
   }
 }

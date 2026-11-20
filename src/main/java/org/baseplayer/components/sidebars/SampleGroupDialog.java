@@ -21,10 +21,12 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
+import javafx.application.Platform;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.stage.Window;
+import javafx.stage.WindowEvent;
 
 /**
  * Quick dialog to place selected sample tracks in a colored group and/or
@@ -124,6 +126,10 @@ public final class SampleGroupDialog {
     cancel.setOnAction(e -> dialog.close());
     add.setOnAction(e -> {
       String name = nameField.getText() == null ? "" : nameField.getText().trim();
+      // Prompt text is the suggestion — use it when the user leaves the field empty.
+      if (name.isEmpty() && suggestedName != null && !suggestedName.isBlank()) {
+        name = suggestedName.trim();
+      }
       Color color = colorPicker.getValue() != null ? colorPicker.getValue() : Color.web("#4db8ff");
       chosen[0] = new Outcome.Add(name, color, EnumSet.copyOf(selectedTags));
       dialog.close();
@@ -155,11 +161,14 @@ public final class SampleGroupDialog {
     root.setPadding(new Insets(16));
     root.setStyle(AppDialog.PANEL_STYLE);
     dialog.setScene(new Scene(root, 480, 520));
-    dialog.setOnShown(e -> {
-      nameField.requestFocus();
-      nameField.deselect();
-      nameField.positionCaret(0);
-    });
+    AppDialog.focusWhenShown(dialog, nameField, false);
+    dialog.addEventHandler(WindowEvent.WINDOW_SHOWN, e ->
+        Platform.runLater(() -> {
+          if (nameField.isFocused()) {
+            nameField.deselect();
+            nameField.positionCaret(0);
+          }
+        }));
     dialog.showAndWait();
     return Optional.ofNullable(chosen[0]);
   }

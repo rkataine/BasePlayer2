@@ -78,7 +78,7 @@ public final class VariantOddsRatio {
      * Haldane–Anscombe allele OR:
      * {@code ((AC_c+0.5)/(AN_c−AC_c+0.5)) / ((AF·AN+0.5)/((1−AF)·AN+0.5))}.
      */
-    static double alleleOddsRatio(int caseAc, int caseAn, double controlAf) {
+    public static double alleleOddsRatio(int caseAc, int caseAn, double controlAf) {
         if (caseAn < 2 || caseAc < 0 || caseAc > caseAn) {
             return Double.NaN;
         }

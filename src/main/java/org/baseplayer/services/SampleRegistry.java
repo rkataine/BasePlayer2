@@ -2,6 +2,8 @@ package org.baseplayer.services;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -286,6 +288,146 @@ public class SampleRegistry extends TrackViewportRegistry {
         }
         sampleTracks.remove(track);
         invalidateDisplayedTrackIndicesCache();
+    }
+
+    /**
+     * Move {@code tracks} into a contiguous block inserted before the track
+     * currently at {@code beforeIndex} (or at the end if
+     * {@code beforeIndex >= size}). Relative order among moved tracks (current
+     * list order) is preserved. No-op when already in place or when none of the
+     * tracks are registered.
+     */
+    public void moveSampleTracks(List<SampleTrack> tracks, int beforeIndex) {
+        if (tracks == null || tracks.isEmpty() || sampleTracks.isEmpty()) {
+            return;
+        }
+        Set<SampleTrack> wanted = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (SampleTrack track : tracks) {
+            if (track != null) {
+                wanted.add(track);
+            }
+        }
+        if (wanted.isEmpty()) {
+            return;
+        }
+
+        List<SampleTrack> moving = new ArrayList<>();
+        List<SampleTrack> staying = new ArrayList<>();
+        List<String> movingNames = new ArrayList<>();
+        List<String> stayingNames = new ArrayList<>();
+        boolean syncNames = sampleList.size() == sampleTracks.size();
+
+        for (int i = 0; i < sampleTracks.size(); i++) {
+            SampleTrack track = sampleTracks.get(i);
+            if (wanted.contains(track)) {
+                moving.add(track);
+                if (syncNames) {
+                    movingNames.add(sampleList.get(i));
+                }
+            } else {
+                staying.add(track);
+                if (syncNames) {
+                    stayingNames.add(sampleList.get(i));
+                }
+            }
+        }
+        if (moving.isEmpty()) {
+            return;
+        }
+
+        int clampedBefore = Math.max(0, Math.min(beforeIndex, sampleTracks.size()));
+        int dest = 0;
+        for (int i = 0; i < clampedBefore; i++) {
+            if (!wanted.contains(sampleTracks.get(i))) {
+                dest++;
+            }
+        }
+        dest = Math.max(0, Math.min(dest, staying.size()));
+
+        if (dest + moving.size() <= sampleTracks.size()) {
+            boolean already = true;
+            for (int i = 0; i < moving.size(); i++) {
+                if (sampleTracks.get(dest + i) != moving.get(i)) {
+                    already = false;
+                    break;
+                }
+            }
+            if (already) {
+                return;
+            }
+        }
+
+        List<SampleTrack> newOrder = new ArrayList<>(sampleTracks.size());
+        newOrder.addAll(staying.subList(0, dest));
+        newOrder.addAll(moving);
+        newOrder.addAll(staying.subList(dest, staying.size()));
+
+        beginBatchTrackMutation();
+        try {
+            sampleTracks.setAll(newOrder);
+            if (syncNames) {
+                List<String> newNames = new ArrayList<>(newOrder.size());
+                newNames.addAll(stayingNames.subList(0, dest));
+                newNames.addAll(movingNames);
+                newNames.addAll(stayingNames.subList(dest, stayingNames.size()));
+                sampleList.clear();
+                sampleList.addAll(newNames);
+            }
+        } finally {
+            endBatchTrackMutation();
+        }
+    }
+
+    /**
+     * Gather all members of {@code groupId} into one contiguous block near the
+     * top of the sample list, stacked after groups with lower ids (created
+     * earlier). Relative order among members is preserved.
+     */
+    public void coalesceTracksInGroup(int groupId) {
+        if (!sampleGroups.containsKey(groupId)) {
+            return;
+        }
+        List<SampleTrack> members = getTracksInGroup(groupId);
+        if (members.isEmpty()) {
+            return;
+        }
+        Set<SampleTrack> moving = Collections.newSetFromMap(new IdentityHashMap<>());
+        moving.addAll(members);
+        moveSampleTracks(members, insertionIndexAfterEarlierGroups(groupId, moving));
+    }
+
+    /**
+     * Index to insert {@code moving} before so the block sits after every track
+     * that belongs to a group created earlier than {@code groupId}.
+     */
+    private int insertionIndexAfterEarlierGroups(int groupId, Set<SampleTrack> moving) {
+        int insertBefore = 0;
+        for (int i = 0; i < sampleTracks.size(); i++) {
+            SampleTrack track = sampleTracks.get(i);
+            if (moving.contains(track)) {
+                continue;
+            }
+            if (belongsToEarlierGroup(track, groupId)) {
+                insertBefore = i + 1;
+            } else {
+                insertBefore = i;
+                break;
+            }
+        }
+        return insertBefore;
+    }
+
+    /** True when {@code track} is in any existing group with id &lt; {@code groupId}. */
+    private boolean belongsToEarlierGroup(SampleTrack track, int groupId) {
+        if (track == null) {
+            return false;
+        }
+        for (int otherId : track.getGroupIds()) {
+            if (otherId < groupId && sampleGroups.containsKey(otherId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void clearSampleTracks() {
@@ -1368,6 +1510,7 @@ public class SampleRegistry extends TrackViewportRegistry {
             changed = true;
         }
         if (changed) {
+            coalesceTracksInGroup(groupId);
             ProjectSessionState.get().markDirty();
             bumpSampleGroupsRevision();
         }
@@ -1394,6 +1537,7 @@ public class SampleRegistry extends TrackViewportRegistry {
             changed = true;
         }
         if (changed) {
+            coalesceTracksInGroup(groupId);
             ProjectSessionState.get().markDirty();
             bumpSampleGroupsRevision();
         }
@@ -1411,6 +1555,7 @@ public class SampleRegistry extends TrackViewportRegistry {
             return;
         }
         track.addGroupId(groupId);
+        coalesceTracksInGroup(groupId);
         ProjectSessionState.get().markDirty();
         bumpSampleGroupsRevision();
     }
@@ -1596,6 +1741,81 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     /**
+     * Result of applying a sample→group text mapping.
+     *
+     * @param groupsCreated   new groups created by name
+     * @param groupsUpdated   existing groups that received members
+     * @param tracksAssigned  tracks that gained/changed membership
+     * @param unmatchedSamples sample names from the file with no loaded track match
+     */
+    public record GroupMappingApplyResult(
+        int groupsCreated,
+        int groupsUpdated,
+        int tracksAssigned,
+        List<String> unmatchedSamples) {}
+
+    /**
+     * Create/reuse groups by name and assign matching tracks from
+     * {@code [sampleName, groupName]} rows (file order). Tracks are set to the
+     * mapped group exclusively and coalesced to the top stack.
+     */
+    public GroupMappingApplyResult applyGroupsFromMapping(List<String[]> sampleGroupPairs) {
+        List<String> unmatched = new ArrayList<>();
+        Map<String, List<SampleTrack>> byGroup =
+            org.baseplayer.io.SampleGroupMappingImporter.resolveMapping(
+                this, sampleGroupPairs, unmatched);
+        if (byGroup.isEmpty()) {
+            return new GroupMappingApplyResult(0, 0, 0, List.copyOf(unmatched));
+        }
+
+        int groupsCreated = 0;
+        int groupsUpdated = 0;
+        int tracksAssigned = 0;
+        boolean changed = false;
+
+        for (Map.Entry<String, List<SampleTrack>> entry : byGroup.entrySet()) {
+            String groupName = entry.getKey();
+            List<SampleTrack> members = entry.getValue();
+            if (groupName == null || groupName.isBlank() || members == null || members.isEmpty()) {
+                continue;
+            }
+            SampleGroup group = findSampleGroupByName(groupName);
+            boolean created = false;
+            if (group == null) {
+                group = createSampleGroup(groupName, null);
+                created = true;
+                groupsCreated++;
+                changed = true;
+            }
+
+            if (!created) {
+                groupsUpdated++;
+            }
+            for (SampleTrack track : members) {
+                if (track == null) {
+                    continue;
+                }
+                List<Integer> current = track.getGroupIds();
+                if (current.size() == 1 && current.get(0) == group.getId()) {
+                    continue;
+                }
+                track.setGroupId(group.getId());
+                tracksAssigned++;
+                changed = true;
+            }
+            coalesceTracksInGroup(group.getId());
+            changed = true;
+        }
+
+        if (changed) {
+            ProjectSessionState.get().markDirty();
+            bumpSampleGroupsRevision();
+        }
+        return new GroupMappingApplyResult(
+            groupsCreated, groupsUpdated, tracksAssigned, List.copyOf(unmatched));
+    }
+
+    /**
      * Create (or reuse by name) a lineage group per distinct directory segment and
      * assign tracks. Existing memberships are kept; tracks are added to the lineage group.
      *
@@ -1631,6 +1851,7 @@ public class SampleRegistry extends TrackViewportRegistry {
             }
             if (created || added) {
                 touched++;
+                coalesceTracksInGroup(group.getId());
             }
         }
         if (changed) {

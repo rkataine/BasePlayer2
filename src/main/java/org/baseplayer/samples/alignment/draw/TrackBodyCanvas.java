@@ -502,6 +502,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (canDrawSampleBigWigData(slot)) {
       drawSampleBigWigData(slot, rowTopY, rowHeight);
     }
+    // Mapped table/segment bars (ASCAT etc.) — all zoom levels.
+    if (canDrawMappedTableData(slot)) {
+      drawMappedTableData(slot, rowTopY, rowHeight);
+    }
   }
 
   private void ensureTrackRowHeightFitsViewport(double viewportHeight) {
@@ -885,7 +889,26 @@ public class TrackBodyCanvas extends GenomicCanvas {
       return false;
     }
     // Coverage still draws when rows are short; read piles need enough vertical room.
-    return isWithinReadZoom() && isSampleHeightEnoughForReads();
+    if (!(isWithinReadZoom() && isSampleHeightEnoughForReads())) {
+      return false;
+    }
+    // Skip pile drawing when every visible BAM on the track is coverage-only mode.
+    SampleTrack track = resolveSampleTrack(slot);
+    return track == null || !trackAllBamsCoverageOnly(track);
+  }
+
+  private static boolean trackAllBamsCoverageOnly(SampleTrack track) {
+    boolean anyBam = false;
+    for (Sample sample : track.getSamples()) {
+      if (!sample.visible || sample.getDataType() != Sample.DataType.BAM) {
+        continue;
+      }
+      anyBam = true;
+      if (!sample.isCoverageOnlyMode()) {
+        return false;
+      }
+    }
+    return anyBam;
   }
 
   private boolean isSampleHeightEnoughForReads() {
@@ -903,12 +926,25 @@ public class TrackBodyCanvas extends GenomicCanvas {
     int end = (int) drawStack.getViewEnd();
     double coverageFractionH = Math.max(MIN_COVERAGE_HEIGHT,
         Math.min(MAX_COVERAGE_HEIGHT, rowHeight * Settings.get().getCoverageFraction()));
+    boolean sampleListScrolling = sampleRegistry.isSampleListScrolling();
     boolean allowFetch = !(drawStack.nav.navigating
         || drawStack.nav.animationRunning
-        || drawStack.nav.lineZoomerActive);
+        || drawStack.nav.lineZoomerActive
+        || sampleListScrolling);
     try {
       for (Sample sample : track.getSamples()) {
         if (sample.visible && sample.getDataType() == Sample.DataType.BAM) {
+          if (sample.isCoverageOnlyMode()) {
+            continue;
+          }
+          // Never open BAM on the FX paint path (blocks gene jump + scrollbar).
+          // Queue a background open once navigation/scroll has settled.
+          if (sample.getBamFile() == null) {
+            if (allowFetch) {
+              org.baseplayer.samples.alignment.BamOpenQueue.get().request(sample);
+            }
+            continue;
+          }
           drawSampleReads(sample, chrom, start, end, rowTopY, rowHeight, coverageFractionH, allowFetch);
         }
       }
@@ -1028,9 +1064,319 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   private static final double SAMPLE_BIGWIG_OVERLAY_ALPHA = 0.65;
   private static final double SAMPLE_BIGWIG_STACK_GAP = 1.0;
+  private static final double SAMPLE_TABLE_STACK_GAP = 1.0;
 
   private boolean canDrawSampleBigWigData(TrackViewportRegistry.VisibleTrackSlot slot) {
     return isSampleBody() && hasVisibleSampleOfType(slot, Sample.DataType.BIGWIG);
+  }
+
+  private boolean canDrawMappedTableData(TrackViewportRegistry.VisibleTrackSlot slot) {
+    return isSampleBody() && hasVisibleSampleOfType(slot, Sample.DataType.TABLE);
+  }
+
+  private void drawMappedTableData(
+      TrackViewportRegistry.VisibleTrackSlot slot, double rowTopY, double rowHeight) {
+    SampleTrack track = resolveSampleTrack(slot);
+    if (track == null || drawStack == null) {
+      return;
+    }
+    List<Sample> tables = new ArrayList<>();
+    for (Sample sample : track.getSamples()) {
+      if (sample.visible
+          && sample.getDataType() == Sample.DataType.TABLE
+          && sample.getMappedTable() != null) {
+        tables.add(sample);
+      }
+    }
+    if (tables.isEmpty()) {
+      return;
+    }
+
+    boolean hasBamOrBigWig = false;
+    for (Sample sample : track.getSamples()) {
+      if (!sample.visible) {
+        continue;
+      }
+      if (sample.getDataType() == Sample.DataType.BAM
+          || sample.getDataType() == Sample.DataType.BIGWIG) {
+        hasBamOrBigWig = true;
+        break;
+      }
+    }
+
+    String chrom = drawStack.getChromosome();
+    double viewStart = drawStack.getViewStart();
+    double viewEnd = drawStack.getViewEnd();
+    double width = getWidth();
+    int laneCount = tables.size();
+    double laneGap = laneCount > 1 ? SAMPLE_TABLE_STACK_GAP : 0.0;
+    double laneHeight;
+    double laneTopBase;
+    if (hasBamOrBigWig) {
+      // Companion overlay: keep a compact band inside the row.
+      double usableH = Math.max(1, rowHeight - 2);
+      double band = Math.max(14, Math.min(usableH * 0.4, 36));
+      if (laneCount == 1) {
+        laneHeight = band;
+        laneTopBase = rowTopY + 2;
+      } else {
+        double totalGap = laneGap * (laneCount - 1);
+        laneHeight = Math.max(10, (band - totalGap) / laneCount);
+        laneTopBase = rowTopY + 2;
+      }
+    } else if (laneCount == 1) {
+      laneHeight = Math.max(12, rowHeight - 2);
+      laneTopBase = rowTopY + 1;
+    } else {
+      double totalGap = laneGap * (laneCount - 1);
+      double laneArea = Math.max(1, rowHeight - 2 - totalGap);
+      laneHeight = Math.max(12, laneArea / laneCount);
+      double usedH = laneHeight * laneCount + totalGap;
+      laneTopBase = rowTopY + (rowHeight - usedH) * 0.5;
+    }
+
+    for (int lane = 0; lane < tables.size(); lane++) {
+      Sample sample = tables.get(lane);
+      org.baseplayer.io.table.MappedTableData table = sample.getMappedTable();
+      List<org.baseplayer.io.table.MappedTableRow> rows =
+          table.rowsOverlapping(chrom, (long) viewStart, (long) viewEnd);
+      double laneY = laneTopBase + lane * (laneHeight + laneGap);
+      drawMappedTableLane(
+          sample, table, rows, 0, laneY, width, laneHeight, viewStart, viewEnd);
+    }
+  }
+
+  /**
+   * Step-plot of table segments with Y scale (total CN or VALUE) and a short legend.
+   */
+  private void drawMappedTableLane(
+      Sample sample,
+      org.baseplayer.io.table.MappedTableData table,
+      List<org.baseplayer.io.table.MappedTableRow> rows,
+      double x,
+      double y,
+      double width,
+      double height,
+      double viewStart,
+      double viewEnd) {
+    if (table == null || width <= 0 || height < 8) {
+      return;
+    }
+    boolean alleleCn = table.hasAlleleCn();
+    boolean hasValue = table.hasValueColumn();
+    double viewLen = Math.max(1e-9, viewEnd - viewStart);
+    double top = y + 2;
+    double usable = Math.max(4, height - 4);
+
+    double dispMin;
+    double dispMax;
+    double midDisplay;
+    String scaleLabel;
+    if (alleleCn) {
+      dispMin = 0;
+      dispMax = 4;
+      midDisplay = 2;
+      scaleLabel = "Total CN";
+      if (rows != null) {
+        for (org.baseplayer.io.table.MappedTableRow row : rows) {
+          double v = mappedTableDisplayValue(row, true, false);
+          if (Double.isFinite(v)) {
+            dispMax = Math.max(dispMax, Math.ceil(v + 0.01));
+          }
+        }
+      }
+      dispMax = Math.min(12, Math.max(4, dispMax));
+    } else if (hasValue) {
+      double min = Double.POSITIVE_INFINITY;
+      double max = Double.NEGATIVE_INFINITY;
+      if (rows != null) {
+        for (org.baseplayer.io.table.MappedTableRow row : rows) {
+          double v = mappedTableDisplayValue(row, false, true);
+          if (!Double.isFinite(v)) {
+            continue;
+          }
+          min = Math.min(min, v);
+          max = Math.max(max, v);
+        }
+      }
+      if (!(max > min) || !Double.isFinite(min)) {
+        min = -1.5;
+        max = 1.5;
+      } else {
+        double pad = Math.max(0.1, (max - min) * 0.08);
+        min -= pad;
+        max += pad;
+      }
+      dispMin = min;
+      dispMax = max;
+      midDisplay = (min <= 0 && max >= 0) ? 0 : (min + max) * 0.5;
+      scaleLabel = "Value";
+    } else {
+      // Interval-only table: still show presence as a midline step, with a note.
+      dispMin = 0;
+      dispMax = 2;
+      midDisplay = 1;
+      scaleLabel = "Segments";
+    }
+
+    Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
+    Color faint = Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.25);
+    // Scale guides/labels need vertical room; skip on narrow lanes.
+    boolean drawScale = height >= 28;
+
+    gc.setLineWidth(1);
+    gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
+    if (drawScale) {
+      if (alleleCn) {
+        for (int cn = (int) Math.ceil(dispMin); cn <= (int) Math.floor(dispMax); cn++) {
+          double frac = (cn - dispMin) / (dispMax - dispMin);
+          double gy = top + usable * (1.0 - frac);
+          gc.setStroke(cn == 2 ? Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.55) : faint);
+          if (cn == 2) {
+            gc.setLineDashes(3, 3);
+          } else {
+            gc.setLineDashes();
+          }
+          gc.strokeLine(x, gy, x + width, gy);
+          gc.setLineDashes();
+          gc.setFill(axis);
+          gc.fillText(String.valueOf(cn), x + 3, gy - 1);
+        }
+      } else {
+        double midY = top + usable * (1.0 - ((midDisplay - dispMin) / (dispMax - dispMin)));
+        midY = Math.max(top, Math.min(top + usable, midY));
+        gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.55));
+        gc.setLineDashes(3, 3);
+        gc.strokeLine(x, midY, x + width, midY);
+        gc.setLineDashes();
+        gc.setStroke(faint);
+        gc.strokeLine(x, top, x + width, top);
+        gc.strokeLine(x, top + usable, x + width, top + usable);
+        gc.setFill(axis);
+        gc.fillText(formatScaleTick(dispMax), x + 3, top + 9);
+        gc.fillText(formatScaleTick(midDisplay), x + 3, midY - 1);
+        gc.fillText(formatScaleTick(dispMin), x + 3, top + usable - 1);
+      }
+
+      // Legend / meaning.
+      gc.setFill(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.85));
+      String legend = alleleCn
+          ? scaleLabel + "  ·  red = LOH (minor≈0)  ·  blue = gain"
+          : (hasValue ? scaleLabel + "  ·  blue = low  ·  red = high" : scaleLabel);
+      String name = sample != null ? sample.getName() : null;
+      if (name != null && !name.isBlank() && name.length() < 40) {
+        legend = name + "  ·  " + legend;
+      }
+      gc.fillText(legend, x + 28, y + 11);
+    }
+
+    if (rows == null || rows.isEmpty()) {
+      gc.setFill(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.6));
+      gc.fillText("No segments in view", x + 28, y + height * 0.55);
+      return;
+    }
+
+    double alpha = sample != null && sample.overlay ? 0.9 : 1.0;
+    gc.setLineWidth(3.0);
+    Double prevEndX = null;
+    Double prevValueY = null;
+    Color prevStroke = null;
+
+    for (org.baseplayer.io.table.MappedTableRow row : rows) {
+      double value = mappedTableDisplayValue(row, alleleCn, hasValue);
+      if (!Double.isFinite(value) && !alleleCn && !hasValue) {
+        value = midDisplay;
+      }
+      if (!Double.isFinite(value)) {
+        continue;
+      }
+      double frac = (value - dispMin) / (dispMax - dispMin);
+      frac = Math.max(0, Math.min(1, frac));
+      double valueY = top + usable * (1.0 - frac);
+      Color stroke = colorForMappedTableStep(row, value, midDisplay, alleleCn, hasValue);
+      stroke = Color.color(stroke.getRed(), stroke.getGreen(), stroke.getBlue(), alpha);
+
+      double x1 = x + ((Math.max(row.start1Based(), viewStart) - viewStart) / viewLen) * width;
+      double x2 = x + ((Math.min(row.end1Based(), viewEnd) - viewStart) / viewLen) * width;
+      if (x2 < x1) {
+        double tmp = x1;
+        x1 = x2;
+        x2 = tmp;
+      }
+      if (x2 - x1 < 1) {
+        x2 = x1 + 1;
+      }
+
+      if (prevEndX != null && prevValueY != null && Math.abs(prevEndX - x1) <= 1.5) {
+        gc.setStroke(prevStroke != null ? prevStroke : stroke);
+        gc.strokeLine(x1, prevValueY, x1, valueY);
+      }
+      gc.setStroke(stroke);
+      gc.strokeLine(x1, valueY, x2, valueY);
+      prevEndX = x2;
+      prevValueY = valueY;
+      prevStroke = stroke;
+    }
+    gc.setLineWidth(1.0);
+  }
+
+  private static double mappedTableDisplayValue(
+      org.baseplayer.io.table.MappedTableRow row, boolean alleleCn, boolean hasValue) {
+    if (alleleCn && row.hasAlleleCn()) {
+      if (row.totalCn() != null && Double.isFinite(row.totalCn())) {
+        return row.totalCn();
+      }
+      return row.minorCn() + row.majorCn();
+    }
+    if (hasValue) {
+      return row.analysisValue();
+    }
+    return Double.NaN;
+  }
+
+  private static Color colorForMappedTableStep(
+      org.baseplayer.io.table.MappedTableRow row,
+      double displayValue,
+      double midDisplay,
+      boolean alleleCn,
+      boolean hasValue) {
+    if (alleleCn && row.hasAlleleCn()) {
+      double minor = row.minorCn();
+      double major = row.majorCn();
+      if (minor <= 0.05 && major <= 0.05) {
+        return Color.rgb(35, 35, 35);
+      }
+      if (minor <= 0.05 && major > 0.05) {
+        return Color.rgb(210, 55, 55); // LOH
+      }
+      if (displayValue > midDisplay + 0.25) {
+        return Color.rgb(45, 95, 210); // gain
+      }
+      if (displayValue < midDisplay - 0.25) {
+        return Color.rgb(110, 55, 170); // loss
+      }
+      return Color.rgb(70, 150, 80); // ~diploid
+    }
+    if (hasValue) {
+      if (displayValue > midDisplay + 1e-6) {
+        return Color.rgb(200, 70, 70);
+      }
+      if (displayValue < midDisplay - 1e-6) {
+        return Color.rgb(55, 100, 200);
+      }
+      return Color.rgb(120, 120, 120);
+    }
+    return Color.rgb(40, 140, 150);
+  }
+
+  private static String formatScaleTick(double v) {
+    if (!Double.isFinite(v)) {
+      return "";
+    }
+    if (Math.abs(v - Math.rint(v)) < 1e-6) {
+      return String.valueOf((long) Math.rint(v));
+    }
+    return String.format(java.util.Locale.ROOT, "%.1f", v);
   }
 
   private void drawSampleBigWigData(
@@ -1209,7 +1555,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (sample.getDataType() != Sample.DataType.BAM) return;
 
     AlignmentFile bamFile = sample.getBamFile();
-    if (bamFile == null) return;
+    if (bamFile == null || bamFile.isCoverageOnlyMode()) return;
 
     boolean isHoverStack      = (drawStack == ServiceRegistry.getInstance().getDrawStackManager().getHoverStack());
     boolean shouldShowLoading = bamFile.isLoading(drawStack) && (isHoverStack || !drawStack.nav.navigating);

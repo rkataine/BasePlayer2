@@ -46,7 +46,7 @@ public class VariantManagerWindow {
 
             Stage stage = new Stage();
             stage.initModality(Modality.NONE);
-            stage.setTitle("Variant Manager");
+            stage.setTitle("Analysis");
             stage.setResizable(true);
             stage.setMinWidth(820);
             stage.setMinHeight(580);
@@ -141,8 +141,76 @@ public class VariantManagerWindow {
     }
 
     public static boolean shouldShowToolbarButton() {
-        // Show whenever a VCF is loaded (including first open / while focused).
-        return VcfManager.getInstance().hasLoadedVcf();
+        if (VcfManager.getInstance().hasLoadedVcf()) {
+            return true;
+        }
+        return hasComparableSignalData();
+    }
+
+    /**
+     * BED scores, BigWig, methylation BAM, or mapped tables (VALUE / allele-CN) —
+     * enough to open Analysis without VCF.
+     */
+    public static boolean hasComparableSignalData() {
+        org.baseplayer.services.SampleRegistry registry =
+            org.baseplayer.services.ServiceRegistry.getInstance().getSampleRegistry();
+        if (registry == null) {
+            return false;
+        }
+        for (org.baseplayer.samples.SampleTrack track : snapshotSampleTracks(registry)) {
+            if (track == null) {
+                continue;
+            }
+            if (org.baseplayer.analysis.source.BedScoreSource.trackHasScoredBed(track)
+                || org.baseplayer.analysis.source.BigWigValueSource.trackHasBigWig(track)
+                || org.baseplayer.analysis.source.BamMethylSource.trackHasMethylBam(track)
+                || org.baseplayer.analysis.source.BedScoreSource.firstBed(track) != null
+                || org.baseplayer.analysis.source.MappedTableValueSource.trackHasValueTable(track)
+                || org.baseplayer.analysis.source.AlleleCnLohValueSource.trackHasAlleleCn(track)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Open Analysis and focus the Signal tab (table / LOH / BigWig comparison).
+     * Safe when the window is already open.
+     */
+    public static void openForSignalAnalysis() {
+        bringToFrontOrOpen();
+        VariantManagerController controller = getCurrentController();
+        if (controller != null) {
+            controller.selectSignalMode();
+            controller.refreshSignalSources();
+        }
+    }
+
+    /**
+     * Index-based copy of the live {@code ObservableList}. Avoids iterator CME when
+     * tracks are added during the same FX pulse as a list-change listener.
+     */
+    private static java.util.List<org.baseplayer.samples.SampleTrack> snapshotSampleTracks(
+            org.baseplayer.services.SampleRegistry registry) {
+        javafx.collections.ObservableList<org.baseplayer.samples.SampleTrack> live =
+            registry.getSampleTracks();
+        for (int attempt = 0; attempt < 6; attempt++) {
+            try {
+                int n = live.size();
+                java.util.ArrayList<org.baseplayer.samples.SampleTrack> copy =
+                    new java.util.ArrayList<>(Math.max(4, n));
+                for (int i = 0; i < n; i++) {
+                    if (i >= live.size()) {
+                        break;
+                    }
+                    copy.add(live.get(i));
+                }
+                return copy;
+            } catch (IndexOutOfBoundsException | java.util.ConcurrentModificationException ignored) {
+                // List mutated mid-copy — retry.
+            }
+        }
+        return java.util.List.of();
     }
 
     public static void bringToFrontOrOpen() {

@@ -5,6 +5,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.baseplayer.components.AppDialog;
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.io.SampleDataManager;
@@ -19,13 +20,13 @@ import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.ui.MenuIcons;
 import org.baseplayer.ui.theme.AppTheme;
-import org.baseplayer.services.ThreadRunner;
 import org.baseplayer.services.TrackViewportRegistry;
 import org.baseplayer.utils.DrawColors;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Cursor;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
@@ -63,9 +64,19 @@ public class SampleTrackListPanel extends TrackListPanel {
   private static final double META_TEXT_MIN_ROW =
       SampleTrackControls.MIN_ROW_HEIGHT_FOR_SIDEBAR;
 
+  private static final double ROW_REORDER_DRAG_THRESHOLD_PX = 5;
+
   private final SampleRegistry sampleRegistry;
   private final Set<Integer> selectedTrackIndices = new LinkedHashSet<>();
   private int selectionAnchorIndex = -1;
+
+  private boolean rowReorderArmed;
+  private boolean rowReorderDragging;
+  private boolean suppressClickFromReorder;
+  private double rowReorderStartY;
+  private int rowReorderPressBackingIndex = -1;
+  /** Final backing-list index for the moved block start while dragging, or -1. */
+  private int rowReorderInsertIndex = -1;
 
   public SampleTrackListPanel(StackPane parent) {
     this(parent, ServiceRegistry.getInstance().getSampleRegistry());
@@ -76,12 +87,166 @@ public class SampleTrackListPanel extends TrackListPanel {
     this.sampleRegistry = sampleRegistry;
     sampleRegistry.setTrackIconActionHandler(this::handleTrackRowIconClick);
     sampleRegistry.sampleGroupsRevisionProperty().addListener((obs, oldVal, newVal) -> {
-      if (Platform.isFxApplicationThread()) {
+      Runnable refresh = () -> {
         draw();
+        onAfterVisibleTrackRangeChanged();
+      };
+      if (Platform.isFxApplicationThread()) {
+        refresh.run();
       } else {
-        Platform.runLater(this::draw);
+        Platform.runLater(refresh);
       }
     });
+    setupRowReorderHandlers();
+  }
+
+  private void setupRowReorderHandlers() {
+    reactiveCanvas.addEventFilter(MouseEvent.MOUSE_PRESSED, this::onRowReorderPressed);
+    reactiveCanvas.addEventFilter(MouseEvent.MOUSE_DRAGGED, this::onRowReorderDragged);
+    reactiveCanvas.addEventFilter(MouseEvent.MOUSE_RELEASED, this::onRowReorderReleased);
+    reactiveCanvas.addEventFilter(MouseEvent.MOUSE_CLICKED, event -> {
+      if (suppressClickFromReorder) {
+        suppressClickFromReorder = false;
+        event.consume();
+      }
+    });
+  }
+
+  private void onRowReorderPressed(MouseEvent event) {
+    if (!event.isPrimaryButtonDown() || suppressRowHover(event.getX(), event.getY())) {
+      return;
+    }
+    int backingTrackIndex = findRowAt(event.getY());
+    if (backingTrackIndex < 0) {
+      return;
+    }
+    if (findIconAt(event.getX(), event.getY(), backingTrackIndex) != null) {
+      return;
+    }
+    rowReorderArmed = true;
+    rowReorderDragging = false;
+    rowReorderStartY = event.getY();
+    rowReorderPressBackingIndex = backingTrackIndex;
+    rowReorderInsertIndex = -1;
+  }
+
+  private void onRowReorderDragged(MouseEvent event) {
+    if (!rowReorderArmed && !rowReorderDragging) {
+      return;
+    }
+    if (!rowReorderDragging) {
+      if (Math.abs(event.getY() - rowReorderStartY) < ROW_REORDER_DRAG_THRESHOLD_PX) {
+        return;
+      }
+      rowReorderDragging = true;
+      reactiveCanvas.setCursor(Cursor.CLOSED_HAND);
+    }
+    rowReorderInsertIndex = computeReorderInsertIndex(event.getY());
+    event.consume();
+    drawReactive();
+  }
+
+  private void onRowReorderReleased(MouseEvent event) {
+    if (!rowReorderArmed && !rowReorderDragging) {
+      return;
+    }
+    boolean didDrag = rowReorderDragging;
+    int insertIndex = rowReorderInsertIndex;
+    int pressIndex = rowReorderPressBackingIndex;
+    rowReorderArmed = false;
+    rowReorderDragging = false;
+    rowReorderPressBackingIndex = -1;
+    rowReorderInsertIndex = -1;
+    reactiveCanvas.setCursor(Cursor.DEFAULT);
+
+    if (!didDrag) {
+      return;
+    }
+    suppressClickFromReorder = true;
+    event.consume();
+
+    List<SampleTrack> moving = tracksForReorder(pressIndex);
+    if (!moving.isEmpty() && insertIndex >= 0) {
+      sampleRegistry.moveSampleTracks(moving, insertIndex);
+      // Selection indices follow reindex via track identity.
+      resyncSelectionAfterReorder(moving);
+      draw();
+      onAfterVisibleTrackRangeChanged();
+    } else {
+      drawReactive();
+    }
+  }
+
+  /** Tracks to move: current multi-selection, or the pressed row if it wasn't selected. */
+  private List<SampleTrack> tracksForReorder(int pressBackingIndex) {
+    if (pressBackingIndex >= 0 && !selectedTrackIndices.contains(pressBackingIndex)) {
+      if (pressBackingIndex < sampleRegistry.getSampleTracks().size()) {
+        return List.of(sampleRegistry.getSampleTracks().get(pressBackingIndex));
+      }
+      return List.of();
+    }
+    return selectedTracksInListOrder();
+  }
+
+  private void resyncSelectionAfterReorder(List<SampleTrack> tracks) {
+    selectedTrackIndices.clear();
+    for (SampleTrack track : tracks) {
+      int index = track.getRegistryIndex();
+      if (index >= 0) {
+        selectedTrackIndices.add(index);
+      }
+    }
+    selectionAnchorIndex = selectedTrackIndices.isEmpty()
+        ? -1
+        : selectedTrackIndices.iterator().next();
+  }
+
+  /**
+   * Map pointer Y to the final backing-list index where the moved block should start
+   * (insert-before using the row midpoint).
+   */
+  private int computeReorderInsertIndex(double y) {
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    int trackCount = sampleRegistry.getSampleTracks().size();
+    if (displayed.isEmpty() || trackCount <= 0) {
+      return 0;
+    }
+    double rowHeight = sampleRegistry.getTrackRowHeightPixels();
+    if (rowHeight <= 0) {
+      return 0;
+    }
+    int slot = findVisibleSlotIndexAtVerticalCoordinate(y);
+    if (slot < 0) {
+      double scroll = sampleRegistry.getVerticalScrollOffsetPixels();
+      if (y + scroll <= 0) {
+        return displayed.get(0);
+      }
+      int lastBacking = displayed.get(displayed.size() - 1);
+      return Math.min(trackCount, lastBacking + 1);
+    }
+    double scroll = sampleRegistry.getVerticalScrollOffsetPixels();
+    double rowTop = slot * rowHeight - scroll;
+    boolean after = (y - rowTop) >= rowHeight * 0.5;
+    int insertDisplayedSlot = after ? slot + 1 : slot;
+    if (insertDisplayedSlot <= 0) {
+      return displayed.get(0);
+    }
+    if (insertDisplayedSlot >= displayed.size()) {
+      int lastBacking = displayed.get(displayed.size() - 1);
+      return Math.min(trackCount, lastBacking + 1);
+    }
+    return displayed.get(insertDisplayedSlot);
+  }
+
+  private List<SampleTrack> selectedTracksInListOrder() {
+    List<SampleTrack> tracks = new ArrayList<>();
+    for (SampleTrack track : sampleRegistry.getSampleTracks()) {
+      int index = track.getRegistryIndex();
+      if (selectedTrackIndices.contains(index)) {
+        tracks.add(track);
+      }
+    }
+    return tracks;
   }
 
   @Override
@@ -141,9 +306,7 @@ public class SampleTrackListPanel extends TrackListPanel {
       for (Sample sample : sampleTrack.getSamples()) {
         if (sample.isSuspended()) {
           sample.resume();
-          ThreadRunner.RunnerTask readTask =
-              ThreadRunner.get().track("Loading reads: " + sample.getName(), sample::cancelAndSuspend);
-          sample.setOnFirstLoadComplete(readTask::complete);
+          // AlignmentFile tracks "Loading reads" for each fetch (cancel stops that fetch).
         }
       }
       draw();
@@ -362,6 +525,12 @@ public class SampleTrackListPanel extends TrackListPanel {
   @Override
   protected void drawHoveredTrackRowReactiveOverlay(
       double panelWidthPixels, double panelHeightPixels) {
+    double contentRight = Math.max(0, panelWidthPixels - getRightUiInsetPixels());
+    if (rowReorderDragging && rowReorderInsertIndex >= 0) {
+      drawReorderInsertLine(panelHeightPixels, contentRight);
+      return;
+    }
+
     if (hoverIndex < 0 || hoverIndex >= sampleRegistry.getSampleTracks().size()) {
       return;
     }
@@ -377,7 +546,6 @@ public class SampleTrackListPanel extends TrackListPanel {
       return;
     }
 
-    double contentRight = Math.max(0, panelWidthPixels - getRightUiInsetPixels());
     if (isSidebarSqueezed()) {
       SampleTrack sampleTrack = sampleRegistry.getSampleTracks().get(hoverIndex);
       String displayName = sampleTrack.getDisplayName();
@@ -408,6 +576,45 @@ public class SampleTrackListPanel extends TrackListPanel {
     if (hoveredIcon != null) {
       drawIconGlow(hoveredIcon, hoverIndex);
     }
+  }
+
+  private void drawReorderInsertLine(double panelHeightPixels, double contentRight) {
+    double rowHeight = sampleRegistry.getTrackRowHeightPixels();
+    if (rowHeight <= 0) {
+      return;
+    }
+    List<Integer> displayed = sampleRegistry.getDisplayedTrackIndices();
+    if (displayed.isEmpty()) {
+      return;
+    }
+    int insertBacking = rowReorderInsertIndex;
+    int insertSlot;
+    if (insertBacking >= sampleRegistry.getSampleTracks().size()) {
+      insertSlot = displayed.size();
+    } else {
+      insertSlot = sampleRegistry.getDisplayedSlotForTrackIndex(insertBacking);
+      if (insertSlot < 0) {
+        // Target is filtered out — fall back to nearest displayed boundary.
+        insertSlot = 0;
+        for (int i = 0; i < displayed.size(); i++) {
+          if (displayed.get(i) >= insertBacking) {
+            insertSlot = i;
+            break;
+          }
+          insertSlot = i + 1;
+        }
+      }
+    }
+    double scroll = sampleRegistry.getVerticalScrollOffsetPixels();
+    double lineY = Math.floor(insertSlot * rowHeight - scroll) + 0.5;
+    if (lineY < -1 || lineY > panelHeightPixels + 1) {
+      return;
+    }
+    reactiveGc.setStroke(AppTheme.chrome().accent());
+    reactiveGc.setLineWidth(2);
+    reactiveGc.strokeLine(0, lineY, contentRight, lineY);
+    reactiveGc.setFill(AppTheme.chrome().accent());
+    reactiveGc.fillOval(-1, lineY - 3.5, 7, 7);
   }
 
   /**
@@ -623,12 +830,99 @@ public class SampleTrackListPanel extends TrackListPanel {
         "-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
     addOpenedFilesMenuItems(settingsMenu, track, sampleIndex);
     addSignalLayoutMenuItems(settingsMenu, track);
+    addMoveMenuItems(settingsMenu, track, sampleIndex);
     addSampleGroupMenuItems(settingsMenu, track, sampleIndex);
     addMethylationSettings(settingsMenu, track);
     addHaplotypeInformation(settingsMenu, track);
     addReadRenderingSettings(settingsMenu, track);
     addApplySettingsToAllItem(settingsMenu, track);
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  private void addMoveMenuItems(ContextMenu settingsMenu, SampleTrack track, int sampleIndex) {
+    if (sampleRegistry.getSampleTracks().size() <= 1) {
+      return;
+    }
+    settingsMenu.getItems().add(new SeparatorMenuItem());
+
+    List<SampleTrack> targets = selectedTrackIndices.contains(sampleIndex)
+            && selectedTrackIndices.size() > 1
+        ? selectedTracksInListOrder()
+        : List.of(track);
+    int minIndex = Integer.MAX_VALUE;
+    int maxIndex = -1;
+    for (SampleTrack target : targets) {
+      int index = target.getRegistryIndex();
+      if (index >= 0) {
+        minIndex = Math.min(minIndex, index);
+        maxIndex = Math.max(maxIndex, index);
+      }
+    }
+    if (minIndex == Integer.MAX_VALUE) {
+      return;
+    }
+
+    int trackCount = sampleRegistry.getSampleTracks().size();
+    boolean canMoveUp = minIndex > 0;
+    boolean canMoveDown = maxIndex >= 0 && maxIndex < trackCount - 1;
+
+    VBox box = new VBox(4);
+    box.setPadding(new Insets(4, 8, 4, 8));
+    Label header = new Label(targets.size() > 1
+        ? "Move " + targets.size() + " samples"
+        : "Move sample");
+    header.setStyle(
+        "-fx-text-fill: " + AppTheme.chrome().mutedHex()
+            + "; -fx-font-size: 10; -fx-font-weight: bold;");
+    box.getChildren().add(header);
+
+    HBox row = new HBox(4);
+    row.setAlignment(Pos.CENTER_LEFT);
+    Button toTop = new Button("Top");
+    styleMenuActionButton(toTop);
+    toTop.setDisable(!canMoveUp);
+    toTop.setOnAction(e -> {
+      sampleRegistry.moveSampleTracks(targets, 0);
+      resyncSelectionAfterReorder(targets);
+      draw();
+      onAfterVisibleTrackRangeChanged();
+      settingsMenu.hide();
+    });
+    Button up = new Button("Up");
+    styleMenuActionButton(up);
+    up.setDisable(!canMoveUp);
+    int moveUpBefore = minIndex - 1;
+    up.setOnAction(e -> {
+      sampleRegistry.moveSampleTracks(targets, moveUpBefore);
+      resyncSelectionAfterReorder(targets);
+      draw();
+      onAfterVisibleTrackRangeChanged();
+      settingsMenu.hide();
+    });
+    Button down = new Button("Down");
+    styleMenuActionButton(down);
+    down.setDisable(!canMoveDown);
+    int moveDownBefore = maxIndex + 2;
+    down.setOnAction(e -> {
+      sampleRegistry.moveSampleTracks(targets, moveDownBefore);
+      resyncSelectionAfterReorder(targets);
+      draw();
+      onAfterVisibleTrackRangeChanged();
+      settingsMenu.hide();
+    });
+    Button toBottom = new Button("Bottom");
+    styleMenuActionButton(toBottom);
+    toBottom.setDisable(!canMoveDown);
+    toBottom.setOnAction(e -> {
+      sampleRegistry.moveSampleTracks(targets, trackCount);
+      resyncSelectionAfterReorder(targets);
+      draw();
+      onAfterVisibleTrackRangeChanged();
+      settingsMenu.hide();
+    });
+    row.getChildren().addAll(toTop, up, down, toBottom);
+    box.getChildren().add(row);
+    settingsMenu.getItems().add(new CustomMenuItem(box, false));
   }
 
   private void addSignalLayoutMenuItems(ContextMenu settingsMenu, SampleTrack track) {
@@ -864,7 +1158,7 @@ public class SampleTrackListPanel extends TrackListPanel {
   }
 
   private void addMethylationSettings(ContextMenu settingsMenu, SampleTrack track) {
-    if (track.getFirstBam() == null) {
+    if (!track.hasBamSample()) {
       return;
     }
     settingsMenu.getItems().add(new SeparatorMenuItem());
@@ -883,9 +1177,8 @@ public class SampleTrackListPanel extends TrackListPanel {
     hideMismatches.setStyle("-fx-font-size: 11;");
     hideMismatches.selectedProperty().addListener((observable, oldValue, newValue) -> {
       for (Sample sample : track.getSamples()) {
-        AlignmentFile alignmentFile = sample.getBamFile();
-        if (alignmentFile != null) {
-          alignmentFile.setSuppressMethylMismatches(newValue);
+        if (sample.getDataType() == Sample.DataType.BAM) {
+          sample.setSuppressMethylMismatches(newValue);
         }
       }
       onAfterVisibleTrackRangeChanged();
@@ -893,7 +1186,33 @@ public class SampleTrackListPanel extends TrackListPanel {
     Label information =
         new Label("Enable for emSeq/WGBS data to hide C→T conversions");
     information.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
-    methylationBox.getChildren().addAll(label, hideMismatches, information);
+
+    boolean anyCoverageOnly = false;
+    for (Sample sample : track.getSamples()) {
+      if (sample.isCoverageOnlyMode()) {
+        anyCoverageOnly = true;
+        break;
+      }
+    }
+    CheckBox coverageOnly =
+        new CheckBox("Coverage only (skip reads — saves memory)");
+    coverageOnly.setSelected(anyCoverageOnly);
+    coverageOnly.getStyleClass().add("dark-checkbox");
+    coverageOnly.setStyle("-fx-font-size: 11;");
+    coverageOnly.selectedProperty().addListener((observable, oldValue, newValue) -> {
+      for (Sample sample : track.getSamples()) {
+        if (sample.getDataType() == Sample.DataType.BAM) {
+          sample.setCoverageOnlyMode(Boolean.TRUE.equals(newValue));
+        }
+      }
+      onAfterVisibleTrackRangeChanged();
+    });
+    Label coverageOnlyInfo =
+        new Label("Keeps coverage + methylation lines; does not pack read piles");
+    coverageOnlyInfo.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
+
+    methylationBox.getChildren().addAll(
+        label, hideMismatches, information, coverageOnly, coverageOnlyInfo);
     settingsMenu.getItems().add(new CustomMenuItem(methylationBox, false));
   }
 
@@ -915,8 +1234,14 @@ public class SampleTrackListPanel extends TrackListPanel {
   }
 
   private void addReadRenderingSettings(ContextMenu settingsMenu, SampleTrack track) {
-    AlignmentFile primaryAlignmentFile = track.getFirstBam();
-    if (primaryAlignmentFile == null) {
+    Sample primaryBam = null;
+    for (Sample sample : track.getSamples()) {
+      if (sample.getDataType() == Sample.DataType.BAM) {
+        primaryBam = sample;
+        break;
+      }
+    }
+    if (primaryBam == null) {
       return;
     }
     settingsMenu.getItems().add(new SeparatorMenuItem());
@@ -930,16 +1255,15 @@ public class SampleTrackListPanel extends TrackListPanel {
     Label colorLabel = new Label("Read color:");
     colorLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
     ComboBox<ReadColorMode> colorComboBox = new ComboBox<>();
-    colorComboBox.getItems().setAll(primaryAlignmentFile.getAvailableColorModes());
-    colorComboBox.setValue(primaryAlignmentFile.getReadColorMode());
+    colorComboBox.getItems().setAll(ReadColorMode.values());
+    colorComboBox.setValue(primaryBam.getReadColorMode());
     colorComboBox.setPrefWidth(190);
     PopupComboBoxStyler.styleDarkComboBox(colorComboBox, settingsMenu);
     colorComboBox.valueProperty().addListener((observable, oldMode, newMode) -> {
       if (newMode != null) {
         for (Sample sample : track.getSamples()) {
-          AlignmentFile alignmentFile = sample.getBamFile();
-          if (alignmentFile != null) {
-            alignmentFile.setReadColorMode(newMode);
+          if (sample.getDataType() == Sample.DataType.BAM) {
+            sample.setReadColorMode(newMode);
           }
         }
         onAfterVisibleTrackRangeChanged();
@@ -952,15 +1276,14 @@ public class SampleTrackListPanel extends TrackListPanel {
     stackingLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 10;");
     ComboBox<AlignmentFile.ReadStackingMode> stackingComboBox = new ComboBox<>();
     stackingComboBox.getItems().setAll(AlignmentFile.ReadStackingMode.values());
-    stackingComboBox.setValue(primaryAlignmentFile.getReadStackingMode());
+    stackingComboBox.setValue(primaryBam.getReadStackingMode());
     stackingComboBox.setPrefWidth(190);
     PopupComboBoxStyler.styleDarkComboBox(stackingComboBox, settingsMenu);
     stackingComboBox.valueProperty().addListener((observable, oldMode, newMode) -> {
       if (newMode != null) {
         for (Sample sample : track.getSamples()) {
-          AlignmentFile alignmentFile = sample.getBamFile();
-          if (alignmentFile != null) {
-            alignmentFile.setReadStackingMode(newMode);
+          if (sample.getDataType() == Sample.DataType.BAM) {
+            sample.setReadStackingMode(newMode);
           }
         }
         onAfterVisibleTrackRangeChanged();
@@ -973,13 +1296,6 @@ public class SampleTrackListPanel extends TrackListPanel {
     stackingInformation.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
     renderingBox.getChildren().addAll(
         renderingLabel, colorRow, stackingRow, stackingInformation);
-    if (primaryAlignmentFile.getDetectedReadGroups().size() > 1) {
-      Label readGroupInformation = new Label(
-          "Read groups: " + String.join(", ", primaryAlignmentFile.getDetectedReadGroups()));
-      readGroupInformation.setStyle("-fx-text-fill: " + AppTheme.chrome().mutedHex() + "; -fx-font-size: 9;");
-      readGroupInformation.setWrapText(true);
-      renderingBox.getChildren().add(readGroupInformation);
-    }
     settingsMenu.getItems().add(new CustomMenuItem(renderingBox, false));
   }
 
@@ -993,13 +1309,16 @@ public class SampleTrackListPanel extends TrackListPanel {
     MenuItem bedItem = new MenuItem("Add BED");
     MenuIcons.bed(bedItem);
     bedItem.setOnAction(event -> SampleDataManager.addBedToTrack(sampleIndex));
+    MenuItem tableItem = new MenuItem("Add table / segments…");
+    MenuIcons.bed(tableItem);
+    tableItem.setOnAction(event -> SampleDataManager.addTableToTrack(sampleIndex));
     MenuItem vcfItem = new MenuItem("Add VCF");
     MenuIcons.vcf(vcfItem);
     vcfItem.setOnAction(event -> SampleDataManager.addVcfToTrack(sampleIndex));
     MenuItem ab1Item = new MenuItem("Add AB1 / Sanger");
     MenuIcons.ab1(ab1Item);
     ab1Item.setOnAction(event -> SampleDataManager.addAb1ToTrack(sampleIndex));
-    addMenu.getItems().addAll(vcfItem, bamItem, bedItem, ab1Item);
+    addMenu.getItems().addAll(vcfItem, bamItem, bedItem, tableItem, ab1Item);
     addMenu.show(canvas, screenX, screenY);
   }
 
@@ -1009,10 +1328,19 @@ public class SampleTrackListPanel extends TrackListPanel {
     dialog.setTitle("Rename Track");
     dialog.setHeaderText("Enter new name for this individual:");
     dialog.setContentText("Name:");
+    if (canvas != null && canvas.getScene() != null && canvas.getScene().getWindow() != null) {
+      dialog.initOwner(canvas.getScene().getWindow());
+    }
     dialog.getDialogPane().setStyle("-fx-background-color: " + AppTheme.chrome().panelHex() + ";");
     dialog.getDialogPane().lookup(".content.label").setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + ";");
     dialog.getDialogPane().lookup(".header-panel")
         .setStyle("-fx-background-color: " + AppTheme.chrome().elevatedHex() + ";");
+    dialog.setOnShown(e -> {
+      Window w = dialog.getDialogPane().getScene() != null
+          ? dialog.getDialogPane().getScene().getWindow()
+          : null;
+      AppDialog.scheduleInputFocus(w, dialog.getEditor(), true);
+    });
     dialog.showAndWait().ifPresent(newName -> {
       if (!newName.trim().isEmpty()) {
         track.setCustomName(newName.trim());

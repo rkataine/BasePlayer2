@@ -277,10 +277,6 @@ VBox {
 
 /* ── Start Hub ───────────────────────────────────────────────────────────── */
 
-.start-hub-backdrop {
-  -fx-background-color: rgba(8, 10, 12, 0.72);
-}
-
 .start-hub-panel {
   -fx-background-color: linear-gradient(to bottom, #2a2e33 0%, #1f2328 55%, #1a1d21 100%);
   -fx-background-radius: 10;

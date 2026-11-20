@@ -1,6 +1,7 @@
 package org.baseplayer.variant.ui;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.analysis.GroupStatExcelExport;
 import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
@@ -63,6 +64,7 @@ import java.nio.file.Path;
 import java.util.*;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
@@ -141,6 +143,15 @@ public class VariantManagerController implements Initializable {
     private VariantClassWorkspace svWorkspace;
 
     private TabPane pointToolTabPane;
+    private Tab signalModeTab;
+    private TabPane signalToolTabPane;
+    private org.baseplayer.analysis.ui.SignalAnalysisWorkspace signalWorkspace;
+    private Tab pointEnrichmentTab;
+    private Tab svEnrichmentTab;
+    private Tab pointGroupResultsTab;
+    private Tab svGroupResultsTab;
+    private org.baseplayer.analysis.ui.MutationEnrichmentPanel pointEnrichmentPanel;
+    private org.baseplayer.analysis.ui.MutationEnrichmentPanel svEnrichmentPanel;
     private TabPane svToolTabPane;
     private Tab pointFiltersTab;
     private Tab svFiltersTab;
@@ -227,6 +238,10 @@ public class VariantManagerController implements Initializable {
     private boolean pendingOnDemandFieldReload;
     /** Debounce live point/LOH table search (filter + gene-group rebuild). */
     private Timeline tableSearchDebounceTimer;
+    /** Last results tab that received point-mode search (clear others only on change). */
+    private Tab lastPointSearchTab;
+    /** Last SV results tab that received search. */
+    private Tab lastSvSearchTab;
     /** Debounce live SV table search. */
     private Timeline svTableSearchDebounceTimer;
     private volatile boolean rebuildRunning = false;
@@ -250,6 +265,8 @@ public class VariantManagerController implements Initializable {
         final Tab tab;
         final NestedPanel panel;
         String titleBase;
+        /** Unfiltered groups from last table rebuild (search restores from this). */
+        List<GeneGroup> baseGroups = List.of();
         List<GeneGroup> lastGroups = List.of();
 
         AnnotationFeatureTabSlot(BedTrack track, Tab tab, NestedPanel panel, String titleBase) {
@@ -387,18 +404,194 @@ public class VariantManagerController implements Initializable {
         BedVariantAnnotation.uiPulseProperty().addListener(annotationUiPulseListener);
         if (tableSearchField != null) {
             tableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
-                if (variantTable != null) {
-                    variantTable.rememberSearchQuery(newVal);
-                }
-                if (lohVariantTable != null) {
-                    lohVariantTable.rememberSearchQuery(newVal);
-                }
+                rememberPointSearchQuery(newVal);
                 schedulePointTableSearch();
             });
+        }
+        if (resultsTabPane != null) {
+            resultsTabPane.getSelectionModel().selectedItemProperty().addListener(
+                (obs, oldTab, newTab) -> applyPointTableSearchNow());
         }
         setupExcelExportButton(excelExportButton, false);
 
         restructureModeWorkspaces();
+        installAnalysisExtensions();
+    }
+
+    /**
+     * Signal mode workspace + Point/SV Group comparison tabs.
+     * All sample groups are compared automatically (no group-picker chrome).
+     */
+    private void installAnalysisExtensions() {
+        org.baseplayer.analysis.ComparisonContext.get().ensureBound();
+        org.baseplayer.analysis.ComparisonContext.get().loadFromDocument(
+            org.baseplayer.project.ProjectSessionState.get().getDocument());
+
+        if (filterTabPane != null) {
+            // Drop legacy Expression / Methylation / Signal comparison tabs.
+            filterTabPane.getTabs().removeIf(t ->
+                t != null && ("Expression".equals(t.getText())
+                    || "Methylation".equals(t.getText())
+                    || "Signal comparison".equals(t.getText())));
+        }
+
+        installSignalModeWorkspace();
+        installMutationGroupComparisonTabs();
+    }
+
+    /**
+     * Point/SV tool-tab run controls, with results hosted in the variant results TabPane
+     * (same pattern as Signal → Signals table).
+     */
+    private void installMutationGroupComparisonTabs() {
+        if (pointToolTabPane != null && pointEnrichmentTab == null) {
+            pointEnrichmentPanel = new org.baseplayer.analysis.ui.MutationEnrichmentPanel(
+                org.baseplayer.analysis.AnalysisMode.MUTATIONS_POINT);
+            pointEnrichmentTab = new Tab("Group comparison", pointEnrichmentPanel);
+            pointEnrichmentTab.setClosable(false);
+            pointToolTabPane.getTabs().add(pointEnrichmentTab);
+
+            pointGroupResultsTab = new Tab(
+                "Group comparison", pointEnrichmentPanel.getResultTable());
+            pointGroupResultsTab.setClosable(false);
+            pointEnrichmentPanel.setResultsTab(pointGroupResultsTab);
+            if (resultsTabPane != null && !resultsTabPane.getTabs().contains(pointGroupResultsTab)) {
+                resultsTabPane.getTabs().add(pointGroupResultsTab);
+            }
+            pointEnrichmentPanel.setOnResultReady(result -> {
+                if (resultsTabPane != null && pointGroupResultsTab != null) {
+                    if (!resultsTabPane.getTabs().contains(pointGroupResultsTab)) {
+                        resultsTabPane.getTabs().add(pointGroupResultsTab);
+                    }
+                    resultsTabPane.getSelectionModel().select(pointGroupResultsTab);
+                }
+            });
+        } else if (pointEnrichmentTab != null) {
+            pointEnrichmentTab.setText("Group comparison");
+        }
+
+        if (svToolTabPane != null && svEnrichmentTab == null) {
+            svEnrichmentPanel = new org.baseplayer.analysis.ui.MutationEnrichmentPanel(
+                org.baseplayer.analysis.AnalysisMode.MUTATIONS_SV);
+            svEnrichmentTab = new Tab("Group comparison", svEnrichmentPanel);
+            svEnrichmentTab.setClosable(false);
+            svToolTabPane.getTabs().add(svEnrichmentTab);
+
+            svGroupResultsTab = new Tab(
+                "Group comparison", svEnrichmentPanel.getResultTable());
+            svGroupResultsTab.setClosable(false);
+            svEnrichmentPanel.setResultsTab(svGroupResultsTab);
+            TabPane svResults = svResultsTabPane != null ? svResultsTabPane : resultsTabPane;
+            if (svResults != null && !svResults.getTabs().contains(svGroupResultsTab)) {
+                svResults.getTabs().add(svGroupResultsTab);
+            }
+            final TabPane svResultsFinal = svResults;
+            svEnrichmentPanel.setOnResultReady(result -> {
+                if (svResultsFinal != null && svGroupResultsTab != null) {
+                    if (!svResultsFinal.getTabs().contains(svGroupResultsTab)) {
+                        svResultsFinal.getTabs().add(svGroupResultsTab);
+                    }
+                    svResultsFinal.getSelectionModel().select(svGroupResultsTab);
+                }
+            });
+        } else if (svEnrichmentTab != null) {
+            svEnrichmentTab.setText("Group comparison");
+        }
+
+        org.baseplayer.analysis.MutationGroupComparisonRunner.setAnnotateAllRunningCheck(
+            this::isAllChromosomeAnnotationRunning);
+    }
+
+    /** Peer mode: Signal Filters | Group comparison above a Signals results table. */
+    private void installSignalModeWorkspace() {
+        if (filterTabPane == null) {
+            return;
+        }
+        if (signalModeTab != null && filterTabPane.getTabs().contains(signalModeTab)) {
+            return;
+        }
+        if (signalWorkspace == null) {
+            signalWorkspace = new org.baseplayer.analysis.ui.SignalAnalysisWorkspace();
+        }
+        signalWorkspace.setOnResultUpdated(result -> updateExcelExportVisibilityFromSignal());
+
+        signalToolTabPane = new TabPane();
+        signalToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        signalToolTabPane.getStyleClass().add("filter-tabs");
+
+        Tab signalFiltersTab = new Tab("Signal Filters", signalWorkspace.createFiltersPane());
+        signalFiltersTab.setClosable(false);
+        Tab signalGroupTab = new Tab("Group comparison", signalWorkspace.createComparisonPane());
+        signalGroupTab.setClosable(false);
+        signalToolTabPane.getTabs().addAll(signalFiltersTab, signalGroupTab);
+
+        TabPane signalResultsTabs = new TabPane();
+        signalResultsTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        signalResultsTabs.getStyleClass().add("results-tabs");
+        Tab signalsTableTab = new Tab("Signals", signalWorkspace.getResultTable());
+        signalsTableTab.setClosable(false);
+        signalResultsTabs.getTabs().add(signalsTableTab);
+
+        VBox resultsArea = new VBox(signalResultsTabs);
+        resultsArea.getStyleClass().add("variant-table-area");
+        VBox.setVgrow(signalResultsTabs, Priority.ALWAYS);
+
+        SplitPane signalSplit = new SplitPane(signalToolTabPane, resultsArea);
+        signalSplit.setOrientation(javafx.geometry.Orientation.VERTICAL);
+        signalSplit.setDividerPositions(0.38);
+        signalSplit.getStyleClass().add("variant-manager-split");
+        signalToolTabPane.setMinHeight(48);
+        resultsArea.setMinHeight(120);
+        SplitPane.setResizableWithParent(signalToolTabPane, true);
+        SplitPane.setResizableWithParent(resultsArea, true);
+        wireResultsExpandDivider(signalSplit);
+
+        signalModeTab = new Tab("Signal", signalSplit);
+        signalModeTab.setClosable(false);
+        if (!filterTabPane.getTabs().contains(signalModeTab)) {
+            filterTabPane.getTabs().add(signalModeTab);
+        }
+    }
+
+    /** Focus the Signal mode tab (table LOH / numeric group comparison). */
+    public void selectSignalMode() {
+        if (filterTabPane == null) {
+            return;
+        }
+        installSignalModeWorkspace();
+        if (signalModeTab != null && filterTabPane.getTabs().contains(signalModeTab)) {
+            filterTabPane.getSelectionModel().select(signalModeTab);
+        }
+        if (signalToolTabPane != null && !signalToolTabPane.getTabs().isEmpty()) {
+            // Prefer Group comparison when tables are ready to run.
+            if (signalToolTabPane.getTabs().size() > 1) {
+                signalToolTabPane.getSelectionModel().select(1);
+            }
+        }
+    }
+
+    /** Refresh Signal Value kinds after opening BAM companions / tables. */
+    public void refreshSignalSources() {
+        if (signalWorkspace == null) {
+            installSignalModeWorkspace();
+        }
+        if (signalWorkspace != null) {
+            signalWorkspace.refreshFromData();
+        }
+        updateExcelExportVisibilityFromSignal();
+    }
+
+    private void updateExcelExportVisibilityFromSignal() {
+        boolean hasGroupSheets =
+            !org.baseplayer.analysis.GroupStatExcelExport.sheetSourcesFromSession().isEmpty();
+        if (!hasGroupSheets) {
+            return;
+        }
+        // Signal-only sessions have no point/SV rows; still expose Excel for group sheets.
+        setExcelExportButtonVisible(excelExportButton, true);
+        if (svExcelExportButton != null) {
+            setExcelExportButtonVisible(svExcelExportButton, true);
+        }
     }
 
     /** Ordered Point then SV workspaces that have been assembled. */
@@ -415,7 +608,7 @@ public class VariantManagerController implements Initializable {
 
     /**
      * Nest Filters / Sample Comparison / Control under each mode workspace.
-     * Outer {@link #filterTabPane} becomes Point | SV only.
+     * Outer {@link #filterTabPane} becomes Point | SV (Signal is added afterward).
      */
     private void restructureModeWorkspaces() {
         if (filterTabPane == null || pointMainSplitPane == null || svMainSplitPane == null) {
@@ -641,11 +834,14 @@ public class VariantManagerController implements Initializable {
         }
         if (svTableSearchField != null) {
             svTableSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
-                if (svVariantTable != null) {
-                    svVariantTable.rememberSearchQuery(newVal);
-                }
+                rememberSvSearchQuery(newVal);
                 scheduleSvTableSearch();
             });
+        }
+        TabPane svResults = svResultsTabPane != null ? svResultsTabPane : resultsTabPane;
+        if (svResults != null) {
+            svResults.getSelectionModel().selectedItemProperty().addListener(
+                (obs, oldTab, newTab) -> applySvTableSearchNow());
         }
         setupExcelExportButton(svExcelExportButton, true);
 
@@ -744,25 +940,242 @@ public class VariantManagerController implements Initializable {
         }
     }
 
-    /** Apply debounced point (+ LOH) table search; feature tabs refresh after groups bind. */
-    private void applyPointTableSearchNow() {
-        String q = tableSearchField != null ? tableSearchField.getText() : "";
-        if (variantTable != null) {
-            variantTable.setTableSearchQuery(q, this::refreshAnnotationFeatureGroupsFromSearch);
-        } else {
-            refreshAnnotationFeatureGroupsFromSearch();
+    /** Remember query only on the selected point-results target (avoids cross-tab filtering). */
+    private void rememberPointSearchQuery(String query) {
+        Tab selected = resultsTabPane != null
+            ? resultsTabPane.getSelectionModel().getSelectedItem()
+            : null;
+        if (selected == pointGroupResultsTab) {
+            if (pointEnrichmentPanel != null) {
+                pointEnrichmentPanel.getResultTable().rememberSearchQuery(query);
+            }
+            return;
         }
-        if (lohVariantTable != null) {
-            lohVariantTable.setSearchQuery(q);
+        if (selected == lohRegionsTab) {
+            if (lohVariantTable != null) {
+                lohVariantTable.rememberSearchQuery(query);
+            }
+            return;
+        }
+        if (selected == codingTab || selected == intronicTab || selected == intergenicTab) {
+            if (variantTable != null) {
+                variantTable.rememberSearchQuery(query);
+            }
         }
     }
 
+    private void rememberSvSearchQuery(String query) {
+        TabPane pane = svResultsTabPane != null ? svResultsTabPane : resultsTabPane;
+        Tab selected = pane != null ? pane.getSelectionModel().getSelectedItem() : null;
+        if (selected == svGroupResultsTab) {
+            if (svEnrichmentPanel != null) {
+                svEnrichmentPanel.getResultTable().rememberSearchQuery(query);
+            }
+            return;
+        }
+        if (svVariantTable != null) {
+            svVariantTable.rememberSearchQuery(query);
+        }
+    }
+
+    /**
+     * Apply debounced point/LOH/feature/group-comparison search to the
+     * currently selected results tab only.
+     */
+    private void applyPointTableSearchNow() {
+        String q = tableSearchField != null ? tableSearchField.getText() : "";
+        Tab selected = resultsTabPane != null
+            ? resultsTabPane.getSelectionModel().getSelectedItem()
+            : null;
+
+        if (selected != lastPointSearchTab) {
+            clearPointSearchExcept(selected);
+            lastPointSearchTab = selected;
+        }
+
+        if (selected == null) {
+            return;
+        }
+        if (selected == codingTab) {
+            if (variantTable != null) {
+                variantTable.setTableSearchQuery(
+                    q, AbstractNestedVariantTable.SearchBucket.CODING, null);
+            }
+            return;
+        }
+        if (selected == intronicTab) {
+            if (variantTable != null) {
+                variantTable.setTableSearchQuery(
+                    q, AbstractNestedVariantTable.SearchBucket.INTRONIC, null);
+            }
+            return;
+        }
+        if (selected == intergenicTab) {
+            if (variantTable != null) {
+                variantTable.setTableSearchQuery(
+                    q, AbstractNestedVariantTable.SearchBucket.INTERGENIC, null);
+            }
+            return;
+        }
+        if (selected == lohRegionsTab) {
+            if (lohVariantTable != null) {
+                lohVariantTable.setSearchQuery(q);
+            }
+            return;
+        }
+        if (selected == pointGroupResultsTab) {
+            if (pointEnrichmentPanel != null) {
+                pointEnrichmentPanel.getResultTable().setSearchQuery(q);
+            }
+            return;
+        }
+        AnnotationFeatureTabSlot featureSlot = annotationFeatureSlotForTab(selected);
+        if (featureSlot != null) {
+            applyAnnotationFeatureTabSearch(featureSlot, q);
+        }
+    }
+
+    private void clearPointSearchExcept(Tab selected) {
+        if (variantTable != null
+            && selected != codingTab
+            && selected != intronicTab
+            && selected != intergenicTab) {
+            variantTable.setTableSearchQuery(
+                "", AbstractNestedVariantTable.SearchBucket.NONE, null);
+        }
+        if (lohVariantTable != null && selected != lohRegionsTab) {
+            lohVariantTable.setSearchQuery("");
+        }
+        if (pointEnrichmentPanel != null && selected != pointGroupResultsTab) {
+            pointEnrichmentPanel.getResultTable().setSearchQuery("");
+        }
+        restoreAnnotationFeatureBaseGroups(selected);
+    }
+
     private void applySvTableSearchNow() {
+        String q = svTableSearchField != null ? svTableSearchField.getText() : "";
+        TabPane pane = svResultsTabPane != null ? svResultsTabPane : resultsTabPane;
+        Tab selected = pane != null ? pane.getSelectionModel().getSelectedItem() : null;
+
+        if (selected != lastSvSearchTab) {
+            if (selected != svGroupResultsTab && svEnrichmentPanel != null) {
+                svEnrichmentPanel.getResultTable().setSearchQuery("");
+            }
+            if (selected == svGroupResultsTab && svVariantTable != null) {
+                svVariantTable.setSearchQuery(
+                    "", SvVariantTable.SearchScope.NONE, null, null);
+            }
+            lastSvSearchTab = selected;
+        }
+
+        if (selected == svGroupResultsTab) {
+            if (svEnrichmentPanel != null) {
+                svEnrichmentPanel.getResultTable().setSearchQuery(q);
+            }
+            return;
+        }
         if (svVariantTable == null) {
             return;
         }
-        String q = svTableSearchField != null ? svTableSearchField.getText() : "";
-        svVariantTable.setSearchQuery(q);
+        if (selected == svAllTab) {
+            svVariantTable.setSearchQuery(
+                q, SvVariantTable.SearchScope.ALL_TAB, null, null);
+            return;
+        }
+        VcfVariantType type = svTypeForTab(selected);
+        if (type != null) {
+            svVariantTable.setSearchQuery(
+                q, SvVariantTable.SearchScope.TYPE, type, null);
+            return;
+        }
+        svVariantTable.setSearchQuery(
+            "", SvVariantTable.SearchScope.NONE, null, null);
+    }
+
+    private VcfVariantType svTypeForTab(Tab tab) {
+        if (tab == null) {
+            return null;
+        }
+        if (tab == svDelTab) {
+            return VcfVariantType.SV_DELETION;
+        }
+        if (tab == svDupTab) {
+            return VcfVariantType.SV_DUPLICATION;
+        }
+        if (tab == svCnvGainTab) {
+            return VcfVariantType.SV_CNV_GAIN;
+        }
+        if (tab == svCnvLossTab) {
+            return VcfVariantType.SV_CNV_LOSS;
+        }
+        if (tab == svCnvNeutralTab) {
+            return VcfVariantType.SV_CNV_NEUTRAL;
+        }
+        if (tab == svInvTab) {
+            return VcfVariantType.SV_INVERSION;
+        }
+        if (tab == svTraTab) {
+            return VcfVariantType.SV_TRANSLOCATION;
+        }
+        if (tab == svBndTab) {
+            return VcfVariantType.SV_BREAKEND;
+        }
+        if (tab == svInsTab) {
+            return VcfVariantType.SV_INSERTION;
+        }
+        return null;
+    }
+
+    private AnnotationFeatureTabSlot annotationFeatureSlotForTab(Tab tab) {
+        if (tab == null) {
+            return null;
+        }
+        for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
+            if (slot != null && slot.tab == tab) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    private void restoreAnnotationFeatureBaseGroups(Tab selected) {
+        for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
+            if (slot == null || slot.tab == selected) {
+                continue;
+            }
+            List<GeneGroup> base = slot.baseGroups != null ? slot.baseGroups : List.of();
+            slot.panel.setGroups(base);
+            slot.lastGroups = base;
+            updateFeatureTabTitle(slot, base.size());
+        }
+    }
+
+    private void applyAnnotationFeatureTabSearch(AnnotationFeatureTabSlot slot, String query) {
+        if (slot == null || slot.panel == null) {
+            return;
+        }
+        VariantFilter filter = vcfManager != null
+            ? vcfManager.getCurrentFilter()
+            : buildFilterFromUI();
+        if (!AbstractNestedVariantTable.isActiveSearchQuery(query)) {
+            List<GeneGroup> base = slot.baseGroups != null ? slot.baseGroups : List.of();
+            slot.panel.setGroups(base);
+            slot.lastGroups = base;
+            updateFeatureTabTitle(slot, base.size());
+            return;
+        }
+        if (variantTable == null) {
+            return;
+        }
+        List<TableRow> fanned = fanOutPointRowsByFeatureName(
+            variantTable.snapshotAllPointRows(), slot.track);
+        List<TableRow> matched = AbstractNestedVariantTable.rowsMatchingSearch(
+            fanned, query, filter);
+        List<GeneGroup> groups = AbstractNestedVariantTable.buildFeatureGroups(
+            matched, filter, false);
+        slot.panel.setGroups(groups);
+        slot.lastGroups = groups;
+        updateFeatureTabTitle(slot, groups.size());
     }
 
     /** Single-click LOH row: open details only. */
@@ -1037,11 +1450,24 @@ public class VariantManagerController implements Initializable {
         if (svTableSearchField != null) {
             svTableSearchField.clear();
         }
+        lastPointSearchTab = null;
+        lastSvSearchTab = null;
         if (variantTable != null) {
-            variantTable.setTableSearchQuery("");
+            variantTable.setTableSearchQuery(
+                "", AbstractNestedVariantTable.SearchBucket.NONE, null);
+        }
+        if (lohVariantTable != null) {
+            lohVariantTable.setSearchQuery("");
         }
         if (svVariantTable != null) {
-            svVariantTable.setSearchQuery("");
+            svVariantTable.setSearchQuery(
+                "", SvVariantTable.SearchScope.NONE, null, null);
+        }
+        if (pointEnrichmentPanel != null) {
+            pointEnrichmentPanel.getResultTable().setSearchQuery("");
+        }
+        if (svEnrichmentPanel != null) {
+            svEnrichmentPanel.getResultTable().setSearchQuery("");
         }
         clearTableItemsForChromosomeSwitch();
         setPlaceholder("Open a VCF to see variants");
@@ -1759,9 +2185,8 @@ public class VariantManagerController implements Initializable {
         icon.setIconColor(Color.web("#217346"));
         button.setText("");
         button.setGraphic(icon);
-        if (button.getTooltip() == null) {
-            button.setTooltip(new Tooltip("Export to Excel"));
-        }
+        button.setTooltip(new Tooltip(
+            "Export to Excel (variant sheets + group comparison tabs when available)"));
         button.setOnAction(e -> {
             if (structural) {
                 exportVariantsToExcel(true);
@@ -1786,19 +2211,22 @@ public class VariantManagerController implements Initializable {
     }
 
     private void exportVariantsToExcel(boolean structural) {
+        boolean hasGroupSheets = !GroupStatExcelExport.sheetSourcesFromSession().isEmpty();
         if (structural) {
-            if (svVariantTable == null
+            if ((svVariantTable == null
                     || svVariantTable.getDisplayedAllRows() == null
-                    || svVariantTable.getDisplayedAllRows().isEmpty()) {
+                    || svVariantTable.getDisplayedAllRows().isEmpty())
+                    && !hasGroupSheets) {
                 showExcelInfo("No variants available to export.");
                 return;
             }
         } else {
             VariantTable table = variantTable();
-            if (table == null
+            if ((table == null
                     || (isEmpty(table.getDisplayedCodingRows())
                         && isEmpty(table.getDisplayedIntronicRows())
-                        && isEmpty(table.getDisplayedIntergenicRows()))) {
+                        && isEmpty(table.getDisplayedIntergenicRows())))
+                    && !hasGroupSheets) {
                 showExcelInfo("No variants available to export.");
                 return;
             }
@@ -1851,6 +2279,7 @@ public class VariantManagerController implements Initializable {
                     List<VariantTableExcelWriter.SheetSource> sheetsToWrite = exportSv
                         ? buildSvExcelSheets()
                         : buildPointExcelSheets();
+                    appendGroupComparisonSheets(sheetsToWrite);
                     if (sheetsToWrite.isEmpty()) {
                         return new IOException("No variants available to export.");
                     }
@@ -2017,6 +2446,55 @@ public class VariantManagerController implements Initializable {
             VariantTableExcelWriter.SheetSource sheet) {
         if (sheet != null) {
             sheets.add(sheet);
+        }
+    }
+
+    /** Append group-comparison result tabs (one per analysis mode) into the workbook. */
+    private static void appendGroupComparisonSheets(
+            List<VariantTableExcelWriter.SheetSource> sheets) {
+        if (sheets == null) {
+            return;
+        }
+        java.util.HashSet<String> used = new java.util.HashSet<>();
+        for (VariantTableExcelWriter.SheetSource existing : sheets) {
+            if (existing != null && existing.name() != null) {
+                used.add(existing.name().toLowerCase(Locale.ROOT));
+            }
+        }
+        for (VariantTableExcelWriter.SheetSource sheet : GroupStatExcelExport.sheetSourcesFromSession()) {
+            if (sheet == null) {
+                continue;
+            }
+            String name = sheet.name() != null ? sheet.name() : "Group";
+            String unique = name;
+            int n = 2;
+            while (used.contains(unique.toLowerCase(Locale.ROOT))) {
+                unique = name + " (" + n + ")";
+                n++;
+            }
+            used.add(unique.toLowerCase(Locale.ROOT));
+            final String sheetName = unique;
+            sheets.add(new VariantTableExcelWriter.SheetSource() {
+                @Override
+                public String name() {
+                    return sheetName;
+                }
+
+                @Override
+                public List<String> headers() {
+                    return sheet.headers();
+                }
+
+                @Override
+                public int estimatedRows() {
+                    return sheet.estimatedRows();
+                }
+
+                @Override
+                public void writeRows(java.util.function.Consumer<List<String>> rowConsumer) {
+                    sheet.writeRows(rowConsumer);
+                }
+            });
         }
     }
 
@@ -3271,38 +3749,10 @@ public class VariantManagerController implements Initializable {
      * bind them with a light FX apply, then defer canvas redraw so the popup never freezes.
      */
     private void finishTableRebuildHeavy(TableRebuildResult result) {
-        final String pointSearch;
-        final String svSearch;
-        final String lohSearch;
-        try {
-            // Prefer live text fields so in-flight debounce does not miss the latest query.
-            pointSearch = tableSearchField != null
-                ? tableSearchField.getText()
-                : (variantTable() != null ? variantTable().getTableSearchQuery() : "");
-            svSearch = svTableSearchField != null
-                ? svTableSearchField.getText()
-                : (svVariantTable != null ? svVariantTable.getSearchQuery() : "");
-            lohSearch = tableSearchField != null
-                ? tableSearchField.getText()
-                : (lohVariantTable != null ? lohVariantTable.getSearchQuery() : "");
-        } catch (Throwable t) {
-            System.err.println("Failed to read table search state: " + t.getMessage());
-            tableRebuildTask = null;
-            rebuildRunning = false;
-            try {
-                applyTableRebuildResultLight(result, null);
-            } catch (Throwable applyEx) {
-                System.err.println("Fallback table apply failed: " + applyEx.getMessage());
-            }
-            deferPostHeavyUi(result.redrawCanvases());
-            return;
-        }
-
-        // Register the next task BEFORE this onSuccess returns so the LoadingPopup
-        // never sees an empty active-task list between phases.
+        // Prebuild unfiltered groups; selected-tab search is re-applied after bind.
         tableRebuildTask = ThreadRunner.get().submit(
             "Updating tables…",
-            () -> buildPrebuiltTableUi(result, pointSearch, svSearch, lohSearch),
+            () -> buildPrebuiltTableUi(result, "", "", ""),
             prebuilt -> {
                 try {
                     if (prebuilt != null) {
@@ -3310,6 +3760,10 @@ public class VariantManagerController implements Initializable {
                     } else {
                         applyTableRebuildResultLight(result, null);
                     }
+                    lastPointSearchTab = null;
+                    lastSvSearchTab = null;
+                    applyPointTableSearchNow();
+                    applySvTableSearchNow();
                 } catch (Throwable t) {
                     System.err.println("Prebuilt table apply failed: " + t.getMessage());
                     t.printStackTrace();
@@ -3477,14 +3931,15 @@ public class VariantManagerController implements Initializable {
         VariantFilter filterSnapshot = result.filter();
 
         variantTable().setDisplayContext(filterSnapshot);
-        if (tableSearchField != null) {
-            variantTable().rememberSearchQuery(tableSearchField.getText());
-            if (lohVariantTable != null) {
-                lohVariantTable.rememberSearchQuery(tableSearchField.getText());
-            }
+        // Bind unfiltered groups; selected-tab search runs after this method returns.
+        if (variantTable() != null) {
+            variantTable().rememberSearchQuery("");
         }
-        if (svVariantTable != null && svTableSearchField != null) {
-            svVariantTable.rememberSearchQuery(svTableSearchField.getText());
+        if (lohVariantTable != null) {
+            lohVariantTable.rememberSearchQuery("");
+        }
+        if (svVariantTable != null) {
+            svVariantTable.rememberSearchQuery("");
         }
         ObservableList<VariantTable.TableRow> codingObs =
             FXCollections.observableArrayList(result.coding());
@@ -3548,8 +4003,10 @@ public class VariantManagerController implements Initializable {
             && result.intergenic().isEmpty();
         boolean svEmpty = result.svAll().isEmpty();
         boolean lohEmpty = result.lohAll().isEmpty();
-        setExcelExportButtonVisible(excelExportButton, !pointEmpty);
-        setExcelExportButtonVisible(svExcelExportButton, !svEmpty);
+        boolean hasGroupSheets =
+            !org.baseplayer.analysis.GroupStatExcelExport.sheetSourcesFromSession().isEmpty();
+        setExcelExportButtonVisible(excelExportButton, !pointEmpty || hasGroupSheets);
+        setExcelExportButtonVisible(svExcelExportButton, !svEmpty || hasGroupSheets);
         // Point-only empty must NOT call setPlaceholder() — that resets SV tab titles to (0).
         if (pointEmpty) {
             Label emptyPoint = new Label("No point mutations match current filter settings");
@@ -3700,8 +4157,10 @@ public class VariantManagerController implements Initializable {
             svVariantTable.setBaseTabTitles();
             svVariantTable.setPlaceholders(text, "");
         }
-        setExcelExportButtonVisible(excelExportButton, false);
-        setExcelExportButtonVisible(svExcelExportButton, false);
+        boolean hasGroupSheets =
+            !org.baseplayer.analysis.GroupStatExcelExport.sheetSourcesFromSession().isEmpty();
+        setExcelExportButtonVisible(excelExportButton, hasGroupSheets);
+        setExcelExportButtonVisible(svExcelExportButton, hasGroupSheets);
     }
 
     private void setupWindowVisibilityListeners() {
@@ -3760,6 +4219,8 @@ public class VariantManagerController implements Initializable {
         lastSeenVariantsRevision = -1;
         if (result != null && !result.cancelled() && result.completedChromosomes() > 0) {
             org.baseplayer.project.ProjectSessionState.get().markDirty();
+            // Variant cache is gene-annotated — auto-run group comparison when groups exist.
+            org.baseplayer.analysis.MutationGroupComparisonRunner.runAutoAfterAnnotation();
         }
         loadData();
     }
@@ -3836,9 +4297,15 @@ public class VariantManagerController implements Initializable {
         boolean both = hasPoint && hasSv;
         setTabVisible(pointMutationsTab, hasPoint);
         setTabVisible(structuralVariantsTab, hasSv);
+        // Signal is always available (numeric group comparison), independent of VCF types.
+        if (signalModeTab != null && !filterTabPane.getTabs().contains(signalModeTab)) {
+            filterTabPane.getTabs().add(signalModeTab);
+        }
         VariantFilter current = vcfManager != null ? vcfManager.getCurrentFilter() : null;
         updateLohTabVisibility(current, false);
-        applyModeChrome(both);
+        // Keep mode chrome when Signal is present (Point|SV|Signal) even if only one VCF class.
+        int modeCount = filterTabPane.getTabs().size();
+        applyModeChrome(both || modeCount > 1);
 
         // Prefer the only available mode; when both exist, leave current selection alone
         // unless it points at a hidden tab.
@@ -4004,6 +4471,7 @@ public class VariantManagerController implements Initializable {
         if (prebuilts == null) {
             for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
                 slot.panel.setGroups(List.of());
+                slot.baseGroups = List.of();
                 slot.lastGroups = List.of();
                 slot.panel.setEmptyMessage("No overlapping variants");
                 updateFeatureTabTitle(slot, 0);
@@ -4020,35 +4488,21 @@ public class VariantManagerController implements Initializable {
         for (AnnotationFeatureTabSlot slot : annotationFeatureTabs.values()) {
             List<GeneGroup> groups = byTrack.getOrDefault(slot.track, List.of());
             slot.panel.setGroups(groups);
+            slot.baseGroups = groups;
             slot.lastGroups = groups;
             if (groups.isEmpty()) {
                 slot.panel.setEmptyMessage("No overlapping variants");
             }
             updateFeatureTabTitle(slot, groups.size());
         }
-    }
-
-    /** Re-fan-out feature tabs from Gene-tab search-filtered point rows (live search). */
-    private void refreshAnnotationFeatureGroupsFromSearch() {
-        if (annotationFeatureTabs.isEmpty() || variantTable == null) {
-            return;
+        // Re-apply selected-tab search so a live query still filters the active feature tab.
+        Tab selected = resultsTabPane != null
+            ? resultsTabPane.getSelectionModel().getSelectedItem()
+            : null;
+        AnnotationFeatureTabSlot active = annotationFeatureSlotForTab(selected);
+        if (active != null && tableSearchField != null) {
+            applyAnnotationFeatureTabSearch(active, tableSearchField.getText());
         }
-        VariantFilter filter = vcfManager != null
-            ? vcfManager.getCurrentFilter()
-            : buildFilterFromUI();
-        // Feature tabs: keep collapsed during live search (same as gene tabs).
-        List<TableRow> pointUnion = new ArrayList<>();
-        pointUnion.addAll(variantTable.getDisplayedCodingRows());
-        pointUnion.addAll(variantTable.getDisplayedIntronicRows());
-        pointUnion.addAll(variantTable.getDisplayedIntergenicRows());
-        List<AnnotationFeaturePrebuilt> out = new ArrayList<>();
-        for (BedTrack track : BedVariantAnnotation.annotationTracks()) {
-            List<TableRow> fanned = fanOutPointRowsByFeatureName(pointUnion, track);
-            out.add(new AnnotationFeaturePrebuilt(
-                track,
-                AbstractNestedVariantTable.buildFeatureGroups(fanned, filter, false)));
-        }
-        applyAnnotationFeatureGroups(out);
     }
 
     /** Types actually present in cached chromosome variant lists. */

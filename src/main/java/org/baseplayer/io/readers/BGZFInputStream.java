@@ -235,8 +235,7 @@ public class BGZFInputStream implements Closeable {
       currentBlock = new byte[0];
       currentBlockSize = 0;
     } else {
-      Inflater inflater = new Inflater(true); // raw deflate (no zlib header)
-      try {
+      try (Inflater inflater = new Inflater(true)) { // raw deflate (no zlib header)
         inflater.setInput(cData);
         byte[] decompressed = new byte[isize];
         int inflated = inflater.inflate(decompressed);
@@ -247,8 +246,6 @@ public class BGZFInputStream implements Closeable {
         currentBlockSize = isize;
       } catch (DataFormatException e) {
         throw new IOException("BGZF decompression error at offset " + compressedOffset, e);
-      } finally {
-        inflater.end();
       }
     }
 
