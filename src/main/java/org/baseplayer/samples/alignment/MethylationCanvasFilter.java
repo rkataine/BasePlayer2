@@ -1,8 +1,10 @@
 package org.baseplayer.samples.alignment;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.baseplayer.draw.GenomicCanvas;
@@ -142,11 +144,8 @@ public final class MethylationCanvasFilter {
   public Set<Character> collectPresentModTypes() {
     Set<Character> present = new LinkedHashSet<>();
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    for (SampleTrack track : registry.getSampleTracks()) {
-      if (track == null) {
-        continue;
-      }
-      for (Sample sample : track.getSamples()) {
+    for (SampleTrack track : registry.snapshotSampleTracks()) {
+      for (Sample sample : snapshotSamples(track)) {
         if (sample == null || sample.getBamFile() == null) {
           continue;
         }
@@ -162,11 +161,8 @@ public final class MethylationCanvasFilter {
 
   public boolean anyMethylSamplesOpen() {
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    for (SampleTrack track : registry.getSampleTracks()) {
-      if (track == null) {
-        continue;
-      }
-      for (Sample sample : track.getSamples()) {
+    for (SampleTrack track : registry.snapshotSampleTracks()) {
+      for (Sample sample : snapshotSamples(track)) {
         if (sample != null && sample.isMethylationData()) {
           return true;
         }
@@ -176,6 +172,30 @@ public final class MethylationCanvasFilter {
       }
     }
     return false;
+  }
+
+  /** Index copy of a track's samples — safe while restore threads call {@code addSample}. */
+  private static List<Sample> snapshotSamples(SampleTrack track) {
+    if (track == null) {
+      return List.of();
+    }
+    List<Sample> live = track.getSamples();
+    for (int attempt = 0; attempt < 5; attempt++) {
+      try {
+        int n = live.size();
+        ArrayList<Sample> out = new ArrayList<>(Math.max(0, n));
+        for (int i = 0; i < n; i++) {
+          if (i >= live.size()) {
+            break;
+          }
+          out.add(live.get(i));
+        }
+        return out;
+      } catch (RuntimeException ignored) {
+        // List mutated mid-copy; retry.
+      }
+    }
+    return List.of();
   }
 
   private void bumpContextRevision() {

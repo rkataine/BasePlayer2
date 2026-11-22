@@ -1,13 +1,17 @@
 package org.baseplayer.io.table;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.zip.GZIPInputStream;
 
 import org.baseplayer.utils.ChromosomeNames;
 
@@ -15,6 +19,45 @@ import org.baseplayer.utils.ChromosomeNames;
 public final class MappedTableReader {
 
   private MappedTableReader() {}
+
+  /**
+   * UTF-8 text reader; transparently gunzips {@code .gz} (and gzip-magic) files.
+   * Caller must close the returned reader.
+   */
+  public static BufferedReader openTextReader(Path path) throws IOException {
+    if (path == null) {
+      throw new IllegalArgumentException("path required");
+    }
+    InputStream in = new BufferedInputStream(Files.newInputStream(path));
+    try {
+      if (looksGzip(path, in)) {
+        in = new GZIPInputStream(in);
+      }
+      return new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+    } catch (IOException | RuntimeException ex) {
+      try {
+        in.close();
+      } catch (IOException ignored) {
+        // keep original
+      }
+      throw ex;
+    }
+  }
+
+  /** True when the filename ends with {@code .gz} or the stream starts with gzip magic. */
+  static boolean looksGzip(Path path, InputStream in) throws IOException {
+    String name = path.getFileName() != null
+        ? path.getFileName().toString().toLowerCase(Locale.ROOT)
+        : "";
+    if (name.endsWith(".gz") || name.endsWith(".gzip")) {
+      return true;
+    }
+    in.mark(2);
+    int b0 = in.read();
+    int b1 = in.read();
+    in.reset();
+    return b0 == 0x1f && b1 == 0x8b;
+  }
 
   /**
    * @param headers guessed header cells (first line), or synthetic {@code Col N} when no header
@@ -31,7 +74,7 @@ public final class MappedTableReader {
   public static Preview preview(Path path, int maxDataRows) throws IOException {
     char delim = detectDelimiter(path);
     int limit = Math.max(1, maxDataRows);
-    try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+    try (BufferedReader reader = openTextReader(path)) {
       List<String[]> firstLines = new ArrayList<>();
       String line;
       while (firstLines.size() < limit && (line = nextNonComment(reader)) != null) {
@@ -75,7 +118,7 @@ public final class MappedTableReader {
     char delim = detectDelimiter(path);
     List<MappedTableRow> out = new ArrayList<>();
     String[] headers;
-    try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+    try (BufferedReader reader = openTextReader(path)) {
       String firstLine = nextNonComment(reader);
       if (firstLine == null) {
         headers = new String[0];
@@ -110,7 +153,7 @@ public final class MappedTableReader {
   }
 
   public static char detectDelimiter(Path path) throws IOException {
-    try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+    try (BufferedReader reader = openTextReader(path)) {
       String line = nextNonComment(reader);
       if (line == null) {
         return '\t';
@@ -136,11 +179,17 @@ public final class MappedTableReader {
       return "sample";
     }
     String name = path.getFileName().toString();
+    String lower = name.toLowerCase(Locale.ROOT);
+    if (lower.endsWith(".gz") || lower.endsWith(".gzip")) {
+      int cut = lower.endsWith(".gzip") ? name.length() - 5 : name.length() - 3;
+      name = name.substring(0, cut);
+      lower = name.toLowerCase(Locale.ROOT);
+    }
     int dot = name.lastIndexOf('.');
     if (dot > 0) {
       name = name.substring(0, dot);
+      lower = name.toLowerCase(Locale.ROOT);
     }
-    String lower = name.toLowerCase(Locale.ROOT);
     for (String tag : List.of(".segments", ".ascat", ".allelecn", ".cn", ".table")) {
       int idx = lower.indexOf(tag);
       if (idx > 0) {

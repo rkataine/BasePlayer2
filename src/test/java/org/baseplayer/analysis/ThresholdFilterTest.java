@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.baseplayer.analysis.groupstat.GroupStatResult;
 
 class ThresholdFilterTest {
 
@@ -40,20 +41,21 @@ class ThresholdFilterTest {
   }
 
   @Test
-  void minDeltaUsesDisplayedMeanSpreadNotLog2Fc() {
+  void minDeltaUsesEffectVsBaseline() {
     DifferenceThresholds thr = new DifferenceThresholds();
     thr.setEnabled(true);
     thr.setMinAbsLog2Fc(0.5);
     thr.setMaxQ(1.0);
     thr.setMinNPerGroup(2);
 
-    // Large log2FC effect but tiny on-screen Δ between group means.
-    GroupStatResult.Row tinyDelta = row("tiny", 2.0, 0.01, 3, "different", 0.00, 0.01);
-    assertFalse(ThresholdFilter.passes(tinyDelta, thr));
-    assertEquals(0.01, ThresholdFilter.differenceMagnitude(tinyDelta), 1e-12);
+    // Large effect passes even if group-mean spread is tiny.
+    GroupStatResult.Row largeEffect = row("large", 2.0, 0.01, 3, "different", 0.00, 0.01);
+    assertTrue(ThresholdFilter.passes(largeEffect, thr));
+    assertEquals(2.0, ThresholdFilter.differenceMagnitude(largeEffect), 1e-12);
 
-    GroupStatResult.Row bigDelta = row("big", 0.2, 0.01, 3, "different", 0.0, 0.8);
-    assertTrue(ThresholdFilter.passes(bigDelta, thr));
+    GroupStatResult.Row smallEffect = row("small", 0.2, 0.01, 3, "different", 0.0, 0.8);
+    assertFalse(ThresholdFilter.passes(smallEffect, thr));
+    assertEquals(0.2, ThresholdFilter.differenceMagnitude(smallEffect), 1e-12);
   }
 
   @Test

@@ -128,11 +128,15 @@ public class VariantBusyOverlay {
 
     /**
      * Sync overlay + lock targets with ThreadRunner busy state and annotation flag.
+     *
+     * <p>{@link #allChromosomeAnnotationRunning} is owned by annotate-all / discover-all
+     * entry points and cleared only on completion — do not clear it here when the task
+     * list is briefly empty (before {@code Platform.runLater} submits work, or between
+     * nested annotate → pattern/DE steps).
      */
     public void syncBusyOverlay() {
         boolean tasksRunning = !ThreadRunner.get().getActiveTasks().isEmpty();
-        if (!tasksRunning) {
-            allChromosomeAnnotationRunning = false;
+        if (!tasksRunning && !allChromosomeAnnotationRunning) {
             allChromosomeAnnotationTask = null;
             statusMessage = null;
         } else if (allChromosomeAnnotationRunning && statusMessage == null) {

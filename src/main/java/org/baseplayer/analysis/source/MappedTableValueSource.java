@@ -8,15 +8,16 @@ import java.util.Map;
 
 import org.baseplayer.analysis.CollectContext;
 import org.baseplayer.analysis.ComparisonUnit;
-import org.baseplayer.analysis.FeatureValueMatrix;
+import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.GeneOverlapIndex;
 import org.baseplayer.analysis.GenomicScope;
-import org.baseplayer.analysis.SignalScopeHelper;
-import org.baseplayer.analysis.SignalScopeHelper.Region;
-import org.baseplayer.analysis.SignalSourceSpec;
+import org.baseplayer.analysis.signal.SignalScopeHelper;
+import org.baseplayer.analysis.signal.SignalScopeHelper.Region;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.io.table.MappedTableData;
 import org.baseplayer.io.table.MappedTableRow;
+import org.baseplayer.io.table.SharedMatrixLoci;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 
@@ -63,6 +64,16 @@ public final class MappedTableValueSource implements ValueSource {
       MappedTableData table = firstValueTable(track);
       if (table == null) {
         skipped++;
+        continue;
+      }
+      if (table.hasUnitIds() && table.sharedLoci() != null) {
+        int n = collectFromUnitIds(table, track, matrix, scope, ctx);
+        if (n <= 0) {
+          skipped++;
+        } else {
+          used++;
+          appendNote(notes, track.getDisplayName(), n + " genes");
+        }
         continue;
       }
       Map<String, List<Double>> perGene = new HashMap<>();
@@ -148,7 +159,54 @@ public final class MappedTableValueSource implements ValueSource {
     return firstValueTable(track) != null;
   }
 
+  /**
+   * Gene matrix: unit ids already identify genes — put values + loci directly
+   * without interval re-annotation. Prefer gene symbol when ENSG/id resolves.
+   */
+  private static int collectFromUnitIds(
+      MappedTableData table,
+      SampleTrack track,
+      FeatureValueMatrix matrix,
+      GenomicScope scope,
+      CollectContext ctx) {
+    SharedMatrixLoci loci = table.sharedLoci();
+    float[] values = table.compactValues();
+    if (loci == null || values == null) {
+      return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < loci.size(); i++) {
+      if (ctx != null && (i & 0x3FF) == 0) {
+        ctx.checkCancelled();
+      }
+      float v = values[i];
+      if (!Float.isFinite(v)) {
+        continue;
+      }
+      String unit = loci.unitId(i);
+      if (unit == null || unit.isBlank()) {
+        continue;
+      }
+      String chrom = loci.chrom(i);
+      long start = loci.start1Based(i);
+      long end = loci.end1Based(i);
+      if (!inScope(chrom, start, end, scope)) {
+        continue;
+      }
+      // unitId already prefers gene symbol (resolved at matrix open).
+      matrix.put(unit, track, v);
+      matrix.putLocus(unit, chrom, start, end);
+      n++;
+    }
+    return n;
+  }
+
   private static boolean inScope(MappedTableRow row, GenomicScope scope) {
+    return inScope(row.chromosome(), row.start1Based(), row.end1Based(), scope);
+  }
+
+  private static boolean inScope(
+      String chrom, long start1Based, long end1Based, GenomicScope scope) {
     if (scope == null || scope == GenomicScope.ALL_CHROMS) {
       return true;
     }
@@ -156,7 +214,9 @@ public final class MappedTableValueSource implements ValueSource {
     if (view == null) {
       return scope != GenomicScope.CURRENT_VIEW;
     }
-    String chrom = row.chromosome();
+    if (chrom == null) {
+      return false;
+    }
     if (!chrom.equals(view.chrom())
         && !chrom.equals("chr" + view.chrom())
         && !(("chr" + chrom).equals(view.chrom()))) {
@@ -165,7 +225,7 @@ public final class MappedTableValueSource implements ValueSource {
     if (scope == GenomicScope.CURRENT_CHROM) {
       return true;
     }
-    return row.end1Based() >= view.start1Based() && row.start1Based() <= view.end1Based();
+    return end1Based >= view.start1Based() && start1Based <= view.end1Based();
   }
 
   private static void appendNote(StringBuilder notes, String name, String detail) {

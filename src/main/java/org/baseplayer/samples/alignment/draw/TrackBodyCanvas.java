@@ -502,7 +502,7 @@ public class TrackBodyCanvas extends GenomicCanvas {
     if (canDrawSampleBigWigData(slot)) {
       drawSampleBigWigData(slot, rowTopY, rowHeight);
     }
-    // Mapped table/segment bars (ASCAT etc.) — all zoom levels.
+    // Mapped table/segment bars (allele-CN, value tables, …) — all zoom levels.
     if (canDrawMappedTableData(slot)) {
       drawMappedTableData(slot, rowTopY, rowHeight);
     }
@@ -1138,8 +1138,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
     for (int lane = 0; lane < tables.size(); lane++) {
       Sample sample = tables.get(lane);
       org.baseplayer.io.table.MappedTableData table = sample.getMappedTable();
-      List<org.baseplayer.io.table.MappedTableRow> rows =
-          table.rowsOverlapping(chrom, (long) viewStart, (long) viewEnd);
+      // Interval-bar matrices draw from shared loci + compactValues (SSOT); skip row materialization.
+      List<org.baseplayer.io.table.MappedTableRow> rows = table.isIntervalBars()
+          ? List.of()
+          : table.rowsOverlapping(chrom, (long) viewStart, (long) viewEnd);
       double laneY = laneTopBase + lane * (laneHeight + laneGap);
       drawMappedTableLane(
           sample, table, rows, 0, laneY, width, laneHeight, viewStart, viewEnd);
@@ -1148,6 +1150,8 @@ public class TrackBodyCanvas extends GenomicCanvas {
 
   /**
    * Step-plot of table segments with Y scale (total CN or VALUE) and a short legend.
+   * Gene/region matrices ({@link org.baseplayer.io.table.MappedTableData#isIntervalBars()})
+   * paint discrete BED-like bars with gaps between loci — no continuous connectors.
    */
   private void drawMappedTableLane(
       Sample sample,
@@ -1160,6 +1164,10 @@ public class TrackBodyCanvas extends GenomicCanvas {
       double viewStart,
       double viewEnd) {
     if (table == null || width <= 0 || height < 8) {
+      return;
+    }
+    if (table.isIntervalBars()) {
+      drawMappedTableIntervalBars(sample, table, x, y, width, height, viewStart, viewEnd);
       return;
     }
     boolean alleleCn = table.hasAlleleCn();
@@ -1318,6 +1326,90 @@ public class TrackBodyCanvas extends GenomicCanvas {
       prevStroke = stroke;
     }
     gc.setLineWidth(1.0);
+  }
+
+  /** BED-like score bars at gene/region loci (matrix files). */
+  private void drawMappedTableIntervalBars(
+      Sample sample,
+      org.baseplayer.io.table.MappedTableData table,
+      double x,
+      double y,
+      double width,
+      double height,
+      double viewStart,
+      double viewEnd) {
+    org.baseplayer.io.table.SharedMatrixLoci loci = table.sharedLoci();
+    if (loci == null || drawStack == null) {
+      return;
+    }
+    String chrom = drawStack.getChromosome();
+    double viewLen = Math.max(1e-9, viewEnd - viewStart);
+    double top = y + 2;
+    double usable = Math.max(4, height - 4);
+    double baseline = top + usable;
+
+    double min = Double.POSITIVE_INFINITY;
+    double max = Double.NEGATIVE_INFINITY;
+    int[] idx = loci.overlappingIndices(chrom, (long) viewStart, (long) viewEnd);
+    for (int i : idx) {
+      float v = table.compactValue(i);
+      if (!Float.isFinite(v)) {
+        continue;
+      }
+      min = Math.min(min, v);
+      max = Math.max(max, v);
+    }
+    if (!(max > min) || !Double.isFinite(min)) {
+      min = 0;
+      max = 1;
+    } else if (min > 0) {
+      min = 0; // bars grow from zero for expression-like counts
+    }
+    double span = Math.max(1e-9, max - min);
+
+    Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
+    boolean drawScale = height >= 28;
+    if (drawScale) {
+      gc.setFont(org.baseplayer.utils.AppFonts.getFont("Segoe UI", 9));
+      gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.35));
+      gc.setLineDashes(3, 3);
+      gc.strokeLine(x, baseline, x + width, baseline);
+      gc.setLineDashes();
+      gc.setFill(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.85));
+      String name = sample != null ? sample.getName() : null;
+      String legend = "Value bars";
+      if (name != null && !name.isBlank() && name.length() < 40) {
+        legend = name + "  ·  " + legend;
+      }
+      gc.fillText(legend, x + 4, y + 11);
+      gc.fillText(formatScaleTick(max), x + 4, top + 9);
+    }
+
+    if (idx.length == 0) {
+      return;
+    }
+
+    double alpha = sample != null && sample.overlay ? 0.75 : 0.9;
+    Color fill = Color.rgb(45, 95, 180, alpha);
+    for (int i : idx) {
+      float v = table.compactValue(i);
+      if (!Float.isFinite(v)) {
+        continue;
+      }
+      double x1 = x + ((Math.max(loci.start1Based(i), viewStart) - viewStart) / viewLen) * width;
+      double x2 = x + ((Math.min(loci.end1Based(i), viewEnd) - viewStart) / viewLen) * width;
+      if (x2 < x1) {
+        double tmp = x1;
+        x1 = x2;
+        x2 = tmp;
+      }
+      double barW = Math.max(1.0, x2 - x1);
+      double t = (v - min) / span;
+      t = Math.max(0, Math.min(1, t));
+      double barH = Math.max(1.0, usable * t);
+      gc.setFill(fill);
+      gc.fillRect(x1, baseline - barH, barW, barH);
+    }
   }
 
   private static double mappedTableDisplayValue(

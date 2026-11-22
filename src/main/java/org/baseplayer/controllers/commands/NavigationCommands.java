@@ -259,7 +259,10 @@ public class NavigationCommands {
     long[] view = geneViewBounds(loc);
     stack.navigateTo(loc.chrom(), view[0], view[1]);
     if (loadVariantRegion) {
-      VcfManager.getInstance().loadRegionVariants(loc.chrom(), view[0], view[1]);
+      // Pass unpadded gene body as core so an already-loaded locus is reused even
+      // when geneViewBounds padding extends past the prior Load-region window.
+      VcfManager.getInstance().loadRegionVariants(
+          loc.chrom(), view[0], view[1], false, loc.start(), loc.end());
     }
   }
 

@@ -533,7 +533,8 @@ public abstract class TrackViewportRegistry {
   }
 
   /**
-   * Enable/disable the master aggregate band (density + visible-range slider + filter strip).
+   * Enable/disable the master aggregate band (density + legends + filter strip;
+   * multi-track also gets the visible-range slider).
    * Disabling keeps the Add/settings title bar only; enabling restores a usable height.
    */
   public void setMasterAggregatesEnabled(boolean enabled) {
@@ -541,20 +542,22 @@ public abstract class TrackViewportRegistry {
       return;
     }
     masterAggregatesEnabled.set(enabled);
-    if (!enabled || getDisplayedTrackCount() <= 1) {
-      // Single-sample / feature: title bar only — aggregate density is not useful.
+    if (!enabled) {
       setMasterBandHeightPixels(DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
-    } else {
+    } else if (getDisplayedTrackCount() > 1) {
       setMasterBandHeightPixels(EXPANDED_MASTER_BAND_HEIGHT_PIXELS);
+    } else {
+      // Single track: density + type legends without the visible-range slider.
+      setMasterBandHeightPixels(AGGREGATE_MASTER_BAND_HEIGHT_PIXELS);
     }
   }
 
   /**
-   * True when aggregate density / cohort summaries should run and paint.
-   * Requires the aggregates toggle and more than one displayed track.
+   * True when aggregate density / legends / cohort summaries should run and paint.
+   * Single-sample (and single-feature) bands still paint so type legends stay available.
    */
   public boolean shouldPaintMasterAggregates() {
-    return isMasterAggregatesEnabled() && getDisplayedTrackCount() > 1;
+    return isMasterAggregatesEnabled();
   }
 
   public List<VisibleTrackSlot> buildVisibleTrackSlotList(List<Integer> displayedBackingTrackIndices) {

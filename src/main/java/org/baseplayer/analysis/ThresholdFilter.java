@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import org.baseplayer.analysis.groupstat.GroupStatResult;
 
 /**
  * Filters {@link GroupStatResult} rows by effect size, FDR/p, per-group n, direction,
@@ -84,9 +85,9 @@ public final class ThresholdFilter {
     }
     if (row.groups() != null) {
       for (GroupStatResult.GroupSummary g : row.groups()) {
-        // Prefer samples with non-zero signal (hits); fall back to roster size.
-        int hits = Math.max(g.nSignal(), 0);
-        if (hits < thresholds.getMinNPerGroup()) {
+        // Prefer observed samples (continuous DE / patterns); fall back to non-zero hits.
+        int n = g.nObserved() > 0 ? g.nObserved() : Math.max(g.nSignal(), 0);
+        if (n < thresholds.getMinNPerGroup()) {
           return false;
         }
       }
@@ -116,13 +117,15 @@ public final class ThresholdFilter {
   }
 
   /**
-   * Absolute group-mean spread — same metric as the table Δ column.
-   * Min |Δ| filtering must use this (not |log2FC|), otherwise rows with a tiny
-   * displayed Δ can still pass when effect-vs-baseline is large.
+   * Absolute effect vs baseline (log2 fold or mean Δ, depending on the run).
+   * Falls back to |max−min| group means when effect is missing.
    */
   public static double differenceMagnitude(GroupStatResult.Row row) {
     if (row == null) {
       return 0;
+    }
+    if (row.effectVsBaseline() != null && !Double.isNaN(row.effectVsBaseline())) {
+      return Math.abs(row.effectVsBaseline());
     }
     GroupStatResult.MeanExtremes extremes = GroupStatResult.meanExtremes(row.groups());
     if (extremes != null && extremes.distinct()) {
@@ -130,9 +133,6 @@ public final class ThresholdFilter {
       if (!Double.isNaN(spread)) {
         return spread;
       }
-    }
-    if (row.effectVsBaseline() != null && !Double.isNaN(row.effectVsBaseline())) {
-      return Math.abs(row.effectVsBaseline());
     }
     return 0;
   }

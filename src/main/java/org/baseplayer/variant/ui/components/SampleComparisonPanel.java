@@ -24,6 +24,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleGroup;
@@ -37,6 +38,7 @@ import javafx.util.Pair;
 
 /**
  * Sample Comparison tab: shared-sample range, gene/window mode, and fixed tag roles.
+ * VCF mode includes HET/HOM + LOH presets; Signal mode is presence/absence only.
  */
 public class SampleComparisonPanel {
 
@@ -51,7 +53,9 @@ public class SampleComparisonPanel {
       Button refreshComparisonGroupsButton,
       RadioButton presentMatchAllRadio,
       RadioButton presentMatchAnyRadio,
-      Button calculateLohButton) {}
+      Button calculateLohButton,
+      /** Signal only: host for differential Run/thresholds below shared-events slider. */
+      VBox differentialHost) {}
 
   private Nodes nodes;
   private Runnable onDebouncedChange;
@@ -63,6 +67,11 @@ public class SampleComparisonPanel {
       new EnumMap<>(SampleTag.class);
   /** Window bp last committed via Apply / load — not live field text. */
   private int appliedComparisonWindowBp = 0;
+  /**
+   * When true (Signal): only Ignore / Present / Absent roles; no HET/HOM or LOH presets.
+   * Genotype roles coerce to Present on write.
+   */
+  private boolean presenceOnly;
 
   public void install(
       Nodes nodes,
@@ -77,6 +86,31 @@ public class SampleComparisonPanel {
     if (nodes.refreshComparisonGroupsButton() != null) {
       nodes.refreshComparisonGroupsButton().setOnAction(e -> refreshGroups());
     }
+    refreshGroups();
+  }
+
+  /**
+   * Signal Sample Comparison: event presence only (no genotype / inheritance LOH chrome).
+   * Call after {@link #install} when the panel backs Signal, not VCF.
+   */
+  public void configurePresenceOnlyForSignal() {
+    this.presenceOnly = true;
+    coerceRolesToPresenceOnly();
+    if (nodes != null) {
+      if (nodes.commonVariantsHelpLabel() != null) {
+        nodes.commonVariantsHelpLabel().setText(
+            "Shared-event range (min–max samples with a threshold-passing event).");
+      }
+      if (nodes.geneLevelComparisonCheckBox() != null) {
+        nodes.geneLevelComparisonCheckBox().setTooltip(new Tooltip(
+            "Gene-level: count samples that share an event on the same gene."));
+      }
+      if (nodes.calculateLohButton() != null) {
+        nodes.calculateLohButton().setVisible(false);
+        nodes.calculateLohButton().setManaged(false);
+      }
+    }
+    updateCommonVariantsHelpLabel();
     refreshGroups();
   }
 
@@ -103,6 +137,100 @@ public class SampleComparisonPanel {
     }
     filter.setTagRoles(roles);
     filter.setPresentMatchMode(selectedPresentMatchMode());
+  }
+
+  /** Persist Sample Comparison into Signal-owned settings (not VariantFilter). */
+  public void writeTo(org.baseplayer.analysis.signal.SignalComparisonSettings settings) {
+    if (nodes == null || settings == null) {
+      return;
+    }
+    if (nodes.sharedSampleRangeSlider() != null) {
+      settings.setMinSharedSamples(nodes.sharedSampleRangeSlider().getLowValue());
+      int high = nodes.sharedSampleRangeSlider().getHighValue();
+      int total = nodes.sharedSampleRangeSlider().getAbsoluteMax();
+      settings.setMaxSharedSamples(high >= total ? Integer.MAX_VALUE : high);
+    }
+    settings.setGeneLevel(
+        nodes.geneLevelComparisonCheckBox() != null && nodes.geneLevelComparisonCheckBox().isSelected());
+    settings.setComparisonWindowBp(appliedComparisonWindowBp);
+    Map<SampleTag, VariantFilter.GroupRole> roles = new EnumMap<>(SampleTag.class);
+    for (Map.Entry<SampleTag, VariantFilter.GroupRole> entry : comparisonTagRoles.entrySet()) {
+      VariantFilter.GroupRole role = entry.getValue();
+      if (role == null || role == VariantFilter.GroupRole.IGNORE) {
+        continue;
+      }
+      // Signal has no genotypes — HET/HOM mean “event present”.
+      if (role == VariantFilter.GroupRole.HETEROZYGOUS
+          || role == VariantFilter.GroupRole.HOMOZYGOUS) {
+        role = VariantFilter.GroupRole.PRESENT;
+      }
+      roles.put(entry.getKey(), role);
+    }
+    settings.setTagRoles(roles);
+    settings.setPresentMatchMode(selectedPresentMatchMode());
+  }
+
+  public void loadFrom(org.baseplayer.analysis.signal.SignalComparisonSettings settings) {
+    if (nodes == null || settings == null) {
+      return;
+    }
+    if (nodes.sharedSampleRangeSlider() != null) {
+      syncSharedSampleRangeBoundsForSignal();
+      int maxShare = settings.getMaxSharedSamples();
+      if (maxShare == Integer.MAX_VALUE) {
+        maxShare = nodes.sharedSampleRangeSlider().getAbsoluteMax();
+      }
+      nodes.sharedSampleRangeSlider().setRange(settings.getMinSharedSamples(), maxShare);
+    }
+    if (nodes.geneLevelComparisonCheckBox() != null) {
+      nodes.geneLevelComparisonCheckBox().setSelected(settings.isGeneLevel());
+    }
+    appliedComparisonWindowBp = Math.max(0, settings.getComparisonWindowBp());
+    if (nodes.comparisonWindowField() != null) {
+      nodes.comparisonWindowField().setText(Integer.toString(appliedComparisonWindowBp));
+    }
+    updateComparisonWindowEnabled();
+    updateCommonVariantsHelpLabel();
+    comparisonTagRoles.clear();
+    if (settings.getTagRoles() != null) {
+      comparisonTagRoles.putAll(settings.getTagRoles());
+    }
+    applyPresentMatchModeToRadios(settings.getPresentMatchMode());
+    refreshGroups();
+  }
+
+  /** Shared-sample slider bound to visible mapped-table / signal tracks. */
+  public void syncSharedSampleRangeBoundsForSignal() {
+    if (nodes == null || nodes.sharedSampleRangeSlider() == null) {
+      return;
+    }
+    nodes.sharedSampleRangeSlider().setAbsoluteMax(countTracksWithSignalData());
+  }
+
+  private static int countTracksWithSignalData() {
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<SampleTrack> tracks = snapshotTracks(registry);
+    int count = 0;
+    for (SampleTrack track : tracks) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null || !sample.visible) {
+          continue;
+        }
+        if (sample.getDataType() == Sample.DataType.TABLE
+            || sample.getDataType() == Sample.DataType.BIGWIG
+            || sample.getDataType() == Sample.DataType.BED) {
+          count++;
+          break;
+        }
+      }
+    }
+    if (count == 0) {
+      count = tracks.size();
+    }
+    return Math.max(1, count);
   }
 
   public void loadFrom(VariantFilter filter) {
@@ -241,6 +369,11 @@ public class SampleComparisonPanel {
     if (nodes == null || nodes.calculateLohButton() == null) {
       return;
     }
+    if (presenceOnly) {
+      nodes.calculateLohButton().setVisible(false);
+      nodes.calculateLohButton().setManaged(false);
+      return;
+    }
     VariantFilter probe = new VariantFilter();
     writeTo(probe);
     boolean lohReady = probe.isLohMode();
@@ -310,12 +443,27 @@ public class SampleComparisonPanel {
     int windowBp = appliedComparisonWindowBp;
     if (nodes.sharedSampleRangeSlider() != null) {
       if (geneLevel) {
-        nodes.sharedSampleRangeSlider().setSummaryUnit("samples (gene)");
+        nodes.sharedSampleRangeSlider().setSummaryUnit(
+            presenceOnly ? "samples (gene events)" : "samples (gene)");
       } else if (windowBp > 0) {
         nodes.sharedSampleRangeSlider().setSummaryUnit("samples (cluster)");
       } else {
         nodes.sharedSampleRangeSlider().setSummaryUnit("samples");
       }
+    }
+    if (presenceOnly) {
+      if (geneLevel) {
+        nodes.commonVariantsHelpLabel().setText(
+            "Count samples with a threshold-passing event anywhere in the gene.");
+      } else if (windowBp > 0) {
+        nodes.commonVariantsHelpLabel().setText(
+            "Event clusters within " + windowBp
+                + " bp; slider = samples sharing the cluster.");
+      } else {
+        nodes.commonVariantsHelpLabel().setText(
+            "Shared-event range (min–max samples with an event).");
+      }
+      return;
     }
     if (geneLevel) {
       nodes.commonVariantsHelpLabel().setText("Count samples mutated anywhere in the gene.");
@@ -354,12 +502,9 @@ public class SampleComparisonPanel {
     Label label = new Label("Preset");
     label.getStyleClass().add("subsection-label");
 
-    ComboBox<String> presetBox = AppComboBox.create(
-        "—",
-        "De novo",
-        "Maternal",
-        "Paternal",
-        "LOH / markers");
+    ComboBox<String> presetBox = presenceOnly
+        ? AppComboBox.create("—", "De novo", "Maternal", "Paternal")
+        : AppComboBox.create("—", "De novo", "Maternal", "Paternal", "LOH / markers");
     presetBox.setValue("—");
     presetBox.setPrefWidth(140);
     presetBox.valueProperty().addListener((obs, oldVal, newVal) -> {
@@ -393,6 +538,9 @@ public class SampleComparisonPanel {
         comparisonTagRoles.put(SampleTag.MOTHER, VariantFilter.GroupRole.ABSENT);
       }
       case "LOH / markers" -> {
+        if (presenceOnly) {
+          break;
+        }
         // Parental het + Child hom is enough for LOH. Marker is optional and only
         // applied when the project actually has Marker-tagged tracks — an empty
         // Marker cohort would otherwise fail PresentMatchMode.ALL and hide all sites.
@@ -430,14 +578,22 @@ public class SampleComparisonPanel {
     nameLabel.setMaxWidth(Double.MAX_VALUE);
     HBox.setHgrow(nameLabel, Priority.ALWAYS);
 
-    ComboBox<String> roleBox = AppComboBox.create(
-        "Ignore",
-        "Must be present",
-        "Must be absent",
-        "Must be heterozygous",
-        "Must be homozygous");
+    ComboBox<String> roleBox = presenceOnly
+        ? AppComboBox.create("Ignore", "Must be present", "Must be absent")
+        : AppComboBox.create(
+            "Ignore",
+            "Must be present",
+            "Must be absent",
+            "Must be heterozygous",
+            "Must be homozygous");
     VariantFilter.GroupRole currentRole =
         comparisonTagRoles.getOrDefault(tag, VariantFilter.GroupRole.IGNORE);
+    if (presenceOnly
+        && (currentRole == VariantFilter.GroupRole.HETEROZYGOUS
+            || currentRole == VariantFilter.GroupRole.HOMOZYGOUS)) {
+      currentRole = VariantFilter.GroupRole.PRESENT;
+      comparisonTagRoles.put(tag, currentRole);
+    }
     roleBox.setValue(roleLabel(currentRole));
     roleBox.setPrefWidth(180);
     roleBox.valueProperty().addListener((obs, oldVal, newVal) -> {
@@ -523,19 +679,27 @@ public class SampleComparisonPanel {
         case IGNORE -> { /* not shown in summary */ }
       }
     }
+    if (presenceOnly) {
+      // Signal: genotype roles are not shown; treat as present if any leaked in.
+      present.addAll(heterozygous);
+      present.addAll(homozygous);
+      heterozygous.clear();
+      homozygous.clear();
+    }
     if (present.isEmpty() && absent.isEmpty()
         && heterozygous.isEmpty() && homozygous.isEmpty()) {
-      nodes.groupComparisonSummaryLabel().setText("No tag constraints");
+      nodes.groupComparisonSummaryLabel().setText(
+          presenceOnly ? "No event tag constraints" : "No tag constraints");
       return;
     }
-    boolean lohMode = !heterozygous.isEmpty() && !homozygous.isEmpty();
+    boolean lohMode = !presenceOnly && !heterozygous.isEmpty() && !homozygous.isEmpty();
     StringBuilder sb = new StringBuilder();
     String presentJoiner =
         selectedPresentMatchMode() == VariantFilter.PresentMatchMode.ANY ? " or " : " and ";
     if (lohMode) {
       sb.append("LOH: het ").append(String.join(presentJoiner, heterozygous))
           .append(" → hom AA/BB ").append(String.join(presentJoiner, homozygous));
-    } else {
+    } else if (!presenceOnly) {
       if (!heterozygous.isEmpty()) {
         sb.append("Het: ").append(String.join(presentJoiner, heterozygous));
       }
@@ -546,13 +710,26 @@ public class SampleComparisonPanel {
     }
     if (!present.isEmpty()) {
       if (sb.length() > 0) sb.append("  ·  ");
-      sb.append("Present: ").append(String.join(presentJoiner, present));
+      sb.append(presenceOnly ? "Event present: " : "Present: ")
+          .append(String.join(presentJoiner, present));
     }
     if (!absent.isEmpty()) {
       if (sb.length() > 0) sb.append("  ·  ");
-      sb.append("Absent: ").append(String.join(" and ", absent));
+      sb.append(presenceOnly ? "Event absent: " : "Absent: ")
+          .append(String.join(" and ", absent));
     }
     nodes.groupComparisonSummaryLabel().setText(sb.toString());
+  }
+
+  private void coerceRolesToPresenceOnly() {
+    for (Map.Entry<SampleTag, VariantFilter.GroupRole> entry :
+        new EnumMap<>(comparisonTagRoles).entrySet()) {
+      VariantFilter.GroupRole role = entry.getValue();
+      if (role == VariantFilter.GroupRole.HETEROZYGOUS
+          || role == VariantFilter.GroupRole.HOMOZYGOUS) {
+        comparisonTagRoles.put(entry.getKey(), VariantFilter.GroupRole.PRESENT);
+      }
+    }
   }
 
   private VariantFilter.PresentMatchMode selectedPresentMatchMode() {
@@ -587,11 +764,26 @@ public class SampleComparisonPanel {
    * Build a Sample Comparison UI tree programmatically (for the SV mode workspace).
    */
   public static Pair<javafx.scene.Node, Nodes> buildUi() {
-    Label help = new Label("Shared-sample range (min–max).");
+    return buildUi(false);
+  }
+
+  /** Signal Sample Comparison: event/shared-unit wording (no VCF “variants” framing). */
+  public static Pair<javafx.scene.Node, Nodes> buildUiForSignal() {
+    return buildUi(true);
+  }
+
+  private static Pair<javafx.scene.Node, Nodes> buildUi(boolean signalEvents) {
+    Label help = new Label(signalEvents
+        ? "Shared-event range (min–max samples with a threshold-passing event)."
+        : "Shared-sample range (min–max).");
     help.getStyleClass().add("subsection-label");
     help.setWrapText(true);
 
     ColoredToggle geneLevel = new ColoredToggle("Gene level");
+    if (signalEvents) {
+      geneLevel.setTooltip(new Tooltip(
+          "Gene-level: count samples that share an event on the same gene."));
+    }
 
     TextField windowField = new TextField("0");
     windowField.setPrefWidth(72);
@@ -606,14 +798,34 @@ public class SampleComparisonPanel {
     VBox left = new VBox(8);
     left.getStyleClass().add("filter-panel");
     left.setPadding(new Insets(16));
-    Label commonTitle = new Label("Common variants");
+    Label commonTitle = new Label(signalEvents ? "Shared events" : "Common variants");
     commonTitle.getStyleClass().add("section-header");
-    Label windowLabel = new Label("Window (bp)");
+    Label windowLabel = new Label(signalEvents ? "Flanking window (bp)" : "Window (bp)");
     windowLabel.getStyleClass().add("subsection-label");
-    windowLabel.setMinWidth(80);
+    windowLabel.setMinWidth(signalEvents ? 120 : 80);
+    if (signalEvents) {
+      windowLabel.setTooltip(new Tooltip(
+          "Cluster nearby gene events within this gap for shared-sample counts."));
+    }
     HBox windowRow = new HBox(8, windowLabel, windowField, windowApply);
     windowRow.setAlignment(Pos.CENTER_LEFT);
-    left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
+    VBox differentialHost = null;
+    if (signalEvents) {
+      differentialHost = new VBox(8);
+      Label diffTitle = new Label("Patterns");
+      diffTitle.getStyleClass().add("section-header");
+      Label diffHelp = new Label(
+          "Discover sample groups from similar signal patterns; "
+              + "marker genes appear in the Group comparison table. "
+              + "Use Group comparison for DE once groups are applied.");
+      diffHelp.getStyleClass().add("subsection-label");
+      diffHelp.setWrapText(true);
+      left.getChildren().addAll(
+          commonTitle, help, geneLevel, windowRow, rangeSlider,
+          new Separator(), diffTitle, diffHelp, differentialHost);
+    } else {
+      left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
+    }
 
     VBox groupsContainer = new VBox(6);
     VBox.setVgrow(groupsContainer, Priority.ALWAYS);
@@ -651,7 +863,13 @@ public class SampleComparisonPanel {
     presentTitle.getStyleClass().add("section-header");
     HBox presentRow = new HBox(16, matchAll, matchAny);
     presentRow.setAlignment(Pos.CENTER_LEFT);
-    HBox applyRow = new HBox(12, calculateLoh, apply);
+    if (signalEvents) {
+      calculateLoh.setVisible(false);
+      calculateLoh.setManaged(false);
+    }
+    HBox applyRow = signalEvents
+        ? new HBox(12, apply)
+        : new HBox(12, calculateLoh, apply);
     applyRow.setAlignment(Pos.CENTER_RIGHT);
     right.getChildren().addAll(
         groupsHeader,
@@ -690,7 +908,8 @@ public class SampleComparisonPanel {
         refresh,
         matchAll,
         matchAny,
-        calculateLoh);
+        calculateLoh,
+        differentialHost);
     apply.setOnAction(e -> {
       // Wired by controller after install if needed; default no-op here.
     });
@@ -714,6 +933,17 @@ public class SampleComparisonPanel {
     }
     findButtonByText(root, "Calculate LOH")
         .ifPresent(btn -> btn.setOnAction(e -> onCalculate.run()));
+  }
+
+  /** Hide inheritance LOH control on Signal Sample Comparison (Allele-CN LOH lives in Filters). */
+  public static void hideCalculateLohButton(javafx.scene.Node root) {
+    if (root == null) {
+      return;
+    }
+    findButtonByText(root, "Calculate LOH").ifPresent(btn -> {
+      btn.setVisible(false);
+      btn.setManaged(false);
+    });
   }
 
   private static java.util.Optional<Button> findButtonByText(javafx.scene.Node node, String text) {

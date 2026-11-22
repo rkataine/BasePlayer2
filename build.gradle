@@ -22,15 +22,17 @@ javafx {
     modules = [ 'javafx.controls', 'javafx.fxml', 'javafx.web' ]
 }
 
+// Shared runtime flags (Java 25 + JavaFX module access).
+ext.baseplayerJvmArgs = [
+    '--enable-native-access=javafx.graphics',
+    '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
+    '--add-opens', 'javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
+    '--add-exports', 'javafx.base/com.sun.javafx.event=ALL-UNNAMED'
+]
+
 application {
     mainClass = "org.baseplayer.MainApp"
-    
-    // Add Ikonli modules to the module path
-    applicationDefaultJvmArgs = [
-        '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
-        '--add-opens', 'javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
-        '--add-exports', 'javafx.base/com.sun.javafx.event=ALL-UNNAMED'
-    ]
+    applicationDefaultJvmArgs = baseplayerJvmArgs
 }
 shadowJar {
     mergeServiceFiles()
@@ -64,12 +66,7 @@ tasks.register('lohBench', JavaExec) {
     description = 'Run LohFlowBench on parental + child VCFs'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'org.baseplayer.variant.LohFlowBench'
-    jvmArgs = [
-        '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
-        '--add-opens', 'javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
-        '--add-exports', 'javafx.base/com.sun.javafx.event=ALL-UNNAMED',
-        '-Dbaseplayer.loh.timing=true'
-    ]
+    jvmArgs = baseplayerJvmArgs + ['-Dbaseplayer.loh.timing=true']
     List<String> benchArgs = []
     if (project.hasProperty('parental')) {
         benchArgs.addAll(['--parental', project.property('parental').toString()])
@@ -112,11 +109,7 @@ tasks.register('variantLoadBench', JavaExec) {
     description = 'Time sequential VCF stream/annotate/rebuild into one VariantList'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'org.baseplayer.variant.VariantLoadBench'
-    jvmArgs = [
-        '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
-        '--add-opens', 'javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
-        '--add-exports', 'javafx.base/com.sun.javafx.event=ALL-UNNAMED'
-    ]
+    jvmArgs = baseplayerJvmArgs
     List<String> benchArgs = []
     if (project.hasProperty('chrom')) {
         benchArgs.addAll(['--chrom', project.property('chrom').toString()])
@@ -212,6 +205,7 @@ def buildCommonJpackageArgs = { String type, File shadowFile, File outputDir ->
         '--dest', outputDir.absolutePath,
         '--app-version', packageAppVersion,
         '--vendor', 'BasePlayer',
+        '--java-options', '--enable-native-access=javafx.graphics',
         '--java-options', '--add-opens=javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
         '--java-options', '--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED',
         '--java-options', '--add-exports=javafx.base/com.sun.javafx.event=ALL-UNNAMED',

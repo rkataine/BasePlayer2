@@ -57,7 +57,6 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
-
 @SuppressWarnings("this-escape")
 public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
@@ -567,7 +566,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
   @Override
   protected boolean shouldAutoExpandMasterHeader(int displayedTrackCount) {
-    // Visible-range slider is pointless for a single sample; filter strip stays below.
+    // Visible-range slider is pointless for a single sample; density + legends still paint.
     return displayedTrackCount > 1;
   }
 
@@ -670,6 +669,10 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     MenuIcons.bed(tableItem);
     tableItem.setOnAction(e -> SampleDataManager.addTableSampleFiles());
 
+    MenuItem matrixItem = new MenuItem("Matrix file…");
+    MenuIcons.bed(matrixItem);
+    matrixItem.setOnAction(e -> SampleDataManager.addMatrixSampleFile());
+
     MenuItem bigwigItem = new MenuItem("BigWig");
     MenuIcons.bigwig(bigwigItem);
     bigwigItem.setOnAction(e -> SampleDataManager.addBigWigFile());
@@ -680,7 +683,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
 
     menu.getItems().addAll(
         vcfItem, bamItem, directoryItem, dragenItem,
-        new SeparatorMenuItem(), bedItem, tableItem, bigwigItem, ab1Item);
+        new SeparatorMenuItem(), bedItem, tableItem, matrixItem, bigwigItem, ab1Item);
     return menu;
   }
 

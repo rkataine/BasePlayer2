@@ -124,6 +124,101 @@ public final class MappedTableOpen {
     return MappedTableReader.syntheticHeaders(lines.get(0).length);
   }
 
+  /**
+   * Re-prompt column mapping using {@code template} as the dialog seed, then reload
+   * every table in {@code samples} with the chosen mapping (same roles for all files).
+   *
+   * @return number of tables successfully remapped, or empty if cancelled / failed validation
+   */
+  public static Optional<Integer> editMappingForAll(
+      Window owner,
+      MappedTableData template,
+      List<org.baseplayer.samples.Sample> samples) {
+    if (template == null || template.getPath() == null || samples == null || samples.isEmpty()) {
+      return Optional.empty();
+    }
+    Path path = template.getPath();
+    try {
+      MappedTableReader.Preview preview = MappedTableReader.preview(path, PREVIEW_LINES);
+      MappedTableColumnMapping initial = template.getMapping() != null
+          ? template.getMapping()
+          : MappedTableColumnMapping.autoDetect(template.getHeaders());
+      Optional<MappedTableColumnMapping> chosen = promptMapping(
+          owner,
+          "all open tables ("
+              + (path.getFileName() != null ? path.getFileName() : path)
+              + " as template)",
+          preview,
+          initial);
+      if (chosen.isEmpty()) {
+        return Optional.empty();
+      }
+      MappedTableColumnMapping mapping = chosen.get();
+      if (!mapping.hasRequired() || !mapping.hasPayload()) {
+        AppDialog.info(
+            owner,
+            "Incomplete mapping",
+            "Need Chromosome, Start, End, and at least Value or Minor+Major CN.",
+            null);
+        return Optional.empty();
+      }
+      MappedTableMappingMemory.remember(headersForFingerprint(preview, mapping.headerRow()), mapping);
+
+      int ok = 0;
+      StringBuilder errors = new StringBuilder();
+      for (org.baseplayer.samples.Sample sample : samples) {
+        if (sample == null
+            || sample.getDataType() != org.baseplayer.samples.Sample.DataType.TABLE
+            || sample.getMappedTable() == null
+            || sample.getMappedTable().getPath() == null) {
+          continue;
+        }
+        try {
+          MappedTableData data = MappedTableReader.read(
+              sample.getMappedTable().getPath(), mapping, sample.getName());
+          if (data.getRows().isEmpty()) {
+            if (errors.length() > 0) {
+              errors.append('\n');
+            }
+            errors.append(sample.getName()).append(": no rows");
+            continue;
+          }
+          sample.replaceMappedTable(data);
+          ok++;
+        } catch (Exception ex) {
+          if (errors.length() > 0) {
+            errors.append('\n');
+          }
+          errors.append(sample.getName()).append(": ")
+              .append(ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+        }
+      }
+      if (ok == 0) {
+        AppDialog.info(
+            owner,
+            "Remap failed",
+            "No tables could be reloaded with that mapping.",
+            errors.length() > 0 ? errors.toString() : null);
+        return Optional.empty();
+      }
+      if (errors.length() > 0) {
+        AppDialog.info(
+            owner,
+            "Partially remapped",
+            ok + " table(s) updated; some failed:",
+            errors.toString());
+      }
+      return Optional.of(ok);
+    } catch (Exception ex) {
+      AppDialog.info(
+          owner,
+          "Failed to remap tables",
+          path.getFileName() != null ? path.getFileName().toString() : path.toString(),
+          ex.getMessage());
+      return Optional.empty();
+    }
+  }
+
   private static Optional<MappedTableColumnMapping> promptMapping(
       Window owner,
       String fileName,

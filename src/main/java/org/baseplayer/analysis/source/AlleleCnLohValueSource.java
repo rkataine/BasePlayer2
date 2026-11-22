@@ -8,12 +8,12 @@ import java.util.Map;
 
 import org.baseplayer.analysis.CollectContext;
 import org.baseplayer.analysis.ComparisonUnit;
-import org.baseplayer.analysis.FeatureValueMatrix;
+import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.GeneOverlapIndex;
 import org.baseplayer.analysis.GenomicScope;
-import org.baseplayer.analysis.SignalScopeHelper;
-import org.baseplayer.analysis.SignalScopeHelper.Region;
-import org.baseplayer.analysis.SignalSourceSpec;
+import org.baseplayer.analysis.signal.SignalScopeHelper;
+import org.baseplayer.analysis.signal.SignalScopeHelper.Region;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.analysis.allelecn.AlleleCnSegment;
 import org.baseplayer.analysis.allelecn.LohFromAlleleCn;
 import org.baseplayer.genome.gene.Gene;
@@ -94,6 +94,10 @@ public final class AlleleCnLohValueSource implements ValueSource {
         AlleleCnSegment seg = toSegment(row);
         double score = policy.score(seg);
         if (Double.isNaN(score)) {
+          continue;
+        }
+        // LOH-only: skip diploid / non-LOH segments (e.g. minor=1, major=1).
+        if (effective.isLohOnly() && !(score > 0.0)) {
           continue;
         }
         List<String> geneNames = GeneOverlapIndex.overlappingGeneNames(

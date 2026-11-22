@@ -6,90 +6,71 @@ import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.AnalysisSession;
 import org.baseplayer.analysis.ComparisonContext;
 import org.baseplayer.analysis.DifferenceThresholds;
-import org.baseplayer.analysis.GroupStatResult;
-import org.baseplayer.analysis.GroupStatTest;
-import org.baseplayer.analysis.MutationGroupComparisonRunner;
+import org.baseplayer.analysis.groupstat.GroupStatResult;
+import org.baseplayer.analysis.groupstat.GroupStatTest;
+import org.baseplayer.analysis.mutation.MutationGroupComparisonRunner;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 
 import javafx.geometry.Insets;
-import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tab;
-import javafx.scene.layout.HBox;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 
 /**
  * Group comparison for filter-passing mutations (point or SV mode).
  * Auto-runs after annotate-all / group changes via {@link MutationGroupComparisonRunner};
- * Refresh re-scans with the current filters.
+ * Run re-scans with the current filters.
  */
 public final class MutationEnrichmentPanel extends VBox
     implements MutationGroupComparisonRunner.Listener {
 
   private final AnalysisMode mode;
   private final Label statusLabel = new Label();
-  private final Label methodStripLabel = new Label();
-  private final Button refreshButton = new Button("Refresh");
+  private final Button runButton = new Button("Run");
   private final ChoiceBox<GroupStatTest> testChoice;
   private final GroupStatResultTable resultTable = new GroupStatResultTable();
   private final GroupComparisonFilterControls filters = new GroupComparisonFilterControls();
   private GroupStatResult lastDisplayed;
   private Consumer<GroupStatResult> onResultReady;
+  private AnalysisBusyRunner analysisBusyRunner;
+  private Runnable pendingBusyComplete;
   private Tab resultsTab;
   private boolean refreshing;
   private static final String RESULTS_TAB_BASE = "Group comparison";
 
   public MutationEnrichmentPanel(AnalysisMode mode) {
     this.mode = mode != null ? mode : AnalysisMode.MUTATIONS_POINT;
-    setSpacing(8);
-    setPadding(new Insets(12, 16, 12, 16));
-    getStyleClass().add("filter-panel");
+    setSpacing(0);
+    setPadding(Insets.EMPTY);
     VBox.setVgrow(this, Priority.ALWAYS);
 
-    Label title = new Label("Group comparison");
-    title.getStyleClass().add("panel-title");
-
-    Label blurb = new Label(mode == AnalysisMode.MUTATIONS_SV
-        ? "CNV/SV group comparison: each gene×sample score is signed event burden "
-            + "(gains − losses); missing samples = 0. Diff requires within-group sign "
-            + "agreement on the extreme groups. Stable across one-chrom vs annotate-all. "
-            + "Use Min |Δ| / Max q / Top N to filter the results tab. "
-            + "Export via the variant table Excel button (Group comparison sheet)."
-        : "Compares filter-passing point mutations across sample groups for every gene "
-            + "with a call. Runs automatically after Annotate all chromosomes and when "
-            + "sample groups change. Use Min |Δ| / Max q / Top N to filter the "
-            + "variant-table Group comparison tab; Refresh re-scans after filter changes. "
-            + "Export via the variant table Excel button (Group comparison sheet).");
-    blurb.setWrapText(true);
-    blurb.setStyle("-fx-font-size: 12px; -fx-opacity: 0.85;");
-
-    refreshButton.getStyleClass().add("primary-button");
-    refreshButton.setOnAction(e -> refresh(true));
+    runButton.getStyleClass().add("primary-button");
+    runButton.setOnAction(e -> run(true));
+    Tooltip.install(runButton, new Tooltip(mode == AnalysisMode.MUTATIONS_SV
+        ? "Run CNV/SV group comparison with the current filters"
+        : "Run point-mutation group comparison with the current filters"));
 
     testChoice = GroupStatTestControls.createChoiceBox(this::onTestChanged);
     statusLabel.setWrapText(true);
-    statusLabel.setStyle("-fx-font-size: 12px;");
-    methodStripLabel.setWrapText(true);
-    methodStripLabel.setStyle("-fx-font-size: 11px; -fx-opacity: 0.8;");
+    statusLabel.setStyle("-fx-font-size: 12px; -fx-opacity: 0.85;");
 
     resultTable.setMeanTooltip(mode == AnalysisMode.MUTATIONS_SV
-        ? "Mean of signed event burden (gains−losses) over all group samples (missing = 0)"
-        : "Mean of binary carrier score (0/1) over all group samples (missing = 0)");
-
-    HBox controls = new HBox(10, refreshButton, GroupStatTestControls.labeledChoice(testChoice));
-    controls.setAlignment(Pos.CENTER_LEFT);
+        ? "Mean of signed event burden (gains−losses) over all group samples (missing = 0). "
+            + "Collapsed Diff uses polarity + hit rate (not mean ↑/↓)."
+        : "Mean of binary carrier score (0/1) over all group samples (missing = 0). "
+            + "Collapsed Diff uses hit rate extremes (not mean ↑/↓).");
 
     filters.loadFrom(AnalysisSession.get().getThresholds());
     filters.setOnChanged(this::onFiltersChanged);
 
-    getChildren().addAll(
-        title, blurb, controls, statusLabel, methodStripLabel, filters.createPane());
+    getChildren().add(filters.createWorkspace(runButton, testChoice, statusLabel));
 
     MutationGroupComparisonRunner.addListener(this.mode, this);
 
@@ -117,43 +98,69 @@ public final class MutationEnrichmentPanel extends VBox
     this.onResultReady = onResultReady;
   }
 
+  /** Optional Analysis Manager busy gate (same chrome as Signal Discover / annotate-all). */
+  public void setAnalysisBusyRunner(AnalysisBusyRunner runner) {
+    this.analysisBusyRunner = runner;
+  }
+
   /** Variant-table results tab whose title shows the filtered gene count. */
   public void setResultsTab(Tab resultsTab) {
     this.resultsTab = resultsTab;
     updateResultsTabTitle(lastDisplayed);
   }
 
-  /** Manual re-scan; when {@code selectTab} is true, switches to the results tab. */
-  public void refresh(boolean selectTab) {
+  /** Manual run; when {@code selectTab} is true, switches to the results tab. */
+  public void run(boolean selectTab) {
     DifferenceThresholds thr = filters.buildThresholds();
     AnalysisSession.get().setThresholds(thr);
     ComparisonContext.get().writeToDocument(ProjectSessionState.get().getDocument());
     ProjectSessionState.get().markDirty();
-    MutationGroupComparisonRunner.run(mode, thr, selectTab);
+    String status = mode == AnalysisMode.MUTATIONS_SV
+        ? "SV/CNV group comparison…"
+        : "Point mutation group comparison…";
+    if (analysisBusyRunner != null) {
+      analysisBusyRunner.run(status, onDone -> {
+        pendingBusyComplete = onDone;
+        MutationGroupComparisonRunner.run(mode, thr, selectTab);
+      });
+    } else {
+      MutationGroupComparisonRunner.run(mode, thr, selectTab);
+    }
   }
 
   @Override
   public void onStarted(AnalysisMode runMode) {
-    refreshButton.setDisable(true);
-    statusLabel.setText("Scanning genes with calls…");
+    runButton.setDisable(true);
+    statusLabel.setText("Scanning…");
   }
 
   @Override
   public void onFinished(AnalysisMode runMode, GroupStatResult filteredOrRaw, boolean selectResultsTab) {
     applyDisplayed(filteredOrRaw, selectResultsTab);
     updateReady();
+    finishBusy();
   }
 
   @Override
   public void onFailed(AnalysisMode runMode, String message) {
-    statusLabel.setText(message != null ? message : "Enrichment failed");
+    statusLabel.setText(message != null ? message : "Failed");
     updateReady();
+    finishBusy();
   }
 
   @Override
   public void onCancelled(AnalysisMode runMode) {
     statusLabel.setText("Cancelled");
     updateReady();
+    finishBusy();
+  }
+
+  private void finishBusy() {
+    Runnable done = pendingBusyComplete;
+    pendingBusyComplete = null;
+    if (done != null) {
+      done.run();
+    }
   }
 
   private void onFiltersChanged() {
@@ -177,8 +184,7 @@ public final class MutationEnrichmentPanel extends VBox
       org.baseplayer.draw.GenomicCanvas.update.set(!org.baseplayer.draw.GenomicCanvas.update.get());
       return;
     }
-    // No matrix yet — full Refresh will pick up the new test.
-    statusLabel.setText("Test updated — Refresh to apply (no cached matrix yet)");
+    statusLabel.setText("Test updated — Run to apply");
   }
 
   private String scoreLabel() {
@@ -198,12 +204,21 @@ public final class MutationEnrichmentPanel extends VBox
     }
   }
 
+  /** Refresh after Genome sidebar gene-type / COSMIC visibility changes. */
+  public void refreshAfterGeneVisibility() {
+    refreshDisplayedResult();
+  }
+
   private void applyDisplayed(GroupStatResult result, boolean notify) {
     lastDisplayed = result;
     resultTable.setResult(result);
     statusLabel.setText(result != null ? result.summary() : "");
-    String strip = result != null ? result.methodStrip() : "";
-    methodStripLabel.setText(strip != null ? strip : "");
+    String strip = result != null ? result.methodStrip() : null;
+    if (strip != null && !strip.isBlank()) {
+      statusLabel.setTooltip(new Tooltip(strip));
+    } else {
+      statusLabel.setTooltip(null);
+    }
     if (testChoice.getValue() != AnalysisSession.get().getGroupStatTest()) {
       refreshing = true;
       testChoice.setValue(AnalysisSession.get().getGroupStatTest());
@@ -238,16 +253,19 @@ public final class MutationEnrichmentPanel extends VBox
     String block = ComparisonContext.get().runBlockReason(registry);
     boolean hasVcf = VcfManager.getInstance().hasLoadedVcf();
     if (block != null) {
-      refreshButton.setDisable(true);
+      runButton.setDisable(true);
       statusLabel.setText(block);
     } else if (!hasVcf) {
-      refreshButton.setDisable(true);
+      runButton.setDisable(true);
       statusLabel.setText("Load VCF samples first");
     } else {
-      refreshButton.setDisable(false);
-      if (lastDisplayed == null) {
-        statusLabel.setText(
-            "Ready — auto-runs after Annotate all chromosomes / group changes");
+      runButton.setDisable(false);
+      if (lastDisplayed == null
+          && (statusLabel.getText() == null
+              || statusLabel.getText().isBlank()
+              || statusLabel.getText().startsWith("Ready")
+              || statusLabel.getText().startsWith("Load"))) {
+        statusLabel.setText("");
       }
     }
   }

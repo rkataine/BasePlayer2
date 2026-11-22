@@ -244,8 +244,8 @@ public abstract class TrackColumnSidebar extends SidebarBase {
 
   /**
    * True when the visible-range slider chrome should paint/handle input.
-   * Independent of aggregate/density band height — a tall band with one track
-   * must not imply slider controls (that used to snap height back to default).
+   * Independent of aggregate/density band height — a single-track density band
+   * still paints legends without implying slider controls.
    */
   protected final boolean isControlsExpanded() {
     if (!trackViewportRegistry.isMasterAggregatesEnabled()) {
@@ -278,13 +278,20 @@ public abstract class TrackColumnSidebar extends SidebarBase {
     int trackCount = trackViewportRegistry.getDisplayedTrackCount();
     double masterH = trackViewportRegistry.getMasterBandHeightPixels();
 
-    if (!trackViewportRegistry.isMasterAggregatesEnabled()
-        || !shouldAutoExpandMasterHeader(trackCount)) {
-      // Aggregates off, or only one track: title bar only (no slider / density).
+    if (!trackViewportRegistry.isMasterAggregatesEnabled() || trackCount <= 0) {
+      // Aggregates off or no tracks: title bar only.
       if (Math.abs(masterH - TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS) > 0.5) {
         trackViewportRegistry.setMasterBandHeightPixels(
             TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS);
         masterH = TrackViewportRegistry.DEFAULT_MASTER_BAND_HEIGHT_PIXELS;
+      }
+    } else if (!shouldAutoExpandMasterHeader(trackCount)) {
+      // Single track: density + type legends without the visible-range slider.
+      // Skip while dragging so resize stays interactive.
+      double singleH = TrackViewportRegistry.AGGREGATE_MASTER_BAND_HEIGHT_PIXELS;
+      if (!isDraggingResize && masterH < singleH - 1) {
+        trackViewportRegistry.setMasterBandHeightPixels(singleH);
+        masterH = singleH;
       }
     } else {
       // Multi-track with aggregates on: title + range slider needs ~82px.

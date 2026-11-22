@@ -7,13 +7,16 @@ import java.util.Map;
 import java.util.Set;
 
 import org.baseplayer.annotation.AnnotationData;
+import org.baseplayer.annotation.AnnotationLoader;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.utils.ChromosomeNames;
+import org.baseplayer.utils.GeneBiotypeVisibility;
 
 /**
  * Public gene-overlap helpers extracted from variant annotation.
  * Gene lists are start-sorted; queries use inclusive 1-based coordinates.
+ * Respects {@link GeneBiotypeVisibility} (Genome sidebar gene-type legend).
  */
 public final class GeneOverlapIndex {
 
@@ -22,12 +25,16 @@ public final class GeneOverlapIndex {
   /** Prefer protein-coding gene overlapping an inclusive point; null if none. */
   public static Gene bestGeneAt(String chromosome, long position1Based) {
     List<Gene> genes = genesFor(chromosome);
+    GeneBiotypeVisibility visibility = GeneBiotypeVisibility.get();
     Gene best = null;
     for (Gene gene : genes) {
       if (gene.start() > position1Based) {
         break;
       }
       if (gene.end() < position1Based) {
+        continue;
+      }
+      if (!visibility.isVisible(gene)) {
         continue;
       }
       if (best == null
@@ -47,12 +54,16 @@ public final class GeneOverlapIndex {
     long qStart = Math.min(start1Based, end1Based);
     long qEnd = Math.max(start1Based, end1Based);
     List<Gene> genes = genesFor(chromosome);
+    GeneBiotypeVisibility visibility = GeneBiotypeVisibility.get();
     Gene best = null;
     for (Gene gene : genes) {
       if (gene.start() > qEnd) {
         break;
       }
       if (gene.end() < qStart) {
+        continue;
+      }
+      if (!visibility.isVisible(gene)) {
         continue;
       }
       boolean geneCoding = "protein_coding".equals(gene.biotype());
@@ -72,6 +83,7 @@ public final class GeneOverlapIndex {
     long qStart = Math.min(start1Based, end1Based);
     long qEnd = Math.max(start1Based, end1Based);
     List<Gene> genes = genesFor(chromosome);
+    GeneBiotypeVisibility visibility = GeneBiotypeVisibility.get();
     List<String> out = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
     for (Gene gene : genes) {
@@ -84,6 +96,9 @@ public final class GeneOverlapIndex {
       if (gene.name() == null || gene.name().isBlank()) {
         continue;
       }
+      if (!visibility.isVisible(gene)) {
+        continue;
+      }
       if (seen.add(gene.name())) {
         out.add(gene.name());
       }
@@ -92,36 +107,63 @@ public final class GeneOverlapIndex {
   }
 
   /**
-   * Resolve a BED name column as a gene symbol or Ensembl id when possible.
-   * Returns null when the name is not a known gene.
+   * Resolve a BED/matrix name as a catalog gene symbol or Ensembl id.
+   * Prefers the annotation {@link Gene#name()} (HGNC-style symbol). Versioned
+   * Ensembl ids ({@code ENSG….15}) match unversioned GFF ids.
+   * Returns null when unknown or hidden by biotype visibility — never a synthetic
+   * gene whose display name is the raw ENSG string.
    */
   public static Gene resolveByName(String name) {
     if (name == null || name.isBlank() || ".".equals(name)) {
       return null;
     }
-    GeneLocation loc = AnnotationData.getGeneLocation(name);
+    String needle = name.trim();
+    String needleId = stripGenePrefix(needle);
+    String needleVersionless = AnnotationLoader.stripEnsemblVersion(needleId);
+    GeneLocation loc = AnnotationData.getGeneLocation(needle);
+    if (loc == null && !needleId.equalsIgnoreCase(needle)) {
+      loc = AnnotationData.getGeneLocation(needleId);
+    }
+    if (loc == null && !needleVersionless.equalsIgnoreCase(needleId)) {
+      loc = AnnotationData.getGeneLocation(needleVersionless);
+    }
     if (loc == null) {
       return null;
     }
     List<Gene> genes = genesFor(loc.chrom());
+    GeneBiotypeVisibility visibility = GeneBiotypeVisibility.get();
     for (Gene gene : genes) {
-      if (name.equalsIgnoreCase(gene.name()) || name.equalsIgnoreCase(gene.id())) {
-        return gene;
+      if (idsMatch(needle, needleId, needleVersionless, gene.name())
+          || idsMatch(needle, needleId, needleVersionless, gene.id())) {
+        return visibility.isVisible(gene) ? gene : null;
       }
     }
-    String biotype = AnnotationData.getGeneBiotype(name);
-    String description = AnnotationData.getGeneDescription(name);
-    return new Gene(
-        loc.chrom(),
-        loc.start(),
-        loc.end(),
-        name,
-        name,
-        "+",
-        biotype,
-        description,
-        List.of(),
-        List.of());
+    // Locus known but no catalog Gene matched — do not invent an ENSG-named Gene.
+    return null;
+  }
+
+  private static String stripGenePrefix(String id) {
+    if (id != null && id.regionMatches(true, 0, "gene:", 0, 5)) {
+      return id.substring(5);
+    }
+    return id != null ? id : "";
+  }
+
+  private static boolean idsMatch(
+      String needle, String needleId, String needleVersionless, String candidate) {
+    if (candidate == null || candidate.isBlank()) {
+      return false;
+    }
+    if (needle.equalsIgnoreCase(candidate)) {
+      return true;
+    }
+    String candId = stripGenePrefix(candidate);
+    String candVersionless = AnnotationLoader.stripEnsemblVersion(candId);
+    return needleId.equalsIgnoreCase(candId)
+        || needle.equalsIgnoreCase(candId)
+        || needleVersionless.equalsIgnoreCase(candId)
+        || needleId.equalsIgnoreCase(candVersionless)
+        || needleVersionless.equalsIgnoreCase(candVersionless);
   }
 
   public static List<Gene> genesFor(String chromosome) {

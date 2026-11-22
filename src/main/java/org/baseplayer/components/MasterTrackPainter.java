@@ -62,6 +62,17 @@ public class MasterTrackPainter {
   private final CanvasColorLegend colorLegend = new CanvasColorLegend();
   /** Site-context + mod-type toggles for methylation aggregates / marks. */
   private final CanvasColorLegend methylColorLegend = new CanvasColorLegend();
+  /** Allele-CN / mapped-VALUE aggregate series (same class as VCF type legends). */
+  private final CanvasColorLegend mappedTableColorLegend = new CanvasColorLegend();
+  private static final Object LEGEND_GAIN = new Object() {
+    @Override public String toString() { return "GAIN"; }
+  };
+  private static final Object LEGEND_LOH = new Object() {
+    @Override public String toString() { return "LOH"; }
+  };
+  private static final Object LEGEND_MEAN = new Object() {
+    @Override public String toString() { return "MEAN"; }
+  };
 
   /**
    * Zoomed-in precise bars — reuse across paints while view/filter/chain stay put.
@@ -176,6 +187,9 @@ public class MasterTrackPainter {
       if (redrawCallback != null) {
         redrawCallback.run();
       }
+      return true;
+    }
+    if (handleMappedTableLegendClick(x, y)) {
       return true;
     }
     if (handleMethylLegendClick(x, y)) {
@@ -294,7 +308,48 @@ public class MasterTrackPainter {
   public boolean isOverLegend(double x, double y) {
     return hitGroupLabel(x, y) != null
         || colorLegend.isOver(x, y)
-        || methylColorLegend.isOver(x, y);
+        || methylColorLegend.isOver(x, y)
+        || mappedTableColorLegend.isOver(x, y);
+  }
+
+  /** Group swatches on allele-CN / VALUE aggregate legends. */
+  private boolean handleMappedTableLegendClick(double x, double y) {
+    Object hitId = mappedTableColorLegend.hitTest(x, y);
+    if (hitId == null) {
+      return false;
+    }
+    AnalysisSession session = AnalysisSession.get();
+    if (CanvasColorLegend.isSelectAll(hitId)) {
+      List<Integer> groupIds = ComparisonContext.analysisGroupIds(sampleRegistry);
+      if (groupIds.isEmpty()) {
+        return true;
+      }
+      boolean allVisible = true;
+      for (int groupId : groupIds) {
+        if (!session.isAggregateGroupVisible(groupId)) {
+          allVisible = false;
+          break;
+        }
+      }
+      for (int groupId : groupIds) {
+        session.setAggregateGroupVisible(groupId, !allVisible);
+      }
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      if (redrawCallback != null) {
+        redrawCallback.run();
+      }
+      return true;
+    }
+    if (hitId instanceof Integer groupId) {
+      session.toggleAggregateGroupVisible(groupId);
+      GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      if (redrawCallback != null) {
+        redrawCallback.run();
+      }
+      return true;
+    }
+    // Gain / LOH / Mean chrome items are informational only.
+    return hitId == LEGEND_GAIN || hitId == LEGEND_LOH || hitId == LEGEND_MEAN;
   }
 
   private GroupLabelHit hitGroupLabel(double x, double y) {
@@ -452,7 +507,8 @@ public class MasterTrackPainter {
   }
 
   /**
-   * One equal-height row per analysis group (CNV-style stacks): label + mean methylation.
+   * One equal-height row per analysis group (CNV-style stacks): full-width mean
+   * methylation with the group label overlaid in the row's top-left corner.
    */
   private void drawMethylGroupRows(
       GraphicsContext gc,
@@ -467,12 +523,11 @@ public class MasterTrackPainter {
         new ArrayList<>(groupRows.entrySet());
     int n = rows.size();
     double rowH = h / n;
-    double labelW = 72;
-    double plotLeft = 4 + labelW;
-    double plotW = Math.max(8, canvasWidth - plotLeft - 4);
+    double plotLeft = 0;
+    double plotW = Math.max(8, canvasWidth);
 
     gc.setFont(AppFonts.getFont("Segoe UI", 10));
-    gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
     Color axis = org.baseplayer.ui.theme.AppTheme.canvas().axisInk();
 
     for (int ri = 0; ri < n; ri++) {
@@ -480,58 +535,46 @@ public class MasterTrackPainter {
       int groupId = entry.getKey();
       List<CoverageDrawer.SampleRow> members = entry.getValue();
       double rowTop = top + ri * rowH;
-      double midY = rowTop + rowH * 0.5;
+      Color gColor = ComparisonContext.groupColor(sampleRegistry, groupId);
 
       if (ri > 0) {
         gc.setStroke(Color.rgb(120, 120, 120, 0.35));
         gc.setLineWidth(1.0);
-        gc.strokeLine(plotLeft, rowTop + 0.5, canvasWidth - 2, rowTop + 0.5);
+        gc.strokeLine(0, rowTop + 0.5, canvasWidth - 2, rowTop + 0.5);
       }
 
-      Color gColor = ComparisonContext.groupColor(sampleRegistry, groupId);
+      if (rowH >= 6 && members != null && !members.isEmpty()) {
+        double seriesTop = rowTop + 2;
+        double seriesH = Math.max(4, rowH - 4);
+        if (rowH >= 18) {
+          double guideY = seriesTop + seriesH * 0.5;
+          gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.28));
+          gc.setLineDashes(3, 3);
+          gc.setLineWidth(1);
+          gc.strokeLine(plotLeft, guideY, canvasWidth - 2, guideY);
+          gc.setLineDashes();
+        }
+
+        double[] mean = meanMethylSeries(members);
+        if (mean != null) {
+          gc.save();
+          try {
+            gc.beginPath();
+            gc.rect(plotLeft, rowTop, plotW, rowH);
+            gc.clip();
+            Color stroke = Color.color(gColor.getRed(), gColor.getGreen(), gColor.getBlue(), 0.95);
+            strokeMethylSeriesInPlot(
+                gc, mean, stroke, 2.4, plotLeft, seriesTop, plotW, seriesH);
+          } finally {
+            gc.restore();
+          }
+        }
+      }
+
       String name = truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 12);
       int memberCount = members != null ? members.size() : 0;
-      double sw = 8;
-      double sh = 7;
-      double labelX = 4;
-      gc.setFill(Color.color(gColor.getRed(), gColor.getGreen(), gColor.getBlue(), 0.95));
-      gc.fillRoundRect(labelX, midY - sh * 0.5, sw, sh, 2, 2);
-      gc.setFill(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.9));
-      gc.fillText(name + " · n=" + memberCount, labelX + sw + 4, midY);
-
-      if (rowH < 6 || members == null || members.isEmpty()) {
-        continue;
-      }
-
-      double seriesTop = rowTop + 2;
-      double seriesH = Math.max(4, rowH - 4);
-      // 0.5 guide within the row
-      if (rowH >= 18) {
-        double guideY = seriesTop + seriesH * 0.5;
-        gc.setStroke(Color.color(axis.getRed(), axis.getGreen(), axis.getBlue(), 0.28));
-        gc.setLineDashes(3, 3);
-        gc.setLineWidth(1);
-        gc.strokeLine(plotLeft, guideY, canvasWidth - 2, guideY);
-        gc.setLineDashes();
-      }
-
-      double[] mean = meanMethylSeries(members);
-      if (mean == null) {
-        continue;
-      }
-      // Stroke in the full canvas X, but clip Y to this row via seriesTop/seriesH.
-      // Shift series horizontally by drawing into a translated clip region.
-      gc.save();
-      try {
-        gc.beginPath();
-        gc.rect(plotLeft, rowTop, plotW, rowH);
-        gc.clip();
-        Color stroke = Color.color(gColor.getRed(), gColor.getGreen(), gColor.getBlue(), 0.95);
-        strokeMethylSeriesInPlot(
-            gc, mean, stroke, 2.4, plotLeft, seriesTop, plotW, seriesH);
-      } finally {
-        gc.restore();
-      }
+      paintGroupRowOverlayLabel(
+          gc, 4, rowTop + 2, gColor, true, name + " · n=" + memberCount, axis);
     }
   }
 
@@ -619,12 +662,12 @@ public class MasterTrackPainter {
   private static final Color TABLE_GAIN_COLOR = Color.rgb(45, 95, 210, 0.88);
   private static final Color TABLE_LOH_COLOR = Color.rgb(210, 55, 55, 0.88);
   private static final LohFromAlleleCn TABLE_LOH_POLICY = LohFromAlleleCn.binary();
-  /** Total CN above this counts as gain in the ASCAT recurrence aggregate. */
+  /** Total CN above this counts as gain in the allele-CN recurrence aggregate. */
   private static final double TABLE_GAIN_CN_THRESHOLD = 2.5;
 
   /**
    * Aggregate mapped tables on the master band.
-   * Allele-CN (ASCAT…): CNV-style recurrence — gain counts up, LOH counts down
+   * Allele-CN: CNV-style recurrence — gain counts up, LOH counts down
    * (peaks = shared / minimal regions). VALUE tables: single cohort/group mean.
    */
   private void renderMasterMappedTable(
@@ -674,7 +717,9 @@ public class MasterTrackPainter {
           if (mask != null) {
             alleleMasks.add(new AlleleCnMask(sample, mask.loh(), mask.gain()));
           }
-        } else if (table.hasValueColumn()) {
+        } else if (table.hasValueColumn() && !table.isIntervalBars()) {
+          // Gene/region matrices are sparse bars — skip continuous master raster
+          // (would paint through intergenic gaps).
           double[] series = rasterizeMappedTableValueSeries(
               table, chrom, vStart, vEnd, width, viewStart, viewEnd);
           if (series != null) {
@@ -690,6 +735,8 @@ public class MasterTrackPainter {
     } else if (!valueSeries.isEmpty()) {
       renderMappedValueMean(
           gc, canvasWidth, masterTrackHeight, valueSeries, sampleToTrack);
+    } else {
+      mappedTableColorLegend.clear();
     }
   }
 
@@ -811,7 +858,7 @@ public class MasterTrackPainter {
     gc.setLineDashes();
 
     drawAlleleCnRecurrenceLegend(
-        gc, canvasWidth, masterTrackHeight, masks.size(), groupIds, byGroup, maxCount);
+        gc, canvasWidth, masterTrackHeight, groupIds, byGroup, maxCount);
   }
 
   private void renderMappedValueMean(
@@ -1147,77 +1194,26 @@ public class MasterTrackPainter {
       GraphicsContext gc,
       double canvasWidth,
       double masterTrackHeight,
-      int sampleCount,
       List<Integer> groupIds,
       boolean byGroup,
       int maxCount) {
-    gc.setLineWidth(1.0);
-    gc.setFont(AppFonts.getFont("Segoe UI", 9));
-    gc.setTextBaseline(javafx.geometry.VPos.TOP);
-
-    double rowH = 12;
-    double pad = 6;
-    double sw = 10;
-    double sh = 7;
-    double maxLabel = 120;
-    List<String> lines = new ArrayList<>();
-    List<Color> colors = new ArrayList<>();
-
-    lines.add("ASCAT recurrence (" + sampleCount + ")");
-    colors.add(null);
-    lines.add("Gain ↑  (n≤" + maxCount + ")");
-    colors.add(TABLE_GAIN_COLOR);
-    lines.add("LOH ↓  (n≤" + maxCount + ")");
-    colors.add(TABLE_LOH_COLOR);
+    List<CanvasColorLegend.Item> items = new ArrayList<>();
+    items.add(new CanvasColorLegend.Item(
+        LEGEND_GAIN, "Gain≤" + maxCount, TABLE_GAIN_COLOR, true));
+    items.add(new CanvasColorLegend.Item(
+        LEGEND_LOH, "LOH≤" + maxCount, TABLE_LOH_COLOR, true));
     if (byGroup && groupIds != null) {
-      lines.add("Stacked by group");
-      colors.add(null);
+      AnalysisSession session = AnalysisSession.get();
       for (int groupId : groupIds) {
-        lines.add(truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 18));
-        colors.add(ComparisonContext.groupColor(sampleRegistry, groupId));
+        items.add(new CanvasColorLegend.Item(
+            Integer.valueOf(groupId),
+            truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 14),
+            ComparisonContext.groupColor(sampleRegistry, groupId),
+            session.isAggregateGroupVisible(groupId)));
       }
     }
-
-    double textW = 0;
-    for (String line : lines) {
-      textW = Math.max(textW, Math.min(maxLabel, line.length() * 5.6));
-    }
-    double boxW = pad * 2 + sw + 4 + textW;
-    double boxH = pad * 2 + lines.size() * rowH;
-    if (boxH > masterTrackHeight - 4) {
-      boxH = masterTrackHeight - 4;
-    }
-    double boxX = Math.max(4, canvasWidth - boxW - 4);
-    double boxY = Math.max(2, masterTrackHeight - boxH - 2);
-
-    var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
-    gc.setFill(Color.color(
-        chrome.elevated().getRed(),
-        chrome.elevated().getGreen(),
-        chrome.elevated().getBlue(),
-        org.baseplayer.ui.theme.AppTheme.isDark() ? 0.72 : 0.9));
-    gc.fillRoundRect(boxX, boxY, boxW, boxH, 4, 4);
-
-    double y = boxY + pad;
-    double maxY = boxY + boxH - 2;
-    for (int i = 0; i < lines.size(); i++) {
-      if (y + rowH > maxY) {
-        break;
-      }
-      String label = lines.get(i);
-      Color color = colors.get(i);
-      double x = boxX + pad;
-      if (color != null) {
-        gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.95));
-        gc.fillRoundRect(x, y + 1, sw, sh, 2, 2);
-        x += sw + 4;
-      }
-      gc.setFill(color == null
-          ? Color.rgb(180, 180, 180, 0.95)
-          : Color.rgb(220, 220, 220, 0.95));
-      gc.fillText(label, x, y);
-      y += rowH;
-    }
+    mappedTableColorLegend.draw(
+        gc, items, 39, 4, canvasWidth - 4, Math.max(8, masterTrackHeight - 4), "All");
   }
 
   private void drawMappedValueAggregateScale(
@@ -1254,70 +1250,25 @@ public class MasterTrackPainter {
       int sampleCount,
       Set<Integer> groupIds,
       boolean showGroupMeans) {
-    gc.setLineWidth(1.0);
-    gc.setFont(AppFonts.getFont("Segoe UI", 9));
-    gc.setTextBaseline(javafx.geometry.VPos.TOP);
-
-    double rowH = 12;
-    double pad = 6;
-    double sw = 10;
-    double sh = 7;
-    double maxLabel = 110;
-    List<String> lines = new ArrayList<>();
-    List<Color> colors = new ArrayList<>();
-
+    List<CanvasColorLegend.Item> items = new ArrayList<>();
     if (showGroupMeans && groupIds != null && !groupIds.isEmpty()) {
-      lines.add("Mean value by group");
-      colors.add(null);
+      AnalysisSession session = AnalysisSession.get();
       for (int groupId : groupIds) {
-        lines.add(truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 18));
-        colors.add(ComparisonContext.groupColor(sampleRegistry, groupId));
+        items.add(new CanvasColorLegend.Item(
+            Integer.valueOf(groupId),
+            truncateLegendLabel(ComparisonContext.groupName(sampleRegistry, groupId), 14),
+            ComparisonContext.groupColor(sampleRegistry, groupId),
+            session.isAggregateGroupVisible(groupId)));
       }
     } else {
-      lines.add("Mean value (" + sampleCount + " samples)");
-      colors.add(Color.rgb(55, 120, 200));
+      items.add(new CanvasColorLegend.Item(
+          LEGEND_MEAN,
+          "Mean (" + sampleCount + ")",
+          Color.rgb(55, 120, 200),
+          true));
     }
-
-    double textW = 0;
-    for (String line : lines) {
-      textW = Math.max(textW, Math.min(maxLabel, line.length() * 5.6));
-    }
-    double boxW = pad * 2 + sw + 4 + textW;
-    double boxH = pad * 2 + lines.size() * rowH;
-    if (boxH > masterTrackHeight - 4) {
-      boxH = masterTrackHeight - 4;
-    }
-    double boxX = Math.max(4, canvasWidth - boxW - 4);
-    double boxY = Math.max(2, masterTrackHeight - boxH - 2);
-
-    var chrome = org.baseplayer.ui.theme.AppTheme.chrome();
-    gc.setFill(Color.color(
-        chrome.elevated().getRed(),
-        chrome.elevated().getGreen(),
-        chrome.elevated().getBlue(),
-        org.baseplayer.ui.theme.AppTheme.isDark() ? 0.72 : 0.9));
-    gc.fillRoundRect(boxX, boxY, boxW, boxH, 4, 4);
-
-    double y = boxY + pad;
-    double maxY = boxY + boxH - 2;
-    for (int i = 0; i < lines.size(); i++) {
-      if (y + rowH > maxY) {
-        break;
-      }
-      String label = lines.get(i);
-      Color color = colors.get(i);
-      double x = boxX + pad;
-      if (color != null) {
-        gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.95));
-        gc.fillRoundRect(x, y + 1, sw, sh, 2, 2);
-        x += sw + 4;
-      }
-      gc.setFill(color == null
-          ? Color.rgb(180, 180, 180, 0.95)
-          : Color.rgb(220, 220, 220, 0.95));
-      gc.fillText(label, x, y);
-      y += rowH;
-    }
+    mappedTableColorLegend.draw(
+        gc, items, 39, 4, canvasWidth - 4, Math.max(8, masterTrackHeight - 4), "All");
   }
 
   private static String formatAggregateTick(double v) {
@@ -1594,7 +1545,8 @@ public class MasterTrackPainter {
 
   /**
    * Equal-height group stack rows with a shared Y scale (sum of visible type counts).
-   * Bars use type colors; group identity is only in the clickable row label.
+   * Bars use the full canvas width (aligned with non-group density); group identity is
+   * a clickable label overlaid in each row's top-left corner.
    */
   private int drawGroupStackRows(
       GraphicsContext gc,
@@ -1643,12 +1595,11 @@ public class MasterTrackPainter {
 
     int n = rows.size();
     double rowH = h / n;
-    double labelW = 72;
-    double plotLeft = 36 + labelW;
-    double plotW = Math.max(8, canvasWidth - plotLeft - 4);
+    double plotLeft = 0;
+    double plotW = Math.max(8, canvasWidth);
     List<GroupLabelHit> hits = new ArrayList<>(n);
     gc.setFont(AppFonts.getFont("Segoe UI", 10));
-    gc.setTextBaseline(javafx.geometry.VPos.CENTER);
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
 
     for (int ri = 0; ri < n; ri++) {
       VariantDensityPyramid.GroupDensity gd = rows.get(ri);
@@ -1656,78 +1607,115 @@ public class MasterTrackPainter {
       boolean shown = session.isAggregateGroupVisible(groupId);
       double rowTop = top + ri * rowH;
       double rowBottom = rowTop + rowH;
-      double midY = rowTop + rowH * 0.5;
 
-      // Separators between stacks
       if (ri > 0) {
         gc.setStroke(Color.rgb(120, 120, 120, 0.35));
         gc.setLineWidth(1.0);
-        gc.strokeLine(plotLeft, rowTop + 0.5, canvasWidth - 2, rowTop + 0.5);
+        gc.strokeLine(0, rowTop + 0.5, canvasWidth - 2, rowTop + 0.5);
+      }
+
+      if (shown && rowH >= 4) {
+        double maxBarH = Math.max(1, rowH - 2);
+        int width = (int) Math.floor(plotW);
+        for (int px = 0; px < width; px++) {
+          double g0 = viewStart + px * viewLen / plotW;
+          double g1 = viewStart + (px + 1) * viewLen / plotW;
+          int b0 = pyr.genomicToBin(g0, level);
+          int b1 = pyr.genomicToBin(g1, level);
+          if (b1 < b0) {
+            int tmp = b0;
+            b0 = b1;
+            b1 = tmp;
+          }
+          int stack = 0;
+          double yCursor = rowBottom - 1;
+          for (VariantDensityPyramid.Channel ch : VariantDensityPyramid.Channel.values()) {
+            if (!visible[ch.ordinal()]) {
+              continue;
+            }
+            VcfVariantType type = typeForPyramidChannel(ch);
+            if (type == null) {
+              continue;
+            }
+            int[] counts = gd.channelCounts(levelIndex, ch);
+            int val = channelMaxInBins(counts, b0, b1);
+            if (val <= 0) {
+              continue;
+            }
+            double bh = maxBarH * (val / (double) maxC);
+            if (bh < 0.5) {
+              bh = 0.5;
+            }
+            Color c = VariantTypeVisuals.color(type);
+            gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.55));
+            gc.fillRect(plotLeft + px, yCursor - bh, 1, bh);
+            yCursor -= bh;
+            stack += val;
+            if (stack >= maxC && yCursor <= rowTop + 1) {
+              break;
+            }
+          }
+        }
       }
 
       String name = truncateLegendLabel(
           ComparisonContext.groupName(sampleRegistry, groupId), 12);
       Color gColor = ComparisonContext.groupColor(sampleRegistry, groupId);
-      double sw = 8;
-      double sh = 7;
-      double labelX = 36;
-      gc.setFill(Color.color(
-          gColor.getRed(), gColor.getGreen(), gColor.getBlue(), shown ? 0.95 : 0.35));
-      gc.fillRoundRect(labelX, midY - sh * 0.5, sw, sh, 2, 2);
-      gc.setFill(shown
-          ? Color.rgb(220, 220, 220, 0.95)
-          : Color.rgb(160, 160, 160, 0.7));
-      gc.fillText(name, labelX + sw + 4, midY);
-      hits.add(new GroupLabelHit(labelX, rowTop, labelW, rowH, groupId));
-
-      if (!shown || rowH < 4) {
-        continue;
-      }
-
-      double maxBarH = Math.max(1, rowH - 2);
-      int width = (int) Math.floor(plotW);
-      for (int px = 0; px < width; px++) {
-        double g0 = viewStart + px * viewLen / plotW;
-        double g1 = viewStart + (px + 1) * viewLen / plotW;
-        int b0 = pyr.genomicToBin(g0, level);
-        int b1 = pyr.genomicToBin(g1, level);
-        if (b1 < b0) {
-          int tmp = b0;
-          b0 = b1;
-          b1 = tmp;
-        }
-        int stack = 0;
-        double yCursor = rowBottom - 1;
-        for (VariantDensityPyramid.Channel ch : VariantDensityPyramid.Channel.values()) {
-          if (!visible[ch.ordinal()]) {
-            continue;
-          }
-          VcfVariantType type = typeForPyramidChannel(ch);
-          if (type == null) {
-            continue;
-          }
-          int[] counts = gd.channelCounts(levelIndex, ch);
-          int val = channelMaxInBins(counts, b0, b1);
-          if (val <= 0) {
-            continue;
-          }
-          double bh = maxBarH * (val / (double) maxC);
-          if (bh < 0.5) {
-            bh = 0.5;
-          }
-          Color c = VariantTypeVisuals.color(type);
-          gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.55));
-          gc.fillRect(plotLeft + px, yCursor - bh, 1, bh);
-          yCursor -= bh;
-          stack += val;
-          if (stack >= maxC && yCursor <= rowTop + 1) {
-            break;
-          }
-        }
-      }
+      double labelX = 4;
+      double labelPad = 2;
+      GroupLabelHit hit = paintGroupRowOverlayLabel(
+          gc, labelX, rowTop + labelPad, gColor, shown, name, Color.rgb(220, 220, 220));
+      hits.add(new GroupLabelHit(
+          hit.x(), rowTop, hit.w(), Math.max(hit.h(), Math.min(rowH, 18)), groupId));
     }
     groupLabelHits = hits;
     return maxC;
+  }
+
+  /**
+   * Semi-transparent pill with color swatch + name in the top-left of a group row.
+   * Returns the pill bounds for hit-testing.
+   */
+  private static GroupLabelHit paintGroupRowOverlayLabel(
+      GraphicsContext gc,
+      double x,
+      double y,
+      Color groupColor,
+      boolean emphasized,
+      String text,
+      Color textColor) {
+    double sw = 8;
+    double sh = 7;
+    double padX = 5;
+    double padY = 3;
+    double gap = 4;
+    javafx.scene.text.Font font = gc.getFont();
+    javafx.scene.text.Text measure = new javafx.scene.text.Text(text != null ? text : "");
+    measure.setFont(font);
+    double textW = Math.max(8, measure.getLayoutBounds().getWidth());
+    double textH = Math.max(10, measure.getLayoutBounds().getHeight());
+    double pillW = padX + sw + gap + textW + padX;
+    double pillH = Math.max(sh, textH) + padY * 2;
+
+    gc.setFill(Color.rgb(20, 20, 20, emphasized ? 0.55 : 0.4));
+    gc.fillRoundRect(x, y, pillW, pillH, 4, 4);
+
+    double contentY = y + padY;
+    double swatchY = contentY + (Math.max(sh, textH) - sh) * 0.5;
+    gc.setFill(Color.color(
+        groupColor.getRed(),
+        groupColor.getGreen(),
+        groupColor.getBlue(),
+        emphasized ? 0.95 : 0.4));
+    gc.fillRoundRect(x + padX, swatchY, sw, sh, 2, 2);
+
+    gc.setFill(emphasized
+        ? Color.color(textColor.getRed(), textColor.getGreen(), textColor.getBlue(), 0.95)
+        : Color.rgb(160, 160, 160, 0.75));
+    gc.setTextBaseline(javafx.geometry.VPos.TOP);
+    gc.fillText(text != null ? text : "", x + padX + sw + gap, contentY);
+
+    return new GroupLabelHit(x, y, pillW, pillH, -1);
   }
 
   private static boolean[] visiblePyramidChannels(VcfManager vcfManager) {
@@ -1827,8 +1815,11 @@ public class MasterTrackPainter {
     VariantList variants = this.variantList;
     if (variants == null || variants.isEmpty()) {
       pyramid = null;
-      colorLegend.clear();
       clusterHits = List.of();
+      groupLabelHits = List.of();
+      // Keep session type legends clickable even before any variants are cached.
+      colorLegend.clear();
+      drawDensityChrome(gc, canvasWidth, 2, Math.max(8, masterTrackHeight - 4), 1);
       return;
     }
 

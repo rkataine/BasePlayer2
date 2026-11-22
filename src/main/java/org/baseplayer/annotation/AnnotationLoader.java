@@ -481,7 +481,8 @@ public final class AnnotationLoader {
       );
       
       byChrom.computeIfAbsent(gb.chrom, k -> new ArrayList<>()).add(gene);
-      searchMap.put(gb.name.toLowerCase(), new GeneLocation(gb.chrom, gb.start, gb.end));
+      GeneLocation loc = new GeneLocation(gb.chrom, gb.start, gb.end);
+      putGeneSearchKeys(searchMap, gb.name, gb.id, loc);
       if (gb.biotype != null) {
         biotypeMap.put(gb.name.toLowerCase(), gb.biotype);
       }
@@ -502,6 +503,71 @@ public final class AnnotationLoader {
         if (cmp != 0) return cmp;
         return a.name().compareToIgnoreCase(b.name());
       });
+    }
+  }
+
+  /**
+   * Strip trailing Ensembl version ({@code .digits}) from Ensembl-style ids
+   * ({@code ENSG…}, {@code ENSMUSG…}, etc.). Leaves symbols unchanged.
+   */
+  public static String stripEnsemblVersion(String id) {
+    if (id == null || id.isBlank()) {
+      return id;
+    }
+    String s = id.trim();
+    int dot = s.lastIndexOf('.');
+    if (dot <= 0 || dot >= s.length() - 1) {
+      return s;
+    }
+    for (int i = dot + 1; i < s.length(); i++) {
+      if (!Character.isDigit(s.charAt(i))) {
+        return s;
+      }
+    }
+    String base = s.substring(0, dot);
+    if (base.regionMatches(true, 0, "ENS", 0, 3)) {
+      return base;
+    }
+    return s;
+  }
+
+  /**
+   * Index symbol plus Ensembl-style gene id aliases so matrix ENSG columns resolve.
+   * Keys are lower-cased. Does not overwrite an existing symbol entry with an id alias.
+   * Indexes both versioned and versionless Ensembl ids.
+   */
+  public static void putGeneSearchKeys(
+      Map<String, GeneLocation> searchMap,
+      String name,
+      String id,
+      GeneLocation loc) {
+    if (searchMap == null || loc == null) {
+      return;
+    }
+    if (name != null && !name.isBlank()) {
+      searchMap.putIfAbsent(name.toLowerCase(java.util.Locale.ROOT), loc);
+    }
+    if (id == null || id.isBlank()) {
+      return;
+    }
+    String raw = id.trim();
+    putIdAlias(searchMap, raw, loc);
+    // GFF often stores "gene:ENSG00000…".
+    if (raw.regionMatches(true, 0, "gene:", 0, 5)) {
+      putIdAlias(searchMap, raw.substring(5), loc);
+    }
+  }
+
+  private static void putIdAlias(
+      Map<String, GeneLocation> searchMap, String alias, GeneLocation loc) {
+    if (alias == null || alias.isBlank()) {
+      return;
+    }
+    String key = alias.toLowerCase(java.util.Locale.ROOT);
+    searchMap.putIfAbsent(key, loc);
+    String versionless = stripEnsemblVersion(alias);
+    if (versionless != null && !versionless.equalsIgnoreCase(alias)) {
+      searchMap.putIfAbsent(versionless.toLowerCase(java.util.Locale.ROOT), loc);
     }
   }
 
@@ -679,7 +745,8 @@ public final class AnnotationLoader {
                              description, transcripts, exons);
         
         byChrom.computeIfAbsent(chrom, k -> new ArrayList<>()).add(gene);
-        searchMap.put(name.toLowerCase(), new GeneLocation(chrom, start, end));
+        GeneLocation loc = new GeneLocation(chrom, start, end);
+        putGeneSearchKeys(searchMap, name, id, loc);
         if (biotype != null && !biotype.isEmpty()) {
           biotypeMap.put(name.toLowerCase(), biotype);
         }

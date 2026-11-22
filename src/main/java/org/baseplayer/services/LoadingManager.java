@@ -148,16 +148,18 @@ public final class LoadingManager {
         popup.hide();
       }
     } else {
-      ensurePopup();
+      Window owner = resolveOwnerWindow();
+      ensurePopupForOwner(owner);
       String message = buildMessage(tasks);
       String detail = buildDetail(tasks);
       if (!popup.isShowing()) {
-        popup.show(message, resolveOwnerWindow(), ThreadRunner.get()::cancelAll);
+        popup.show(message, owner, ThreadRunner.get()::cancelAll);
         popup.setDetailMessage(detail);
       } else {
         popup.setMessage(message);
         popup.setDetailMessage(detail);
-        popup.syncForegroundVisibility();
+        // Re-anchor if the previous owner (e.g. Variant Manager) was hidden.
+        popup.ensureVisibleOver(owner);
       }
     }
     org.baseplayer.variant.ui.VariantManagerController controller =
@@ -167,11 +169,24 @@ public final class LoadingManager {
     }
   }
 
+  /**
+   * Prefer Analysis Manager when it is open so annotate/discover-all loading stays
+   * over that window. Fall back to the main stage when VM is hidden/minimized so
+   * the popup is not orphaned on a non-showing owner.
+   */
   private static Window resolveOwnerWindow() {
     org.baseplayer.variant.ui.VariantManagerController controller =
         org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
-    if (controller != null && controller.getStage() != null && controller.getStage().isShowing()) {
-      return controller.getStage();
+    if (controller != null) {
+      Window vm = controller.getStage();
+      if (vm instanceof javafx.stage.Stage stage
+          && stage.isShowing()
+          && !stage.isIconified()) {
+        return stage;
+      }
+    }
+    if (MainApp.stage != null && MainApp.stage.isShowing()) {
+      return MainApp.stage;
     }
     return MainApp.stage;
   }
@@ -183,6 +198,21 @@ public final class LoadingManager {
       }
       popup = new LoadingPopup();
     }
+  }
+
+  /**
+   * JavaFX allows {@code initOwner} only once. If Analysis Manager should own the
+   * popup but an earlier MainApp-owned instance exists, dispose and recreate.
+   */
+  private void ensurePopupForOwner(Window owner) {
+    if (popup != null && owner != null) {
+      Window current = popup.stageOwner();
+      if (current != null && current != owner) {
+        popup.dispose();
+        popup = null;
+      }
+    }
+    ensurePopup();
   }
 
   private String buildMessage(List<ThreadRunner.RunnerTask> tasks) {

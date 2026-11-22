@@ -84,7 +84,7 @@ public class LoadRegionButton extends StackPane {
         idleShadow.setOffsetY(1);
         setEffect(idleShadow);
 
-        textLabel = new Label("Load region");
+        textLabel = new Label("Load variants");
         textLabel.setMouseTransparent(true);
         textLabel.setStyle(LABEL_IDLE);
 
@@ -154,18 +154,19 @@ public class LoadRegionButton extends StackPane {
         long viewStart = Math.max(1L, region.start());
         long viewEnd = Math.max(viewStart, region.end());
 
-        VariantList loaded = VcfManager.getInstance().getCachedVariants(region.chrom());
+        VcfManager vcfManager = VcfManager.getInstance();
+        VariantList loaded = vcfManager.getCachedVariants(region.chrom());
         boolean isCached = regionFetchCache.isFetched("VCF", region.chrom(), viewStart, viewEnd)
             // Annotate-all / session restore used to skip RegionFetchCache; VariantList wins.
-            || (loaded != null && loaded.isRegionLoaded(viewStart, viewEnd));
-        var fetchedRegions = regionFetchCache.getFetched("VCF", region.chrom());
-        boolean hasAnyCoverage = !fetchedRegions.isEmpty()
-            || (loaded != null && !loaded.isEmpty());
+            || (loaded != null && !loaded.isEmpty() && loaded.isRegionLoaded(viewStart, viewEnd));
 
-        // Show when this chrom has some VCF coverage but the viewport is not fully covered.
-        boolean shouldShowButton = !isCached && hasAnyCoverage;
+        // Show whenever visible VCFs are open and this viewport is not loaded yet —
+        // including after restore/visibility toggles with an empty cache (no auto-stream).
+        boolean needsLoad = vcfManager.hasLoadedVcf()
+            && vcfManager.hasVisibleVcfSample()
+            && !isCached;
 
-        if (loading && !VcfManager.getInstance().isLoading()) {
+        if (loading && !vcfManager.isLoading()) {
             loading = false;
             applyIdleStyle();
         }
@@ -174,8 +175,8 @@ public class LoadRegionButton extends StackPane {
             applyIdleStyle();
         }
 
-        setVisible(shouldShowButton || loading);
-        if (!shouldShowButton && !loading) {
+        setVisible(needsLoad || loading);
+        if (!needsLoad && !loading) {
             applyIdleStyle();
         }
     }
@@ -208,7 +209,7 @@ public class LoadRegionButton extends StackPane {
     }
 
     private void applyIdleStyle() {
-        textLabel.setText("Load region");
+        textLabel.setText("Load variants");
         textLabel.setStyle(LABEL_IDLE);
         setStyle(STYLE_IDLE);
     }

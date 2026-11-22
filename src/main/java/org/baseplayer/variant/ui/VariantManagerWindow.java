@@ -157,7 +157,7 @@ public class VariantManagerWindow {
         if (registry == null) {
             return false;
         }
-        for (org.baseplayer.samples.SampleTrack track : snapshotSampleTracks(registry)) {
+        for (org.baseplayer.samples.SampleTrack track : registry.snapshotSampleTracks()) {
             if (track == null) {
                 continue;
             }
@@ -184,33 +184,6 @@ public class VariantManagerWindow {
             controller.selectSignalMode();
             controller.refreshSignalSources();
         }
-    }
-
-    /**
-     * Index-based copy of the live {@code ObservableList}. Avoids iterator CME when
-     * tracks are added during the same FX pulse as a list-change listener.
-     */
-    private static java.util.List<org.baseplayer.samples.SampleTrack> snapshotSampleTracks(
-            org.baseplayer.services.SampleRegistry registry) {
-        javafx.collections.ObservableList<org.baseplayer.samples.SampleTrack> live =
-            registry.getSampleTracks();
-        for (int attempt = 0; attempt < 6; attempt++) {
-            try {
-                int n = live.size();
-                java.util.ArrayList<org.baseplayer.samples.SampleTrack> copy =
-                    new java.util.ArrayList<>(Math.max(4, n));
-                for (int i = 0; i < n; i++) {
-                    if (i >= live.size()) {
-                        break;
-                    }
-                    copy.add(live.get(i));
-                }
-                return copy;
-            } catch (IndexOutOfBoundsException | java.util.ConcurrentModificationException ignored) {
-                // List mutated mid-copy — retry.
-            }
-        }
-        return java.util.List.of();
     }
 
     public static void bringToFrontOrOpen() {

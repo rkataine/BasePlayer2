@@ -50,7 +50,7 @@ public class Sample implements Closeable {
   private final BedTrack bedTrack;
   private final BigWigTrack bigWigTrack;
   private final SangerTrace sangerTrace;
-  private final MappedTableData mappedTable;
+  private volatile MappedTableData mappedTable;
 
   /** Path-only BAM/CRAM — does not open the file or load the index. */
   public Sample(Path filePath) {
@@ -362,6 +362,14 @@ public class Sample implements Closeable {
   public BigWigTrack getBigWigTrack() { return bigWigTrack; }
   public SangerTrace getSangerTrace() { return sangerTrace; }
   public MappedTableData getMappedTable() { return mappedTable; }
+
+  /** Replace table data after remapping columns (TABLE samples only). */
+  public void replaceMappedTable(MappedTableData data) {
+    if (dataType != DataType.TABLE) {
+      throw new IllegalStateException("Not a table sample");
+    }
+    this.mappedTable = data;
+  }
 
   @Override
   public void close() throws IOException {

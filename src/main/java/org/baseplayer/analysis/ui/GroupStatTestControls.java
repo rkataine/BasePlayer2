@@ -3,8 +3,8 @@ package org.baseplayer.analysis.ui;
 import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.AnalysisSession;
 import org.baseplayer.analysis.ComparisonContext;
-import org.baseplayer.analysis.GroupStatResult;
-import org.baseplayer.analysis.GroupStatTest;
+import org.baseplayer.analysis.groupstat.GroupStatResult;
+import org.baseplayer.analysis.groupstat.GroupStatTest;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
@@ -38,11 +38,12 @@ public final class GroupStatTestControls {
       }
     });
     box.setValue(AnalysisSession.get().getGroupStatTest());
-    box.setPrefWidth(220);
+    box.setMaxWidth(Double.MAX_VALUE);
+    box.setPrefWidth(240);
     Tooltip.install(box, new Tooltip(
-        "Hypothesis test for group differences. Auto picks Fisher for sparse "
-            + "carrier-like matrices (2 groups), Welch for dense continuous (2 groups), "
-            + "Kruskal–Wallis for N>2. Changing test recomputes from the last matrix."));
+        "Auto picks by data: Fisher for sparse 0/1 carrier matrices (2 groups), "
+            + "Moderated t for continuous values (2 groups), Kruskal–Wallis when N>2. "
+            + "Changing test recomputes from the last matrix when available."));
     box.valueProperty().addListener((o, a, b) -> {
       if (b == null) {
         return;

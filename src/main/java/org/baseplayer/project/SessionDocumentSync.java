@@ -1,6 +1,5 @@
 package org.baseplayer.project;
 
-import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -33,7 +32,6 @@ import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantEffect;
 
 import javafx.scene.paint.Color;
-
 /**
  * Keeps the live {@link ProjectDocument} in sync with runtime services.
  * Targeted writers update the document immediately on mutation; {@link #syncAll}
@@ -97,6 +95,7 @@ public final class SessionDocumentSync {
     writeSampleGroupsFromRegistry();
     org.baseplayer.analysis.ComparisonContext.get().writeToDocument(live());
     writeSampleTracksFromRuntime(projectFile);
+    writeMatricesFromRuntime(projectFile);
     writeFeatureTracksFromRuntime(projectFile);
     writeStacksFromRuntime();
     writeViewportsFromRuntime();
@@ -124,19 +123,8 @@ public final class SessionDocumentSync {
       groupSpec.parentGroupId = -1;
       doc.sampleGroups.add(groupSpec);
     }
-    // Membership + tags are stored on track specs — refresh if tracks already present.
-    if (doc.sampleTracks != null && !doc.sampleTracks.isEmpty()) {
-      List<SampleTrack> tracks = samples.getSampleTracks();
-      int n = Math.min(tracks.size(), doc.sampleTracks.size());
-      for (int i = 0; i < n; i++) {
-        SampleTrack track = tracks.get(i);
-        ProjectDocument.SampleTrackSpec spec = doc.sampleTracks.get(i);
-        if (track != null && spec != null) {
-          spec.groupIds = new ArrayList<>(track.getGroupIds());
-          spec.tags = writeTrackTags(track);
-        }
-      }
-    }
+    // Membership + tags are written with track specs in writeSampleTracksFromRuntime —
+    // do not pair by parallel index (sampleTracks may be shorter when empty tracks are skipped).
   }
 
   private static List<String> writeTrackTags(SampleTrack track) {
@@ -440,11 +428,9 @@ public final class SessionDocumentSync {
   public static void writeSampleTracksFromRuntime(Path projectFile) {
     ProjectDocument doc = live();
     SampleRegistry samples = ServiceRegistry.getInstance().getSampleRegistry();
-    VcfManager vcfManager = VcfManager.getInstance();
     doc.sampleTracks = new ArrayList<>();
     List<SampleTrack> sampleTracks = samples.getSampleTracks();
-    for (int trackIndex = 0; trackIndex < sampleTracks.size(); trackIndex++) {
-      SampleTrack track = sampleTracks.get(trackIndex);
+    for (SampleTrack track : sampleTracks) {
       ProjectDocument.SampleTrackSpec trackSpec = new ProjectDocument.SampleTrackSpec();
       trackSpec.displayName = track.getDisplayName();
       trackSpec.groupIds = new ArrayList<>(track.getGroupIds());
@@ -474,23 +460,38 @@ public final class SessionDocumentSync {
         }
       }
 
-      for (File vcf : vcfManager.getVcfFilesForTrackIndex(trackIndex)) {
-        if (vcf == null) continue;
-        String pathKey = vcf.toPath().toAbsolutePath().normalize().toString();
-        boolean alreadyListed = trackSpec.samples.stream().anyMatch(spec ->
-            "VCF".equalsIgnoreCase(spec.type)
-                && ((spec.path != null
-                    && pathKey.equals(Path.of(spec.path).toAbsolutePath().normalize().toString()))
-                    || (spec.pathRelative != null && spec.pathRelative.equals(vcf.getName()))));
-        if (!alreadyListed) {
-          trackSpec.samples.add(capturePathAsSampleFile("VCF", vcf.toPath(), projectFile));
-        }
-      }
-
       if (trackSpec.samples.isEmpty()) {
         continue;
       }
       doc.sampleTracks.add(trackSpec);
+    }
+  }
+
+  /** Persist opened matrix files (path + open options); values are re-parsed on load. */
+  public static void writeMatricesFromRuntime(Path projectFile) {
+    ProjectDocument doc = live();
+    doc.matrices = new ArrayList<>();
+    for (OpenedMatrixRegistry.Entry entry : OpenedMatrixRegistry.get().entries()) {
+      if (entry == null || entry.path() == null || entry.spec() == null) {
+        continue;
+      }
+      ProjectDocument.MatrixSpec spec = new ProjectDocument.MatrixSpec();
+      Path abs = entry.path().toAbsolutePath().normalize();
+      spec.path = PathResolver.toAbsoluteString(abs);
+      String relative = PathResolver.toRelativeString(abs, projectFile);
+      if (relative != null && !relative.isBlank()) {
+        spec.pathRelative = relative;
+      }
+      var open = entry.spec();
+      spec.mode = open.mode() != null ? open.mode().name() : null;
+      spec.headerRow = open.headerRow();
+      spec.startZeroBased = open.startZeroBased();
+      spec.keyColumnStart = open.keyColumnStart();
+      spec.firstSampleColumn = open.firstSampleColumn();
+      if (open.sampleMappingPolicy() != null) {
+        spec.sampleMappingPolicy = open.sampleMappingPolicy().name();
+      }
+      doc.matrices.add(spec);
     }
   }
 

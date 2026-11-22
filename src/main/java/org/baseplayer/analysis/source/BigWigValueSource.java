@@ -6,20 +6,21 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-import org.baseplayer.analysis.BigWigCompanionRule;
+import org.baseplayer.analysis.signal.BigWigCompanionRule;
 import org.baseplayer.analysis.CollectContext;
 import org.baseplayer.analysis.ComparisonUnit;
-import org.baseplayer.analysis.FeatureValueMatrix;
+import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.GenomicScope;
-import org.baseplayer.analysis.SignalScopeHelper;
-import org.baseplayer.analysis.SignalScopeHelper.Region;
-import org.baseplayer.analysis.SignalSourceSpec;
+import org.baseplayer.analysis.signal.SignalScopeHelper;
+import org.baseplayer.analysis.signal.SignalScopeHelper.Region;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.features.BigWigTrack;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.utils.ChromosomeNames;
+import org.baseplayer.utils.GeneBiotypeVisibility;
 
 /**
  * BigWig signal → gene / window / native (gene-sized query) matrix.
@@ -91,11 +92,15 @@ public final class BigWigValueSource implements ValueSource {
         if (genes == null) {
           continue;
         }
+        GeneBiotypeVisibility visibility = GeneBiotypeVisibility.get();
         for (Gene gene : genes) {
           if ((geneCount & 0x3FF) == 0) {
             check(ctx);
           }
           if (gene.name() == null || gene.name().isBlank()) {
+            continue;
+          }
+          if (!visibility.isVisible(gene)) {
             continue;
           }
           if (spec.getScope() == GenomicScope.CURRENT_VIEW && view != null) {

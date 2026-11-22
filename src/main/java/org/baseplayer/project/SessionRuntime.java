@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.annotation.AnnotationLoader;
@@ -49,7 +51,6 @@ import org.baseplayer.variant.annotation.VariantEffect;
 
 import javafx.application.Platform;
 import javafx.scene.paint.Color;
-
 /**
  * Rebuilds ephemeral runtime (handles, caches, FX) from a {@link ProjectDocument}.
  * The document itself is already the live SSOT after {@link ProjectSessionState#replaceDocument}.
@@ -89,15 +90,31 @@ public final class SessionRuntime {
 
       ThreadRunner.get().submit("Opening project…",
           () -> {
+            org.baseplayer.services.LoadingManager loading =
+                org.baseplayer.services.LoadingManager.get();
+            // Kick overall progress early so ETA can estimate after the first second.
+            loading.setProgress(0.05);
+            loading.setDetailMessage("Restoring sample tracks…");
             restoreSampleTracks(document, projectFile, warnings);
+
+            loading.setProgress(0.35);
+            loading.setDetailMessage("Opening VCF files…");
             restoreVcfs(document, projectFile, warnings);
+
+            loading.setProgress(0.55);
+            loading.setDetailMessage("Restoring matrices…");
+            restoreMatrices(document, projectFile, warnings);
+
             Map<String, VariantList> cachedVariants = Map.of();
             try {
-              org.baseplayer.services.LoadingManager.get().setProgress(0, 1);
+              loading.setProgress(0.70);
+              loading.setDetailMessage("Reading variant cache…");
               cachedVariants = VariantCacheStore.readSessionCache(projectFile, warnings);
             } catch (Exception e) {
               warnings.add("Failed to read variant cache: " + e.getMessage());
             }
+            loading.clearDetail();
+            loading.setProgress(0.95);
             return cachedVariants;
           },
           cachedVariants -> {
@@ -211,6 +228,8 @@ public final class SessionRuntime {
       return;
     }
 
+    // Build tracks off the FX thread; publish the ObservableList on FX only.
+    List<SampleTrack> restored = new ArrayList<>();
     for (ProjectDocument.SampleTrackSpec trackSpec : document.sampleTracks) {
       if (trackSpec == null) {
         continue;
@@ -293,15 +312,47 @@ public final class SessionRuntime {
         applySignalLayout(track, trackSpec.signalLayout);
         applyTrackGroupMembership(track, trackSpec.groupIds, registry);
         applyTrackTags(track, trackSpec.tags);
-        registry.getSampleTracks().add(track);
-        registry.getSampleList().add(track.getDisplayName());
+        restored.add(track);
       } catch (Exception e) {
         warnings.add("Failed to restore sample track "
             + trackSpec.displayName + ": " + e.getMessage());
       }
     }
-    if (!registry.getSampleTracks().isEmpty()) {
+    if (restored.isEmpty()) {
+      return;
+    }
+    runOnFxAndWait(() -> {
+      for (SampleTrack track : restored) {
+        registry.getSampleTracks().add(track);
+        registry.getSampleList().add(track.getDisplayName());
+      }
       registry.includeNewTracksAtEndResetHeight();
+    });
+  }
+
+  /** Run {@code action} on the FX thread and wait (no-op wait when already on FX). */
+  private static void runOnFxAndWait(Runnable action) {
+    if (action == null) {
+      return;
+    }
+    if (Platform.isFxApplicationThread()) {
+      action.run();
+      return;
+    }
+    CountDownLatch latch = new CountDownLatch(1);
+    Platform.runLater(() -> {
+      try {
+        action.run();
+      } finally {
+        latch.countDown();
+      }
+    });
+    try {
+      if (!latch.await(60, TimeUnit.SECONDS)) {
+        System.err.println("Timed out waiting for FX publish during project restore");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
     }
   }
 
@@ -468,6 +519,55 @@ public final class SessionRuntime {
       files.add(Path.of(absolute).toFile());
     }
     SampleDataManager.loadVcfFilesForSessionRestore(files, warnings);
+  }
+
+  private static void restoreMatrices(
+      ProjectDocument document, Path projectFile, List<String> warnings) {
+    if (document.matrices == null || document.matrices.isEmpty()) {
+      return;
+    }
+    for (ProjectDocument.MatrixSpec matrixSpec : document.matrices) {
+      if (matrixSpec == null) {
+        continue;
+      }
+      Path path = PathResolver.resolve(matrixSpec.path, matrixSpec.pathRelative, projectFile);
+      if (path == null || !path.toFile().exists()) {
+        warnings.add("Missing matrix: "
+            + (matrixSpec.path != null ? matrixSpec.path : matrixSpec.pathRelative));
+        continue;
+      }
+      org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec openSpec =
+          matrixOpenSpecFromDocument(matrixSpec);
+      SampleDataManager.restoreMatrixForSession(path, openSpec, warnings);
+    }
+  }
+
+  private static org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec matrixOpenSpecFromDocument(
+      ProjectDocument.MatrixSpec matrixSpec) {
+    org.baseplayer.io.table.MatrixKeyMode mode = org.baseplayer.io.table.MatrixKeyMode.GENE_ID;
+    if (matrixSpec.mode != null && !matrixSpec.mode.isBlank()) {
+      try {
+        mode = org.baseplayer.io.table.MatrixKeyMode.valueOf(matrixSpec.mode.trim());
+      } catch (IllegalArgumentException ignored) {
+        // keep default
+      }
+    }
+    org.baseplayer.components.MatrixSampleMappingDialog.Policy policy = null;
+    if (matrixSpec.sampleMappingPolicy != null && !matrixSpec.sampleMappingPolicy.isBlank()) {
+      try {
+        policy = org.baseplayer.components.MatrixSampleMappingDialog.Policy.valueOf(
+            matrixSpec.sampleMappingPolicy.trim());
+      } catch (IllegalArgumentException ignored) {
+        // null → MERGE via mappingPolicyOrMerge
+      }
+    }
+    return new org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec(
+        mode,
+        matrixSpec.headerRow,
+        matrixSpec.startZeroBased,
+        matrixSpec.keyColumnStart,
+        matrixSpec.firstSampleColumn,
+        policy);
   }
 
   private static void restoreFeatureTracks(

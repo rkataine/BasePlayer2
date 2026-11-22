@@ -17,6 +17,10 @@ import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.scene.paint.Color;
+import org.baseplayer.analysis.groupstat.GroupStatTest;
+import org.baseplayer.analysis.signal.BigWigCompanionRule;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
+import org.baseplayer.analysis.signal.SignalValueKind;
 
 /**
  * Shared cohort context for Analysis Manager modes.
@@ -354,6 +358,12 @@ public final class ComparisonContext {
     if (spec.groupStatTest != null) {
       AnalysisSession.get().setGroupStatTest(GroupStatTest.fromPersisted(spec.groupStatTest));
     }
+    if (spec.effectMode != null) {
+      AnalysisSession.get().setEffectMode(EffectMode.fromPersisted(spec.effectMode), true);
+    }
+    if (spec.minMeanPrefilter != null) {
+      AnalysisSession.get().setMinMeanPrefilter(spec.minMeanPrefilter);
+    }
   }
 
   private static void writeSignalSettings(ProjectDocument.AnalysisComparisonSpec spec) {
@@ -378,6 +388,9 @@ public final class ComparisonContext {
     spec.showOnAggregate = AnalysisSession.get().isShowOnAggregate();
     GroupStatTest test = AnalysisSession.get().getGroupStatTest();
     spec.groupStatTest = test != null ? test.name() : GroupStatTest.AUTO.name();
+    EffectMode effect = AnalysisSession.get().getEffectMode();
+    spec.effectMode = effect != null ? effect.name() : EffectMode.AUTO.name();
+    spec.minMeanPrefilter = AnalysisSession.get().getMinMeanPrefilter();
   }
 
   private void persist() {

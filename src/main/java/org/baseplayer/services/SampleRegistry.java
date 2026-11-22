@@ -173,41 +173,37 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     /**
-     * Find an existing track that matches {@code candidateName} by equality or
-     * mutual substring (either name contains the other), case-insensitive.
-     * Prefers exact matches, then the longest overlapping track/sample name so
-     * short accidental hits lose to more specific ones.
+     * Find an existing track whose display/name/sample name equals
+     * {@code candidateName} after {@link #normalizeNameKey} (case-insensitive).
+     * No substring or separator-alias matching — shared prefixes must not bind
+     * the wrong VCF/matrix column onto a track.
      *
      * @return track index, or {@code -1} if none
      */
     public int findTrackIndexMatchingName(String candidateName) {
-        String needle = normalizeNameKey(candidateName);
+        String needle = normalizeNameKey(candidateName).toLowerCase(Locale.ROOT);
         if (needle.isEmpty()) {
             return -1;
         }
-        String needleLower = needle.toLowerCase(Locale.ROOT);
-
-        int bestIndex = -1;
-        int bestScore = -1; // exact=Integer.MAX_VALUE/2 + len, else match length
         for (int i = 0; i < sampleTracks.size(); i++) {
             SampleTrack track = sampleTracks.get(i);
             if (track == null) {
                 continue;
             }
-            int score = scoreNameMatch(needleLower, normalizeNameKey(track.getDisplayName()));
-            score = Math.max(score, scoreNameMatch(needleLower, normalizeNameKey(track.getName())));
+            if (needle.equals(normalizeNameKey(track.getDisplayName()).toLowerCase(Locale.ROOT))
+                || needle.equals(normalizeNameKey(track.getName()).toLowerCase(Locale.ROOT))) {
+                return i;
+            }
             for (Sample sample : track.getSamples()) {
                 if (sample == null) {
                     continue;
                 }
-                score = Math.max(score, scoreNameMatch(needleLower, normalizeNameKey(sample.getName())));
-            }
-            if (score > bestScore) {
-                bestScore = score;
-                bestIndex = i;
+                if (needle.equals(normalizeNameKey(sample.getName()).toLowerCase(Locale.ROOT))) {
+                    return i;
+                }
             }
         }
-        return bestIndex;
+        return -1;
     }
 
     public SampleTrack findTrackMatchingName(String candidateName) {
@@ -220,7 +216,8 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     /**
      * Strip path and common genomic extensions so {@code Sample.bam} matches track
-     * {@code Sample}.
+     * {@code Sample}. Separators and spelling must otherwise match exactly
+     * (comparison is case-insensitive at the call site).
      */
     public static String normalizeNameKey(String name) {
         if (name == null) {
@@ -235,8 +232,9 @@ public class SampleRegistry extends TrackViewportRegistry {
             key = key.substring(slash + 1);
         }
         String lower = key.toLowerCase(Locale.ROOT);
+        // Longer extensions first.
         String[] extensions = {
-            ".bam", ".cram", ".vcf.gz", ".vcf", ".bed.gz", ".bed", ".bw", ".bigwig"
+            ".vcf.gz", ".bed.gz", ".bigwig", ".bam", ".cram", ".vcf", ".bed", ".bw"
         };
         for (String ext : extensions) {
             if (lower.endsWith(ext)) {
@@ -245,33 +243,6 @@ public class SampleRegistry extends TrackViewportRegistry {
             }
         }
         return key.trim();
-    }
-
-    /**
-     * @return match quality, or {@code -1} if no match. Exact matches outrank
-     *         substring matches; longer overlaps outrank shorter ones. Substring
-     *         hits require the shorter token to be at least 3 characters.
-     */
-    private static int scoreNameMatch(String needleLower, String candidateRaw) {
-        if (needleLower == null || needleLower.isEmpty() || candidateRaw == null) {
-            return -1;
-        }
-        String candidate = candidateRaw.toLowerCase(Locale.ROOT);
-        if (candidate.isEmpty()) {
-            return -1;
-        }
-        if (needleLower.equals(candidate)) {
-            return 1_000_000 + candidate.length();
-        }
-        String shorter = needleLower.length() <= candidate.length() ? needleLower : candidate;
-        String longer = needleLower.length() <= candidate.length() ? candidate : needleLower;
-        if (shorter.length() < 3) {
-            return -1;
-        }
-        if (longer.contains(shorter)) {
-            return shorter.length();
-        }
-        return -1;
     }
 
     public void addSampleTrack(SampleTrack track) {
@@ -1299,8 +1270,12 @@ public class SampleRegistry extends TrackViewportRegistry {
         return false;
     }
 
-    /** Best-effort snapshot of {@link #sampleTracks} safe against concurrent mutation. */
-    private List<SampleTrack> snapshotSampleTracks() {
+    /**
+     * Best-effort snapshot of {@link #sampleTracks} safe against concurrent mutation.
+     * Index walk + retries — never iterate the live {@link ObservableList} (CME during
+     * project restore / batch VCF load while the FX thread redraws).
+     */
+    public List<SampleTrack> snapshotSampleTracks() {
         for (int attempt = 0; attempt < 5; attempt++) {
             try {
                 int n = sampleTracks.size();

@@ -10,12 +10,12 @@ import java.util.Set;
 
 import org.baseplayer.analysis.CollectContext;
 import org.baseplayer.analysis.ComparisonUnit;
-import org.baseplayer.analysis.FeatureValueMatrix;
+import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.GeneOverlapIndex;
 import org.baseplayer.analysis.GenomicScope;
-import org.baseplayer.analysis.SignalScopeHelper;
-import org.baseplayer.analysis.SignalScopeHelper.Region;
-import org.baseplayer.analysis.SignalSourceSpec;
+import org.baseplayer.analysis.signal.SignalScopeHelper;
+import org.baseplayer.analysis.signal.SignalScopeHelper.Region;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.io.readers.BedFileReader.BedFeature;

@@ -116,7 +116,7 @@ public class FeatureTrackColumnSidebar extends TrackColumnSidebar {
 
   @Override
   protected boolean shouldAutoExpandMasterHeader(int displayedTrackCount) {
-    // Visible-range slider is pointless for a single track.
+    // Visible-range slider is pointless for a single track; density + legends still paint.
     return displayedTrackCount > 1;
   }
 

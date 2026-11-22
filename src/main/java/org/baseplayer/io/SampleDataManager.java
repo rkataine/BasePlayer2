@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.MatrixSampleMappingDialog;
 import org.baseplayer.components.SampleOpenFailuresDialog;
 import org.baseplayer.components.sidebars.OpenDirectorySamplesDialog;
 import org.baseplayer.components.sidebars.OpenDragenDialog;
@@ -1272,7 +1273,10 @@ public class SampleDataManager {
       }
     }
     fileChooser.getExtensionFilters().addAll(
-        new ExtensionFilter("Tables", "*.tsv", "*.csv", "*.txt", "*.segments", "*.bed"),
+        new ExtensionFilter(
+            "Tables",
+            "*.tsv", "*.tsv.gz", "*.csv", "*.csv.gz", "*.txt", "*.txt.gz",
+            "*.segments", "*.segments.gz", "*.bed", "*.bed.gz"),
         new ExtensionFilter("All files", "*.*"));
     File file = fileChooser.showOpenDialog(MainApp.stage);
     if (file == null) {
@@ -1298,7 +1302,10 @@ public class SampleDataManager {
       }
     }
     fileChooser.getExtensionFilters().addAll(
-        new ExtensionFilter("Tables", "*.tsv", "*.csv", "*.txt", "*.segments", "*.bed"),
+        new ExtensionFilter(
+            "Tables",
+            "*.tsv", "*.tsv.gz", "*.csv", "*.csv.gz", "*.txt", "*.txt.gz",
+            "*.segments", "*.segments.gz", "*.bed", "*.bed.gz"),
         new ExtensionFilter("All files", "*.*"));
     List<File> files = fileChooser.showOpenMultipleDialog(MainApp.stage);
     if (files == null || files.isEmpty()) {
@@ -1308,6 +1315,262 @@ public class SampleDataManager {
     for (File file : files) {
       addTableSampleFile(file);
     }
+  }
+
+  /**
+   * Open a wide matrix (leading gene/region keys + sample columns).
+   * Each sample column becomes its own {@link SampleTrack} with a VALUE table.
+   */
+  public static void addMatrixSampleFile() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open matrix file");
+    File lastDir = UserPreferences.getLastDirectory("TABLE");
+    if (lastDir == null) {
+      lastDir = UserPreferences.getLastDirectory("BED");
+    }
+    if (lastDir != null) {
+      try {
+        fileChooser.setInitialDirectory(lastDir);
+      } catch (IllegalArgumentException e) {
+        System.err.println("Last directory not accessible: " + lastDir + ". Using default.");
+      }
+    }
+    fileChooser.getExtensionFilters().addAll(
+        new ExtensionFilter(
+            "Matrix tables",
+            "*.tsv", "*.tsv.gz", "*.csv", "*.csv.gz", "*.txt", "*.txt.gz"),
+        new ExtensionFilter("All files", "*.*"));
+    File file = fileChooser.showOpenDialog(MainApp.stage);
+    if (file == null) {
+      return;
+    }
+    UserPreferences.setLastDirectory("TABLE", file.getParentFile());
+    openMatrixSampleFile(file);
+  }
+
+  static void openMatrixSampleFile(File file) {
+    if (file == null) {
+      return;
+    }
+    Path path = file.toPath();
+    var spec = org.baseplayer.io.table.MatrixTableOpen.prompt(MainApp.stage, path).orElse(null);
+    if (spec == null) {
+      return;
+    }
+    String[] loadError = { null };
+    ThreadRunner.get().submit(
+        "Loading matrix " + file.getName() + "\u2026",
+        () -> {
+          try {
+            return org.baseplayer.io.table.MatrixTableOpen.load(
+                path, spec, org.baseplayer.annotation.AnnotationData::getGeneLocation);
+          } catch (Exception ex) {
+            loadError[0] = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+            return null;
+          }
+        },
+        result -> {
+          if (loadError[0] != null) {
+            SampleOpenFailuresDialog.create()
+                .add(file, loadError[0])
+                .commitAndShowLater();
+            return;
+          }
+          if (result == null || result.tables().isEmpty()) {
+            return;
+          }
+          SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+          MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, result.tables());
+          // Policy chosen in the column-mapping dialog (before load) so Loading modal
+          // never covers a second mapping prompt.
+          MatrixSampleMappingDialog.Policy policy = spec.mappingPolicyOrMerge();
+          MatrixApplyResult applied = applyMatrixSamplePolicy(
+              sampleRegistry, path, plan, policy);
+          if (applied.created() > 0) {
+            sampleRegistry.includeNewTracksAtEndResetHeight();
+          } else if (applied.attached() > 0) {
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          }
+          if (applied.attached() + applied.created() == 0) {
+            SampleOpenFailuresDialog.create()
+                .add(file, "No matrix columns were attached (map-existing skipped all unmatched)")
+                .commitAndShowLater();
+            return;
+          }
+          org.baseplayer.project.OpenedMatrixRegistry.get().register(path, spec);
+          UserPreferences.addRecentFile("TABLE", file);
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          ProjectSessionState.get().markDirty();
+          // Open Signal and annotate so genes + per-sample values fill the table.
+          afterTableSampleOpened();
+        });
+  }
+
+  /** One matrix column matched to an existing track. */
+  record MatrixColumnMatch(MappedTableData data, SampleTrack track) {}
+
+  /** Matched vs unmatched matrix columns after name resolution. */
+  record MatrixColumnPlan(List<MatrixColumnMatch> matched, List<MappedTableData> unmatched) {}
+
+  /** Counts from applying a matrix mapping policy. */
+  record MatrixApplyResult(int attached, int created, int skipped) {}
+
+  /**
+   * Re-parse a matrix file and attach columns (project restore). No dialogs.
+   * Registers the open in {@link org.baseplayer.project.OpenedMatrixRegistry}.
+   */
+  public static void restoreMatrixForSession(
+      Path path,
+      org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec spec,
+      List<String> warnings) {
+    if (path == null || spec == null) {
+      return;
+    }
+    if (!Files.exists(path)) {
+      if (warnings != null) {
+        warnings.add("Missing matrix: " + path);
+      }
+      return;
+    }
+    try {
+      if (spec.mode() == org.baseplayer.io.table.MatrixKeyMode.GENE_ID
+          && !awaitGenesLoaded(120_000)) {
+        if (warnings != null) {
+          warnings.add("Gene annotation not ready; skipped matrix: "
+              + (path.getFileName() != null ? path.getFileName() : path));
+        }
+        return;
+      }
+      var result = org.baseplayer.io.table.MatrixTableOpen.load(
+          path, spec, org.baseplayer.annotation.AnnotationData::getGeneLocation);
+      if (result == null || result.tables().isEmpty()) {
+        if (warnings != null) {
+          warnings.add("No matrix columns from: "
+              + (path.getFileName() != null ? path.getFileName() : path));
+        }
+        return;
+      }
+      SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+      MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, result.tables());
+      MatrixSampleMappingDialog.Policy policy = spec.mappingPolicyOrMerge();
+      MatrixApplyResult applied = applyMatrixSamplePolicy(sampleRegistry, path, plan, policy);
+      if (applied.created() > 0) {
+        sampleRegistry.includeNewTracksAtEndResetHeight();
+      }
+      if (applied.attached() + applied.created() == 0) {
+        if (warnings != null) {
+          warnings.add("No matrix columns attached from: "
+              + (path.getFileName() != null ? path.getFileName() : path));
+        }
+        return;
+      }
+      org.baseplayer.project.OpenedMatrixRegistry.get().register(path, spec);
+    } catch (Exception e) {
+      if (warnings != null) {
+        warnings.add("Failed to restore matrix "
+            + (path.getFileName() != null ? path.getFileName() : path)
+            + ": " + e.getMessage());
+      }
+      System.err.println("Failed to restore matrix: " + path + " - " + e.getMessage());
+    }
+  }
+
+  /** Wait for background gene load (project restore of gene-key matrices). */
+  private static boolean awaitGenesLoaded(long timeoutMs) {
+    if (org.baseplayer.annotation.AnnotationData.isGenesLoaded()) {
+      return true;
+    }
+    long deadline = System.currentTimeMillis() + Math.max(0, timeoutMs);
+    while (System.currentTimeMillis() < deadline) {
+      if (org.baseplayer.annotation.AnnotationData.isGenesLoaded()) {
+        return true;
+      }
+      if (!org.baseplayer.annotation.AnnotationData.isGenesLoading()
+          && !org.baseplayer.annotation.AnnotationData.isGenesLoaded()) {
+        break;
+      }
+      try {
+        Thread.sleep(50);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+      }
+    }
+    return org.baseplayer.annotation.AnnotationData.isGenesLoaded();
+  }
+
+  /**
+   * Classify matrix sample columns against existing tracks using
+   * {@link SampleRegistry#findTrackMatchingName(String)}.
+   */
+  static MatrixColumnPlan classifyMatrixColumns(
+      SampleRegistry registry, List<MappedTableData> tables) {
+    List<MatrixColumnMatch> matched = new ArrayList<>();
+    List<MappedTableData> unmatched = new ArrayList<>();
+    if (tables == null) {
+      return new MatrixColumnPlan(matched, unmatched);
+    }
+    for (MappedTableData data : tables) {
+      if (data == null) {
+        continue;
+      }
+      SampleTrack existing = registry != null
+          ? registry.findTrackMatchingName(data.getName())
+          : null;
+      if (existing != null) {
+        matched.add(new MatrixColumnMatch(data, existing));
+      } else {
+        unmatched.add(data);
+      }
+    }
+    return new MatrixColumnPlan(matched, unmatched);
+  }
+
+  /**
+   * Attach matrix columns per policy. Package-visible for tests.
+   */
+  static MatrixApplyResult applyMatrixSamplePolicy(
+      SampleRegistry registry,
+      Path path,
+      MatrixColumnPlan plan,
+      MatrixSampleMappingDialog.Policy policy) {
+    if (registry == null || plan == null || policy == null) {
+      return new MatrixApplyResult(0, 0, 0);
+    }
+    int attached = 0;
+    int created = 0;
+    int skipped = 0;
+    registry.beginBatchTrackMutation();
+    try {
+      for (MatrixColumnMatch match : plan.matched()) {
+        if (match == null || match.data() == null || match.track() == null) {
+          continue;
+        }
+        Path samplePath = match.data().getPath() != null ? match.data().getPath() : path;
+        Sample sample = new Sample(samplePath, match.data());
+        match.track().addSample(sample);
+        preferShorterTrackName(match.track(), sample.getName());
+        attached++;
+      }
+      if (policy == MatrixSampleMappingDialog.Policy.MERGE) {
+        for (MappedTableData data : plan.unmatched()) {
+          if (data == null) {
+            continue;
+          }
+          Path samplePath = data.getPath() != null ? data.getPath() : path;
+          Sample sample = new Sample(samplePath, data);
+          SampleTrack track = new SampleTrack(sample);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(sample.getName());
+          created++;
+        }
+      } else {
+        skipped = plan.unmatched() != null ? plan.unmatched().size() : 0;
+      }
+    } finally {
+      registry.endBatchTrackMutation();
+    }
+    return new MatrixApplyResult(attached, created, skipped);
   }
 
   public static void addTableSampleFile(File file) {
@@ -1887,7 +2150,27 @@ public class SampleDataManager {
   }
   
   /**
+   * Probe this many successfully opened VCFs for sample-name matches before
+   * deciding whether the rest of a large batch should keep matching or force
+   * separate tracks.
+   */
+  private static final int VCF_BATCH_MATCH_PROBE_SIZE = 10;
+
+  /** Outcome of one synchronous VCF open for batch matching decisions. */
+  private record VcfOpenResult(boolean createdTracks, boolean matchedExisting, boolean opened) {
+    static VcfOpenResult none() {
+      return new VcfOpenResult(false, false, false);
+    }
+  }
+
+  /**
    * Open many VCFs without per-file canvas resize / session rewrite.
+   *
+   * <p>The first {@link #VCF_BATCH_MATCH_PROBE_SIZE} successful opens always try
+   * sample-name matching. If any of those matched an existing track, matching
+   * continues for the rest of the batch; otherwise remaining files get separate
+   * tracks (no name matching / BAM companions).
+   *
    * @return true if any new sample tracks were created
    */
   private static Boolean loadVcfFilesBatchWithProgress(
@@ -1896,6 +2179,9 @@ public class SampleDataManager {
     registry.beginBatchTrackMutation();
     boolean addedTracks = false;
     SomaticSampleResolver.BatchContext somaticBatch = new SomaticSampleResolver.BatchContext();
+    int probedOpens = 0;
+    boolean sawMatchInProbe = false;
+    boolean forceSeparateRemaining = false;
     try {
       for (int index = 0; index < files.size(); index++) {
         if (Thread.currentThread().isInterrupted()) {
@@ -1919,8 +2205,21 @@ public class SampleDataManager {
         org.baseplayer.services.LoadingManager.get().setProgress(currentIndex, totalFiles);
 
         try {
-          if (loadVcfFileSynchronously(file, true, failures, somaticBatch)) {
+          VcfOpenResult result = loadVcfFileSynchronously(
+              file, true, failures, somaticBatch, forceSeparateRemaining);
+          if (result.createdTracks()) {
             addedTracks = true;
+          }
+          if (result.opened()
+              && !forceSeparateRemaining
+              && probedOpens < VCF_BATCH_MATCH_PROBE_SIZE) {
+            if (result.matchedExisting()) {
+              sawMatchInProbe = true;
+            }
+            probedOpens++;
+            if (probedOpens >= VCF_BATCH_MATCH_PROBE_SIZE && !sawMatchInProbe) {
+              forceSeparateRemaining = true;
+            }
           }
         } catch (Exception e) {
           if (Thread.currentThread().isInterrupted()) {
@@ -1943,13 +2242,15 @@ public class SampleDataManager {
    * Open and register many VCFs on the calling thread (no nested ThreadRunner tasks).
    * Used by project restore after sample tracks already exist — maps onto those tracks
    * immediately so the opener does not wait through per-file "Opening VCF…" / sample UI.
+   *
+   * <p>Each VCF binds only to tracks that already list that file path (from the project
+   * document). Name matching does not fan out across the whole registry.
    */
   public static void loadVcfFilesForSessionRestore(List<File> files, List<String> warnings) {
     if (files == null || files.isEmpty()) {
       return;
     }
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    boolean addedTracks = false;
     registry.beginBatchTrackMutation();
     try {
       for (File file : files) {
@@ -1973,7 +2274,6 @@ public class SampleDataManager {
           // No dialogs on restore — heuristics + saved project somatic preference only.
           SomaticSampleResolver.resolve(loader, false, null);
 
-          List<String> unmappedSamples = loader.getUnmappedSamples();
           VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
           if (vcfData == null) {
             try { reader.close(); } catch (IOException ignored) {}
@@ -1981,20 +2281,9 @@ public class SampleDataManager {
             continue;
           }
 
-          // Tracks were restored first; only create rows for truly new sample IDs.
-          if (!unmappedSamples.isEmpty()) {
-            for (String sampleName : unmappedSamples) {
-              if (registry.findTrackMatchingName(sampleName) != null) {
-                continue;
-              }
-              SampleTrack track = new SampleTrack(sampleName);
-              registry.getSampleTracks().add(track);
-              registry.getSampleList().add(sampleName);
-              addedTracks = true;
-            }
-          }
-          loader.updateMapping();
-
+          // Bind only to tracks that already listed this VCF path in the document.
+          List<Integer> allowed = findTrackIndicesListingVcf(registry, vcfPath);
+          loader.remapOntoAllowedTracks(allowed);
           attachVcfSamplesToMappedTracks(loader, vcfPath);
 
           // Mate index after mapping, while reader is still open.
@@ -2017,23 +2306,48 @@ public class SampleDataManager {
     } finally {
       registry.endBatchTrackMutation();
     }
-
-    if (addedTracks) {
-      registry.includeNewTracksAtEndResetHeight();
-    }
   }
 
-  private static boolean loadVcfFileSynchronously(
+  /** Track indices whose samples already include a VCF entry for {@code vcfPath}. */
+  public static List<Integer> findTrackIndicesListingVcf(SampleRegistry registry, Path vcfPath) {
+    List<Integer> indices = new ArrayList<>();
+    if (registry == null || vcfPath == null) {
+      return indices;
+    }
+    String pathKey = vcfPath.toAbsolutePath().normalize().toString();
+    List<SampleTrack> tracks = registry.getSampleTracks();
+    for (int i = 0; i < tracks.size(); i++) {
+      SampleTrack track = tracks.get(i);
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null
+            || sample.getDataType() != Sample.DataType.VCF
+            || sample.getPath() == null) {
+          continue;
+        }
+        if (pathKey.equals(sample.getPath().toAbsolutePath().normalize().toString())) {
+          indices.add(i);
+          break;
+        }
+      }
+    }
+    return indices;
+  }
+
+  private static VcfOpenResult loadVcfFileSynchronously(
       File file,
       boolean deferUi,
       SampleOpenFailuresDialog failures,
-      SomaticSampleResolver.BatchContext somaticBatch) throws IOException {
+      SomaticSampleResolver.BatchContext somaticBatch,
+      boolean forceSeparateTracks) throws IOException {
     if (file == null || !file.exists()) {
       throw new IOException("VCF file not found: " + file);
     }
 
     if (VcfManager.getInstance().isVcfFileLoaded(file)) {
-      return false;
+      return VcfOpenResult.none();
     }
     
     Path vcfPath = file.toPath();
@@ -2045,14 +2359,20 @@ public class SampleDataManager {
     VariantLoader loader = new VariantLoader(reader);
     SomaticSampleResolver.resolve(
         loader, true, somaticBatch != null ? somaticBatch : new SomaticSampleResolver.BatchContext());
+    // Match against tracks that already existed before this file (incl. earlier in batch).
+    boolean matchedExisting = loader.getMappedSampleCount() > 0;
+    if (forceSeparateTracks) {
+      // No name matching for the remainder of a large batch with no probe matches.
+      loader.detachFromExistingTracks();
+    }
     
-    List<String> unmappedSamples = loader.getUnmappedSamples();
+    List<String> unmappedSamples = new ArrayList<>(loader.getUnmappedSamples());
     
     VcfManager.VcfData vcfData = VcfManager.getInstance().registerLoadedVcf(reader, loader, file);
     if (vcfData == null) {
       try { reader.close(); } catch (IOException ignored) {}
       loader.setVcfReader(null);
-      return false;
+      return new VcfOpenResult(false, matchedExisting, false);
     }
 
     // Create tracks on this thread (same as session restore) so mapping is ready
@@ -2060,22 +2380,35 @@ public class SampleDataManager {
     boolean addedTracks = false;
     if (!unmappedSamples.isEmpty()) {
       SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-      for (String sampleName : unmappedSamples) {
-        if (registry.findTrackMatchingName(sampleName) != null) {
-          continue;
+      if (forceSeparateTracks) {
+        for (String sampleName : unmappedSamples) {
+          SampleTrack track = new SampleTrack(sampleName);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(sampleName);
+          loader.bindSampleToTrack(sampleName, registry.getSampleTracks().size() - 1);
+          addedTracks = true;
         }
-        SampleTrack track = new SampleTrack(sampleName);
-        registry.getSampleTracks().add(track);
-        registry.getSampleList().add(sampleName);
-        addedTracks = true;
+      } else {
+        for (String sampleName : unmappedSamples) {
+          if (registry.findTrackMatchingName(sampleName) != null) {
+            continue;
+          }
+          SampleTrack track = new SampleTrack(sampleName);
+          registry.getSampleTracks().add(track);
+          registry.getSampleList().add(sampleName);
+          addedTracks = true;
+        }
+        loader.updateMapping();
       }
-      loader.updateMapping();
     }
 
     // Sidebar VCF entries — safe on the worker thread; no canvas resize.
     attachVcfSamplesToMappedTracks(loader, vcfPath);
     // Co-located BAM/CRAM with a matching sample or file stem → same track.
-    attachMatchingBamsForMappedTracks(loader, vcfPath, failures);
+    // Skip in separate-track remainder (avoids scanning + name matching per file).
+    if (!forceSeparateTracks) {
+      attachMatchingBamsForMappedTracks(loader, vcfPath, failures);
+    }
 
     if (loader.getMappedSampleCount() == 0) {
       System.err.println("Warning: Could not create or map any VCF samples from: " + file);
@@ -2101,7 +2434,7 @@ public class SampleDataManager {
     loader.setVcfReader(null);  // Release loader's reference too
     
     UserPreferences.addRecentFile("VCF", file);
-    return createdTracks;
+    return new VcfOpenResult(createdTracks, matchedExisting, true);
   }
   
   /**
@@ -2383,16 +2716,32 @@ public class SampleDataManager {
   }
 
   /**
-   * Toggle VCF file visibility without touching the variant cache.
-   * Hidden calls stay in {@link org.baseplayer.variant.VariantList} but are skipped
-   * by the filter / drawer / density / table via {@link VariantNode.SampleCall#isUiVisible()}.
+   * Toggle VCF file visibility. Does not auto-stream alleles — use the canvas
+   * {@code Load variants} button (or chrom change / Load Region paths). Hiding and
+   * showing only refresh presentation; cached calls stay filtered by
+   * {@link VariantNode.SampleCall#isUiVisible()}.
    */
   public static void applyVcfSampleVisibility(SampleTrack track, Sample vcfSample, boolean visible) {
     if (track == null || vcfSample == null || vcfSample.getDataType() != Sample.DataType.VCF) {
       return;
     }
     vcfSample.visible = visible;
+    afterVcfVisibilityChanged(visible);
+  }
+
+  /**
+   * After visibility toggles (one sample or apply-to-all): repair path mappings,
+   * refresh canvas/table presentation, and nudge the Load variants button.
+   */
+  private static void afterVcfVisibilityChanged(boolean anyBecameVisible) {
+    VcfManager vcfManager = VcfManager.getInstance();
+    if (anyBecameVisible) {
+      vcfManager.repairPathListedUnmappedVcfs();
+      vcfManager.discardEmptyChromosomeCaches();
+    }
     refreshVariantPresentation(true);
+    // Visibility alone does not touch RegionFetchCache; force the overlay button to re-check.
+    ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
   }
 
   /**
@@ -2459,6 +2808,7 @@ public class SampleDataManager {
     List<Sample> sourceBams = samplesOfType(source, Sample.DataType.BAM);
     List<Sample> sourceBeds = samplesOfType(source, Sample.DataType.BED);
     List<Sample> sourceVcfs = samplesOfType(source, Sample.DataType.VCF);
+    List<Sample> sourceTables = samplesOfType(source, Sample.DataType.TABLE);
     List<Sample> sourceAb1s = samplesOfType(source, Sample.DataType.AB1);
     List<Sample> sourceBigWigs = samplesOfType(source, Sample.DataType.BIGWIG);
 
@@ -2471,6 +2821,7 @@ public class SampleDataManager {
       List<Sample> targetBams = samplesOfType(track, Sample.DataType.BAM);
       List<Sample> targetBeds = samplesOfType(track, Sample.DataType.BED);
       List<Sample> targetVcfs = samplesOfType(track, Sample.DataType.VCF);
+      List<Sample> targetTables = samplesOfType(track, Sample.DataType.TABLE);
       List<Sample> targetAb1s = samplesOfType(track, Sample.DataType.AB1);
       List<Sample> targetBigWigs = samplesOfType(track, Sample.DataType.BIGWIG);
 
@@ -2503,6 +2854,14 @@ public class SampleDataManager {
         }
         to.overlay = from.overlay;
       }
+      for (int i = 0; i < targetTables.size() && i < sourceTables.size(); i++) {
+        Sample from = sourceTables.get(i);
+        Sample to = targetTables.get(i);
+        if (to.visible != from.visible) {
+          to.visible = from.visible;
+        }
+        to.overlay = from.overlay;
+      }
       for (int i = 0; i < targetAb1s.size() && i < sourceAb1s.size(); i++) {
         Sample from = sourceAb1s.get(i);
         Sample to = targetAb1s.get(i);
@@ -2519,7 +2878,7 @@ public class SampleDataManager {
 
     ProjectSessionState.get().markDirty();
     if (touchedVcfVisibility) {
-      refreshVariantPresentation(true);
+      afterVcfVisibilityChanged(VcfManager.getInstance().hasVisibleVcfSample());
     } else {
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
     }
@@ -2572,6 +2931,7 @@ public class SampleDataManager {
     registry.setHoverSample(-1);
 
     VcfManager.getInstance().closeCurrentVcf();
+    org.baseplayer.project.OpenedMatrixRegistry.get().clear();
     // Do not reset Settings — draw prefs (read height, coverage, …) are user-global
     // and must survive new project / clear / project switch.
     ProjectSessionState.get().resetDocument();

@@ -59,6 +59,11 @@ public class ProjectDocument {
   /** Analysis Manager Signal settings (+ mirror of current groups; groups always = all). */
   public AnalysisComparisonSpec analysisComparison = new AnalysisComparisonSpec();
   public List<SampleTrackSpec> sampleTracks = new ArrayList<>();
+  /**
+   * Wide matrix files (gene/region keys + sample columns) reopened after sample tracks.
+   * Values are not stored — the file is re-parsed with the saved open options.
+   */
+  public List<MatrixSpec> matrices = new ArrayList<>();
   /** Legacy top-level VCF list; new saves omit this and nest VCFs under samples. */
   @Deprecated
   public List<PathSpec> vcfs;
@@ -224,8 +229,12 @@ public class ProjectDocument {
     public Boolean showDownDifferences;
     public Boolean showSimilarDifferences;
     public Boolean showOnAggregate;
-    /** {@link org.baseplayer.analysis.GroupStatTest} name; null = AUTO. */
+    /** {@link org.baseplayer.analysis.groupstat.GroupStatTest} name; null = AUTO. */
     public String groupStatTest;
+    /** {@link org.baseplayer.analysis.EffectMode} name; null = AUTO. */
+    public String effectMode;
+    /** Drop features with mean below this before testing; 0 = off. */
+    public Double minMeanPrefilter;
   }
 
   public static class SampleGroupSpec {
@@ -288,6 +297,23 @@ public class ProjectDocument {
     public String pathRelative;
     public boolean visible = true;
     public boolean overlay;
+  }
+
+  /**
+   * One opened matrix file. Re-parsed on load via {@code MatrixTableOpen.load}
+   * then attached with {@code SampleDataManager.applyMatrixSamplePolicy}.
+   */
+  public static class MatrixSpec {
+    public String path;
+    public String pathRelative;
+    /** {@link org.baseplayer.io.table.MatrixKeyMode} name. */
+    public String mode;
+    public boolean headerRow = true;
+    public boolean startZeroBased;
+    public int keyColumnStart;
+    public int firstSampleColumn;
+    /** {@code MAP_EXISTING} or {@code MERGE}; null treated as MERGE. */
+    public String sampleMappingPolicy;
   }
 
   public static class FeatureTrackSpec {

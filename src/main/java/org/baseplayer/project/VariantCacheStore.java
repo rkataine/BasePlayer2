@@ -319,14 +319,15 @@ public final class VariantCacheStore {
     List<String> sampleNames = meta.sampleNames != null ? meta.sampleNames : List.of();
 
     int total = Math.max(1, chroms.size());
-    org.baseplayer.services.LoadingManager.get().setProgress(0, total);
+    // Detail bar only — overall progress/ETA is owned by SessionRuntime.open phases.
+    org.baseplayer.services.LoadingManager.get().setDetailProgress(0, total);
     int index = 0;
     for (String chrom : chroms) {
       Path file = dir.resolve(safeChromFileName(chrom) + CHROM_SUFFIX);
       if (!Files.isRegularFile(file)) {
         if (warnings != null) warnings.add("Missing variant cache file for chr" + chrom);
         index++;
-        org.baseplayer.services.LoadingManager.get().setProgress(index, total);
+        org.baseplayer.services.LoadingManager.get().setDetailProgress(index, total);
         continue;
       }
       try {
@@ -357,7 +358,7 @@ public final class VariantCacheStore {
         }
       }
       index++;
-      org.baseplayer.services.LoadingManager.get().setProgress(index, total);
+      org.baseplayer.services.LoadingManager.get().setDetailProgress(index, total);
     }
     return out;
   }

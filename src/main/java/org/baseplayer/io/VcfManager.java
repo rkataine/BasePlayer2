@@ -25,6 +25,7 @@ import org.baseplayer.genome.ReferenceGenomeService;
 import org.baseplayer.io.readers.VcfReader;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.project.SessionDocumentSync;
+import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.RegionFetchCache;
@@ -344,18 +345,98 @@ public class VcfManager {
         loadRegionVariants(chrom, range[0], range[1]);
     }
 
+    /**
+     * Visibility toggles: stream only the on-screen window. Never escalate to a
+     * full-chromosome scan (projects often restore at chrom scale; one checkbox
+     * must not materialize every VCF across the contig).
+     */
+    public void loadVariantsForVisibleWindowOnly() {
+        syncCurrentFilterFromOpenVariantManager();
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        if (stackManager.isEmpty() || loadedVcfs.isEmpty() || !hasVisibleVcfSample()) {
+            return;
+        }
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack == null) {
+                continue;
+            }
+            String chrom = stack.getChromosome();
+            if (chrom == null || chrom.isBlank()) {
+                continue;
+            }
+            if (isFullChromosomeView(stack)) {
+                continue;
+            }
+            long[] range = visibleWindowRange(stack);
+            loadRegionVariants(chrom, range[0], range[1]);
+        }
+    }
+
+    /** Non-empty cached alleles already cover each visible stack's current window. */
+    public boolean currentViewHasCachedAlleles() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        if (stackManager.isEmpty()) {
+            return false;
+        }
+        boolean any = false;
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (stack == null) {
+                continue;
+            }
+            String chrom = stack.getChromosome();
+            if (chrom == null || chrom.isBlank()) {
+                return false;
+            }
+            VariantList list = findCachedVariantList(chrom);
+            if (list == null || list.isEmpty()) {
+                return false;
+            }
+            long[] range = isFullChromosomeView(stack)
+                ? variantLoadRangeForStack(stack)
+                : visibleWindowRange(stack);
+            if (!list.isRegionLoaded(range[0], range[1])) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+
+    /** True when any stack is showing the whole contig (chrom overview). */
+    public boolean isAnyStackAtFullChromosomeView() {
+        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+        for (DrawStack stack : stackManager.getStacks()) {
+            if (isFullChromosomeView(stack)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Full chromosome when the stack is at chrom scale; otherwise the visible window. */
     private static long[] variantLoadRangeForStack(DrawStack stack) {
+        if (isFullChromosomeView(stack)) {
+            return new long[] { 1L, Math.max(2L, (long) (stack.chromSize + 1)) };
+        }
+        return visibleWindowRange(stack);
+    }
+
+    private static long[] visibleWindowRange(DrawStack stack) {
         long viewStart = Math.max(1L, (long) stack.getViewStart());
         long viewEnd = (long) stack.getViewEnd();
         if (viewEnd <= viewStart) {
             viewEnd = viewStart + 1;
         }
-        boolean fullChromosomeView = viewStart <= 1 && viewEnd >= (long) stack.chromSize;
-        if (fullChromosomeView) {
-            return new long[] { 1L, Math.max(2L, (long) (stack.chromSize + 1)) };
-        }
         return new long[] { viewStart, viewEnd };
+    }
+
+    private static boolean isFullChromosomeView(DrawStack stack) {
+        if (stack == null) {
+            return false;
+        }
+        long viewStart = Math.max(1L, (long) stack.getViewStart());
+        long viewEnd = (long) stack.getViewEnd();
+        return viewStart <= 1 && viewEnd >= (long) stack.chromSize;
     }
 
     
@@ -377,6 +458,21 @@ public class VcfManager {
         long start,
         long end,
         boolean manualChromosomeSelection) {
+        loadRegionVariants(chromosome, start, end, manualChromosomeSelection, -1L, -1L);
+    }
+
+    /**
+     * Load variants for a region. When {@code coreStart}/{@code coreEnd} are valid
+     * (gene body), cache reuse succeeds if that core is already loaded even when
+     * the padded {@code start}/{@code end} view overhangs the cache.
+     */
+    public synchronized void loadRegionVariants(
+        String chromosome,
+        long start,
+        long end,
+        boolean manualChromosomeSelection,
+        long coreStart,
+        long coreEnd) {
         syncCurrentFilterFromOpenVariantManager();
         if (!manualChromosomeSelection) {
             pendingManualChromosomeScrollTarget = null;
@@ -385,6 +481,10 @@ public class VcfManager {
 
         chromosome = ChromosomeNames.strip(chromosome);
         if (chromosome == null || chromosome.isBlank() || loadedVcfs.isEmpty()) {
+            return;
+        }
+        // Sidebar unchecked VCFs stay registered but must not trigger chrom/gene streams.
+        if (!hasVisibleVcfSample()) {
             return;
         }
 
@@ -396,11 +496,16 @@ public class VcfManager {
         VariantFilter requestFilterSnapshot = loadTimeFilterSnapshot();
         VariantList cachedVariants = findCachedVariantList(chromosome);
         
-        if (shouldReuseCachedVariants(chromosome, start, end, cachedVariants, requestFilterSnapshot)) {
+        if (shouldReuseCachedVariants(chromosome, start, end, cachedVariants, requestFilterSnapshot)
+            || shouldReuseCachedVariants(chromosome, coreStart, coreEnd, cachedVariants, requestFilterSnapshot)) {
             putVariantList(chromosome, cachedVariants);
             // Mate index may have finished after this chrom was first cached — project now.
             projectMateBreakpoints(chromosome, cachedVariants, start, end);
-            markVcfRegionFetched(chromosome, start, end, cachedVariants);
+            // Only mark the requested view as fetched when fully covered; core-only
+            // hits leave Load Region visible for padded overhang.
+            if (cachedVariants != null && cachedVariants.isRegionLoaded(start, end)) {
+                markVcfRegionFetched(chromosome, start, end, cachedVariants);
+            }
             displayCachedVariants(chromosome, cachedVariants);
             return;
         }
@@ -454,7 +559,8 @@ public class VcfManager {
             && filterCompatible;
 
         if (shouldResetVariantListBeforeLoad(variantList, requestFilterSnapshot)) {
-            // Filter change or VCF removal — rematerialize. Expand partial → full chrom for reuse.
+            // Filter change or VCF removal — rematerialize the requested window only.
+            // Expanding partial → full chrom turned gene re-nav into a whole-chrom stream.
             System.err.printf(
                 "[VcfManager] RESET chrom=%s listSize=%d loadedVcfs=%d->%d filterCompatible=%s%n",
                 chromosome,
@@ -462,11 +568,6 @@ public class VcfManager {
                 previouslyLoadedVcfCount,
                 loadedVcfs.size(),
                 filterCompatible);
-            if (partialRequest) {
-                long fullEnd = resolveChromosomeLoadEnd(chromosome);
-                start = 1;
-                end = fullEnd;
-            }
             clearOverlapScanFlags(chromosome);
             variantList.clear();
         } else if (incrementalAppend) {
@@ -654,8 +755,12 @@ public class VcfManager {
                         }
                     }
                 }
-                result.setLoadedFilterKey(loadFilterSnapshot.toLoadIdentityKey());
-                result.setLoadedFilter(loadFilterSnapshot.copy());
+                // Cache identity must match the next loadTimeFilterSnapshot() after admits
+                // (and VM UI sync). Storing the pre-admit stream snapshot made gene re-nav
+                // look like a filter change → rematerialize.
+                VariantFilter identityFilter = loadTimeFilterSnapshot();
+                result.setLoadedFilterKey(identityFilter.toLoadIdentityKey());
+                result.setLoadedFilter(identityFilter.copy());
                 result.setAnnotated(true);
                 result.setVcfCountWhenLoaded(loadedVcfs.size());
 
@@ -782,6 +887,9 @@ public class VcfManager {
         if (cachedVariants == null) {
             return false;  // No variants cached for this chromosome
         }
+        if (start < 0 || end < start) {
+            return false;
+        }
 
         if (!cachedVariants.isRegionLoaded(start, end)) {
             return false;  // Requested region not yet loaded
@@ -793,11 +901,37 @@ public class VcfManager {
 
         String requestedKey = requestedFilter != null ? requestedFilter.toLoadIdentityKey() : null;
         String loadedKey = cachedVariants.getLoadedFilterKey();
-        if (!java.util.Objects.equals(requestedKey, loadedKey)) {
-            return false;
+        if (java.util.Objects.equals(requestedKey, loadedKey)) {
+            return true;
         }
 
-        return true;
+        // Filter key often drifts after a load (auto-admit types, VM UI sync) even though
+        // the alleles for this window are already in memory. Re-streaming a gene/region on
+        // every analysis-table double-click is wrong. Keep filter identity as a gate only
+        // for full-chromosome requests so reloadChromosomeForFilter still rematerializes.
+        // Looser filters that need new alleles use the VM "Reload needed" banner.
+        return !isFullChromosomeRequest(chromosome, start, end);
+    }
+
+    /** True when at least one open track has a visible VCF sample entry. */
+    public boolean hasVisibleVcfSample() {
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        if (registry == null) {
+            return false;
+        }
+        for (SampleTrack track : registry.getSampleTracks()) {
+            if (track == null) {
+                continue;
+            }
+            for (Sample sample : track.getSamples()) {
+                if (sample != null
+                    && sample.getDataType() == Sample.DataType.VCF
+                    && sample.visible) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean isFullChromosomeCached(VariantList list) {
@@ -1031,21 +1165,6 @@ public class VcfManager {
         List<File> files = new ArrayList<>();
         for (VcfData vcfData : loadedVcfs) {
             files.add(vcfData.file);
-        }
-        return files;
-    }
-
-    /**
-     * VCF files whose sample columns map to the given sample-track index.
-     */
-    public synchronized List<File> getVcfFilesForTrackIndex(int trackIndex) {
-        List<File> files = new ArrayList<>();
-        if (trackIndex < 0) return files;
-        for (VcfData vcfData : loadedVcfs) {
-            if (vcfData == null || vcfData.loader == null || vcfData.file == null) continue;
-            if (vcfData.loader.getTrackIndices().contains(trackIndex)) {
-                files.add(vcfData.file);
-            }
         }
         return files;
     }
@@ -2561,6 +2680,12 @@ public class VcfManager {
         if (changed) {
             ProjectSessionState.get().markDirty();
         }
+        // Ensure shouldReuse cannot attach the old list when only the filter key drifted.
+        VariantList cached = findCachedVariantList(chromosome);
+        if (cached != null) {
+            cached.setLoadedFilterKey(null);
+            cached.setLoadedFilter(null);
+        }
         DrawStackManager sm = ServiceRegistry.getInstance().getDrawStackManager();
         DrawStack stack = sm.getStacks().stream()
             .filter(s -> s.getChromosome().equals(chromosome))
@@ -2877,6 +3002,56 @@ public class VcfManager {
 
     public boolean hasLoadedVcf() {
         return !loadedVcfs.isEmpty();
+    }
+
+    /**
+     * Re-bind VCFs that listed a track by path but failed name matching
+     * ({@code CRC.SW…} track vs {@code CRC-SW…} VCF sample id). Safe no-op when
+     * mapping is already non-empty.
+     */
+    public void repairPathListedUnmappedVcfs() {
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        if (registry == null || loadedVcfs.isEmpty()) {
+            return;
+        }
+        for (VcfData vcfData : loadedVcfs) {
+            if (vcfData == null || vcfData.loader == null || vcfData.file == null) {
+                continue;
+            }
+            if (vcfData.loader.getMappedSampleCount() > 0) {
+                continue;
+            }
+            Path vcfPath = vcfData.file.toPath();
+            List<Integer> allowed =
+                org.baseplayer.io.SampleDataManager.findTrackIndicesListingVcf(registry, vcfPath);
+            if (allowed.isEmpty()) {
+                continue;
+            }
+            vcfData.loader.remapOntoAllowedTracks(allowed);
+            org.baseplayer.io.SampleDataManager.attachVcfSamplesToMappedTracks(
+                vcfData.loader, vcfPath);
+        }
+    }
+
+    /**
+     * Drop empty chromosome variant lists so a prior zero-hit load (e.g. unmapped
+     * samples) cannot be reused when visibility is turned back on.
+     */
+    public synchronized void discardEmptyChromosomeCaches() {
+        java.util.Iterator<Map.Entry<String, VariantList>> it = variantCache.entrySet().iterator();
+        boolean removed = false;
+        while (it.hasNext()) {
+            Map.Entry<String, VariantList> entry = it.next();
+            VariantList list = entry.getValue();
+            if (list == null || list.isEmpty()) {
+                it.remove();
+                removed = true;
+            }
+        }
+        if (removed) {
+            ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
+            variantsRevision.incrementAndGet();
+        }
     }
 
     public static record CachedChromosomeVariants(String chromosome, VariantList variants) {

@@ -3,8 +3,8 @@ package org.baseplayer.analysis.source;
 import java.util.List;
 
 import org.baseplayer.analysis.CollectContext;
-import org.baseplayer.analysis.FeatureValueMatrix;
-import org.baseplayer.analysis.SignalSourceSpec;
+import org.baseplayer.analysis.grid.FeatureValueMatrix;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.analysis.ValueAggregation;
 import org.baseplayer.samples.SampleTrack;
 

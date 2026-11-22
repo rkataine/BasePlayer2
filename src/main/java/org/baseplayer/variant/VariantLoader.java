@@ -6,8 +6,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -73,6 +75,107 @@ public class VariantLoader {
             }
             vcfSampleToTrackIndex.put(vcfSample, trackIndex);
         }
+    }
+
+    /**
+     * Drop any matches against already-open tracks; every eligible sample becomes
+     * unmapped so the opener can create dedicated tracks (large multi-file opens).
+     */
+    public void detachFromExistingTracks() {
+        vcfSampleToTrackIndex.clear();
+        unmappedSamples.clear();
+        for (String vcfSample : vcfSampleNames) {
+            if (detectedNormalSample != null && detectedNormalSample.equals(vcfSample)) {
+                continue;
+            }
+            unmappedSamples.add(vcfSample);
+        }
+    }
+
+    /** Bind one VCF sample column to a track index without name lookup. */
+    public void bindSampleToTrack(String sampleName, int trackIndex) {
+        if (sampleName == null || sampleName.isBlank() || trackIndex < 0) {
+            return;
+        }
+        vcfSampleToTrackIndex.put(sampleName, trackIndex);
+        unmappedSamples.remove(sampleName);
+    }
+
+    /**
+     * Remap eligible sample columns by name, but only onto {@code allowedTrackIndices}.
+     * Used by project restore so a VCF only binds to tracks that listed that file.
+     */
+    public void remapOntoAllowedTracks(Collection<Integer> allowedTrackIndices) {
+        vcfSampleToTrackIndex.clear();
+        unmappedSamples.clear();
+        if (allowedTrackIndices == null || allowedTrackIndices.isEmpty()) {
+            for (String vcfSample : vcfSampleNames) {
+                if (detectedNormalSample != null && detectedNormalSample.equals(vcfSample)) {
+                    continue;
+                }
+                unmappedSamples.add(vcfSample);
+            }
+            return;
+        }
+        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+        Set<Integer> allowed = new HashSet<>(allowedTrackIndices);
+        // Session restore lists the VCF under a track by path; name keys often differ
+        // (CRC.SW.U0004.T vs CRC-SW-U0004-T). A single path-listed track is authoritative.
+        Integer soleAllowed = null;
+        if (allowed.size() == 1) {
+            soleAllowed = allowed.iterator().next();
+        }
+        for (String vcfSample : vcfSampleNames) {
+            if (detectedNormalSample != null && detectedNormalSample.equals(vcfSample)) {
+                continue;
+            }
+            int trackIndex = findMatchingAllowedTrackIndex(registry, vcfSample, allowed);
+            if (trackIndex < 0 && soleAllowed != null) {
+                trackIndex = soleAllowed;
+            }
+            if (trackIndex >= 0) {
+                vcfSampleToTrackIndex.put(vcfSample, trackIndex);
+            } else {
+                unmappedSamples.add(vcfSample);
+            }
+        }
+    }
+
+    private static int findMatchingAllowedTrackIndex(
+        SampleRegistry registry, String candidateName, Set<Integer> allowed) {
+        if (registry == null || candidateName == null || allowed == null || allowed.isEmpty()) {
+            return -1;
+        }
+        String needle = SampleRegistry.normalizeNameKey(candidateName).toLowerCase(Locale.ROOT);
+        if (needle.isEmpty()) {
+            return -1;
+        }
+        List<SampleTrack> tracks = registry.getSampleTracks();
+        for (Integer index : allowed) {
+            if (index == null || index < 0 || index >= tracks.size()) {
+                continue;
+            }
+            SampleTrack track = tracks.get(index);
+            if (track == null) {
+                continue;
+            }
+            if (needle.equals(SampleRegistry.normalizeNameKey(track.getDisplayName())
+                    .toLowerCase(Locale.ROOT))
+                || needle.equals(SampleRegistry.normalizeNameKey(track.getName())
+                    .toLowerCase(Locale.ROOT))) {
+                return index;
+            }
+            for (Sample sample : track.getSamples()) {
+                if (sample == null) {
+                    continue;
+                }
+                if (needle.equals(SampleRegistry.normalizeNameKey(sample.getName())
+                        .toLowerCase(Locale.ROOT))) {
+                    return index;
+                }
+            }
+        }
+        return -1;
     }
 
     public void setTypeObserver(Consumer<VcfVariantType> typeObserver) {

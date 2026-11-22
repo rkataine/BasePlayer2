@@ -77,6 +77,28 @@ public final class MappedTableColumnMapping {
     return has(MappedTableColumnRole.VALUE) || has(MappedTableColumnRole.SCORE);
   }
 
+  /** Human-readable role → header assignments for UI. */
+  public String describeRoles(String[] headers) {
+    if (indexes.isEmpty()) {
+      return "(no columns mapped)";
+    }
+    StringBuilder sb = new StringBuilder();
+    for (MappedTableColumnRole role : MappedTableColumnRole.values()) {
+      Integer idx = indexes.get(role);
+      if (idx == null) {
+        continue;
+      }
+      if (sb.length() > 0) {
+        sb.append(" · ");
+      }
+      String header = headers != null && idx >= 0 && idx < headers.length && headers[idx] != null
+          ? headers[idx]
+          : ("col " + (idx + 1));
+      sb.append(role.label()).append('=').append(header);
+    }
+    return sb.toString();
+  }
+
   public static MappedTableColumnMapping autoDetect(String[] headers) {
     EnumMap<MappedTableColumnRole, Integer> map = new EnumMap<>(MappedTableColumnRole.class);
     if (headers == null) {
