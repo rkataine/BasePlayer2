@@ -272,15 +272,20 @@ public final class SampleOrganizationWindow {
     fromFolders.setOnAction(e -> createFromParentFolders());
     Button fromFile = secondaryButton("Import from file…");
     fromFile.setTooltip(new Tooltip(
-        "Text/TSV/CSV with sample name and group name columns"));
+        "Text/TSV/CSV with sample name and group name columns (multiple groups OK)"));
     fromFile.setOnAction(e -> importFromMappingFile());
+    Button toFile = secondaryButton("Export to file…");
+    toFile.setTooltip(new Tooltip(
+        "Write sample_name + group_name TSV for re-import"));
+    toFile.setOnAction(e -> exportToMappingFile());
 
     HBox renameRow = new HBox(8, renameField, groupColorPicker);
     HBox.setHgrow(renameField, Priority.ALWAYS);
     renameRow.setAlignment(Pos.CENTER_LEFT);
 
     HBox row1 = new HBox(8, newGroup, deleteGroup);
-    VBox pane = new VBox(8, heading, groupList, renameRow, row1, fromFolders, fromFile);
+    HBox rowFile = new HBox(8, fromFile, toFile);
+    VBox pane = new VBox(8, heading, groupList, renameRow, row1, fromFolders, rowFile);
     VBox.setVgrow(groupList, Priority.ALWAYS);
     pane.setPadding(new Insets(0, 6, 0, 0));
     return pane;
@@ -776,6 +781,13 @@ public final class SampleOrganizationWindow {
                 ? "."
                 : ", " + result.unmatchedSamples().size() + " unmatched."));
     refreshAll(preserveSelection());
+  }
+
+  private void exportToMappingFile() {
+    boolean ok = org.baseplayer.io.SampleGroupMappingExporter.chooseAndExport(stage);
+    if (ok) {
+      statusLabel.setText("Exported sample→group mapping.");
+    }
   }
 
   private void addSelectedTracks() {

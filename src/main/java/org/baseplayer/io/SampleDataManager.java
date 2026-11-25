@@ -14,6 +14,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
@@ -28,9 +29,12 @@ import org.baseplayer.draw.DrawStack;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BigWigTrack;
+import org.baseplayer.io.table.MappedTableColumnMapping;
 import org.baseplayer.io.table.MappedTableData;
+import org.baseplayer.io.table.MappedTableMappingMemory;
 import org.baseplayer.io.table.MappedTableOpen;
 import org.baseplayer.io.table.MappedTableReader;
+import org.baseplayer.io.table.SalmonQuantOpen;
 import org.baseplayer.samples.alignment.draw.TrackBodyCanvas;
 import org.baseplayer.io.dragen.DragenAnalysisKind;
 import org.baseplayer.io.dragen.DragenFolderScan;
@@ -1020,6 +1024,7 @@ public class SampleDataManager {
       }
     }
     VcfManager.getInstance().bumpVariantsRevision();
+    pruneSignalDatasetsAfterTrackRemoved(removedTrack);
     org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
     
     // Adjust visible range
@@ -1032,6 +1037,28 @@ public class SampleDataManager {
     
     ProjectSessionState.get().markDirty();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
+  }
+
+  /** Drop emptied Signal datasets / session slices when a sample track is removed. */
+  private static void pruneSignalDatasetsAfterTrackRemoved(SampleTrack removedTrack) {
+    if (removedTrack == null) {
+      return;
+    }
+    List<org.baseplayer.analysis.signal.SignalDataset> emptied =
+        org.baseplayer.analysis.signal.SignalDatasetRegistry.get().removeTrack(removedTrack);
+    for (org.baseplayer.analysis.signal.SignalDataset ds : emptied) {
+      if (ds != null) {
+        org.baseplayer.analysis.AnalysisSession.get().clearSignalSlice(ds.getId());
+      }
+    }
+    javafx.application.Platform.runLater(() -> {
+      org.baseplayer.variant.ui.VariantManagerController controller =
+          org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+      if (controller != null) {
+        controller.syncSignalDatasetTabs();
+        controller.updateModeTabVisibility();
+      }
+    });
   }
 
   /**
@@ -1276,13 +1303,19 @@ public class SampleDataManager {
         new ExtensionFilter(
             "Tables",
             "*.tsv", "*.tsv.gz", "*.csv", "*.csv.gz", "*.txt", "*.txt.gz",
-            "*.segments", "*.segments.gz", "*.bed", "*.bed.gz"),
+            "*.segments", "*.segments.gz", "*.bed", "*.bed.gz",
+            "*.sf", "*.sf.gz", "*.quant.sf", "*.quant.sf.gz"),
+        new ExtensionFilter("Salmon quant.sf", "*.sf", "*.sf.gz", "*.quant.sf", "*.quant.sf.gz"),
         new ExtensionFilter("All files", "*.*"));
     File file = fileChooser.showOpenDialog(MainApp.stage);
     if (file == null) {
       return;
     }
     UserPreferences.setLastDirectory("TABLE", file.getParentFile());
+    if (SalmonQuantOpen.isSalmonQuantPath(file.toPath())) {
+      openSalmonQuantFiles(List.of(file));
+      return;
+    }
     openTableOntoTrack(track, file);
   }
 
@@ -1305,14 +1338,28 @@ public class SampleDataManager {
         new ExtensionFilter(
             "Tables",
             "*.tsv", "*.tsv.gz", "*.csv", "*.csv.gz", "*.txt", "*.txt.gz",
-            "*.segments", "*.segments.gz", "*.bed", "*.bed.gz"),
+            "*.segments", "*.segments.gz", "*.bed", "*.bed.gz",
+            "*.sf", "*.sf.gz", "*.quant.sf", "*.quant.sf.gz"),
+        new ExtensionFilter("Salmon quant.sf", "*.sf", "*.sf.gz", "*.quant.sf", "*.quant.sf.gz"),
         new ExtensionFilter("All files", "*.*"));
     List<File> files = fileChooser.showOpenMultipleDialog(MainApp.stage);
     if (files == null || files.isEmpty()) {
       return;
     }
     UserPreferences.setLastDirectory("TABLE", files.get(0).getParentFile());
+    List<File> salmon = new ArrayList<>();
+    List<File> other = new ArrayList<>();
     for (File file : files) {
+      if (file != null && SalmonQuantOpen.isSalmonQuantPath(file.toPath())) {
+        salmon.add(file);
+      } else if (file != null) {
+        other.add(file);
+      }
+    }
+    if (!salmon.isEmpty()) {
+      openSalmonQuantFiles(salmon);
+    }
+    for (File file : other) {
       addTableSampleFile(file);
     }
   }
@@ -1402,7 +1449,9 @@ public class SampleDataManager {
           GenomicCanvas.update.set(!GenomicCanvas.update.get());
           ProjectSessionState.get().markDirty();
           // Open Signal and annotate so genes + per-sample values fill the table.
-          afterTableSampleOpened();
+          afterTableSampleOpened(
+              collectTracksWithTablePath(sampleRegistry, path),
+              List.of(path));
         });
   }
 
@@ -1419,6 +1468,134 @@ public class SampleDataManager {
    * Re-parse a matrix file and attach columns (project restore). No dialogs.
    * Registers the open in {@link org.baseplayer.project.OpenedMatrixRegistry}.
    */
+  /**
+   * Project restore: reload Salmon {@code quant.sf} files onto existing / new tracks
+   * without opening Analysis or prompting.
+   */
+  public static void restoreSalmonQuantForSession(List<Path> paths, List<String> warnings) {
+    if (paths == null || paths.isEmpty()) {
+      return;
+    }
+    List<Path> existing = new ArrayList<>();
+    for (Path path : paths) {
+      if (path != null && Files.exists(path)) {
+        existing.add(path);
+      } else if (warnings != null && path != null) {
+        warnings.add("Missing Salmon file: " + path);
+      }
+    }
+    if (existing.isEmpty()) {
+      return;
+    }
+    try {
+      if (!awaitGenesLoaded(120_000)) {
+        if (warnings != null) {
+          warnings.add("Gene annotation not ready; skipped Salmon restore");
+        }
+        return;
+      }
+      SampleRegistry registryPeek = ServiceRegistry.getInstance().getSampleRegistry();
+      SalmonQuantOpen.LociTemplate reuse = findOpenSalmonLociTemplate(registryPeek);
+      String chromFilter = reuse != null
+          ? org.baseplayer.analysis.signal.SignalScopeHelper.currentChrom()
+          : null;
+      SalmonQuantOpen.SalmonOpenResult result = SalmonQuantOpen.load(
+          existing,
+          org.baseplayer.annotation.AnnotationData::getGeneLocation,
+          reuse,
+          chromFilter);
+      if (result == null || result.tables().isEmpty()) {
+        if (warnings != null) {
+          warnings.add(result != null && result.summary() != null
+              ? result.summary()
+              : "No genes resolved from Salmon files");
+        }
+        return;
+      }
+      SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+      MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, result.tables());
+      MatrixApplyResult applied = applyMatrixSamplePolicy(
+          sampleRegistry,
+          existing.get(0),
+          plan,
+          MatrixSampleMappingDialog.Policy.MERGE);
+      if (applied.created() > 0) {
+        sampleRegistry.includeNewTracksAtEndResetHeight();
+      }
+      if (applied.attached() + applied.created() == 0 && warnings != null) {
+        warnings.add("No Salmon samples were attached during project restore");
+      }
+    } catch (Exception e) {
+      if (warnings != null) {
+        warnings.add("Failed to restore Salmon: " + e.getMessage());
+      }
+      System.err.println("Failed to restore Salmon: " + e.getMessage());
+    }
+  }
+
+  /**
+   * Project restore: reload a mapped table using remembered / auto-detected columns
+   * (no mapping dialog).
+   */
+  public static void restoreMappedTableForSession(Path path, List<String> warnings) {
+    if (path == null || !Files.exists(path)) {
+      if (warnings != null && path != null) {
+        warnings.add("Missing table: " + path);
+      }
+      return;
+    }
+    try {
+      MappedTableReader.Preview preview = MappedTableReader.preview(path, 10);
+      boolean useHeader = preview.firstLineLooksLikeHeader();
+      String[] headers = preview.headers() != null ? preview.headers() : new String[0];
+      MappedTableColumnMapping mapping = MappedTableColumnMapping.autoDetect(headers);
+      if (mapping.headerRow() != useHeader) {
+        mapping = new MappedTableColumnMapping(
+            mapping.indexes(), mapping.startZeroBased(), useHeader);
+      }
+      Optional<MappedTableColumnMapping> remembered =
+          MappedTableMappingMemory.recall(headers, useHeader);
+      if (remembered.isPresent()
+          && remembered.get().hasRequired()
+          && remembered.get().hasPayload()) {
+        mapping = remembered.get();
+      }
+      if (!mapping.hasRequired() || !mapping.hasPayload()) {
+        if (warnings != null) {
+          warnings.add("Could not auto-map table columns: "
+              + (path.getFileName() != null ? path.getFileName() : path));
+        }
+        return;
+      }
+      String stem = MappedTableReader.fileStem(path);
+      MappedTableData data = MappedTableReader.read(path, mapping, stem);
+      if (data.getRows().isEmpty() && !data.isIntervalBars()) {
+        if (warnings != null) {
+          warnings.add("No rows from table: "
+              + (path.getFileName() != null ? path.getFileName() : path));
+        }
+        return;
+      }
+      SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+      SampleTrack existing = findTrackByName(sampleRegistry, stem);
+      if (existing != null) {
+        existing.addSample(new Sample(path, data));
+      } else {
+        Sample newSample = new Sample(path, data);
+        if (addSampleMergingByName(sampleRegistry, newSample)) {
+          sampleRegistry.includeNewTracksAtEndResetHeight();
+        }
+      }
+    } catch (Exception e) {
+      if (warnings != null) {
+        warnings.add("Failed to restore table "
+            + (path.getFileName() != null ? path.getFileName() : path)
+            + ": " + e.getMessage());
+      }
+      System.err.println("Failed to restore table: " + path + " - " + e.getMessage());
+    }
+  }
+
   public static void restoreMatrixForSession(
       Path path,
       org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec spec,
@@ -1577,6 +1754,10 @@ public class SampleDataManager {
     if (file == null) {
       return;
     }
+    if (SalmonQuantOpen.isSalmonQuantPath(file.toPath())) {
+      openSalmonQuantFiles(List.of(file));
+      return;
+    }
     SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
     String stem = MappedTableReader.fileStem(file.toPath());
     SampleTrack existing = findTrackByName(sampleRegistry, stem);
@@ -1598,11 +1779,153 @@ public class SampleDataManager {
     UserPreferences.addRecentFile("TABLE", file);
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
     ProjectSessionState.get().markDirty();
-    afterTableSampleOpened();
+    SampleTrack opened = findTrackByName(sampleRegistry, MappedTableReader.fileStem(file.toPath()));
+    if (opened == null) {
+      opened = findTrackByName(sampleRegistry, stem);
+    }
+    afterTableSampleOpened(
+        opened != null ? List.of(opened) : orphanTableTracks(sampleRegistry),
+        List.of(file.toPath()));
+  }
+
+  /**
+   * Open Salmon {@code quant.sf} files as a gene×sample matrix (TPM + NumReads),
+   * same compact {@link MappedTableData} shape as {@link #openMatrixSampleFile}.
+   */
+  static void openSalmonQuantFiles(List<File> files) {
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+    List<Path> paths = new ArrayList<>(files.size());
+    for (File f : files) {
+      if (f != null) {
+        paths.add(f.toPath());
+      }
+    }
+    if (paths.isEmpty()) {
+      return;
+    }
+    String label = paths.size() == 1
+        ? "Loading Salmon " + paths.get(0).getFileName() + "\u2026"
+        : "Loading " + paths.size() + " Salmon quant.sf files\u2026";
+    SampleRegistry registryPeek = ServiceRegistry.getInstance().getSampleRegistry();
+    SalmonQuantOpen.LociTemplate reuse = findOpenSalmonLociTemplate(registryPeek);
+    // Capture chrom on FX thread before worker runs.
+    String chromFilter = reuse != null
+        ? org.baseplayer.analysis.signal.SignalScopeHelper.currentChrom()
+        : null;
+    String[] loadError = { null };
+    ThreadRunner.get().submit(
+        label,
+        () -> {
+          try {
+            if (reuse == null && !awaitGenesLoaded(120_000)) {
+              loadError[0] = "Gene annotation not ready; cannot map Salmon gene names";
+              return null;
+            }
+            return SalmonQuantOpen.load(
+                paths,
+                org.baseplayer.annotation.AnnotationData::getGeneLocation,
+                reuse,
+                chromFilter);
+          } catch (Exception ex) {
+            loadError[0] = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+            return null;
+          }
+        },
+        result -> {
+          if (loadError[0] != null) {
+            SampleOpenFailuresDialog.create()
+                .add(files.get(0), loadError[0])
+                .commitAndShowLater();
+            return;
+          }
+          if (result == null || result.tables().isEmpty()) {
+            SampleOpenFailuresDialog.create()
+                .add(files.get(0),
+                    result != null && result.summary() != null
+                        ? result.summary()
+                        : "No genes resolved from Salmon files")
+                .commitAndShowLater();
+            return;
+          }
+          SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+          MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, result.tables());
+          MatrixApplyResult applied = applyMatrixSamplePolicy(
+              sampleRegistry,
+              paths.get(0),
+              plan,
+              MatrixSampleMappingDialog.Policy.MERGE);
+          if (applied.created() > 0) {
+            sampleRegistry.includeNewTracksAtEndResetHeight();
+          } else if (applied.attached() > 0) {
+            GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          }
+          if (applied.attached() + applied.created() == 0) {
+            SampleOpenFailuresDialog.create()
+                .add(files.get(0), "No Salmon samples were attached")
+                .commitAndShowLater();
+            return;
+          }
+          for (File f : files) {
+            if (f != null) {
+              UserPreferences.addRecentFile("TABLE", f);
+            }
+          }
+          GenomicCanvas.update.set(!GenomicCanvas.update.get());
+          ProjectSessionState.get().markDirty();
+          List<SampleTrack> salmonTracks = new ArrayList<>();
+          for (MappedTableData table : result.tables()) {
+            if (table == null) {
+              continue;
+            }
+            SampleTrack track = findTrackByName(sampleRegistry, table.getName());
+            if (track != null && !containsIdentity(salmonTracks, track)) {
+              salmonTracks.add(track);
+            }
+          }
+          if (salmonTracks.isEmpty()) {
+            salmonTracks.addAll(orphanTableTracks(sampleRegistry));
+          }
+          afterTableSampleOpened(salmonTracks, paths);
+        });
+  }
+
+  /**
+   * Find an already-open Salmon gene-matrix loci template so later {@code .sf}
+   * opens can reuse ENSG→index mapping (same {@link SharedMatrixLoci} instance).
+   */
+  static SalmonQuantOpen.LociTemplate findOpenSalmonLociTemplate(SampleRegistry registry) {
+    if (registry == null) {
+      return null;
+    }
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null || sample.getDataType() != Sample.DataType.TABLE) {
+          continue;
+        }
+        MappedTableData table = sample.getMappedTable();
+        if (table == null || !table.isIntervalBars() || !table.hasCompactSecondary()) {
+          continue;
+        }
+        SalmonQuantOpen.LociTemplate template = SalmonQuantOpen.templateFor(table.sharedLoci());
+        if (template != null) {
+          return template;
+        }
+      }
+    }
+    return null;
   }
 
   private static void openTableOntoTrack(SampleTrack track, File file) {
     if (track == null || file == null) {
+      return;
+    }
+    if (SalmonQuantOpen.isSalmonQuantPath(file.toPath())) {
+      openSalmonQuantFiles(List.of(file));
       return;
     }
     MappedTableData data = MappedTableOpen.openWithMapping(
@@ -1615,17 +1938,98 @@ public class SampleDataManager {
     UserPreferences.addRecentFile("TABLE", file);
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
     ProjectSessionState.get().markDirty();
-    afterTableSampleOpened();
+    afterTableSampleOpened(List.of(track), List.of(file.toPath()));
   }
 
-  /** Show Analysis for mapped tables and focus Signal (LOH / table values). */
-  private static void afterTableSampleOpened() {
+  /**
+   * Register a named Signal dataset for the opened tracks (prompt if unrecognized),
+   * then open Analysis on that tab.
+   */
+  private static void afterTableSampleOpened(List<SampleTrack> tracks, List<Path> paths) {
     org.baseplayer.controllers.MenuBarController.updateVariantManagerButtonVisibility();
     javafx.application.Platform.runLater(() -> {
-      if (org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton()) {
+      SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+      List<SampleTrack> members = tracks != null ? new ArrayList<>(tracks) : new ArrayList<>();
+      members.removeIf(t -> t == null);
+      if (members.isEmpty()) {
+        members.addAll(orphanTableTracks(registry));
+      }
+      if (members.isEmpty()) {
+        if (org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton()) {
+          org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+        }
+        return;
+      }
+      java.util.Optional<String> datasetId =
+          org.baseplayer.analysis.signal.SignalDatasetCoordinator.registerOpened(
+              members, paths, null);
+      if (datasetId.isPresent()) {
+        org.baseplayer.analysis.signal.SignalDatasetCoordinator.openAnalysisForDataset(
+            datasetId.get());
+      } else if (org.baseplayer.variant.ui.VariantManagerWindow.hasSignalDatasets()) {
         org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
       }
     });
+  }
+
+  /** Table-bearing tracks not yet members of any Signal dataset. */
+  private static List<SampleTrack> orphanTableTracks(SampleRegistry registry) {
+    List<SampleTrack> orphans = new ArrayList<>();
+    if (registry == null) {
+      return orphans;
+    }
+    org.baseplayer.analysis.signal.SignalDatasetRegistry datasets =
+        org.baseplayer.analysis.signal.SignalDatasetRegistry.get();
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null || datasets.findByTrack(track) != null) {
+        continue;
+      }
+      boolean hasTable = false;
+      for (Sample sample : track.getSamples()) {
+        if (sample != null
+            && sample.getDataType() == Sample.DataType.TABLE
+            && sample.getMappedTable() != null) {
+          hasTable = true;
+          break;
+        }
+      }
+      if (hasTable) {
+        orphans.add(track);
+      }
+    }
+    return orphans;
+  }
+
+  private static List<SampleTrack> collectTracksWithTablePath(SampleRegistry registry, Path path) {
+    List<SampleTrack> out = new ArrayList<>();
+    if (registry == null || path == null) {
+      return out;
+    }
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample != null
+            && sample.getDataType() == Sample.DataType.TABLE
+            && path.equals(sample.getPath())) {
+          if (!containsIdentity(out, track)) {
+            out.add(track);
+          }
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  private static boolean containsIdentity(List<SampleTrack> list, SampleTrack track) {
+    for (SampleTrack existing : list) {
+      if (existing == track) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static SampleTrack findTrackByName(SampleRegistry registry, String stem) {
@@ -2932,6 +3336,11 @@ public class SampleDataManager {
 
     VcfManager.getInstance().closeCurrentVcf();
     org.baseplayer.project.OpenedMatrixRegistry.get().clear();
+    SalmonQuantOpen.clearTemplates();
+    // Drop annotation / comparison / pattern caches so the next project does not
+    // show stale Signal tables (settings are reloaded from ProjectDocument).
+    org.baseplayer.analysis.AnalysisSession.get().clear();
+    org.baseplayer.analysis.signal.SignalDatasetRegistry.get().clear();
     // Do not reset Settings — draw prefs (read height, coverage, …) are user-global
     // and must survive new project / clear / project switch.
     ProjectSessionState.get().resetDocument();

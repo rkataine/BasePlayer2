@@ -20,6 +20,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
@@ -40,6 +41,9 @@ import javafx.util.StringConverter;
 public final class GroupComparisonFilterControls {
 
   private final ColoredToggle thresholdsEnabled = new ColoredToggle("Filter by thresholds");
+  private final CheckBox useMinAbsDelta = new CheckBox("Min |Δ|");
+  private final CheckBox useMaxQ = new CheckBox("Max q");
+  private final CheckBox useMinN = new CheckBox("Min hits/group");
   private final Spinner<Double> minAbsDelta = new Spinner<>();
   private final Spinner<Double> maxQ = new Spinner<>();
   private final Spinner<Integer> minN = new Spinner<>();
@@ -50,6 +54,7 @@ public final class GroupComparisonFilterControls {
   private final ColoredToggle showUp = new ColoredToggle("Different / higher outside baseline");
   private final ColoredToggle showDown = new ColoredToggle("Higher in baseline");
   private final ColoredToggle showSimilar = new ColoredToggle("Similar");
+  private final Button showHeatmapButton = new Button("Show heatmap");
   private boolean refreshing;
   private Runnable onChanged;
 
@@ -90,16 +95,30 @@ public final class GroupComparisonFilterControls {
     effectChoice.setValue(AnalysisSession.get().getEffectMode());
     effectChoice.setMaxWidth(Double.MAX_VALUE);
 
-    thresholdsEnabled.setSelected(false);
+    // Default: filter on with only q ≤ 0.05; Min |Δ| / Min hits off until checked.
+    thresholdsEnabled.setSelected(true);
+    useMinAbsDelta.setSelected(false);
+    useMaxQ.setSelected(true);
+    useMinN.setSelected(false);
     showUp.setSelected(true);
     showDown.setSelected(true);
     showSimilar.setSelected(true);
+    showHeatmapButton.getStyleClass().add("secondary-button");
+    showHeatmapButton.setDisable(true);
+    syncCriterionControls();
 
     scaleDetectLabel.getStyleClass().add("value-label");
     scaleDetectLabel.setWrapText(true);
 
     Tooltip.install(thresholdsEnabled, new Tooltip(
-        "When on, hide result rows that fail Min |Δ|, Max q, Min hits/group, direction, or Top N."));
+        "When on, hide rows that fail the checked criteria (Max q, Min |Δ|, Min hits), "
+            + "direction, or Top N. Uncheck to show every computed row."));
+    Tooltip.install(useMinAbsDelta, new Tooltip(
+        "Apply minimum absolute effect vs baseline. Uncheck to ignore |Δ|."));
+    Tooltip.install(useMaxQ, new Tooltip(
+        "Apply maximum FDR-adjusted q-value. Uncheck to ignore q."));
+    Tooltip.install(useMinN, new Tooltip(
+        "Require a minimum samples-with-value per group. Uncheck to ignore."));
     Tooltip.install(minAbsDelta, new Tooltip(
         "Minimum absolute effect vs baseline (log2 fold or mean Δ, per Effect mode)."));
     Tooltip.install(maxQ, new Tooltip("Maximum FDR-adjusted q-value to keep."));
@@ -110,6 +129,9 @@ public final class GroupComparisonFilterControls {
     Tooltip.install(effectChoice, new Tooltip(
         "How Δ is computed vs baseline. Auto follows detected / channel value type."));
     Tooltip.install(showSimilar, new Tooltip("Include rows that are not called different between groups."));
+    Tooltip.install(showHeatmapButton, new Tooltip(
+        "Open a features×samples heatmap of the current Group comparison rows "
+            + "(samples ordered by cohort, values z-scored)."));
 
     wire();
     refreshDirectionLabels();
@@ -118,6 +140,19 @@ public final class GroupComparisonFilterControls {
 
   public void setOnChanged(Runnable onChanged) {
     this.onChanged = onChanged;
+  }
+
+  public void setOnShowHeatmap(Runnable action) {
+    showHeatmapButton.setOnAction(e -> {
+      if (action != null) {
+        action.run();
+      }
+    });
+  }
+
+  /** Enable when the current filtered comparison has enough rows for a heatmap. */
+  public void setHeatmapEnabled(boolean enabled) {
+    showHeatmapButton.setDisable(!enabled);
   }
 
   /**
@@ -149,7 +184,7 @@ public final class GroupComparisonFilterControls {
   private VBox buildLeftColumn(Button runButton, ChoiceBox<GroupStatTest> testChoice, Label statusLabel) {
     Label deHelp = new Label(
         "Differential analysis between sample groups on the current chromosome. "
-            + "Table shows significant features only (q / |Δ| / direction).");
+            + "Default filter keeps q ≤ 0.05; enable Min |Δ| / Min hits as needed.");
     deHelp.getStyleClass().add("subsection-label");
     deHelp.setWrapText(true);
 
@@ -158,8 +193,8 @@ public final class GroupComparisonFilterControls {
     testLabel.setMinWidth(36);
     testLabel.setPrefWidth(36);
     testLabel.setTooltip(new Tooltip(
-        "Auto picks Fisher (sparse 0/1, 2 groups), Moderated t (continuous, 2 groups), "
-            + "or Kruskal–Wallis (N>2)."));
+        "Auto picks Fisher (sparse 0/1) or Moderated t (continuous). "
+            + "With 3+ groups, every pair is tested and the best contrast is kept."));
 
     HBox.setHgrow(testChoice, Priority.ALWAYS);
     testChoice.setMaxWidth(Double.MAX_VALUE);
@@ -167,7 +202,7 @@ public final class GroupComparisonFilterControls {
         "Statistical tests",
         "Group comparison tests",
         GroupComparisonFilterControls::testHelpSections);
-    HBox topRow = new HBox(8, runButton, testLabel, testChoice, testHelp);
+    HBox topRow = new HBox(8, runButton, showHeatmapButton, testLabel, testChoice, testHelp);
     topRow.setAlignment(Pos.CENTER_LEFT);
 
     Label effectLabel = new Label("Effect");
@@ -190,9 +225,9 @@ public final class GroupComparisonFilterControls {
         new Separator(),
         thrHeader,
         thresholdsEnabled,
-        fieldRow("Min |Δ|", minAbsDelta, "Minimum absolute effect vs baseline"),
-        fieldRow("Max q", maxQ, "Maximum FDR-adjusted q-value"),
-        fieldRow("Min hits/group", minN, "Minimum samples with a value per group"),
+        criterionRow(useMinAbsDelta, minAbsDelta, "Minimum absolute effect vs baseline"),
+        criterionRow(useMaxQ, maxQ, "Maximum FDR-adjusted q-value"),
+        criterionRow(useMinN, minN, "Minimum samples with a value per group"),
         fieldRow("Min mean", minMeanPrefilter, "Prefilter: drop low-mean features (0 = off)"),
         fieldRow("Top N", maxRows, "Top N rows by |Δ| (0 = all)"));
     left.setPadding(new Insets(16));
@@ -222,6 +257,9 @@ public final class GroupComparisonFilterControls {
     commitSpinners();
     DifferenceThresholds thr = new DifferenceThresholds();
     thr.setEnabled(thresholdsEnabled.isSelected());
+    thr.setUseMinAbsLog2Fc(useMinAbsDelta.isSelected());
+    thr.setUseMaxQ(useMaxQ.isSelected());
+    thr.setUseMinNPerGroup(useMinN.isSelected());
     Double delta = minAbsDelta.getValue();
     Double q = maxQ.getValue();
     Integer n = minN.getValue();
@@ -251,6 +289,9 @@ public final class GroupComparisonFilterControls {
     refreshing = true;
     try {
       thresholdsEnabled.setSelected(thr.isEnabled());
+      useMinAbsDelta.setSelected(thr.isUseMinAbsLog2Fc());
+      useMaxQ.setSelected(thr.isUseMaxQ());
+      useMinN.setSelected(thr.isUseMinNPerGroup());
       minAbsDelta.getValueFactory().setValue(thr.getMinAbsLog2Fc());
       maxQ.getValueFactory().setValue(thr.getMaxQ());
       minN.getValueFactory().setValue(thr.getMinNPerGroup());
@@ -260,6 +301,7 @@ public final class GroupComparisonFilterControls {
       showSimilar.setSelected(thr.isShowSimilar());
       minMeanPrefilter.getValueFactory().setValue(AnalysisSession.get().getMinMeanPrefilter());
       effectChoice.setValue(AnalysisSession.get().getEffectMode());
+      syncCriterionControls();
       refreshDirectionLabels();
       refreshScaleDetectLabel();
     } finally {
@@ -310,7 +352,22 @@ public final class GroupComparisonFilterControls {
         onChanged.run();
       }
     };
-    thresholdsEnabled.selectedProperty().addListener((o, a, b) -> fire.run());
+    thresholdsEnabled.selectedProperty().addListener((o, a, b) -> {
+      syncCriterionControls();
+      fire.run();
+    });
+    useMinAbsDelta.selectedProperty().addListener((o, a, b) -> {
+      syncCriterionControls();
+      fire.run();
+    });
+    useMaxQ.selectedProperty().addListener((o, a, b) -> {
+      syncCriterionControls();
+      fire.run();
+    });
+    useMinN.selectedProperty().addListener((o, a, b) -> {
+      syncCriterionControls();
+      fire.run();
+    });
     minAbsDelta.valueProperty().addListener((o, a, b) -> fire.run());
     maxQ.valueProperty().addListener((o, a, b) -> fire.run());
     minN.valueProperty().addListener((o, a, b) -> fire.run());
@@ -411,6 +468,30 @@ public final class GroupComparisonFilterControls {
     scroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
     scroll.getStyleClass().add("filter-scroll");
     return scroll;
+  }
+
+  private void syncCriterionControls() {
+    boolean master = thresholdsEnabled.isSelected();
+    useMinAbsDelta.setDisable(!master);
+    useMaxQ.setDisable(!master);
+    useMinN.setDisable(!master);
+    minAbsDelta.setDisable(!master || !useMinAbsDelta.isSelected());
+    maxQ.setDisable(!master || !useMaxQ.isSelected());
+    minN.setDisable(!master || !useMinN.isSelected());
+    maxRows.setDisable(!master);
+  }
+
+  private static HBox criterionRow(CheckBox use, Node control, String tooltip) {
+    use.setMinWidth(110);
+    use.setPrefWidth(110);
+    if (tooltip != null && !tooltip.isBlank()) {
+      use.setTooltip(new Tooltip(tooltip));
+    }
+    Region spacer = new Region();
+    HBox.setHgrow(spacer, Priority.ALWAYS);
+    HBox row = new HBox(8, use, spacer, control);
+    row.setAlignment(Pos.CENTER_LEFT);
+    return row;
   }
 
   private static HBox fieldRow(String labelText, Node control, String tooltip) {

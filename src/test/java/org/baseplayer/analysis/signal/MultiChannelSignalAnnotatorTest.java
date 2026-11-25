@@ -72,10 +72,11 @@ class MultiChannelSignalAnnotatorTest {
     assertEquals(2, result.rows().size());
     assertEquals(List.of("LOH", "GAIN"),
         result.rows().stream().map(GroupStatResult.Row::geneName).toList());
-    assertEquals(0.0, result.channelValue("LOH", "minor"), 1e-9);
-    assertEquals(2.0, result.channelValue("LOH", "major"), 1e-9);
-    assertEquals(1.0, result.channelValue("GAIN", "minor"), 1e-9);
-    assertEquals(2.0, result.channelValue("GAIN", "major"), 1e-9);
+    // Allele-CN rows use gene::EVENT unitIds for per-type channel means.
+    assertEquals(0.0, result.channelValue(SignalEventDirection.rowUnitId("LOH", SignalEventDirection.LOH), "minor"), 1e-9);
+    assertEquals(2.0, result.channelValue(SignalEventDirection.rowUnitId("LOH", SignalEventDirection.LOH), "major"), 1e-9);
+    assertEquals(1.0, result.channelValue(SignalEventDirection.rowUnitId("GAIN", SignalEventDirection.GAIN), "minor"), 1e-9);
+    assertEquals(2.0, result.channelValue(SignalEventDirection.rowUnitId("GAIN", SignalEventDirection.GAIN), "major"), 1e-9);
   }
 
   @Test

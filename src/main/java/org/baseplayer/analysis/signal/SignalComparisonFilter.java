@@ -1,8 +1,10 @@
 package org.baseplayer.analysis.signal;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -53,7 +55,7 @@ public final class SignalComparisonFilter {
       FeatureValueBundle bundle,
       List<SignalChannel> channels,
       SignalValueThresholds thresholds) {
-    return apply(result, settings, roster, matrix, bundle, channels, thresholds, matrix);
+    return apply(result, settings, roster, matrix, bundle, channels, thresholds, matrix, null);
   }
 
   public static GroupStatResult apply(
@@ -65,16 +67,35 @@ public final class SignalComparisonFilter {
       List<SignalChannel> channels,
       SignalValueThresholds thresholds,
       ValueGrid grid) {
+    return apply(result, settings, roster, matrix, bundle, channels, thresholds, grid, null);
+  }
+
+  public static GroupStatResult apply(
+      GroupStatResult result,
+      SignalComparisonSettings settings,
+      List<SampleTrack> roster,
+      FeatureValueMatrix matrix,
+      FeatureValueBundle bundle,
+      List<SignalChannel> channels,
+      SignalValueThresholds thresholds,
+      ValueGrid grid,
+      Collection<SignalEventDirection> allowedDirections) {
     if (result == null || result.rows().isEmpty()) {
       return result;
     }
     if (settings == null || !settings.hasActiveConstraints()) {
       return result;
     }
+    Set<SignalEventDirection> allowed = normalizeAllowed(allowedDirections, channels);
     List<SampleTrack> tracks = roster != null ? roster : List.of();
     Map<SampleTag, List<SampleTrack>> byTag = indexByTag(tracks);
     List<GroupStatResult.Row> rows = new ArrayList<>(result.rows());
     Function<GroupStatResult.Row, Set<SampleTrack>> presentOf = row -> {
+      if (allowed != null && bundle != null && row != null) {
+        String locusId = alleleCnLocusId(row);
+        Set<SignalEventDirection> rowAllowed = allowedForRow(row, allowed);
+        return presentAlleleCn(locusId, tracks, bundle, channels, rowAllowed);
+      }
       if (grid != null && row != null && row.unitId() != null) {
         // Compact SSOT: finite cell (already masked). Sparse matrix: apply thr when set.
         return presentFromGrid(grid, row.unitId(), tracks, thresholds);
@@ -134,6 +155,17 @@ public final class SignalComparisonFilter {
       FeatureValueBundle bundle,
       List<SignalChannel> channels,
       SignalValueThresholds thresholds) {
+    return filterMatrixUnits(matrix, settings, roster, bundle, channels, thresholds, null);
+  }
+
+  public static FeatureValueMatrix filterMatrixUnits(
+      FeatureValueMatrix matrix,
+      SignalComparisonSettings settings,
+      List<SampleTrack> roster,
+      FeatureValueBundle bundle,
+      List<SignalChannel> channels,
+      SignalValueThresholds thresholds,
+      Collection<SignalEventDirection> allowedDirections) {
     if (matrix == null || matrix.isEmpty() || settings == null || !settings.hasActiveConstraints()) {
       return matrix;
     }
@@ -141,14 +173,19 @@ public final class SignalComparisonFilter {
         ? roster
         : new ArrayList<>(matrix.tracks());
     Map<SampleTag, List<SampleTrack>> byTag = indexByTag(tracks);
+    Set<SignalEventDirection> allowed = normalizeAllowed(allowedDirections, channels);
 
     List<String> unitIds = new ArrayList<>(matrix.unitIds());
     unitIds.sort(Comparator
         .comparing((String id) -> chromKey(matrix.locusOf(id)), String.CASE_INSENSITIVE_ORDER)
         .thenComparingLong(id -> locusStart(matrix.locusOf(id))));
 
-    Function<String, Set<SampleTrack>> presentOf = unitId -> presentForUnit(
-        unitId, tracks, matrix, bundle, channels, thresholds);
+    Function<String, Set<SampleTrack>> presentOf = unitId -> {
+      if (allowed != null && bundle != null) {
+        return presentAlleleCn(unitId, tracks, bundle, channels, allowed);
+      }
+      return presentForUnit(unitId, tracks, matrix, bundle, channels, thresholds);
+    };
 
     boolean[] keep;
     if (!settings.isGeneLevel() && settings.getComparisonWindowBp() > 0) {
@@ -360,14 +397,22 @@ public final class SignalComparisonFilter {
       return present;
     }
     // Compact SSOT is already NaN-masked — ignore thr. Sparse collect still uses thr.
+    // Require hasValue so missingDefault fills (e.g. LOH matrix 0.0) are not “present”.
     boolean applyThr = thresholds != null && thresholds.isEnabled()
         && !(grid instanceof CompactTableGrid);
     for (SampleTrack track : tracks) {
+      if (track == null || !grid.hasValue(unitId, track)) {
+        continue;
+      }
       Double v = grid.get(unitId, track);
       if (v == null || !Double.isFinite(v)) {
         continue;
       }
       if (applyThr && !thresholds.passes(v)) {
+        continue;
+      }
+      // LOH binary grids may store explicit 0 for non-LOH; that is not “present”.
+      if (v == 0.0 && thresholds != null && thresholds.isLohOnly()) {
         continue;
       }
       present.add(track);
@@ -397,6 +442,76 @@ public final class SignalComparisonFilter {
       }
     }
     return false;
+  }
+
+  /**
+   * When channels are allele-CN only and allowed directions are set, return that set;
+   * otherwise null (caller uses threshold/finite presence).
+   */
+  private static Set<SignalEventDirection> normalizeAllowed(
+      Collection<SignalEventDirection> allowedDirections,
+      List<SignalChannel> channels) {
+    if (!SignalChannels.isAlleleCnOnly(channels)) {
+      return null;
+    }
+    if (allowedDirections == null) {
+      return SignalEventDirection.defaultAllowed();
+    }
+    EnumSet<SignalEventDirection> out = EnumSet.noneOf(SignalEventDirection.class);
+    for (SignalEventDirection d : allowedDirections) {
+      if (d != null && d != SignalEventDirection.NONE) {
+        out.add(d);
+      }
+    }
+    return out;
+  }
+
+  /** Present when Minor+Major classify to an allowed event type. */
+  private static Set<SampleTrack> presentAlleleCn(
+      String unitId,
+      List<SampleTrack> tracks,
+      FeatureValueBundle bundle,
+      List<SignalChannel> channels,
+      Set<SignalEventDirection> allowed) {
+    Set<SampleTrack> present = new LinkedHashSet<>();
+    if (unitId == null || tracks == null || bundle == null || allowed == null) {
+      return present;
+    }
+    for (SampleTrack track : tracks) {
+      SignalEventDirection dir =
+          SignalEventDirection.fromBundleSample(bundle, channels, unitId, track);
+      if (allowed.contains(dir)) {
+        present.add(track);
+      }
+    }
+    return present;
+  }
+
+  /** Gene locus for allele-CN rows ({@code TP53} from {@code TP53::LOH}). */
+  private static String alleleCnLocusId(GroupStatResult.Row row) {
+    if (row == null) {
+      return null;
+    }
+    if (row.geneName() != null && !row.geneName().isBlank()) {
+      return row.geneName();
+    }
+    return SignalEventDirection.locusUnitId(row.unitId());
+  }
+
+  /**
+   * Gene×event rows count only that event type (intersected with the UI type filter).
+   */
+  private static Set<SignalEventDirection> allowedForRow(
+      GroupStatResult.Row row, Set<SignalEventDirection> allowed) {
+    SignalEventDirection tagged = SignalEventDirection.parseRowDirection(
+        row != null ? row.direction() : null);
+    if (tagged == SignalEventDirection.NONE) {
+      return allowed;
+    }
+    if (allowed == null || !allowed.contains(tagged)) {
+      return EnumSet.noneOf(SignalEventDirection.class);
+    }
+    return EnumSet.of(tagged);
   }
 
   private static Set<SampleTrack> presentTracksFromRowGroups(

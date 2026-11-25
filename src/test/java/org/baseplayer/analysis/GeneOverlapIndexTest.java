@@ -50,6 +50,15 @@ class GeneOverlapIndexTest {
   }
 
   @Test
+  void overlapBpUsesIntersectionWithGene() {
+    Gene gene = new Gene(
+        "1", 100, 200, "G", "ENSG1", "+", "protein_coding", "", List.of(), List.of());
+    assertEquals(51, GeneOverlapIndex.overlapBp(50, 150, gene));
+    assertEquals(101, GeneOverlapIndex.overlapBp(100, 400, gene));
+    assertEquals(101, GeneOverlapIndex.overlapBp(100, 200, null));
+  }
+
+  @Test
   void resolveByNameReturnsNullWhenNoCatalogGene() {
     GeneLocation loc = new GeneLocation("1", 10, 20);
     Map<String, GeneLocation> search = new HashMap<>();

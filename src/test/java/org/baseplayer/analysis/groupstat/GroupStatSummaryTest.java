@@ -30,7 +30,7 @@ class GroupStatSummaryTest {
     FeatureValueMatrix matrix = new FeatureValueMatrix();
     matrix.setMissingDefault(0.0);
     assertEquals(GroupStatTest.FISHER, GroupStatTest.AUTO.resolve(matrix, 2));
-    assertEquals(GroupStatTest.RANK, GroupStatTest.AUTO.resolve(matrix, 3));
+    assertEquals(GroupStatTest.FISHER, GroupStatTest.AUTO.resolve(matrix, 3));
   }
 
   @Test

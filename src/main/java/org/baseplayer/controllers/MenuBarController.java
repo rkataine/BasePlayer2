@@ -75,6 +75,7 @@ public class MenuBarController {
   @FXML private MenuItem openDirMenuItem;
   @FXML private MenuItem openDragenMenuItem;
   @FXML private MenuItem importSampleGroupsMenuItem;
+  @FXML private MenuItem exportSampleGroupsMenuItem;
   @FXML private Menu recentFilesMenu;
   @FXML private MenuItem saveProjectMenuItem;
   @FXML private MenuItem saveProjectAsMenuItem;
@@ -573,6 +574,10 @@ public class MenuBarController {
     MenuIcons.directory(openDirMenuItem);
     MenuIcons.directory(openDragenMenuItem);
     MenuIcons.apply(importSampleGroupsMenuItem, FontAwesomeSolid.USERS, "#d0a050");
+    MenuIcons.apply(exportSampleGroupsMenuItem, FontAwesomeSolid.FILE_EXPORT, "#d0a050");
+    sampleRegistry.sampleGroupsRevisionProperty().addListener(
+        (obs, o, n) -> updateExportSampleGroupsMenuVisibility());
+    updateExportSampleGroupsMenuVisibility();
     MenuIcons.apply(recentFilesMenu, FontAwesomeSolid.HISTORY, "#8a94a6");
     MenuIcons.apply(saveProjectMenuItem, FontAwesomeSolid.SAVE, "#6aab73");
     MenuIcons.apply(saveProjectAsMenuItem, FontAwesomeSolid.FILE_EXPORT, "#5b9bd5");
@@ -737,6 +742,29 @@ public class MenuBarController {
   private void importSampleGroups() {
     org.baseplayer.io.SampleGroupMappingImporter.chooseAndImport(MainApp.stage);
     updateSampleGroupsButtonVisibility();
+    updateExportSampleGroupsMenuVisibility();
+  }
+
+  @FXML
+  private void exportSampleGroups() {
+    org.baseplayer.io.SampleGroupMappingExporter.chooseAndExport(MainApp.stage);
+  }
+
+  private void updateExportSampleGroupsMenuVisibility() {
+    if (exportSampleGroupsMenuItem == null) {
+      return;
+    }
+    Runnable apply = () -> {
+      boolean hasGroups = sampleRegistry != null
+          && sampleRegistry.getSampleGroups() != null
+          && !sampleRegistry.getSampleGroups().isEmpty();
+      exportSampleGroupsMenuItem.setDisable(!hasGroups);
+    };
+    if (Platform.isFxApplicationThread()) {
+      apply.run();
+    } else {
+      Platform.runLater(apply);
+    }
   }
 
   private void setupThemeToggleButton() {

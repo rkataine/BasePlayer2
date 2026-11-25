@@ -2,30 +2,35 @@ package org.baseplayer.analysis.ui;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.function.Consumer;
 
 import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.AnalysisSession;
 import org.baseplayer.analysis.ComparisonContext;
 import org.baseplayer.analysis.ComparisonUnit;
+import org.baseplayer.analysis.grid.CompactTableGrid;
 import org.baseplayer.analysis.grid.FeatureValueBundle;
 import org.baseplayer.analysis.grid.FeatureValueMatrix;
+import org.baseplayer.analysis.grid.ValueGrid;
 import org.baseplayer.analysis.groupstat.GroupComparisonDiffFormat;
 import org.baseplayer.analysis.groupstat.GroupStatResult;
 import org.baseplayer.analysis.signal.SignalAnnotator;
 import org.baseplayer.analysis.signal.SignalChannel;
 import org.baseplayer.analysis.signal.SignalEventDirection;
+import org.baseplayer.analysis.signal.SignalSourceSpec;
+import org.baseplayer.analysis.signal.SignalValueThresholds;
 import org.baseplayer.analysis.signal.SignalValueType;
 import org.baseplayer.analysis.ThresholdFilter;
+import org.baseplayer.components.sidebars.SampleGroupDialog;
 import org.baseplayer.controllers.commands.NavigationCommands;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.ChromosomeNames;
+import org.baseplayer.utils.DrawColors;
 
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -33,6 +38,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -45,6 +51,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.stage.Window;
 
 /**
  * Nested group-comparison results: same chrome as variant gene tables
@@ -64,6 +71,8 @@ public final class GroupStatResultTable extends VBox {
   private static final double COL_CHR = 48;
   private static final double COL_POS = 130;
   private static final double COL_N = 36;
+  /** Annotation Samples column: count + Group… button. */
+  private static final double COL_SAMPLES = 108;
   private static final double COL_DIR = 64;
   private static final double COL_P = 78;
   private static final double COL_Q = 78;
@@ -106,16 +115,14 @@ public final class GroupStatResultTable extends VBox {
   private boolean annotationMode;
   private boolean lohAnnotationMode;
   private boolean alleleCnAnnotationMode;
+  /** Annotation or group-compare rows tagged Gain/Loss/LOH (gene::EVENT). */
+  private boolean alleleCnEventMode;
   private GroupStatResult currentResult;
   private final HBox channelHeaderBox = new HBox(0);
   private final List<HBox> sortChannelHeaders = new ArrayList<>();
   private final List<Label> sortChannelArrows = new ArrayList<>();
   private final List<String> sortChannelIds = new ArrayList<>();
   private static final double COL_CHANNEL = 72;
-  private double valueColorMin = 0;
-  private double valueColorMax = 1;
-  /** Per-chromosome color scale for continuous annotation (chrom → [min,max]). */
-  private final Map<String, double[]> chromValueRange = new HashMap<>();
   private SortCol sortCol = SortCol.DELTA;
   private boolean sortAscending = false;
   /** Channel id when {@link SortCol#CHANNEL}. */
@@ -195,6 +202,8 @@ public final class GroupStatResultTable extends VBox {
     annotationMode = SignalAnnotator.isAnnotationResult(result);
     lohAnnotationMode = annotationMode && SignalAnnotator.isLohAnnotation(result);
     alleleCnAnnotationMode = annotationMode && SignalEventDirection.resultHasAlleleCn(result);
+    alleleCnEventMode = hasAlleleCnEventRows(result)
+        || alleleCnAnnotationMode;
     updateHeaderForMode();
     if (annotationMode && !wasAnnotation) {
       sortCol = SortCol.POS;
@@ -205,12 +214,9 @@ public final class GroupStatResultTable extends VBox {
       sortAscending = false;
       refreshSortHeaderLabels();
     }
-    chromValueRange.clear();
     if (result == null || result.rows().isEmpty()) {
       allEntries.clear();
       items.clear();
-      valueColorMin = 0;
-      valueColorMax = 1;
       emptyLabel.setText(
           result != null && result.summary() != null && !result.summary().isBlank()
               ? result.summary()
@@ -219,37 +225,8 @@ public final class GroupStatResultTable extends VBox {
       return;
     }
     List<Entry> next = new ArrayList<>(result.rows().size());
-    double min = Double.POSITIVE_INFINITY;
-    double max = Double.NEGATIVE_INFINITY;
-    Map<String, List<Double>> byChrom = annotationMode ? new HashMap<>() : null;
     for (GroupStatResult.Row row : result.rows()) {
       next.add(new Entry(row));
-      if (annotationMode) {
-        Double v = SignalAnnotator.annotationValue(row);
-        if (v != null && Double.isFinite(v)) {
-          min = Math.min(min, v);
-          max = Math.max(max, v);
-          String chromKey = chromSortKey(row);
-          if (!chromKey.isEmpty()) {
-            byChrom.computeIfAbsent(chromKey, k -> new ArrayList<>()).add(v);
-          }
-        }
-      }
-    }
-    if (annotationMode && min <= max && Double.isFinite(min) && Double.isFinite(max)) {
-      valueColorMin = min;
-      valueColorMax = max == min ? min + 1e-9 : max;
-    } else {
-      valueColorMin = 0;
-      valueColorMax = 1;
-    }
-    if (byChrom != null) {
-      for (Map.Entry<String, List<Double>> e : byChrom.entrySet()) {
-        double[] range = SignalEventDirection.chromValueScale(e.getValue());
-        if (range != null) {
-          chromValueRange.put(e.getKey(), range);
-        }
-      }
     }
     allEntries.clear();
     allEntries.addAll(next);
@@ -262,33 +239,59 @@ public final class GroupStatResultTable extends VBox {
         && currentResult != null
         && currentResult.hasSignalChannels()
         && currentResult.signalChannels().size() > 1;
-    if (!alleleCnAnnotationMode && sortCol == SortCol.DIR) {
-      sortCol = SortCol.POS;
-      sortAscending = true;
+    if (!alleleCnEventMode && sortCol == SortCol.DIR) {
+      sortCol = annotationMode ? SortCol.POS : SortCol.DELTA;
+      sortAscending = annotationMode;
     }
     if ((!annotationMode || !multiChannel) && sortCol == SortCol.CHANNEL) {
       sortCol = annotationMode ? SortCol.POS : SortCol.DELTA;
       sortAscending = annotationMode;
       sortChannelId = null;
     }
-    if (!annotationMode && sortCol == SortCol.DIR) {
-      sortCol = SortCol.DELTA;
-      sortAscending = false;
-    }
     rebuildChannelHeaders(multiChannel);
     rebuildHeaderChildren(multiChannel);
     if (annotationMode) {
       qHeaderLabel.setText(multiChannel ? "" : "Value");
       Tooltip.install(qHeaderLabel, new Tooltip("Annotation value (not an FDR q-value)"));
+      nHeaderLabel.setText("Samples");
+      Tooltip.install(nHeaderLabel, new Tooltip(
+          "Samples with an event · Group… creates a sample group from those samples"));
       nHeaderLabel.setVisible(true);
       nHeaderLabel.setManaged(true);
-      sortDirHeader.setVisible(alleleCnAnnotationMode);
-      sortDirHeader.setManaged(alleleCnAnnotationMode);
+      sortNHeader.setPrefWidth(COL_SAMPLES);
+      sortNHeader.setMinWidth(COL_SAMPLES);
+      sortDirHeader.setVisible(alleleCnEventMode);
+      sortDirHeader.setManaged(alleleCnEventMode);
     } else {
       qHeaderLabel.setText("q");
       Tooltip.install(qHeaderLabel, new Tooltip(Q_VALUE_TOOLTIP));
+      nHeaderLabel.setText("n");
+      Tooltip.install(nHeaderLabel, new Tooltip("Samples with an event on this gene"));
+      sortNHeader.setPrefWidth(COL_N);
+      sortNHeader.setMinWidth(COL_N);
+      sortDirHeader.setVisible(alleleCnEventMode);
+      sortDirHeader.setManaged(alleleCnEventMode);
     }
     refreshSortHeaderLabels();
+  }
+
+  private static boolean hasAlleleCnEventRows(GroupStatResult result) {
+    if (result == null || result.rows() == null) {
+      return false;
+    }
+    for (GroupStatResult.Row row : result.rows()) {
+      if (row == null) {
+        continue;
+      }
+      if (SignalEventDirection.parseRowDirection(row.direction()) != SignalEventDirection.NONE) {
+        return true;
+      }
+      String unitId = row.unitId();
+      if (unitId != null && !unitId.equals(SignalEventDirection.locusUnitId(unitId))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Rebuild header children so annotation mode omits Δ/Hits/Diff nodes entirely. */
@@ -312,7 +315,7 @@ public final class GroupStatResultTable extends VBox {
     if (annotationMode) {
       kids.add(colSep());
       kids.add(sortNHeader);
-      if (alleleCnAnnotationMode) {
+      if (alleleCnEventMode) {
         kids.add(colSep());
         kids.add(sortDirHeader);
       }
@@ -324,6 +327,10 @@ public final class GroupStatResultTable extends VBox {
         kids.add(channelHeaderBox);
       }
     } else {
+      if (alleleCnEventMode) {
+        kids.add(colSep());
+        kids.add(sortDirHeader);
+      }
       kids.add(colSep());
       kids.add(sortPHeader);
       kids.add(colSep());
@@ -626,8 +633,7 @@ public final class GroupStatResultTable extends VBox {
     if (containsIgnoreCase(row.direction(), queryLower)) {
       return true;
     }
-    if (annotationMode && containsIgnoreCase(
-        SignalAnnotator.formatAnnotationValue(row, lohAnnotationMode), queryLower)) {
+    if (annotationMode && containsIgnoreCase(annotationValueText(row), queryLower)) {
       return true;
     }
     if (containsIgnoreCase(GroupComparisonDiffFormat.formatDiffPlain(analysisMode, row), queryLower)) {
@@ -722,8 +728,9 @@ public final class GroupStatResultTable extends VBox {
     if (annotationMode) {
       children.add(buildSampleHeader());
       if (entry.row.groups() != null) {
+        String locusId = annotationLocusId(entry.row);
         for (GroupStatResult.GroupSummary g : entry.row.groups()) {
-          children.add(buildSampleValueRow(entry.row.unitId(), g));
+          children.add(buildSampleValueRow(locusId, g));
         }
       }
     } else {
@@ -799,9 +806,10 @@ public final class GroupStatResultTable extends VBox {
       }
     } else {
       double mean = group != null ? group.mean() : Double.NaN;
-      row.getChildren().addAll(colSep(), metaLabel(
-          SignalValueType.RAW.format(mean),
-          COL_CHANNEL));
+      String text = integerAnnotationValue()
+          ? SignalValueType.ALLELE_CN.format(mean)
+          : SignalValueType.RAW.format(mean);
+      row.getChildren().addAll(colSep(), metaLabel(text, COL_CHANNEL));
     }
     return row;
   }
@@ -816,6 +824,176 @@ public final class GroupStatResultTable extends VBox {
       }
     }
     return null;
+  }
+
+  /** Samples column cell: event count + Group… (annotation mode). */
+  private Node buildSamplesCell(int nSamples, GroupStatResult.Row row) {
+    Label count = metaLabel(String.valueOf(nSamples), 28);
+    Button btn = new Button("Group…");
+    btn.getStyleClass().add("vn-group-samples-btn");
+    btn.setFocusTraversable(false);
+    btn.setCursor(Cursor.HAND);
+    btn.setMinHeight(22);
+    btn.setPrefHeight(22);
+    btn.setMaxHeight(22);
+    btn.setStyle("-fx-font-size: 11px; -fx-padding: 0 6 0 6;");
+    Tooltip.install(btn, new Tooltip(
+        "Create a sample group from all samples annotated for this "
+            + (unitMode != null ? unitMode.name().toLowerCase(Locale.ROOT) : "unit")));
+    btn.setOnAction(e -> promptGroupAnnotatedSamples(row));
+
+    HBox cell = new HBox(6, count, btn);
+    cell.setAlignment(Pos.CENTER_LEFT);
+    cell.setMinWidth(COL_SAMPLES);
+    cell.setPrefWidth(COL_SAMPLES);
+    cell.setMaxWidth(COL_SAMPLES);
+    return cell;
+  }
+
+  private void promptGroupAnnotatedSamples(GroupStatResult.Row row) {
+    if (row == null) {
+      return;
+    }
+    List<SampleTrack> tracks = resolveAnnotatedTracks(row);
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    Window owner = getScene() != null ? getScene().getWindow() : null;
+    if (tracks.isEmpty() || registry == null) {
+      javafx.scene.control.Alert alert = new javafx.scene.control.Alert(
+          javafx.scene.control.Alert.AlertType.INFORMATION);
+      alert.setTitle("Group samples");
+      alert.setHeaderText(null);
+      alert.setContentText("No annotated samples found for this row.");
+      if (owner != null) {
+        alert.initOwner(owner);
+      }
+      alert.showAndWait();
+      return;
+    }
+    String suggested = row.geneName();
+    if (suggested == null || suggested.isBlank()) {
+      suggested = row.unitId();
+    }
+    if (suggested == null || suggested.isBlank()) {
+      suggested = registry.suggestNextGroupName();
+    }
+    Color initial = DrawColors.SAMPLE_GROUP_COLORS[
+        registry.getSampleGroups().size() % DrawColors.SAMPLE_GROUP_COLORS.length];
+    SampleGroupDialog.show(owner, tracks.size(), suggested.trim(), initial).ifPresent(outcome -> {
+      if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
+        registry.createGroupForTracks(tracks, add.name(), add.color());
+        if (add.tags() != null && !add.tags().isEmpty()) {
+          registry.setTracksTags(tracks, add.tags());
+        }
+        GenomicCanvas.update.set(!GenomicCanvas.update.get());
+      }
+    });
+  }
+
+  /**
+   * Re-resolve deviant samples from the live signal grid/bundle (not slim expand rows).
+   */
+  /** Bundle/grid locus id (gene name; strips {@code ::LOH} from split allele-CN rows). */
+  private static String annotationLocusId(GroupStatResult.Row row) {
+    if (row == null) {
+      return null;
+    }
+    if (row.geneName() != null && !row.geneName().isBlank()) {
+      return row.geneName();
+    }
+    return SignalEventDirection.locusUnitId(row.unitId());
+  }
+
+  private static List<SampleTrack> resolveAnnotatedTracks(GroupStatResult.Row row) {
+    if (row == null) {
+      return List.of();
+    }
+    String unitId = annotationLocusId(row);
+    if (unitId == null || unitId.isBlank()) {
+      return List.of();
+    }
+    AnalysisSession session = AnalysisSession.get();
+    FeatureValueBundle bundle = session.getSignalBundle();
+    SignalSourceSpec spec = session.getSignalSpec();
+    SignalEventDirection rowDir = SignalEventDirection.parseRowDirection(row.direction());
+    if (bundle != null && !bundle.isEmpty() && spec != null && spec.hasChannels()) {
+      List<SampleTrack> fromBundle = SignalAnnotator.deviantTracksForUnit(
+          bundle, spec.getChannels(), new ArrayList<>(bundle.tracks()), unitId);
+      if (rowDir != SignalEventDirection.NONE && !fromBundle.isEmpty()) {
+        List<SampleTrack> typed = new ArrayList<>();
+        for (SampleTrack t : fromBundle) {
+          if (SignalEventDirection.fromBundleSample(
+                  bundle, spec.getChannels(), unitId, t) == rowDir) {
+            typed.add(t);
+          }
+        }
+        if (!typed.isEmpty()) {
+          return typed;
+        }
+      }
+      if (!fromBundle.isEmpty()) {
+        return fromBundle;
+      }
+    }
+    ValueGrid grid = session.getSignalGrid();
+    if (grid != null && !grid.isEmpty()) {
+      // Presence = finite cell. Compact SSOT is already threshold-masked.
+      SignalValueThresholds thr = new SignalValueThresholds();
+      if (!(grid instanceof CompactTableGrid)) {
+        thr = session.getValueThresholds();
+      }
+      List<SampleTrack> roster = grid instanceof CompactTableGrid ctg
+          ? new ArrayList<>(ctg.trackOrder())
+          : new ArrayList<>(grid.tracks());
+      List<SampleTrack> fromGrid = SignalAnnotator.deviantTracksForUnit(grid, roster, thr, unitId);
+      if (!fromGrid.isEmpty()) {
+        return fromGrid;
+      }
+      // geneName may differ from unitId on some sources
+      if (row.geneName() != null && !row.geneName().isBlank() && !row.geneName().equals(unitId)) {
+        fromGrid = SignalAnnotator.deviantTracksForUnit(grid, roster, thr, row.geneName());
+        if (!fromGrid.isEmpty()) {
+          return fromGrid;
+        }
+      }
+    }
+    // Last resort: display-name match from expand summaries (may miss slim cohort).
+    FeatureValueBundle fallbackBundle = session.getSignalBundle();
+    List<SampleTrack> fromSummaries = new ArrayList<>();
+    if (row.groups() != null) {
+      SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+      for (GroupStatResult.GroupSummary g : row.groups()) {
+        if (g == null || g.groupName() == null || g.groupName().startsWith("Cohort (")) {
+          continue;
+        }
+        SampleTrack track = resolveSampleTrack(g.groupName(), fallbackBundle);
+        if (track == null && registry != null) {
+          for (SampleTrack t : registry.snapshotSampleTracks()) {
+            if (t != null && g.groupName().equals(t.getDisplayName())) {
+              track = t;
+              break;
+            }
+          }
+        }
+        if (track != null && !fromSummaries.contains(track)) {
+          fromSummaries.add(track);
+        }
+      }
+    }
+    return fromSummaries;
+  }
+
+  private static boolean isUnderGroupButton(Object target) {
+    if (!(target instanceof Node node)) {
+      return false;
+    }
+    Node cur = node;
+    while (cur != null) {
+      if (cur instanceof Button b && b.getStyleClass().contains("vn-group-samples-btn")) {
+        return true;
+      }
+      cur = cur.getParent();
+    }
+    return false;
   }
 
   private static Double sampleChannelValue(
@@ -848,7 +1026,7 @@ public final class GroupStatResultTable extends VBox {
     box.setMinHeight(28);
     box.setPrefHeight(28);
     box.setMaxHeight(28);
-    if (annotationMode) {
+    if (alleleCnEventMode) {
       applyAnnotationRowColor(box, row);
     }
 
@@ -885,15 +1063,15 @@ public final class GroupStatResultTable extends VBox {
     if (annotationMode) {
       int nSamples = row.groups() == null ? 0 : row.groups().size();
       kids.add(colSep());
-      kids.add(metaLabel(String.valueOf(nSamples), COL_N));
-      if (alleleCnAnnotationMode) {
+      kids.add(buildSamplesCell(nSamples, row));
+      if (alleleCnEventMode) {
         SignalEventDirection dir = SignalEventDirection.fromResultRow(currentResult, row);
         kids.add(colSep());
         kids.add(directionLabel(dir));
       }
       if (!multiChannel) {
         kids.add(colSep());
-        kids.add(metaLabel(SignalAnnotator.formatAnnotationValue(row, lohAnnotationMode), COL_Q));
+        kids.add(metaLabel(annotationValueText(row), COL_Q));
       } else {
         for (SignalChannel ch : currentResult.signalChannels()) {
           Double cv = currentResult.channelValue(row.unitId(), ch.id());
@@ -902,6 +1080,11 @@ public final class GroupStatResultTable extends VBox {
         }
       }
     } else {
+      if (alleleCnEventMode) {
+        SignalEventDirection dir = SignalEventDirection.fromResultRow(currentResult, row);
+        kids.add(colSep());
+        kids.add(directionLabel(dir));
+      }
       kids.add(colSep());
       kids.add(metaLabel(formatP(row.pValue()), COL_P));
       kids.add(colSep());
@@ -934,11 +1117,17 @@ public final class GroupStatResultTable extends VBox {
       if (e.getButton() != MouseButton.PRIMARY || e.isConsumed() || e.getClickCount() >= 2) {
         return;
       }
+      if (isUnderGroupButton(e.getTarget())) {
+        return;
+      }
       toggleAction.run();
       e.consume();
     });
     box.addEventHandler(MouseEvent.MOUSE_CLICKED, e -> {
       if (e.getButton() != MouseButton.PRIMARY || e.getClickCount() < 2) {
+        return;
+      }
+      if (isUnderGroupButton(e.getTarget())) {
         return;
       }
       gotoRow(row);
@@ -962,37 +1151,27 @@ public final class GroupStatResultTable extends VBox {
     return lab;
   }
 
+  /** Allele-CN class tint only. Relative heat tint stretched near-equal LOH scores into red vs gray. */
   private void applyAnnotationRowColor(HBox box, GroupStatResult.Row row) {
+    if (!alleleCnEventMode) {
+      return;
+    }
+    applyDirectionRowTint(box, SignalEventDirection.fromResultRow(currentResult, row));
+  }
+
+  private String annotationValueText(GroupStatResult.Row row) {
+    if (lohAnnotationMode) {
+      return SignalAnnotator.formatAnnotationValue(row, true);
+    }
     if (alleleCnAnnotationMode) {
-      SignalEventDirection dir = SignalEventDirection.fromResultRow(currentResult, row);
-      applyDirectionRowTint(box, dir);
-      return;
+      Double v = SignalAnnotator.annotationValue(row);
+      return SignalValueType.ALLELE_CN.format(v == null ? Double.NaN : v);
     }
-    Double v = SignalAnnotator.annotationValue(row);
-    if (v == null || !Double.isFinite(v)) {
-      return;
-    }
-    double lo = valueColorMin;
-    double hi = valueColorMax;
-    double[] chromRange = chromValueRange.get(chromSortKey(row));
-    if (chromRange != null && chromRange.length >= 2) {
-      lo = chromRange[0];
-      hi = chromRange[1];
-    }
-    double span = hi - lo;
-    if (!(span > 0)) {
-      span = 1e-9;
-    }
-    double t = (v - lo) / span;
-    t = Math.max(0, Math.min(1, t));
-    // Cool muted → warm accent with value intensity (vs chrom baseline).
-    double r = 0.18 + 0.55 * t;
-    double g = 0.28 + 0.15 * (1.0 - t);
-    double b = 0.42 - 0.25 * t;
-    double a = 0.12 + 0.38 * t;
-    box.setStyle(String.format(Locale.ROOT,
-        "-fx-background-color: rgba(%.0f,%.0f,%.0f,%.2f); -fx-background-radius: 3;",
-        r * 255, g * 255, b * 255, a));
+    return SignalAnnotator.formatAnnotationValue(row, false);
+  }
+
+  private boolean integerAnnotationValue() {
+    return lohAnnotationMode || alleleCnAnnotationMode;
   }
 
   private static void applyDirectionRowTint(HBox box, SignalEventDirection dir) {

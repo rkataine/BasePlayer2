@@ -1,16 +1,25 @@
 package org.baseplayer.analysis.ui;
 
+import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 
+import org.baseplayer.MainApp;
 import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.AnalysisRunner;
 import org.baseplayer.analysis.AnalysisSession;
+import org.baseplayer.analysis.export.AnalysisExportDialog;
+import org.baseplayer.analysis.export.AnalysisExportKind;
+import org.baseplayer.analysis.export.AnalysisExportService;
+import org.baseplayer.components.AppDialog;
 import org.baseplayer.analysis.signal.BigWigCompanionRule;
 import org.baseplayer.analysis.ComparisonContext;
 import org.baseplayer.analysis.ComparisonUnit;
@@ -27,6 +36,8 @@ import org.baseplayer.analysis.pattern.SamplePatternEngine;
 import org.baseplayer.analysis.signal.SignalAnnotator;
 import org.baseplayer.analysis.signal.SignalChannel;
 import org.baseplayer.analysis.signal.SignalChannels;
+import org.baseplayer.analysis.signal.SignalDataset;
+import org.baseplayer.analysis.signal.SignalEventDirection;
 import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.analysis.signal.SignalValueKind;
 import org.baseplayer.analysis.signal.SignalValueStats;
@@ -44,6 +55,7 @@ import org.baseplayer.analysis.source.MappedTableValueSource;
 import org.baseplayer.analysis.source.MultiChannelMappedTableSource;
 import org.baseplayer.analysis.source.ValueSource;
 import org.baseplayer.components.ColoredToggle;
+import org.baseplayer.io.UserPreferences;
 import org.baseplayer.io.table.MappedTableColumnMapping;
 import org.baseplayer.io.table.MappedTableData;
 import org.baseplayer.io.table.MappedTableOpen;
@@ -54,8 +66,11 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
+import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
+import org.kordamp.ikonli.javafx.FontIcon;
 
 import javafx.animation.PauseTransition;
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -72,9 +87,13 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import javafx.stage.Window;
 import javafx.util.Duration;
 
@@ -132,6 +151,9 @@ public final class SignalAnalysisWorkspace {
   private final Button editColumnsButton = new Button("Edit columns…");
   private final Label observedRangeLabel = new Label();
   private final VBox channelFiltersBox = new VBox(10);
+  private final Map<SignalEventDirection, ColoredToggle> eventTypeToggles =
+      new java.util.EnumMap<>(SignalEventDirection.class);
+  private boolean eventTypeFilterSuppress;
   private final ColoredToggle valueThrEnabled = new ColoredToggle("Filter by value");
   private final CheckBox useMinBound = new CheckBox("Use Min");
   private final CheckBox useMaxBound = new CheckBox("Use Max");
@@ -146,6 +168,7 @@ public final class SignalAnalysisWorkspace {
   private final Label statusLabel = new Label();
   private final Button runButton = new Button("Run");
   private final Button annotateAllButton = new Button("Annotate All Chromosomes");
+  private final Button exportButton = new Button();
   private final TextField tableSearchField = new TextField();
   private final ChoiceBox<GroupStatTest> testChoice;
   /** Observed min/max per channel id — seeds spinners without enabling filters. */
@@ -171,8 +194,15 @@ public final class SignalAnalysisWorkspace {
   private AnalysisBusyRunner analysisBusyRunner;
   private SignalValueKind lastDefaultsKind;
   private List<SignalChannel> activeChannels = List.of();
+  /** Owning named dataset; null only for legacy single-slot tests. */
+  private final SignalDataset dataset;
 
   public SignalAnalysisWorkspace() {
+    this(null);
+  }
+
+  public SignalAnalysisWorkspace(SignalDataset dataset) {
+    this.dataset = dataset;
     minValueSpinner.setValueFactory(
         new SpinnerValueFactory.DoubleSpinnerValueFactory(-1e9, 1e9, 0, 0.1));
     minValueSpinner.setEditable(true);
@@ -235,7 +265,7 @@ public final class SignalAnalysisWorkspace {
     runButton.setOnAction(e -> runAnalysis());
     Tooltip.install(runButton, new Tooltip(
         "Differential analysis between sample groups on the current chromosome "
-            + "(moderated t / Welch / rank + BH). Table shows significant features only."));
+            + "(moderated t / Welch / rank + BH). Uses the current threshold settings."));
     testChoice = GroupStatTestControls.createChoiceBox(this::onTestChanged);
 
     annotateAllButton.getStyleClass().add("primary-button");
@@ -282,6 +312,7 @@ public final class SignalAnalysisWorkspace {
       refreshComparisonResult();
       persistSettings();
     });
+    filterControls.setOnShowHeatmap(this::showGroupComparisonHeatmap);
     wireListeners();
     loadFromSession();
     refreshSignalChrome();
@@ -296,16 +327,34 @@ public final class SignalAnalysisWorkspace {
     GroupStatResult compared = AnalysisSession.get().getFilteredResult(AnalysisMode.SIGNAL);
     if (compared != null && !SignalAnnotator.isAnnotationResult(compared)) {
       applyComparisonResult(compared);
+    } else {
+      refreshGroupHeatmapEnabled();
     }
   }
 
   private enum Hint { MIN_P5, MAX_P95, MIDDLE_MEDIAN }
+
+  public SignalDataset getDataset() {
+    return dataset;
+  }
+
+  public String getDatasetId() {
+    return dataset != null ? dataset.getId() : null;
+  }
+
+  /** Ensure this workspace's session slice is active before read/write. */
+  public void activateSessionSlice() {
+    if (dataset != null) {
+      AnalysisSession.get().setActiveSignalDatasetId(dataset.getId());
+    }
+  }
 
   public void setOnResultUpdated(Consumer<GroupStatResult> onResultUpdated) {
     this.onResultUpdated = onResultUpdated;
   }
 
   public void refreshFromData() {
+    activateSessionSlice();
     refreshSignalChrome();
     updateReadyState();
     annotateCurrentChromosome();
@@ -397,7 +446,8 @@ public final class SignalAnalysisWorkspace {
    * Signals = annotation only; Group comparison = Run output only.
    */
   public Node createResultsArea() {
-    HBox toolbar = new HBox(8, annotateAllButton, tableSearchField);
+    setupExportButton();
+    HBox toolbar = new HBox(8, annotateAllButton, exportButton, tableSearchField);
     toolbar.setAlignment(Pos.CENTER_LEFT);
     toolbar.getStyleClass().add("variant-table-toolbar");
     toolbar.setPadding(new Insets(4, 8, 4, 8));
@@ -503,8 +553,8 @@ public final class SignalAnalysisWorkspace {
   }
 
   /**
-   * Embed pattern-discovery controls under Signal Sample Comparison (shared-events slider).
-   * Group comparison tab keeps moderated DE controls.
+   * Embed pattern-discovery controls at the top of Signal Sample Comparison’s right pane
+   * (above sample tags). Group comparison tab keeps moderated DE controls.
    */
   public void mountPatternsInto(VBox host) {
     if (host == null) {
@@ -752,17 +802,111 @@ public final class SignalAnalysisWorkspace {
     channelFiltersBox.getChildren().clear();
     thresholdSpinners.clear();
     channelThresholdSyncs.clear();
+    eventTypeToggles.clear();
     if (activeChannels.isEmpty()) {
       return;
     }
+    if (SignalChannels.isAlleleCnOnly(activeChannels)) {
+      channelFiltersBox.getChildren().add(buildEventTypeFilterBlock());
+    }
     Label hint = new Label(
-        "Keep gene if any channel passes. Filters off by default — edit, then Apply.");
+        SignalChannels.isAlleleCnOnly(activeChannels)
+            ? "Event types filter the Signals table immediately. Value filters below need Apply."
+            : "Keep gene if any channel passes. Filters off by default — edit, then Apply.");
     hint.setWrapText(true);
     hint.setStyle("-fx-font-size: 11px; -fx-opacity: 0.85;");
     channelFiltersBox.getChildren().add(hint);
     for (SignalChannel ch : activeChannels) {
       channelFiltersBox.getChildren().add(buildChannelFilterBlock(ch));
     }
+  }
+
+  private Node buildEventTypeFilterBlock() {
+    Label header = new Label("Event types");
+    header.getStyleClass().add("section-header");
+    header.setTooltip(new Tooltip(
+        "Show Gain / Loss / LOH in the Signals table (like Point/SV type filters)."));
+
+    ColoredToggle allToggle = new ColoredToggle("All");
+    Set<SignalEventDirection> allowed =
+        AnalysisSession.get().getSignalSpec().getAllowedEventDirections();
+    FlowPane types = new FlowPane(8, 6);
+    types.setAlignment(Pos.CENTER_LEFT);
+
+    eventTypeFilterSuppress = true;
+    try {
+      for (SignalEventDirection dir : SignalEventDirection.filterTypes()) {
+        int[] rgb = dir.rgb();
+        ColoredToggle toggle = new ColoredToggle(
+            dir.filterLabel(), Color.rgb(rgb[0], rgb[1], rgb[2]));
+        toggle.setSelected(allowed.contains(dir));
+        toggle.setPrefWidth(100);
+        toggle.setMaxWidth(120);
+        toggle.selectedProperty().addListener((o, a, b) -> {
+          if (eventTypeFilterSuppress) {
+            return;
+          }
+          updateEventTypeAllToggle(allToggle);
+          applyEventTypeFilters();
+        });
+        eventTypeToggles.put(dir, toggle);
+        types.getChildren().add(toggle);
+      }
+      allToggle.setSelected(
+          eventTypeToggles.values().stream().allMatch(ColoredToggle::isSelected));
+      allToggle.selectedProperty().addListener((o, a, selected) -> {
+        if (eventTypeFilterSuppress || selected == null) {
+          return;
+        }
+        eventTypeFilterSuppress = true;
+        try {
+          for (ColoredToggle t : eventTypeToggles.values()) {
+            t.setSelected(selected);
+          }
+        } finally {
+          eventTypeFilterSuppress = false;
+        }
+        applyEventTypeFilters();
+      });
+    } finally {
+      eventTypeFilterSuppress = false;
+    }
+
+    HBox allRow = new HBox(8, allToggle);
+    allRow.setAlignment(Pos.CENTER_LEFT);
+    VBox box = new VBox(6, header, allRow, types);
+    return box;
+  }
+
+  private void updateEventTypeAllToggle(ColoredToggle allToggle) {
+    if (allToggle == null || eventTypeToggles.isEmpty()) {
+      return;
+    }
+    boolean allOn = eventTypeToggles.values().stream().allMatch(ColoredToggle::isSelected);
+    eventTypeFilterSuppress = true;
+    try {
+      allToggle.setSelected(allOn);
+    } finally {
+      eventTypeFilterSuppress = false;
+    }
+  }
+
+  private void applyEventTypeFilters() {
+    if (refreshing || eventTypeFilterSuppress) {
+      return;
+    }
+    EnumSet<SignalEventDirection> allowed = EnumSet.noneOf(SignalEventDirection.class);
+    for (Map.Entry<SignalEventDirection, ColoredToggle> e : eventTypeToggles.entrySet()) {
+      if (e.getValue() != null && e.getValue().isSelected()) {
+        allowed.add(e.getKey());
+      }
+    }
+    SignalSourceSpec spec = buildSpec();
+    spec.setAllowedEventDirections(allowed);
+    AnalysisSession.get().setSignalSpec(spec);
+    AnalysisSession.get().refilterSignalAnnotation();
+    refreshAnnotationFromSession();
+    persistSettings();
   }
 
   private Node buildChannelFilterBlock(SignalChannel ch) {
@@ -877,13 +1021,9 @@ public final class SignalAnalysisWorkspace {
     refreshFromData();
   }
 
-  private static List<Sample> allTableSamples() {
-    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+  private List<Sample> allTableSamples() {
     List<Sample> tables = new ArrayList<>();
-    if (registry == null) {
-      return tables;
-    }
-    for (SampleTrack track : registry.getSampleTracks()) {
+    for (SampleTrack track : memberTracks()) {
       if (track == null) {
         continue;
       }
@@ -898,29 +1038,48 @@ public final class SignalAnalysisWorkspace {
     return tables;
   }
 
-  private SignalSourceSpec resolveSpec() {
+  /** Dataset membership, or all registry tracks when unbound (legacy). */
+  private List<SampleTrack> memberTracks() {
+    if (dataset != null) {
+      return dataset.trackList();
+    }
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    List<SampleTrack> tracks = registry != null
-        ? new ArrayList<>(registry.getSampleTracks())
-        : List.of();
+    return registry != null ? new ArrayList<>(registry.getSampleTracks()) : List.of();
+  }
+
+  private SignalSourceSpec resolveSpec() {
+    activateSessionSlice();
+    List<SampleTrack> tracks = memberTracks();
 
     List<SignalChannel> channels = resolveChannels(tracks);
     SignalValueKind kind = null;
-    if (!channels.isEmpty()) {
-      // Multi-channel mapped tables (Minor/Major, Value, …).
-      kind = SignalValueKind.TABLE_VALUES;
-    } else if (tracks.stream().anyMatch(AlleleCnLohValueSource::trackHasAlleleCn)) {
-      kind = SignalValueKind.TABLE_LOH;
-    } else if (tracks.stream().anyMatch(MappedTableValueSource::trackHasValueTable)) {
-      kind = SignalValueKind.TABLE_VALUES;
-    } else if (tracks.stream().anyMatch(BedScoreSource::trackHasScoredBed)) {
-      kind = SignalValueKind.BED_SCORES;
-    } else if (tracks.stream().anyMatch(t -> BedScoreSource.firstBed(t) != null)) {
-      kind = SignalValueKind.BED_ANY;
-    } else if (tracks.stream().anyMatch(BigWigValueSource::trackHasBigWig)) {
-      kind = SignalValueKind.BIGWIG;
-    } else if (tracks.stream().anyMatch(BamMethylSource::trackHasMethylBam)) {
-      kind = SignalValueKind.BAM_METHYL;
+    if (dataset != null) {
+      // Frozen at open so RNA + LOH can coexist without priority fights.
+      kind = dataset.getKind();
+      if (kind == SignalValueKind.TABLE_LOH) {
+        channels = List.of();
+      }
+    } else {
+      // Allele-CN (ASCAT/FACETS Minor+Major): multi-channel TABLE_VALUES so annotation
+      // lists Gain/Loss/LOH with type filters (legacy TABLE_LOH only when channels missing).
+      boolean alleleCnTables = tracks.stream().anyMatch(AlleleCnLohValueSource::trackHasAlleleCn);
+      if (alleleCnTables && SignalChannels.isAlleleCnOnly(channels)) {
+        kind = SignalValueKind.TABLE_VALUES;
+      } else if (!channels.isEmpty()) {
+        kind = SignalValueKind.TABLE_VALUES;
+      } else if (alleleCnTables) {
+        kind = SignalValueKind.TABLE_LOH;
+      } else if (tracks.stream().anyMatch(MappedTableValueSource::trackHasValueTable)) {
+        kind = SignalValueKind.TABLE_VALUES;
+      } else if (tracks.stream().anyMatch(BedScoreSource::trackHasScoredBed)) {
+        kind = SignalValueKind.BED_SCORES;
+      } else if (tracks.stream().anyMatch(t -> BedScoreSource.firstBed(t) != null)) {
+        kind = SignalValueKind.BED_ANY;
+      } else if (tracks.stream().anyMatch(BigWigValueSource::trackHasBigWig)) {
+        kind = SignalValueKind.BIGWIG;
+      } else if (tracks.stream().anyMatch(BamMethylSource::trackHasMethylBam)) {
+        kind = SignalValueKind.BAM_METHYL;
+      }
     }
 
     SignalSourceSpec previous = AnalysisSession.get().getSignalSpec();
@@ -938,8 +1097,12 @@ public final class SignalAnalysisWorkspace {
     spec.setAggregation(ValueAggregation.MEAN);
     spec.setBigWigRule(BigWigCompanionRule.FIRST);
     spec.setWindowBp(SignalSourceSpec.DEFAULT_WINDOW_BP);
-    spec.setLohOnly(false);
+    // LOH-only collect: diploid / non-LOH segments never enter the gene matrix.
+    spec.setLohOnly(kind == SignalValueKind.TABLE_LOH);
     spec.setChannels(mergeChannelThresholds(channels, previous.getChannels()));
+    if (previous != null) {
+      spec.setAllowedEventDirections(previous.getAllowedEventDirections());
+    }
     return spec;
   }
 
@@ -987,7 +1150,9 @@ public final class SignalAnalysisWorkspace {
     if (previous != null && previous.getScope() != null) {
       spec.setScope(previous.getScope());
     }
-    if (!activeChannels.isEmpty()) {
+    // TABLE_LOH must stay channel-less (AlleleCnLohValueSource). Do not re-apply a
+    // stale Minor/Major channel list from a previous multi-channel session.
+    if (!activeChannels.isEmpty() && spec.getValueKind() != SignalValueKind.TABLE_LOH) {
       spec.setChannels(activeChannels);
     }
     return spec;
@@ -1074,6 +1239,7 @@ public final class SignalAnalysisWorkspace {
       annotateStatusLabel.setTooltip(
           strip != null && !strip.isBlank() ? new Tooltip(strip) : null);
     }
+    updateExportButtonState();
     if (onResultUpdated != null) {
       onResultUpdated.accept(result);
     }
@@ -1096,9 +1262,180 @@ public final class SignalAnalysisWorkspace {
     if (resultsTabPane != null && groupResultsTab != null) {
       resultsTabPane.getSelectionModel().select(groupResultsTab);
     }
+    updateExportButtonState();
+    refreshGroupHeatmapEnabled();
     if (onResultUpdated != null) {
       onResultUpdated.accept(result);
     }
+  }
+
+  private void refreshGroupHeatmapEnabled() {
+    GroupStatResult shown = AnalysisSession.get().getFilteredResult(AnalysisMode.SIGNAL);
+    if (shown == null || SignalAnnotator.isAnnotationResult(shown)) {
+      shown = AnalysisSession.get().getResult(AnalysisMode.SIGNAL);
+    }
+    ValueGrid grid = AnalysisSession.get().getSignalGridForGroupRun();
+    if (grid == null || grid.isEmpty()) {
+      grid = AnalysisSession.get().getSignalGrid();
+    }
+    List<Integer> groupIds = ComparisonContext.get().getParticipatingGroupIds();
+    boolean ok = shown != null
+        && !SignalAnnotator.isAnnotationResult(shown)
+        && shown.rows() != null
+        && shown.rows().size() >= 2
+        && grid != null
+        && !grid.isEmpty()
+        && groupIds.size() >= 2;
+    filterControls.setHeatmapEnabled(ok);
+  }
+
+  private void showGroupComparisonHeatmap() {
+    GroupStatResult shown = AnalysisSession.get().getFilteredResult(AnalysisMode.SIGNAL);
+    if (shown == null || SignalAnnotator.isAnnotationResult(shown)) {
+      shown = AnalysisSession.get().getResult(AnalysisMode.SIGNAL);
+    }
+    if (shown == null || SignalAnnotator.isAnnotationResult(shown)) {
+      statusLabel.setText("Run group comparison first");
+      return;
+    }
+    ValueGrid grid = AnalysisSession.get().getSignalGridForGroupRun();
+    if (grid == null || grid.isEmpty()) {
+      grid = AnalysisSession.get().getSignalGrid();
+    }
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<Integer> groupIds = ComparisonContext.get().getParticipatingGroupIds();
+    SamplePatternEngine.Result heat = SamplePatternEngine.fromGroupComparison(
+        grid, registry, groupIds, shown);
+    if (!heat.hasHeatmapData()) {
+      statusLabel.setText(heat.summary() != null ? heat.summary() : "Need ≥2 DE features");
+      refreshGroupHeatmapEnabled();
+      return;
+    }
+    new SignalPatternHeatmap(heat, "Group comparison heatmap", "Cohort", ownerWindow()).show();
+  }
+
+  private void setupExportButton() {
+    FontIcon icon = new FontIcon(FontAwesomeSolid.FILE_EXPORT);
+    icon.setIconSize(14);
+    icon.setIconColor(Color.web("#5b9bd5"));
+    exportButton.setText("");
+    exportButton.setGraphic(icon);
+    exportButton.getStyleClass().add("icon-button");
+    exportButton.setTooltip(new Tooltip(
+        "Export signal values and/or comparison results (TSV / Excel)"));
+    exportButton.setOnAction(e -> handleExportAnalysis());
+    updateExportButtonState();
+  }
+
+  private void updateExportButtonState() {
+    exportButton.setDisable(!AnalysisExportService.hasAnythingToExport());
+  }
+
+  private void handleExportAnalysis() {
+    activateSessionSlice();
+    Window owner = ownerWindow();
+    EnumSet<AnalysisExportKind> kinds = AnalysisExportDialog.show(owner);
+    if (kinds == null || kinds.isEmpty()) {
+      return;
+    }
+    EnumSet<AnalysisExportKind> selected = EnumSet.copyOf(kinds);
+    // AppDialog must fully dismiss before a native FileChooser. Raise the same
+    // Stage that will own the chooser (Analysis) — never MainApp, or the save
+    // dialog stacks behind MainApp on Linux/GTK.
+    SignalPatternHeatmap.raiseWindow(owner != null ? owner : MainApp.stage);
+    Platform.runLater(() -> {
+      Path target = chooseExportTarget(owner, selected);
+      if (target == null) {
+        return;
+      }
+      SignalPatternHeatmap.raiseWindow(owner != null ? owner : MainApp.stage);
+      Platform.runLater(() -> startExportTask(selected, target, owner));
+    });
+  }
+
+  private Path chooseExportTarget(Window owner, EnumSet<AnalysisExportKind> kinds) {
+    File lastDir = UserPreferences.getLastDirectory("ANALYSIS_EXPORT");
+    if (lastDir == null) {
+      lastDir = UserPreferences.getLastDirectory("XLSX");
+    }
+    Window chooserOwner = owner != null ? owner : MainApp.stage;
+    // Keep heatmaps suppressed (kind picker already hid them) and raise owner so
+    // the native dialog parents to the frontmost BasePlayer window.
+    SignalPatternHeatmap.prepareForNativeDialog();
+    SignalPatternHeatmap.raiseWindow(chooserOwner);
+    try {
+      if (kinds.size() > 1) {
+        DirectoryChooser chooser = new DirectoryChooser();
+        chooser.setTitle("Export analysis files to folder");
+        if (lastDir != null) {
+          try {
+            chooser.setInitialDirectory(lastDir);
+          } catch (IllegalArgumentException ignored) {
+            // Directory unavailable.
+          }
+        }
+        File dir = chooser.showDialog(chooserOwner);
+        if (dir == null) {
+          return null;
+        }
+        UserPreferences.setLastDirectory("ANALYSIS_EXPORT", dir);
+        return dir.toPath();
+      }
+      AnalysisExportKind kind = kinds.iterator().next();
+      FileChooser chooser = new FileChooser();
+      chooser.setTitle("Export " + kind.label());
+      chooser.getExtensionFilters().add(
+          new FileChooser.ExtensionFilter(kind.filterDescription(), kind.filterExtension()));
+      chooser.setInitialFileName(kind.defaultFileName());
+      if (lastDir != null) {
+        try {
+          chooser.setInitialDirectory(lastDir);
+        } catch (IllegalArgumentException ignored) {
+          // Directory unavailable.
+        }
+      }
+      File chosen = chooser.showSaveDialog(chooserOwner);
+      if (chosen == null) {
+        return null;
+      }
+      Path path = AnalysisExportService.ensureExtension(chosen.toPath(), kind);
+      UserPreferences.setLastDirectory("ANALYSIS_EXPORT", path.toFile());
+      return path;
+    } finally {
+      SignalPatternHeatmap.restoreAfterNativeDialog(chooserOwner);
+    }
+  }
+
+  private void startExportTask(EnumSet<AnalysisExportKind> kinds, Path target, Window owner) {
+    ThreadRunner.get().submit(
+        "Exporting analysis…",
+        () -> {
+          try {
+            AnalysisExportService.export(kinds, target);
+            return null;
+          } catch (Exception ex) {
+            return ex;
+          }
+        },
+        error -> {
+          if (error != null) {
+            AppDialog.info(
+                owner,
+                "Export analysis",
+                "Export failed",
+                error.getMessage() != null ? error.getMessage() : error.toString());
+          }
+        });
+  }
+
+  private Window ownerWindow() {
+    if (exportButton.getScene() != null) {
+      return exportButton.getScene().getWindow();
+    }
+    if (annotateAllButton.getScene() != null) {
+      return annotateAllButton.getScene().getWindow();
+    }
+    return MainApp.stage;
   }
 
   private void refreshObservedRangeFromSession() {
@@ -1194,6 +1531,7 @@ public final class SignalAnalysisWorkspace {
     SignalSourceSpec spec = buildSpec();
     boolean hasUsable = !usableTracks(registry, spec).isEmpty();
     annotateAllButton.setDisable(!hasUsable);
+    updateExportButtonState();
     if (!hasUsable) {
       runButton.setDisable(true);
       if (annotateStatusLabel.getText() == null || annotateStatusLabel.getText().isBlank()) {
@@ -1309,7 +1647,7 @@ public final class SignalAnalysisWorkspace {
     patternControls.setBusy(true);
     patternControls.setStatus("Annotating all chromosomes…");
     return runAnnotate(GenomicScope.ALL_CHROMS, () -> {
-      ValueGrid grid = AnalysisSession.get().getSignalGrid();
+      ValueGrid grid = discoveryGridOrSession();
       if (grid == null || grid.isEmpty()) {
         patternControls.setBusy(false);
         patternControls.setStatus("No signal to discover");
@@ -1347,8 +1685,7 @@ public final class SignalAnalysisWorkspace {
       }
       return null;
     }
-    DifferenceThresholds thr = significantOnlyThresholds();
-    filterControls.loadFrom(thr);
+    DifferenceThresholds thr = buildThresholds();
     AnalysisSession.get().setThresholds(thr);
     persistSettings();
     AnalysisSession.get().setActiveCanvasMode(AnalysisMode.SIGNAL);
@@ -1366,6 +1703,60 @@ public final class SignalAnalysisWorkspace {
         ? "Signal " + spec.getValueKind().name() + " / " + spec.getAggregation().name()
         : "Signal";
 
+    // Allele-CN segments: genome-wide event presence (not CompactTableGrid).
+    if (SignalChannels.isAlleleCnOnly(spec.getChannels())) {
+      runButton.setDisable(true);
+      statusLabel.setText("Annotating allele-CN for comparison…");
+      annotateStatusLabel.setText("Annotating allele-CN for comparison…");
+      return runAnnotate(GenomicScope.ALL_CHROMS, () -> {
+        ValueGrid grid = AnalysisSession.get().getSignalGridForGroupRun();
+        if (grid == null || grid.isEmpty()) {
+          runButton.setDisable(false);
+          statusLabel.setText("No allele-CN events to compare");
+          applyComparisonResult(null);
+          updateReadyState();
+          if (onComplete != null) {
+            onComplete.run();
+          }
+          return;
+        }
+        statusLabel.setText("Comparing allele-CN events…");
+        ThreadRunner.RunnerTask task = ThreadRunner.get().submit(
+            "Group differential allele-CN",
+            () -> {
+              GroupStatResult raw = GroupStatEngine.compute(
+                  AnalysisMode.SIGNAL,
+                  grid,
+                  registry,
+                  groupIds,
+                  baseline,
+                  test,
+                  scoreLabel,
+                  effect,
+                  valueType != null ? valueType : SignalValueType.ALLELE_CN,
+                  minMean);
+              if (raw == null) {
+                return null;
+              }
+              String summary = (raw.summary() != null ? raw.summary() : "Allele-CN")
+                  + " · genome-wide event presence";
+              String strip = (raw.methodStrip() != null ? raw.methodStrip() : "")
+                  + " · allele-CN Gain/Loss/LOH";
+              return new GroupStatResult(
+                  raw.mode(),
+                  raw.groupIds(),
+                  raw.baselineGroupId(),
+                  raw.rows(),
+                  summary,
+                  strip,
+                  raw.signalChannels(),
+                  raw.channelValuesByUnit());
+            },
+            (GroupStatResult result) -> finishCompareAllChromsResult(result, thr, onComplete));
+        wireCompareAllChromsCancel(task, onComplete);
+      });
+    }
+
     List<String> chromosomes = resolveChromosomesForMatrix(tracks);
     if (chromosomes.isEmpty()) {
       statusLabel.setText("No chromosomes in matrix");
@@ -1382,36 +1773,44 @@ public final class SignalAnalysisWorkspace {
         "Group differential all chroms",
         () -> computeSignificantAllChroms(
             tracks, chromosomes, groupIds, baseline, test, scoreLabel, effect, valueType, minMean, thr),
-        (GroupStatResult result) -> {
-          runButton.setDisable(false);
-          if (result == null) {
-            statusLabel.setText("Differential analysis failed");
-            applyComparisonResult(null);
-            updateReadyState();
-            if (onComplete != null) {
-              onComplete.run();
-            }
-            return;
-          }
-          // Already significant-only; putResult will not duplicate when filter on.
-          AnalysisSession.get().putResult(AnalysisMode.SIGNAL, result, null, thr);
-          GroupStatResult shown = AnalysisSession.get().getFilteredResult(AnalysisMode.SIGNAL);
-          applyComparisonResult(shown != null ? shown : result);
-          selectResultsTab(true);
-          int kept = shown != null ? shown.rows().size() : 0;
-          statusLabel.setText(String.format(
-              Locale.ROOT,
-              "%s · %d significant (q per chrom ≤%.3g)",
-              result.summary() != null ? result.summary() : "Differential",
-              kept,
-              thr.getMaxQ()));
-          org.baseplayer.draw.GenomicCanvas.update.set(
-              !org.baseplayer.draw.GenomicCanvas.update.get());
-          updateReadyState();
-          if (onComplete != null) {
-            onComplete.run();
-          }
-        });
+        (GroupStatResult result) -> finishCompareAllChromsResult(result, thr, onComplete));
+    wireCompareAllChromsCancel(task, onComplete);
+    return task;
+  }
+
+  private void finishCompareAllChromsResult(
+      GroupStatResult result, DifferenceThresholds thr, Runnable onComplete) {
+    runButton.setDisable(false);
+    if (result == null) {
+      statusLabel.setText("Differential analysis failed");
+      applyComparisonResult(null);
+      updateReadyState();
+      if (onComplete != null) {
+        onComplete.run();
+      }
+      return;
+    }
+    AnalysisSession.get().putResult(AnalysisMode.SIGNAL, result, null, thr);
+    GroupStatResult shown = AnalysisSession.get().getFilteredResult(AnalysisMode.SIGNAL);
+    applyComparisonResult(shown != null ? shown : result);
+    selectResultsTab(true);
+    int kept = shown != null ? shown.rows().size() : 0;
+    String summary = result.summary() != null ? result.summary() : "Differential";
+    if (thr.isEnabled() && thr.isUseMaxQ()) {
+      statusLabel.setText(String.format(
+          Locale.ROOT, "%s · %d kept (q ≤%.3g)", summary, kept, thr.getMaxQ()));
+    } else {
+      statusLabel.setText(String.format(Locale.ROOT, "%s · %d kept", summary, kept));
+    }
+    org.baseplayer.draw.GenomicCanvas.update.set(
+        !org.baseplayer.draw.GenomicCanvas.update.get());
+    updateReadyState();
+    if (onComplete != null) {
+      onComplete.run();
+    }
+  }
+
+  private void wireCompareAllChromsCancel(ThreadRunner.RunnerTask task, Runnable onComplete) {
     if (task != null) {
       task.onCancel(() -> javafx.application.Platform.runLater(() -> {
         runButton.setDisable(false);
@@ -1428,7 +1827,6 @@ public final class SignalAnalysisWorkspace {
         onComplete.run();
       }
     }
-    return task;
   }
 
   private static GroupStatResult computeSignificantAllChroms(
@@ -1557,7 +1955,7 @@ public final class SignalAnalysisWorkspace {
     patternControls.setBusy(true);
     patternControls.setStatus("Annotating current chromosome…");
     runAnnotate(GenomicScope.CURRENT_CHROM, () -> {
-      ValueGrid grid = AnalysisSession.get().getSignalGrid();
+      ValueGrid grid = discoveryGridOrSession();
       if (grid == null || grid.isEmpty()) {
         patternControls.setBusy(false);
         patternControls.setStatus("No signal on this chromosome");
@@ -1569,6 +1967,15 @@ public final class SignalAnalysisWorkspace {
       }
       runPatternDiscovery(grid, tracks, onComplete);
     });
+  }
+
+  /** Allele-CN → Gain/Loss/LOH presence matrix; otherwise session signal grid. */
+  private static ValueGrid discoveryGridOrSession() {
+    FeatureValueMatrix events = AnalysisSession.get().getAlleleCnEventMatrixForDiscovery();
+    if (events != null && !events.isEmpty()) {
+      return events;
+    }
+    return AnalysisSession.get().getSignalGrid();
   }
 
   private void runWithAnalysisBusy(String status, Consumer<Runnable> work) {
@@ -1614,8 +2021,7 @@ public final class SignalAnalysisWorkspace {
           }
           AnalysisSession.get().setLastPatternResult(result);
           patternControls.refreshApplyEnabled();
-          DifferenceThresholds thr = significantOnlyThresholds();
-          filterControls.loadFrom(thr);
+          DifferenceThresholds thr = buildThresholds();
           AnalysisSession.get().setThresholds(thr);
           GroupStatResult markers = result.markers();
           FeatureValueMatrix store = grid instanceof FeatureValueMatrix fvm ? fvm : null;
@@ -1626,11 +2032,10 @@ public final class SignalAnalysisWorkspace {
             int raw = markers.rows().size();
             patternControls.setStatus(String.format(
                 Locale.ROOT,
-                "%s · showing %d / %d significant (q≤%.3g)",
+                "%s · showing %d / %d",
                 result.summary(),
                 kept,
-                raw,
-                thr.getMaxQ()));
+                raw));
             applyComparisonResult(shown);
           } else {
             patternControls.setStatus(result.summary() + " · no marker features");
@@ -1642,19 +2047,6 @@ public final class SignalAnalysisWorkspace {
             onComplete.run();
           }
         });
-  }
-
-  /** Force table to significant contrasts only (hide similar; filter by q / |Δ|). */
-  private DifferenceThresholds significantOnlyThresholds() {
-    DifferenceThresholds thr = buildThresholds();
-    thr.setEnabled(true);
-    thr.setShowSimilar(false);
-    thr.setShowUp(true);
-    thr.setShowDown(true);
-    if (thr.getMaxQ() <= 0 || thr.getMaxQ() > 1) {
-      thr.setMaxQ(0.05);
-    }
-    return thr;
   }
 
   private void applyPatternGroups() {
@@ -1686,7 +2078,7 @@ public final class SignalAnalysisWorkspace {
       patternControls.setStatus("Discover patterns first");
       return;
     }
-    new SignalPatternHeatmap(result).show();
+    new SignalPatternHeatmap(result, "Pattern heatmap", "Pattern", ownerWindow()).show();
   }
 
   private void runAnalysis() {
@@ -1712,8 +2104,7 @@ public final class SignalAnalysisWorkspace {
       }
       return;
     }
-    DifferenceThresholds thr = significantOnlyThresholds();
-    filterControls.loadFrom(thr);
+    DifferenceThresholds thr = buildThresholds();
     AnalysisSession.get().setThresholds(thr);
     persistSettings();
     AnalysisSession.get().setActiveCanvasMode(AnalysisMode.SIGNAL);
@@ -1795,11 +2186,10 @@ public final class SignalAnalysisWorkspace {
           int kept = shown != null ? shown.rows().size() : 0;
           statusLabel.setText(String.format(
               Locale.ROOT,
-              "%s · showing %d / %d significant (q≤%.3g)",
+              "%s · showing %d / %d",
               result.summary() != null ? result.summary() : "Differential",
               kept,
-              result.rows().size(),
-              thr.getMaxQ()));
+              result.rows().size()));
           org.baseplayer.draw.GenomicCanvas.update.set(
               !org.baseplayer.draw.GenomicCanvas.update.get());
           updateReadyState();
@@ -1842,12 +2232,15 @@ public final class SignalAnalysisWorkspace {
     };
   }
 
-  private static List<SampleTrack> usableTracks(SampleRegistry registry, SignalSourceSpec spec) {
-    if (registry == null || spec == null || spec.getValueKind() == null) {
+  private List<SampleTrack> usableTracks(SampleRegistry registry, SignalSourceSpec spec) {
+    if (spec == null || spec.getValueKind() == null) {
       return List.of();
     }
+    List<SampleTrack> candidates = dataset != null
+        ? dataset.trackList()
+        : (registry != null ? new ArrayList<>(registry.getSampleTracks()) : List.of());
     List<SampleTrack> out = new ArrayList<>();
-    for (SampleTrack track : registry.getSampleTracks()) {
+    for (SampleTrack track : candidates) {
       if (isUsable(track, spec)) {
         out.add(track);
       }

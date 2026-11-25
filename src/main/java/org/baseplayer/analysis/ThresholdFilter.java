@@ -7,8 +7,8 @@ import java.util.Locale;
 import org.baseplayer.analysis.groupstat.GroupStatResult;
 
 /**
- * Filters {@link GroupStatResult} rows by effect size, FDR/p, per-group n, direction,
- * and optional top-N by difference magnitude.
+ * Filters {@link GroupStatResult} rows by optional effect size, FDR/p, per-group n,
+ * direction, and optional top-N by difference magnitude.
  */
 public final class ThresholdFilter {
 
@@ -53,16 +53,11 @@ public final class ThresholdFilter {
 
     String summary = String.format(
         Locale.ROOT,
-        "%s — %d / %d rows (|Δ|≥%.2f, q≤%.3g, n≥%d%s)",
+        "%s — %d / %d rows (%s)",
         result.summary(),
         kept.size(),
         result.rows().size(),
-        thresholds.getMinAbsLog2Fc(),
-        thresholds.getMaxQ(),
-        thresholds.getMinNPerGroup(),
-        thresholds.getMaxRows() > 0
-            ? String.format(Locale.ROOT, ", top %d of %d", kept.size(), beforeTopN)
-            : "");
+        activeCriteriaSummary(thresholds, kept.size(), beforeTopN));
     return new GroupStatResult(
         result.mode(),
         result.groupIds(),
@@ -83,7 +78,7 @@ public final class ThresholdFilter {
     if (!passesDirection(row, thresholds)) {
       return false;
     }
-    if (row.groups() != null) {
+    if (thresholds.isUseMinNPerGroup() && row.groups() != null) {
       for (GroupStatResult.GroupSummary g : row.groups()) {
         // Prefer observed samples (continuous DE / patterns); fall back to non-zero hits.
         int n = g.nObserved() > 0 ? g.nObserved() : Math.max(g.nSignal(), 0);
@@ -92,14 +87,18 @@ public final class ThresholdFilter {
         }
       }
     }
-    if (differenceMagnitude(row) < thresholds.getMinAbsLog2Fc()) {
+    if (thresholds.isUseMinAbsLog2Fc()
+        && differenceMagnitude(row) < thresholds.getMinAbsLog2Fc()) {
       return false;
     }
-    Double sig = row.qValue() != null ? row.qValue() : row.pValue();
-    if (sig == null || Double.isNaN(sig)) {
-      return false;
+    if (thresholds.isUseMaxQ()) {
+      Double sig = row.qValue() != null ? row.qValue() : row.pValue();
+      if (sig == null || Double.isNaN(sig)) {
+        return false;
+      }
+      return sig <= thresholds.getMaxQ();
     }
-    return sig <= thresholds.getMaxQ();
+    return true;
   }
 
   public static boolean passesDirection(GroupStatResult.Row row, DifferenceThresholds thresholds) {
@@ -135,5 +134,26 @@ public final class ThresholdFilter {
       }
     }
     return 0;
+  }
+
+  private static String activeCriteriaSummary(
+      DifferenceThresholds thresholds, int kept, int beforeTopN) {
+    List<String> parts = new ArrayList<>();
+    if (thresholds.isUseMinAbsLog2Fc()) {
+      parts.add(String.format(Locale.ROOT, "|Δ|≥%.2f", thresholds.getMinAbsLog2Fc()));
+    }
+    if (thresholds.isUseMaxQ()) {
+      parts.add(String.format(Locale.ROOT, "q≤%.3g", thresholds.getMaxQ()));
+    }
+    if (thresholds.isUseMinNPerGroup()) {
+      parts.add(String.format(Locale.ROOT, "n≥%d", thresholds.getMinNPerGroup()));
+    }
+    if (thresholds.getMaxRows() > 0) {
+      parts.add(String.format(Locale.ROOT, "top %d of %d", kept, beforeTopN));
+    }
+    if (parts.isEmpty()) {
+      return "direction";
+    }
+    return String.join(", ", parts);
   }
 }

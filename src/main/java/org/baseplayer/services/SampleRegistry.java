@@ -1731,8 +1731,11 @@ public class SampleRegistry extends TrackViewportRegistry {
 
     /**
      * Create/reuse groups by name and assign matching tracks from
-     * {@code [sampleName, groupName]} rows (file order). Tracks are set to the
-     * mapped group exclusively and coalesced to the top stack.
+     * {@code [sampleName, groupName]} rows (file order).
+     *
+     * <p>A sample may appear under several groups in the file; membership for each
+     * matched track becomes exactly the set of groups listed for it (multi-group).
+     * Groups are coalesced to the top stack in file order.
      */
     public GroupMappingApplyResult applyGroupsFromMapping(List<String[]> sampleGroupPairs) {
         List<String> unmatched = new ArrayList<>();
@@ -1747,6 +1750,11 @@ public class SampleRegistry extends TrackViewportRegistry {
         int groupsUpdated = 0;
         int tracksAssigned = 0;
         boolean changed = false;
+
+        // Track → desired group ids (LinkedHashSet preserves first-seen group order).
+        Map<SampleTrack, LinkedHashSet<Integer>> desired =
+            new IdentityHashMap<>();
+        List<Integer> groupOrder = new ArrayList<>();
 
         for (Map.Entry<String, List<SampleTrack>> entry : byGroup.entrySet()) {
             String groupName = entry.getKey();
@@ -1766,20 +1774,32 @@ public class SampleRegistry extends TrackViewportRegistry {
             if (!created) {
                 groupsUpdated++;
             }
+            groupOrder.add(group.getId());
             for (SampleTrack track : members) {
                 if (track == null) {
                     continue;
                 }
-                List<Integer> current = track.getGroupIds();
-                if (current.size() == 1 && current.get(0) == group.getId()) {
-                    continue;
-                }
-                track.setGroupId(group.getId());
-                tracksAssigned++;
+                desired.computeIfAbsent(track, t -> new LinkedHashSet<>()).add(group.getId());
+            }
+        }
+
+        for (Map.Entry<SampleTrack, LinkedHashSet<Integer>> entry : desired.entrySet()) {
+            SampleTrack track = entry.getKey();
+            LinkedHashSet<Integer> want = entry.getValue();
+            List<Integer> current = track.getGroupIds();
+            if (current.size() == want.size() && want.containsAll(current)) {
+                continue;
+            }
+            track.setGroupIds(want);
+            tracksAssigned++;
+            changed = true;
+        }
+
+        for (Integer groupId : groupOrder) {
+            if (groupId != null) {
+                coalesceTracksInGroup(groupId);
                 changed = true;
             }
-            coalesceTracksInGroup(group.getId());
-            changed = true;
         }
 
         if (changed) {

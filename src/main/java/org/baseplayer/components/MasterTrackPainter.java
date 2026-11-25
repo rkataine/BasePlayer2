@@ -858,7 +858,7 @@ public class MasterTrackPainter {
     gc.setLineDashes();
 
     drawAlleleCnRecurrenceLegend(
-        gc, canvasWidth, masterTrackHeight, groupIds, byGroup, maxCount);
+        gc, canvasWidth, masterTrackHeight, groupIds, byGroup);
   }
 
   private void renderMappedValueMean(
@@ -1175,8 +1175,8 @@ public class MasterTrackPainter {
     gc.setLineWidth(1);
     gc.setFont(AppFonts.getFont("Segoe UI", 9));
     gc.setFill(axis);
-    gc.fillText("Gain " + maxCount, 3, margin + 9);
-    gc.fillText("LOH " + maxCount, 3, margin + halfH * 2 - 2);
+    gc.fillText("Gain", 3, margin + 9);
+    gc.fillText("LOH", 3, margin + halfH * 2 - 2);
     // Half-count guides
     if (maxCount >= 2) {
       double halfFrac = 0.5;
@@ -1195,13 +1195,12 @@ public class MasterTrackPainter {
       double canvasWidth,
       double masterTrackHeight,
       List<Integer> groupIds,
-      boolean byGroup,
-      int maxCount) {
+      boolean byGroup) {
     List<CanvasColorLegend.Item> items = new ArrayList<>();
     items.add(new CanvasColorLegend.Item(
-        LEGEND_GAIN, "Gain≤" + maxCount, TABLE_GAIN_COLOR, true));
+        LEGEND_GAIN, "Gain", TABLE_GAIN_COLOR, true));
     items.add(new CanvasColorLegend.Item(
-        LEGEND_LOH, "LOH≤" + maxCount, TABLE_LOH_COLOR, true));
+        LEGEND_LOH, "LOH", TABLE_LOH_COLOR, true));
     if (byGroup && groupIds != null) {
       AnalysisSession session = AnalysisSession.get();
       for (int groupId : groupIds) {

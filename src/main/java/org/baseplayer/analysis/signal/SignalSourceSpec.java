@@ -1,7 +1,10 @@
 package org.baseplayer.analysis.signal;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import org.baseplayer.analysis.ComparisonUnit;
 import org.baseplayer.analysis.GenomicScope;
 import org.baseplayer.analysis.ValueAggregation;
@@ -29,6 +32,12 @@ public final class SignalSourceSpec {
   private boolean lohOnly = true;
   /** Multi-value channels (Minor/Major/…). Empty → single-matrix ValueSource path. */
   private List<SignalChannel> channels = List.of();
+  /**
+   * Allele-CN event types shown in annotation / Sample Comparison (Gain/Loss/LOH).
+   * Never includes {@link SignalEventDirection#NONE}. Default: all three.
+   */
+  private EnumSet<SignalEventDirection> allowedEventDirections =
+      SignalEventDirection.defaultAllowed();
 
   public SignalValueKind getValueKind() {
     return valueKind;
@@ -132,5 +141,28 @@ public final class SignalSourceSpec {
 
   public boolean hasChannels() {
     return !channels.isEmpty();
+  }
+
+  /** Defensive copy of allowed allele-CN event directions (Gain/Loss/LOH). */
+  public Set<SignalEventDirection> getAllowedEventDirections() {
+    return allowedEventDirections.clone();
+  }
+
+  public void setAllowedEventDirections(Collection<SignalEventDirection> directions) {
+    EnumSet<SignalEventDirection> next = EnumSet.noneOf(SignalEventDirection.class);
+    if (directions != null) {
+      for (SignalEventDirection d : directions) {
+        if (d != null && d != SignalEventDirection.NONE) {
+          next.add(d);
+        }
+      }
+    }
+    this.allowedEventDirections = next;
+  }
+
+  public boolean allowsEventDirection(SignalEventDirection direction) {
+    return direction != null
+        && direction != SignalEventDirection.NONE
+        && allowedEventDirections.contains(direction);
   }
 }

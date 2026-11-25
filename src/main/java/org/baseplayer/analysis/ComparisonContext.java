@@ -1,17 +1,22 @@
 package org.baseplayer.analysis;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 import org.baseplayer.project.ProjectDocument;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.samples.SampleGroup;
+import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.VariantFilter;
 
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
@@ -19,8 +24,15 @@ import javafx.beans.value.ChangeListener;
 import javafx.scene.paint.Color;
 import org.baseplayer.analysis.groupstat.GroupStatTest;
 import org.baseplayer.analysis.signal.BigWigCompanionRule;
+import org.baseplayer.analysis.signal.SignalComparisonSettings;
+import org.baseplayer.analysis.signal.SignalDataset;
+import org.baseplayer.analysis.signal.SignalDatasetCoordinator;
+import org.baseplayer.analysis.signal.SignalDatasetNaming;
+import org.baseplayer.analysis.signal.SignalDatasetRegistry;
+import org.baseplayer.analysis.signal.SignalEventDirection;
 import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.analysis.signal.SignalValueKind;
+import org.baseplayer.analysis.signal.SignalValueThresholds;
 
 /**
  * Shared cohort context for Analysis Manager modes.
@@ -44,6 +56,12 @@ public final class ComparisonContext {
   private final List<Consumer<ComparisonContext>> listeners = new CopyOnWriteArrayList<>();
   private ChangeListener<Number> groupsListener;
   private boolean bound;
+  /**
+   * Signal dataset rows / legacy flat block waiting for sample tracks to exist
+   * ({@link #loadFromDocument} runs before tracks are restored).
+   */
+  private ProjectDocument.AnalysisComparisonSpec pendingSignalDatasetRestore;
+  private boolean pendingLegacySignalDataset;
 
   private ComparisonContext() {}
 
@@ -276,6 +294,186 @@ public final class ComparisonContext {
   }
 
   private static void loadSignalSettings(ProjectDocument.AnalysisComparisonSpec spec) {
+    ComparisonContext ctx = INSTANCE;
+    if (spec.signalDatasets != null && !spec.signalDatasets.isEmpty()) {
+      // Tracks are not restored yet — defer membership matching.
+      ctx.pendingSignalDatasetRestore = spec;
+      ctx.pendingLegacySignalDataset = false;
+      loadFlatSignalSettings(spec);
+      return;
+    }
+    // Legacy single-block projects.
+    ctx.pendingSignalDatasetRestore = null;
+    ctx.pendingLegacySignalDataset = true;
+    AnalysisSession.get().setActiveSignalDatasetId(null);
+    loadFlatSignalSettings(spec);
+  }
+
+  /**
+   * Create named Signal datasets after sample tracks / matrices are restored.
+   * Safe to call repeatedly; no-ops when nothing is pending.
+   */
+  public void restoreSignalDatasetsAfterTracks(ProjectDocument doc) {
+    ProjectDocument.AnalysisComparisonSpec pending = pendingSignalDatasetRestore;
+    boolean legacy = pendingLegacySignalDataset;
+    pendingSignalDatasetRestore = null;
+    pendingLegacySignalDataset = false;
+    if (pending != null) {
+      loadMultiDatasetSettings(pending);
+    } else if (legacy) {
+      ProjectDocument.AnalysisComparisonSpec spec = doc != null ? doc.analysisComparison : null;
+      if (spec != null) {
+        maybeRestoreLegacyDataset(spec);
+      }
+    }
+    // Always cover orphans (e.g. matrices restored after legacy rematch, or
+    // projects saved before named Signal datasets existed).
+    SignalDatasetCoordinator.ensureDatasetsForOpenTracks();
+  }
+
+  private static void loadMultiDatasetSettings(ProjectDocument.AnalysisComparisonSpec spec) {
+    SignalDatasetRegistry datasets = SignalDatasetRegistry.get();
+    datasets.clear();
+    AnalysisSession session = AnalysisSession.get();
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<SampleTrack> allTracks = sampleRegistry != null
+        ? new ArrayList<>(sampleRegistry.getSampleTracks())
+        : List.of();
+
+    String firstId = null;
+    for (ProjectDocument.SignalDatasetSpec row : spec.signalDatasets) {
+      if (row == null || row.signalValueKind == null) {
+        continue;
+      }
+      SignalValueKind kind;
+      try {
+        String kindName = row.signalValueKind;
+        if ("ALLELE_CN_LOH".equals(kindName)) {
+          kindName = SignalValueKind.TABLE_LOH.name();
+        }
+        kind = SignalValueKind.valueOf(kindName);
+      } catch (IllegalArgumentException ex) {
+        continue;
+      }
+      String name = row.displayName != null && !row.displayName.isBlank()
+          ? row.displayName.trim()
+          : legacyNameForKind(kind);
+      SignalDataset dataset = new SignalDataset(
+          row.id != null && !row.id.isBlank() ? row.id : null,
+          name,
+          kind);
+      List<SampleTrack> matched = SignalDatasetRegistry.matchTracksByName(allTracks, row.trackNames);
+      if (matched.isEmpty()) {
+        // Soft fallback: any usable tracks of this kind not yet claimed.
+        for (SampleTrack track : allTracks) {
+          if (track != null && datasets.findByTrack(track) == null
+              && trackMatchesKind(track, kind)) {
+            matched.add(track);
+          }
+        }
+      }
+      if (matched.isEmpty()) {
+        continue;
+      }
+      dataset.addTracks(matched);
+      dataset.setSharedLoci(SignalDatasetNaming.sharedLociFromTracks(matched));
+      datasets.register(dataset);
+      session.ensureSignalSlice(dataset.getId());
+      session.setActiveSignalDatasetId(dataset.getId());
+      ProjectDocument.AnalysisComparisonSpec settings =
+          row.settings != null ? row.settings : new ProjectDocument.AnalysisComparisonSpec();
+      // Kind lives on the dataset row; copy into nested settings for flat loader.
+      if (settings.signalValueKind == null) {
+        settings.signalValueKind = kind.name();
+      }
+      loadFlatSignalSettings(settings);
+      if (firstId == null) {
+        firstId = dataset.getId();
+      }
+    }
+    String active = spec.activeSignalDatasetId;
+    if (active != null && datasets.get(active) != null) {
+      session.setActiveSignalDatasetId(active);
+    } else if (firstId != null) {
+      session.setActiveSignalDatasetId(firstId);
+    }
+  }
+
+  private static void maybeRestoreLegacyDataset(ProjectDocument.AnalysisComparisonSpec spec) {
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (sampleRegistry == null || sampleRegistry.getSampleTracks().isEmpty()) {
+      return;
+    }
+    List<SampleTrack> tracks = new ArrayList<>(sampleRegistry.getSampleTracks());
+    SignalValueKind kind = null;
+    if (spec.signalValueKind != null) {
+      try {
+        String kindName = spec.signalValueKind;
+        if ("ALLELE_CN_LOH".equals(kindName)) {
+          kindName = SignalValueKind.TABLE_LOH.name();
+        }
+        kind = SignalValueKind.valueOf(kindName);
+      } catch (IllegalArgumentException ignored) {
+        // fall through
+      }
+    }
+    if (kind == null) {
+      kind = SignalDatasetNaming.inferKind(tracks);
+    }
+    List<SampleTrack> members = new ArrayList<>();
+    for (SampleTrack track : tracks) {
+      if (trackMatchesKind(track, kind)) {
+        members.add(track);
+      }
+    }
+    if (members.isEmpty()) {
+      return;
+    }
+    String name = legacyNameForKind(kind);
+    SignalDataset dataset = new SignalDataset(name, kind);
+    dataset.addTracks(members);
+    dataset.setSharedLoci(SignalDatasetNaming.sharedLociFromTracks(members));
+    SignalDatasetRegistry.get().register(dataset);
+    AnalysisSession.get().ensureSignalSlice(dataset.getId());
+    AnalysisSession.get().setActiveSignalDatasetId(dataset.getId());
+  }
+
+  private static String legacyNameForKind(SignalValueKind kind) {
+    if (kind == null) {
+      return "Signal";
+    }
+    return switch (kind) {
+      case TABLE_LOH -> "LOH";
+      case BAM_METHYL -> "Methylation";
+      case BED_SCORES -> "BED";
+      case BED_ANY -> "Features";
+      case TABLE_VALUES -> "RNA";
+      case BIGWIG -> "Signal";
+    };
+  }
+
+  private static boolean trackMatchesKind(SampleTrack track, SignalValueKind kind) {
+    if (track == null || kind == null) {
+      return false;
+    }
+    return switch (kind) {
+      case TABLE_LOH ->
+          org.baseplayer.analysis.source.AlleleCnLohValueSource.trackHasAlleleCn(track);
+      case TABLE_VALUES ->
+          org.baseplayer.analysis.source.MappedTableValueSource.trackHasValueTable(track)
+              || org.baseplayer.analysis.source.MultiChannelMappedTableSource.trackHasPayload(track);
+      case BED_SCORES ->
+          org.baseplayer.analysis.source.BedScoreSource.trackHasScoredBed(track);
+      case BED_ANY ->
+          org.baseplayer.analysis.source.BedScoreSource.firstBed(track) != null;
+      case BIGWIG ->
+          org.baseplayer.analysis.source.BigWigValueSource.trackHasBigWig(track);
+      case BAM_METHYL ->
+          org.baseplayer.analysis.source.BamMethylSource.trackHasMethylBam(track);
+    };
+  }
+
+  private static void loadFlatSignalSettings(ProjectDocument.AnalysisComparisonSpec spec) {
     SignalSourceSpec signal = AnalysisSession.get().getSignalSpec();
     if (spec.signalValueKind != null) {
       try {
@@ -339,6 +537,20 @@ public final class ComparisonContext {
     if (spec.minNPerGroup != null) {
       thr.setMinNPerGroup(spec.minNPerGroup);
     }
+    // Optional criteria: explicit flags when present; else legacy inference.
+    if (spec.useMinAbsLog2Fc != null) {
+      thr.setUseMinAbsLog2Fc(spec.useMinAbsLog2Fc);
+    } else if (spec.minAbsLog2Fc != null) {
+      thr.setUseMinAbsLog2Fc(spec.minAbsLog2Fc > 0);
+    }
+    if (spec.useMaxQ != null) {
+      thr.setUseMaxQ(spec.useMaxQ);
+    }
+    if (spec.useMinNPerGroup != null) {
+      thr.setUseMinNPerGroup(spec.useMinNPerGroup);
+    } else if (spec.minNPerGroup != null) {
+      thr.setUseMinNPerGroup(spec.minNPerGroup > 1);
+    }
     if (spec.maxRows != null) {
       thr.setMaxRows(spec.maxRows);
     }
@@ -364,20 +576,174 @@ public final class ComparisonContext {
     if (spec.minMeanPrefilter != null) {
       AnalysisSession.get().setMinMeanPrefilter(spec.minMeanPrefilter);
     }
+    loadValueThresholds(spec);
+    loadSignalComparison(spec);
+    loadAllowedEventDirections(spec);
+  }
+
+  private static void loadAllowedEventDirections(ProjectDocument.AnalysisComparisonSpec spec) {
+    if (spec.signalAllowedEventDirections == null || spec.signalAllowedEventDirections.isEmpty()) {
+      return;
+    }
+    EnumSet<SignalEventDirection> dirs = EnumSet.noneOf(SignalEventDirection.class);
+    for (String name : spec.signalAllowedEventDirections) {
+      if (name == null || name.isBlank()) {
+        continue;
+      }
+      try {
+        SignalEventDirection d = SignalEventDirection.valueOf(name.trim());
+        if (d != SignalEventDirection.NONE) {
+          dirs.add(d);
+        }
+      } catch (IllegalArgumentException ignored) {
+        // skip unknown
+      }
+    }
+    SignalSourceSpec signal = AnalysisSession.get().getSignalSpec();
+    signal.setAllowedEventDirections(dirs);
+  }
+
+  private static void loadValueThresholds(ProjectDocument.AnalysisComparisonSpec spec) {
+    if (spec.valueThresholdsEnabled == null
+        && spec.valueMin == null
+        && spec.valueMax == null
+        && spec.valueMiddle == null
+        && spec.valueMinAbsFromMiddle == null
+        && spec.valueMaxRows == null
+        && spec.valueLohOnly == null) {
+      return;
+    }
+    SignalValueThresholds v = new SignalValueThresholds();
+    if (spec.valueThresholdsEnabled != null) {
+      v.setEnabled(spec.valueThresholdsEnabled);
+    }
+    if (spec.valueMin != null) {
+      v.setMinValue(spec.valueMin);
+    }
+    if (spec.valueMax != null) {
+      v.setMaxValue(spec.valueMax);
+    }
+    if (spec.valueMiddle != null) {
+      v.setMiddle(spec.valueMiddle);
+    }
+    if (spec.valueMinAbsFromMiddle != null) {
+      v.setMinAbsFromMiddle(spec.valueMinAbsFromMiddle);
+    }
+    if (spec.valueMaxRows != null) {
+      v.setMaxRows(spec.valueMaxRows);
+    }
+    if (spec.valueLohOnly != null) {
+      v.setLohOnly(spec.valueLohOnly);
+    }
+    AnalysisSession.get().setValueThresholds(v);
+  }
+
+  private static void loadSignalComparison(ProjectDocument.AnalysisComparisonSpec spec) {
+    if (spec.signalMinSharedSamples == null
+        && spec.signalMaxSharedSamples == null
+        && spec.signalGeneLevel == null
+        && spec.signalComparisonWindowBp == null
+        && spec.signalPresentMatchMode == null
+        && (spec.signalTagRoles == null || spec.signalTagRoles.isEmpty())) {
+      return;
+    }
+    SignalComparisonSettings settings = new SignalComparisonSettings();
+    if (spec.signalMinSharedSamples != null) {
+      settings.setMinSharedSamples(spec.signalMinSharedSamples);
+    }
+    if (spec.signalMaxSharedSamples != null) {
+      settings.setMaxSharedSamples(spec.signalMaxSharedSamples);
+    }
+    if (spec.signalGeneLevel != null) {
+      settings.setGeneLevel(spec.signalGeneLevel);
+    }
+    if (spec.signalComparisonWindowBp != null) {
+      settings.setComparisonWindowBp(spec.signalComparisonWindowBp);
+    }
+    if (spec.signalPresentMatchMode != null) {
+      try {
+        settings.setPresentMatchMode(
+            VariantFilter.PresentMatchMode.valueOf(spec.signalPresentMatchMode));
+      } catch (IllegalArgumentException ignored) {
+        // keep default
+      }
+    }
+    if (spec.signalTagRoles != null && !spec.signalTagRoles.isEmpty()) {
+      Map<SampleTag, VariantFilter.GroupRole> roles = new EnumMap<>(SampleTag.class);
+      for (ProjectDocument.GroupRoleSpec entry : spec.signalTagRoles) {
+        if (entry == null || entry.tag == null || entry.role == null) {
+          continue;
+        }
+        try {
+          SampleTag tag = SampleTag.valueOf(entry.tag);
+          VariantFilter.GroupRole role = VariantFilter.GroupRole.valueOf(entry.role);
+          if (role != VariantFilter.GroupRole.IGNORE) {
+            roles.put(tag, role);
+          }
+        } catch (IllegalArgumentException ignored) {
+          // skip unknown tag/role
+        }
+      }
+      settings.setTagRoles(roles);
+    }
+    AnalysisSession.get().setSignalComparison(settings);
   }
 
   private static void writeSignalSettings(ProjectDocument.AnalysisComparisonSpec spec) {
+    AnalysisSession session = AnalysisSession.get();
+    String previousActive = session.getActiveSignalDatasetId();
+    List<ProjectDocument.SignalDatasetSpec> rows = new ArrayList<>();
+    for (SignalDataset dataset : SignalDatasetRegistry.get().all()) {
+      if (dataset == null || dataset.isEmpty()) {
+        continue;
+      }
+      session.setActiveSignalDatasetId(dataset.getId());
+      ProjectDocument.SignalDatasetSpec row = new ProjectDocument.SignalDatasetSpec();
+      row.id = dataset.getId();
+      row.displayName = dataset.getDisplayName();
+      row.signalValueKind = dataset.getKind().name();
+      row.trackNames = new ArrayList<>(dataset.trackDisplayNames());
+      row.settings = new ProjectDocument.AnalysisComparisonSpec();
+      writeFlatSignalSettings(row.settings);
+      row.settings.signalValueKind = dataset.getKind().name();
+      rows.add(row);
+    }
+    if (previousActive != null) {
+      session.setActiveSignalDatasetId(previousActive);
+    } else if (!rows.isEmpty()) {
+      session.setActiveSignalDatasetId(rows.get(0).id);
+    }
+    spec.signalDatasets = rows;
+    spec.activeSignalDatasetId = session.getActiveSignalDatasetId();
+    // Keep legacy flat fields as a mirror of the active dataset for older readers.
+    writeFlatSignalSettings(spec);
+  }
+
+  private static void writeFlatSignalSettings(ProjectDocument.AnalysisComparisonSpec spec) {
     SignalSourceSpec signal = AnalysisSession.get().getSignalSpec();
     DifferenceThresholds thr = AnalysisSession.get().getThresholds();
-    spec.signalValueKind = signal.getValueKind().name();
-    spec.comparisonUnit = signal.getUnit().name();
-    spec.genomicScope = signal.getScope().name();
-    spec.valueAggregation = signal.getAggregation().name();
-    spec.bigWigCompanionRule = signal.getBigWigRule().name();
+    if (signal.getValueKind() != null) {
+      spec.signalValueKind = signal.getValueKind().name();
+    }
+    if (signal.getUnit() != null) {
+      spec.comparisonUnit = signal.getUnit().name();
+    }
+    if (signal.getScope() != null) {
+      spec.genomicScope = signal.getScope().name();
+    }
+    if (signal.getAggregation() != null) {
+      spec.valueAggregation = signal.getAggregation().name();
+    }
+    if (signal.getBigWigRule() != null) {
+      spec.bigWigCompanionRule = signal.getBigWigRule().name();
+    }
     spec.bigWigNameContains = signal.getBigWigNameContains();
     spec.windowBp = signal.getWindowBp();
     spec.requireBedScores = signal.isRequireBedScores();
     spec.thresholdsEnabled = thr.isEnabled();
+    spec.useMinAbsLog2Fc = thr.isUseMinAbsLog2Fc();
+    spec.useMaxQ = thr.isUseMaxQ();
+    spec.useMinNPerGroup = thr.isUseMinNPerGroup();
     spec.minAbsLog2Fc = thr.getMinAbsLog2Fc();
     spec.maxQ = thr.getMaxQ();
     spec.minNPerGroup = thr.getMinNPerGroup();
@@ -391,6 +757,53 @@ public final class ComparisonContext {
     EffectMode effect = AnalysisSession.get().getEffectMode();
     spec.effectMode = effect != null ? effect.name() : EffectMode.AUTO.name();
     spec.minMeanPrefilter = AnalysisSession.get().getMinMeanPrefilter();
+    writeValueThresholds(spec);
+    writeSignalComparison(spec);
+    writeAllowedEventDirections(spec);
+  }
+
+  private static void writeAllowedEventDirections(ProjectDocument.AnalysisComparisonSpec spec) {
+    SignalSourceSpec signal = AnalysisSession.get().getSignalSpec();
+    List<String> names = new ArrayList<>();
+    for (SignalEventDirection d : SignalEventDirection.filterTypes()) {
+      if (signal.allowsEventDirection(d)) {
+        names.add(d.name());
+      }
+    }
+    spec.signalAllowedEventDirections = names;
+  }
+
+  private static void writeValueThresholds(ProjectDocument.AnalysisComparisonSpec spec) {
+    SignalValueThresholds v = AnalysisSession.get().getValueThresholds();
+    spec.valueThresholdsEnabled = v.isEnabled();
+    spec.valueMin = v.getMinValue();
+    spec.valueMax = v.getMaxValue();
+    spec.valueMiddle = v.getMiddle();
+    spec.valueMinAbsFromMiddle = v.getMinAbsFromMiddle();
+    spec.valueMaxRows = v.getMaxRows();
+    spec.valueLohOnly = v.isLohOnly();
+  }
+
+  private static void writeSignalComparison(ProjectDocument.AnalysisComparisonSpec spec) {
+    SignalComparisonSettings settings = AnalysisSession.get().getSignalComparison();
+    spec.signalMinSharedSamples = settings.getMinSharedSamples();
+    int maxShared = settings.getMaxSharedSamples();
+    spec.signalMaxSharedSamples = maxShared == Integer.MAX_VALUE ? null : maxShared;
+    spec.signalGeneLevel = settings.isGeneLevel();
+    spec.signalComparisonWindowBp = settings.getComparisonWindowBp();
+    VariantFilter.PresentMatchMode match = settings.getPresentMatchMode();
+    spec.signalPresentMatchMode = match != null ? match.name() : null;
+    List<ProjectDocument.GroupRoleSpec> roles = new ArrayList<>();
+    for (Map.Entry<SampleTag, VariantFilter.GroupRole> e : settings.getTagRoles().entrySet()) {
+      if (e.getKey() == null || e.getValue() == null) {
+        continue;
+      }
+      ProjectDocument.GroupRoleSpec row = new ProjectDocument.GroupRoleSpec();
+      row.tag = e.getKey().name();
+      row.role = e.getValue().name();
+      roles.add(row);
+    }
+    spec.signalTagRoles = roles;
   }
 
   private void persist() {

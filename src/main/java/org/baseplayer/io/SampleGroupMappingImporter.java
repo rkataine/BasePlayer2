@@ -30,11 +30,15 @@ import javafx.stage.Window;
 /**
  * Import a text mapping of sample name → group name and assign loaded tracks.
  *
+ * <p>One file may define many groups. A sample listed under several groups is
+ * assigned to all of them (multi-group membership).
+ *
  * <p>Supported lines (tab, comma, or whitespace separated):
  * <pre>
  * sampleA	Tumor
  * sampleB,Normal
  * sampleC Control
+ * sampleA	Control
  * # comments and blank lines are ignored
  * </pre>
  */

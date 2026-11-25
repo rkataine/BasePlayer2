@@ -809,23 +809,7 @@ public class SampleComparisonPanel {
     }
     HBox windowRow = new HBox(8, windowLabel, windowField, windowApply);
     windowRow.setAlignment(Pos.CENTER_LEFT);
-    VBox differentialHost = null;
-    if (signalEvents) {
-      differentialHost = new VBox(8);
-      Label diffTitle = new Label("Patterns");
-      diffTitle.getStyleClass().add("section-header");
-      Label diffHelp = new Label(
-          "Discover sample groups from similar signal patterns; "
-              + "marker genes appear in the Group comparison table. "
-              + "Use Group comparison for DE once groups are applied.");
-      diffHelp.getStyleClass().add("subsection-label");
-      diffHelp.setWrapText(true);
-      left.getChildren().addAll(
-          commonTitle, help, geneLevel, windowRow, rangeSlider,
-          new Separator(), diffTitle, diffHelp, differentialHost);
-    } else {
-      left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
-    }
+    left.getChildren().addAll(commonTitle, help, geneLevel, windowRow, rangeSlider);
 
     VBox groupsContainer = new VBox(6);
     VBox.setVgrow(groupsContainer, Priority.ALWAYS);
@@ -871,15 +855,43 @@ public class SampleComparisonPanel {
         ? new HBox(12, apply)
         : new HBox(12, calculateLoh, apply);
     applyRow.setAlignment(Pos.CENTER_RIGHT);
-    right.getChildren().addAll(
-        groupsHeader,
-        groupsContainer,
-        summary,
-        new javafx.scene.control.Separator(),
-        presentTitle,
-        presentRow,
-        new javafx.scene.control.Separator(),
-        applyRow);
+
+    VBox differentialHost = null;
+    if (signalEvents) {
+      // Patterns first on the right; sample tags follow.
+      differentialHost = new VBox(8);
+      Label diffTitle = new Label("Patterns");
+      diffTitle.getStyleClass().add("section-header");
+      Label diffHelp = new Label(
+          "Discover sample groups from similar signal patterns; "
+              + "marker genes appear in the Group comparison table. "
+              + "Use Group comparison for DE once groups are applied.");
+      diffHelp.getStyleClass().add("subsection-label");
+      diffHelp.setWrapText(true);
+      right.getChildren().addAll(
+          diffTitle,
+          diffHelp,
+          differentialHost,
+          new Separator(),
+          groupsHeader,
+          groupsContainer,
+          summary,
+          new Separator(),
+          presentTitle,
+          presentRow,
+          new Separator(),
+          applyRow);
+    } else {
+      right.getChildren().addAll(
+          groupsHeader,
+          groupsContainer,
+          summary,
+          new Separator(),
+          presentTitle,
+          presentRow,
+          new Separator(),
+          applyRow);
+    }
 
     ScrollPane leftScroll = new ScrollPane(left);
     leftScroll.setFitToWidth(true);

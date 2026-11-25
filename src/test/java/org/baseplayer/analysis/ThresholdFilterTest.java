@@ -15,6 +15,9 @@ class ThresholdFilterTest {
   void filtersByEffectAndQ() {
     DifferenceThresholds thr = new DifferenceThresholds();
     thr.setEnabled(true);
+    thr.setUseMinAbsLog2Fc(true);
+    thr.setUseMaxQ(true);
+    thr.setUseMinNPerGroup(true);
     thr.setMinAbsLog2Fc(0.5);
     thr.setMaxQ(0.05);
     thr.setMinNPerGroup(2);
@@ -41,9 +44,41 @@ class ThresholdFilterTest {
   }
 
   @Test
+  void defaultUsesOnlyMaxQ() {
+    DifferenceThresholds thr = new DifferenceThresholds();
+    assertTrue(thr.isEnabled());
+    assertTrue(thr.isUseMaxQ());
+    assertFalse(thr.isUseMinAbsLog2Fc());
+    assertFalse(thr.isUseMinNPerGroup());
+
+    GroupStatResult.Row smallDelta = row("A", 0.1, 0.01, 1, "up", 0.0, 0.1);
+    GroupStatResult.Row failQ = row("B", 2.0, 0.2, 1, "up", 0.0, 2.0);
+    assertTrue(ThresholdFilter.passes(smallDelta, thr));
+    assertFalse(ThresholdFilter.passes(failQ, thr));
+  }
+
+  @Test
+  void uncheckedCriteriaAreIgnored() {
+    DifferenceThresholds thr = new DifferenceThresholds();
+    thr.setEnabled(true);
+    thr.setUseMinAbsLog2Fc(false);
+    thr.setUseMaxQ(false);
+    thr.setUseMinNPerGroup(false);
+    thr.setMinAbsLog2Fc(10);
+    thr.setMaxQ(0.001);
+    thr.setMinNPerGroup(100);
+
+    GroupStatResult.Row row = row("A", 0.01, 0.9, 1, "up", 0.0, 0.01);
+    assertTrue(ThresholdFilter.passes(row, thr));
+  }
+
+  @Test
   void minDeltaUsesEffectVsBaseline() {
     DifferenceThresholds thr = new DifferenceThresholds();
     thr.setEnabled(true);
+    thr.setUseMinAbsLog2Fc(true);
+    thr.setUseMaxQ(true);
+    thr.setUseMinNPerGroup(true);
     thr.setMinAbsLog2Fc(0.5);
     thr.setMaxQ(1.0);
     thr.setMinNPerGroup(2);
@@ -62,9 +97,9 @@ class ThresholdFilterTest {
   void keepsTopNByDifferenceMagnitudeWhenFilterEnabled() {
     DifferenceThresholds thr = new DifferenceThresholds();
     thr.setEnabled(true);
-    thr.setMinAbsLog2Fc(0);
-    thr.setMaxQ(1.0);
-    thr.setMinNPerGroup(1);
+    thr.setUseMinAbsLog2Fc(false);
+    thr.setUseMaxQ(false);
+    thr.setUseMinNPerGroup(false);
     thr.setShowUp(true);
     thr.setShowDown(true);
     thr.setShowSimilar(true);

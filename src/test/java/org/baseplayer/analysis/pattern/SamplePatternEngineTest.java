@@ -7,14 +7,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.SampleRegistry;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.EffectMode;
 import org.baseplayer.analysis.grid.FeatureValueMatrix;
+import org.baseplayer.analysis.groupstat.GroupStatResult;
 import org.baseplayer.analysis.groupstat.GroupStatTest;
 import org.baseplayer.analysis.signal.SignalValueType;
 
+import javafx.application.Platform;
+
 class SamplePatternEngineTest {
+
+  @BeforeAll
+  static void initJavaFx() {
+    try {
+      Platform.startup(() -> {});
+    } catch (IllegalStateException ignored) {
+      // toolkit already started
+    }
+  }
 
   @Test
   void recoversTwoSampleBlocks() {
@@ -68,6 +84,56 @@ class SamplePatternEngineTest {
     assertEquals(6, result.sampleFeature().length);
     assertEquals(result.selectedFeatures().size(), result.sampleFeature()[0].length);
     assertTrue(result.zScored());
+  }
+
+  @Test
+  void fromGroupComparisonBuildsCohortOrderedHeatmap() {
+    SampleRegistry registry = new SampleRegistry();
+    SampleGroup gA = registry.createSampleGroup("Tumor");
+    SampleGroup gB = registry.createSampleGroup("Normal");
+    List<SampleTrack> aTracks = new ArrayList<>();
+    List<SampleTrack> bTracks = new ArrayList<>();
+    for (int i = 0; i < 3; i++) {
+      SampleTrack t = new SampleTrack("T" + i);
+      aTracks.add(t);
+      registry.getSampleTracks().add(t);
+    }
+    for (int i = 0; i < 3; i++) {
+      SampleTrack t = new SampleTrack("N" + i);
+      bTracks.add(t);
+      registry.getSampleTracks().add(t);
+    }
+    registry.setTracksExclusiveGroup(aTracks, gA.getId());
+    registry.setTracksExclusiveGroup(bTracks, gB.getId());
+
+    FeatureValueMatrix matrix = new FeatureValueMatrix();
+    for (String gene : List.of("G1", "G2", "G3")) {
+      for (int i = 0; i < aTracks.size(); i++) {
+        matrix.put(gene, aTracks.get(i), 5.0 + i);
+      }
+      for (int i = 0; i < bTracks.size(); i++) {
+        matrix.put(gene, bTracks.get(i), 1.0 + i);
+      }
+    }
+    List<GroupStatResult.Row> rows = new ArrayList<>();
+    for (String gene : List.of("G1", "G2", "G3")) {
+      rows.add(new GroupStatResult.Row(
+          gene, gene, "1", 1, 10, List.of(), 1.0, 0.01, 0.02, "t", "up"));
+    }
+    GroupStatResult de = new GroupStatResult(
+        AnalysisMode.SIGNAL, List.of(gA.getId(), gB.getId()), gB.getId(), rows, "de");
+
+    SamplePatternEngine.Result heat = SamplePatternEngine.fromGroupComparison(
+        matrix, registry, List.of(gA.getId(), gB.getId()), de);
+    assertTrue(heat.hasHeatmapData());
+    assertEquals(3, heat.selectedFeatures().size());
+    assertEquals(6, heat.tracks().size());
+    assertEquals("Tumor", heat.clusterLabel(0));
+    assertEquals("Normal", heat.clusterLabel(1));
+    // Cohort order: all Tumor then all Normal.
+    assertEquals(0, heat.clusterOfTrack()[heat.leafOrder()[0]]);
+    assertEquals(0, heat.clusterOfTrack()[heat.leafOrder()[2]]);
+    assertEquals(1, heat.clusterOfTrack()[heat.leafOrder()[3]]);
   }
 
   @Test

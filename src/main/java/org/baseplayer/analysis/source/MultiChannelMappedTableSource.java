@@ -13,6 +13,8 @@ import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.GeneOverlapIndex;
 import org.baseplayer.analysis.GenomicScope;
 import org.baseplayer.analysis.signal.SignalChannel;
+import org.baseplayer.analysis.signal.SignalEventDirection;
+import org.baseplayer.analysis.signal.SignalValueType;
 import org.baseplayer.analysis.signal.SignalScopeHelper;
 import org.baseplayer.analysis.signal.SignalScopeHelper.Region;
 import org.baseplayer.analysis.signal.SignalSourceSpec;
@@ -20,6 +22,7 @@ import org.baseplayer.genome.gene.Gene;
 import org.baseplayer.io.table.MappedTableColumnRole;
 import org.baseplayer.io.table.MappedTableData;
 import org.baseplayer.io.table.MappedTableRow;
+import org.baseplayer.io.table.SharedMatrixLoci;
 import org.baseplayer.samples.Sample;
 import org.baseplayer.samples.SampleTrack;
 
@@ -76,69 +79,19 @@ public final class MultiChannelMappedTableSource implements ValueSource {
         skipped++;
         continue;
       }
-      Map<String, Map<String, List<Double>>> perChannelGene = new HashMap<>();
-      Map<String, Gene> geneMeta = new HashMap<>();
-      List<MappedTableRow> rows = table.getRows();
-      for (int i = 0; i < rows.size(); i++) {
-        if (ctx != null && (i & 0x3FF) == 0) {
-          ctx.checkCancelled();
-        }
-        MappedTableRow row = rows.get(i);
-        if (!inScope(row, scope)) {
-          continue;
-        }
-        List<String> geneNames = overlappingGenes(row, geneMeta);
-        if (geneNames.isEmpty()) {
-          continue;
-        }
-        for (SignalChannel ch : channels) {
-          double value = valueFor(row, ch.sourceRole());
-          if (!Double.isFinite(value)) {
-            continue;
-          }
-          for (String geneName : geneNames) {
-            perChannelGene
-                .computeIfAbsent(ch.id(), k -> new HashMap<>())
-                .computeIfAbsent(geneName, k -> new ArrayList<>())
-                .add(value);
-          }
-        }
+      int geneCount;
+      if (table.hasUnitIds() && table.sharedLoci() != null) {
+        geneCount = collectCompactChannels(
+            table, track, bundle, mirrorPrimary, channels, scope, ctx);
+      } else {
+        geneCount = collectClassicRows(
+            table, track, bundle, mirrorPrimary, channels, scope, effective, ctx);
       }
-      if (perChannelGene.isEmpty()) {
+      if (geneCount <= 0) {
         skipped++;
         continue;
       }
       used++;
-      int geneCount = 0;
-      for (SignalChannel ch : channels) {
-        Map<String, List<Double>> perGene = perChannelGene.get(ch.id());
-        if (perGene == null) {
-          continue;
-        }
-        geneCount = Math.max(geneCount, perGene.size());
-        for (Map.Entry<String, List<Double>> e : perGene.entrySet()) {
-          double collapsed = FeatureValueMatrix.collapse(e.getValue(), effective.getAggregation());
-          if (Double.isNaN(collapsed)) {
-            continue;
-          }
-          collapsed = ch.type().normalize(collapsed);
-          // Skip threshold-fail cells (e.g. diploid Allele CN 1) — keeps the matrix sparse.
-          if (ch.thresholds().isEnabled() && !ch.thresholds().passes(collapsed)) {
-            continue;
-          }
-          bundle.put(ch.id(), e.getKey(), track, collapsed);
-          if (mirrorPrimary != null && ch.id().equals(channels.get(0).id())) {
-            mirrorPrimary.put(e.getKey(), track, collapsed);
-          }
-          Gene gene = geneMeta.get(e.getKey());
-          if (gene != null) {
-            bundle.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
-            if (mirrorPrimary != null) {
-              mirrorPrimary.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
-            }
-          }
-        }
-      }
       appendNote(notes, track.getDisplayName(), geneCount + " genes");
     }
     return String.format(
@@ -188,6 +141,221 @@ public final class MultiChannelMappedTableSource implements ValueSource {
     return firstPayloadTable(track) != null;
   }
 
+  /**
+   * Gene-matrix / Salmon path: unit ids already on shared loci — no row materialization.
+   * @return number of genes written for this track
+   */
+  private static int collectCompactChannels(
+      MappedTableData table,
+      SampleTrack track,
+      FeatureValueBundle bundle,
+      FeatureValueMatrix mirrorPrimary,
+      List<SignalChannel> channels,
+      GenomicScope scope,
+      CollectContext ctx) {
+    SharedMatrixLoci loci = table.sharedLoci();
+    if (loci == null || channels == null || channels.isEmpty()) {
+      return 0;
+    }
+    java.util.LinkedHashSet<String> written = new java.util.LinkedHashSet<>();
+    for (int i = 0; i < loci.size(); i++) {
+      if (ctx != null && (i & 0x3FF) == 0) {
+        ctx.checkCancelled();
+      }
+      String unitId = loci.unitId(i);
+      if (unitId == null || unitId.isBlank()) {
+        continue;
+      }
+      if (!inScopeLocus(loci.chrom(i), loci.start1Based(i), loci.end1Based(i), scope)) {
+        continue;
+      }
+      boolean any = false;
+      for (SignalChannel ch : channels) {
+        float raw = table.compactValue(i, ch.sourceRole());
+        if (!Float.isFinite(raw)) {
+          continue;
+        }
+        double value = ch.type().normalize(raw);
+        if (ch.thresholds().isEnabled() && !ch.thresholds().passes(value)) {
+          continue;
+        }
+        bundle.put(ch.id(), unitId, track, value);
+        if (mirrorPrimary != null && ch.id().equals(channels.get(0).id())) {
+          mirrorPrimary.put(unitId, track, value);
+        }
+        bundle.putLocus(unitId, loci.chrom(i), loci.start1Based(i), loci.end1Based(i));
+        if (mirrorPrimary != null) {
+          mirrorPrimary.putLocus(unitId, loci.chrom(i), loci.start1Based(i), loci.end1Based(i));
+        }
+        any = true;
+      }
+      if (any) {
+        written.add(unitId);
+      }
+    }
+    return written.size();
+  }
+
+  /** Classic segment/table rows (Minor/Major/Value). */
+  private static int collectClassicRows(
+      MappedTableData table,
+      SampleTrack track,
+      FeatureValueBundle bundle,
+      FeatureValueMatrix mirrorPrimary,
+      List<SignalChannel> channels,
+      GenomicScope scope,
+      SignalSourceSpec effective,
+      CollectContext ctx) {
+    if (channels.stream().allMatch(ch -> ch != null && ch.type() == SignalValueType.ALLELE_CN)) {
+      return collectLongestAlleleCnRows(
+          table, track, bundle, mirrorPrimary, channels, scope, ctx);
+    }
+    Map<String, Map<String, List<Double>>> perChannelGene = new HashMap<>();
+    Map<String, Gene> geneMeta = new HashMap<>();
+    List<MappedTableRow> rows = table.getRows();
+    for (int i = 0; i < rows.size(); i++) {
+      if (ctx != null && (i & 0x3FF) == 0) {
+        ctx.checkCancelled();
+      }
+      MappedTableRow row = rows.get(i);
+      if (!inScope(row, scope)) {
+        continue;
+      }
+      List<String> geneNames = overlappingGenes(row, geneMeta);
+      if (geneNames.isEmpty()) {
+        continue;
+      }
+      for (SignalChannel ch : channels) {
+        double value = valueFor(row, ch.sourceRole());
+        if (!Double.isFinite(value)) {
+          continue;
+        }
+        for (String geneName : geneNames) {
+          perChannelGene
+              .computeIfAbsent(ch.id(), k -> new HashMap<>())
+              .computeIfAbsent(geneName, k -> new ArrayList<>())
+              .add(value);
+        }
+      }
+    }
+    if (perChannelGene.isEmpty()) {
+      return 0;
+    }
+    int geneCount = 0;
+    for (SignalChannel ch : channels) {
+      Map<String, List<Double>> perGene = perChannelGene.get(ch.id());
+      if (perGene == null) {
+        continue;
+      }
+      geneCount = Math.max(geneCount, perGene.size());
+      for (Map.Entry<String, List<Double>> e : perGene.entrySet()) {
+        double collapsed = FeatureValueMatrix.collapse(e.getValue(), effective.getAggregation());
+        if (Double.isNaN(collapsed)) {
+          continue;
+        }
+        collapsed = ch.type().normalize(collapsed);
+        if (ch.thresholds().isEnabled() && !ch.thresholds().passes(collapsed)) {
+          continue;
+        }
+        bundle.put(ch.id(), e.getKey(), track, collapsed);
+        if (mirrorPrimary != null && ch.id().equals(channels.get(0).id())) {
+          mirrorPrimary.put(e.getKey(), track, collapsed);
+        }
+        Gene gene = geneMeta.get(e.getKey());
+        if (gene != null) {
+          bundle.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
+          if (mirrorPrimary != null) {
+            mirrorPrimary.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
+          }
+        }
+      }
+    }
+    return geneCount;
+  }
+
+  /**
+   * Allele-CN segments overlapping one gene: keep minor/major from the longest overlap
+   * so the stored copy numbers are values from the file, not a mean of segments.
+   */
+  private static int collectLongestAlleleCnRows(
+      MappedTableData table,
+      SampleTrack track,
+      FeatureValueBundle bundle,
+      FeatureValueMatrix mirrorPrimary,
+      List<SignalChannel> channels,
+      GenomicScope scope,
+      CollectContext ctx) {
+    Map<String, BestRow> best = new HashMap<>();
+    Map<String, Gene> geneMeta = new HashMap<>();
+    List<MappedTableRow> rows = table.getRows();
+    for (int i = 0; i < rows.size(); i++) {
+      if (ctx != null && (i & 0x3FF) == 0) {
+        ctx.checkCancelled();
+      }
+      MappedTableRow row = rows.get(i);
+      if (!inScope(row, scope)) {
+        continue;
+      }
+      List<String> geneNames = overlappingGenes(row, geneMeta);
+      if (geneNames.isEmpty()) {
+        continue;
+      }
+      for (String geneName : geneNames) {
+        long span = GeneOverlapIndex.overlapBp(
+            row.start1Based(), row.end1Based(), geneMeta.get(geneName));
+        BestRow prev = best.get(geneName);
+        if (prev == null || span > prev.span()) {
+          best.put(geneName, new BestRow(span, row));
+        }
+      }
+    }
+    if (best.isEmpty()) {
+      return 0;
+    }
+    int geneCount = 0;
+    for (Map.Entry<String, BestRow> e : best.entrySet()) {
+      MappedTableRow row = e.getValue().row();
+      // Diploid / no-event segments stay out of the matrix; type filters pick Gain/Loss/LOH.
+      double minorRaw = valueFor(row, MappedTableColumnRole.MINOR_CN);
+      double majorRaw = valueFor(row, MappedTableColumnRole.MAJOR_CN);
+      Double minor = Double.isFinite(minorRaw) ? Double.valueOf(minorRaw) : null;
+      Double major = Double.isFinite(majorRaw) ? Double.valueOf(majorRaw) : null;
+      if (SignalEventDirection.fromAlleleCn(minor, major) == SignalEventDirection.NONE) {
+        continue;
+      }
+      boolean wrote = false;
+      for (SignalChannel ch : channels) {
+        double value = valueFor(row, ch.sourceRole());
+        if (!Double.isFinite(value)) {
+          continue;
+        }
+        value = ch.type().normalize(value);
+        if (ch.thresholds().isEnabled() && !ch.thresholds().passes(value)) {
+          continue;
+        }
+        bundle.put(ch.id(), e.getKey(), track, value);
+        if (mirrorPrimary != null && ch.id().equals(channels.get(0).id())) {
+          mirrorPrimary.put(e.getKey(), track, value);
+        }
+        wrote = true;
+      }
+      if (!wrote) {
+        continue;
+      }
+      geneCount++;
+      Gene gene = geneMeta.get(e.getKey());
+      if (gene != null) {
+        bundle.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
+        if (mirrorPrimary != null) {
+          mirrorPrimary.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
+        }
+      }
+    }
+    return geneCount;
+  }
+
+  private record BestRow(long span, MappedTableRow row) {}
+
   private static double valueFor(MappedTableRow row, MappedTableColumnRole role) {
     if (row == null || role == null) {
       return Double.NaN;
@@ -200,6 +368,29 @@ public final class MultiChannelMappedTableSource implements ValueSource {
       case TOTAL_CN -> row.totalCn() != null ? row.totalCn() : Double.NaN;
       default -> Double.NaN;
     };
+  }
+
+  private static boolean inScopeLocus(
+      String chrom, long start1Based, long end1Based, GenomicScope scope) {
+    if (scope == null || scope == GenomicScope.ALL_CHROMS) {
+      return true;
+    }
+    Region view = SignalScopeHelper.currentView();
+    if (view == null) {
+      return scope != GenomicScope.CURRENT_VIEW;
+    }
+    if (chrom == null) {
+      return false;
+    }
+    if (!chrom.equals(view.chrom())
+        && !chrom.equals("chr" + view.chrom())
+        && !(("chr" + chrom).equals(view.chrom()))) {
+      return false;
+    }
+    if (scope == GenomicScope.CURRENT_CHROM) {
+      return true;
+    }
+    return end1Based >= view.start1Based() && start1Based <= view.end1Based();
   }
 
   private static List<String> overlappingGenes(MappedTableRow row, Map<String, Gene> geneMeta) {

@@ -144,7 +144,9 @@ public class VariantManagerController implements Initializable {
     private VariantClassWorkspace svWorkspace;
 
     private TabPane pointToolTabPane;
-    private Tab signalModeTab;
+    /** Named Signal datasets → mode tab + workspace (peer to Point/SV). */
+    private final Map<String, SignalModeBundle> signalModes = new LinkedHashMap<>();
+    /** Mirrors {@link #activeSignalBundle()} for existing call sites. */
     private TabPane signalToolTabPane;
     private org.baseplayer.analysis.ui.SignalAnalysisWorkspace signalWorkspace;
     private SampleComparisonPanel signalSampleComparisonPanel;
@@ -448,8 +450,60 @@ public class VariantManagerController implements Initializable {
                     || "Signal comparison".equals(t.getText())));
         }
 
-        installSignalModeWorkspace();
+        syncSignalDatasetTabs();
         installMutationGroupComparisonTabs();
+    }
+
+    /** One Analysis outer tab per registered {@link org.baseplayer.analysis.signal.SignalDataset}. */
+    private static final class SignalModeBundle {
+        final String datasetId;
+        final Tab modeTab;
+        final TabPane toolTabPane;
+        final org.baseplayer.analysis.ui.SignalAnalysisWorkspace workspace;
+        SampleComparisonPanel sampleComparisonPanel;
+
+        SignalModeBundle(
+            String datasetId,
+            Tab modeTab,
+            TabPane toolTabPane,
+            org.baseplayer.analysis.ui.SignalAnalysisWorkspace workspace) {
+            this.datasetId = datasetId;
+            this.modeTab = modeTab;
+            this.toolTabPane = toolTabPane;
+            this.workspace = workspace;
+        }
+    }
+
+    private SignalModeBundle activeSignalBundle() {
+        Tab selected = filterTabPane != null
+            ? filterTabPane.getSelectionModel().getSelectedItem()
+            : null;
+        if (selected != null) {
+            for (SignalModeBundle bundle : signalModes.values()) {
+                if (bundle.modeTab == selected) {
+                    return bundle;
+                }
+            }
+        }
+        String activeId = org.baseplayer.analysis.AnalysisSession.get().getActiveSignalDatasetId();
+        if (activeId != null && signalModes.containsKey(activeId)) {
+            return signalModes.get(activeId);
+        }
+        return signalModes.isEmpty() ? null : signalModes.values().iterator().next();
+    }
+
+    private void syncActiveSignalPointers() {
+        SignalModeBundle bundle = activeSignalBundle();
+        if (bundle == null) {
+            signalToolTabPane = null;
+            signalWorkspace = null;
+            signalSampleComparisonPanel = null;
+            return;
+        }
+        signalToolTabPane = bundle.toolTabPane;
+        signalWorkspace = bundle.workspace;
+        signalSampleComparisonPanel = bundle.sampleComparisonPanel;
+        bundle.workspace.activateSessionSlice();
     }
 
     /**
@@ -523,44 +577,78 @@ public class VariantManagerController implements Initializable {
             this::isAllChromosomeAnnotationRunning);
     }
 
-    /** Peer mode: Signal Filters | Group comparison above a Signals results table. */
-    private void installSignalModeWorkspace() {
+    /** Sync Analysis outer tabs with {@link org.baseplayer.analysis.signal.SignalDatasetRegistry}. */
+    public void syncSignalDatasetTabs() {
         if (filterTabPane == null) {
             return;
         }
-        if (signalModeTab != null) {
-            // Already built; pane membership is gated by updateModeTabVisibility.
+        org.baseplayer.analysis.signal.SignalDatasetRegistry registry =
+            org.baseplayer.analysis.signal.SignalDatasetRegistry.get();
+        Set<String> wanted = new LinkedHashSet<>();
+        for (org.baseplayer.analysis.signal.SignalDataset ds : registry.all()) {
+            if (ds == null || ds.isEmpty()) {
+                continue;
+            }
+            wanted.add(ds.getId());
+            ensureSignalDatasetTab(ds);
+        }
+        Iterator<Map.Entry<String, SignalModeBundle>> it = signalModes.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, SignalModeBundle> entry = it.next();
+            if (!wanted.contains(entry.getKey())) {
+                filterTabPane.getTabs().remove(entry.getValue().modeTab);
+                it.remove();
+            }
+        }
+        syncActiveSignalPointers();
+        refreshBusyOverlayLockTargets();
+    }
+
+    /** Peer mode: named dataset Filters | Group comparison above a Signals results table. */
+    private void ensureSignalDatasetTab(org.baseplayer.analysis.signal.SignalDataset dataset) {
+        if (filterTabPane == null || dataset == null) {
             return;
         }
-        if (signalWorkspace == null) {
-            signalWorkspace = new org.baseplayer.analysis.ui.SignalAnalysisWorkspace();
+        SignalModeBundle existing = signalModes.get(dataset.getId());
+        if (existing != null) {
+            if (!dataset.getDisplayName().equals(existing.modeTab.getText())) {
+                existing.modeTab.setText(dataset.getDisplayName());
+            }
+            if (!filterTabPane.getTabs().contains(existing.modeTab)) {
+                filterTabPane.getTabs().add(existing.modeTab);
+            }
+            return;
         }
-        signalWorkspace.setOnResultUpdated(result -> updateExcelExportVisibilityFromSignal());
-        signalWorkspace.setAnalysisBusyRunner(this::runAnalysisBusy);
 
-        signalToolTabPane = new TabPane();
-        signalToolTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        signalToolTabPane.getStyleClass().add("filter-tabs");
+        org.baseplayer.analysis.AnalysisSession.get().ensureSignalSlice(dataset.getId());
+        org.baseplayer.analysis.ui.SignalAnalysisWorkspace workspace =
+            new org.baseplayer.analysis.ui.SignalAnalysisWorkspace(dataset);
+        workspace.setOnResultUpdated(result -> updateExcelExportVisibilityFromSignal());
+        workspace.setAnalysisBusyRunner(this::runAnalysisBusy);
 
-        // Same tool-tab order as Point/SV: Filters | Sample Comparison | Control | Group comparison.
-        Tab signalFiltersTab = new Tab("Filters", signalWorkspace.createSignalPane());
+        TabPane toolTabs = new TabPane();
+        toolTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        toolTabs.getStyleClass().add("filter-tabs");
+
+        Tab signalFiltersTab = new Tab("Filters", workspace.createSignalPane());
         signalFiltersTab.setClosable(false);
 
         javafx.util.Pair<Node, SampleComparisonPanel.Nodes> signalComp =
             SampleComparisonPanel.buildUiForSignal();
-        signalSampleComparisonPanel = new SampleComparisonPanel();
-        signalSampleComparisonPanel.install(
+        SampleComparisonPanel comparisonPanel = new SampleComparisonPanel();
+        comparisonPanel.install(
             signalComp.getValue(),
             this::scheduleSignalComparisonUpdate,
             this::scheduleImmediateSignalComparisonApply,
             () -> suppressFilterApplyEvents);
-        signalSampleComparisonPanel.configurePresenceOnlyForSignal();
-        signalSampleComparisonPanel.syncSharedSampleRangeBoundsForSignal();
-        signalSampleComparisonPanel.loadFrom(
+        comparisonPanel.configurePresenceOnlyForSignal();
+        comparisonPanel.syncSharedSampleRangeBoundsForSignal();
+        org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(dataset.getId());
+        comparisonPanel.loadFrom(
             org.baseplayer.analysis.AnalysisSession.get().getSignalComparison());
         SampleComparisonPanel.wireApplyButton(
             signalComp.getKey(), this::scheduleImmediateSignalComparisonApply);
-        signalWorkspace.mountPatternsInto(signalComp.getValue().differentialHost());
+        workspace.mountPatternsInto(signalComp.getValue().differentialHost());
         Tab signalComparisonTab = new Tab("Sample Comparison", signalComp.getKey());
         signalComparisonTab.setClosable(false);
 
@@ -573,40 +661,77 @@ public class VariantManagerController implements Initializable {
         Tab signalControlTab = new Tab("Control Files", signalControlContent);
         signalControlTab.setClosable(false);
 
-        Tab signalGroupTab = new Tab("Group comparison", signalWorkspace.createComparisonPane());
+        Tab signalGroupTab = new Tab("Group comparison", workspace.createComparisonPane());
         signalGroupTab.setClosable(false);
 
-        signalToolTabPane.getTabs().addAll(
+        toolTabs.getTabs().addAll(
             signalFiltersTab, signalComparisonTab, signalControlTab, signalGroupTab);
-        signalToolTabPane.getSelectionModel().selectedItemProperty().addListener(
-            (obs, was, is) -> refreshSignalAllChromosomesButton());
 
-        // Same structure as Point/SV: toolbar (Annotate All + Search) above results tabs.
-        Node resultsArea = signalWorkspace.createResultsArea();
+        Node resultsArea = workspace.createResultsArea();
         if (resultsArea instanceof Region resultsRegion) {
             resultsRegion.setMinHeight(120);
             VBox.setVgrow(resultsRegion, Priority.ALWAYS);
         }
 
-        SplitPane signalSplit = new SplitPane(signalToolTabPane, resultsArea);
+        SplitPane signalSplit = new SplitPane(toolTabs, resultsArea);
         signalSplit.setOrientation(javafx.geometry.Orientation.VERTICAL);
         signalSplit.setDividerPositions(0.38);
         signalSplit.getStyleClass().add("variant-manager-split");
-        signalToolTabPane.setMinHeight(48);
-        SplitPane.setResizableWithParent(signalToolTabPane, true);
+        toolTabs.setMinHeight(48);
+        SplitPane.setResizableWithParent(toolTabs, true);
         SplitPane.setResizableWithParent(resultsArea, true);
         wireResultsExpandDivider(signalSplit);
 
-        signalModeTab = new Tab("Signal", signalSplit);
-        signalModeTab.setClosable(false);
-        // One Annotate All handler for Point/SV/Signal (action follows tool tab).
-        signalWorkspace.getAnnotateAllButton().setOnAction(e -> handleAnnotateAllChromosomes());
+        Tab modeTab = new Tab(dataset.getDisplayName(), signalSplit);
+        modeTab.setClosable(true);
+        modeTab.setOnCloseRequest(e -> {
+            e.consume();
+            closeSignalDatasetTab(dataset.getId());
+        });
+
+        SignalModeBundle bundle = new SignalModeBundle(
+            dataset.getId(), modeTab, toolTabs, workspace);
+        bundle.sampleComparisonPanel = comparisonPanel;
+        signalModes.put(dataset.getId(), bundle);
+
+        toolTabs.getSelectionModel().selectedItemProperty().addListener(
+            (obs, was, is) -> {
+                if (filterTabPane.getSelectionModel().getSelectedItem() == modeTab) {
+                    refreshSignalAllChromosomesButton();
+                }
+            });
+        modeTab.selectedProperty().addListener((obs, was, is) -> {
+            if (Boolean.TRUE.equals(is)) {
+                workspace.activateSessionSlice();
+                syncActiveSignalPointers();
+                refreshSignalAllChromosomesButton();
+            }
+        });
+
+        workspace.getAnnotateAllButton().setOnAction(e -> handleAnnotateAllChromosomes());
+        filterTabPane.getTabs().add(modeTab);
+        syncActiveSignalPointers();
         refreshSignalAllChromosomesButton();
         refreshBusyOverlayLockTargets();
-        // Do not add here — updateModeTabVisibility adds only when signal data exists.
+    }
+
+    private void closeSignalDatasetTab(String datasetId) {
+        if (datasetId == null) {
+            return;
+        }
+        SignalModeBundle bundle = signalModes.remove(datasetId);
+        if (bundle != null && filterTabPane != null) {
+            filterTabPane.getTabs().remove(bundle.modeTab);
+        }
+        org.baseplayer.analysis.signal.SignalDatasetRegistry.get().remove(datasetId);
+        org.baseplayer.analysis.AnalysisSession.get().clearSignalSlice(datasetId);
+        syncActiveSignalPointers();
+        refreshBusyOverlayLockTargets();
+        updateModeTabVisibility();
     }
 
     private void refreshSignalAllChromosomesButton() {
+        syncActiveSignalPointers();
         if (signalWorkspace == null || signalToolTabPane == null) {
             return;
         }
@@ -614,30 +739,56 @@ public class VariantManagerController implements Initializable {
         signalWorkspace.setAllChromosomesAction(signalWorkspace.actionForToolTab(tool));
     }
 
-    /** Focus the Signal mode tab (table LOH / numeric group comparison). */
+    /** Focus the active / first Signal dataset tab. */
     public void selectSignalMode() {
+        selectSignalDataset(org.baseplayer.analysis.AnalysisSession.get().getActiveSignalDatasetId());
+    }
+
+    /** Focus a specific named Signal dataset tab. */
+    public void selectSignalDataset(String datasetId) {
         if (filterTabPane == null) {
             return;
         }
-        installSignalModeWorkspace();
+        syncSignalDatasetTabs();
         updateModeTabVisibility();
-        if (signalModeTab != null && filterTabPane.getTabs().contains(signalModeTab)) {
-            filterTabPane.getSelectionModel().select(signalModeTab);
+        SignalModeBundle bundle = datasetId != null ? signalModes.get(datasetId) : null;
+        if (bundle == null) {
+            bundle = activeSignalBundle();
         }
-        if (signalToolTabPane != null && !signalToolTabPane.getTabs().isEmpty()) {
-            // Prefer Signal tab (columns + thresholds) before group comparison.
-            signalToolTabPane.getSelectionModel().select(0);
+        if (bundle != null && filterTabPane.getTabs().contains(bundle.modeTab)) {
+            org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(bundle.datasetId);
+            filterTabPane.getSelectionModel().select(bundle.modeTab);
+            syncActiveSignalPointers();
+            if (bundle.toolTabPane != null && !bundle.toolTabPane.getTabs().isEmpty()) {
+                bundle.toolTabPane.getSelectionModel().select(0);
+            }
         }
     }
 
     /** Refresh Signal Value kinds after opening BAM companions / tables. */
     public void refreshSignalSources() {
-        if (signalWorkspace == null) {
-            installSignalModeWorkspace();
-        }
+        org.baseplayer.analysis.signal.SignalDatasetCoordinator.ensureDatasetsForOpenTracks();
+        syncSignalDatasetTabs();
         updateModeTabVisibility();
+        syncActiveSignalPointers();
         if (signalWorkspace != null) {
             signalWorkspace.refreshFromData();
+        }
+        updateExcelExportVisibilityFromSignal();
+    }
+
+    /** Refresh a specific dataset workspace after open. */
+    public void refreshSignalDataset(String datasetId) {
+        syncSignalDatasetTabs();
+        updateModeTabVisibility();
+        SignalModeBundle bundle = datasetId != null ? signalModes.get(datasetId) : null;
+        if (bundle != null) {
+            org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(datasetId);
+            filterTabPane.getSelectionModel().select(bundle.modeTab);
+            syncActiveSignalPointers();
+            bundle.workspace.refreshFromData();
+        } else {
+            refreshSignalSources();
         }
         updateExcelExportVisibilityFromSignal();
     }
@@ -870,15 +1021,17 @@ public class VariantManagerController implements Initializable {
     }
 
     private List<Button> annotateLockButtons() {
-        List<Button> buttons = new ArrayList<>(3);
+        List<Button> buttons = new ArrayList<>();
         if (annotateAllChromosomesButton != null) {
             buttons.add(annotateAllChromosomesButton);
         }
         if (svAnnotateAllChromosomesButton != null) {
             buttons.add(svAnnotateAllChromosomesButton);
         }
-        if (signalWorkspace != null && signalWorkspace.getAnnotateAllButton() != null) {
-            buttons.add(signalWorkspace.getAnnotateAllButton());
+        for (SignalModeBundle bundle : signalModes.values()) {
+            if (bundle.workspace != null && bundle.workspace.getAnnotateAllButton() != null) {
+                buttons.add(bundle.workspace.getAnnotateAllButton());
+            }
         }
         return buttons;
     }
@@ -2346,7 +2499,17 @@ public class VariantManagerController implements Initializable {
             }
         }
 
-        File chosen = chooser.showSaveDialog(stage != null ? stage : MainApp.stage);
+        // Open heatmaps sit above native dialogs unless lowered. Raise the same
+        // Stage that owns the chooser so Linux does not bury the save dialog.
+        javafx.stage.Window chooserOwner = stage != null ? stage : MainApp.stage;
+        org.baseplayer.analysis.ui.SignalPatternHeatmap.prepareForNativeDialog();
+        org.baseplayer.analysis.ui.SignalPatternHeatmap.raiseWindow(chooserOwner);
+        File chosen;
+        try {
+            chosen = chooser.showSaveDialog(chooserOwner);
+        } finally {
+            org.baseplayer.analysis.ui.SignalPatternHeatmap.restoreAfterNativeDialog(chooserOwner);
+        }
         if (chosen == null) {
             return;
         }
@@ -2646,15 +2809,27 @@ public class VariantManagerController implements Initializable {
     }
 
     private boolean isSignalModeSelected() {
-        return filterTabPane != null
-            && signalModeTab != null
-            && filterTabPane.getSelectionModel().getSelectedItem() == signalModeTab;
+        syncActiveSignalPointers();
+        Tab selected = filterTabPane != null
+            ? filterTabPane.getSelectionModel().getSelectedItem()
+            : null;
+        if (selected == null) {
+            return false;
+        }
+        for (SignalModeBundle bundle : signalModes.values()) {
+            if (bundle.modeTab == selected) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void handleSignalAnnotateAllChromosomes() {
+        syncActiveSignalPointers();
         if (signalWorkspace == null) {
             return;
         }
+        signalWorkspace.activateSessionSlice();
         refreshSignalAllChromosomesButton();
         org.baseplayer.analysis.ui.SignalAnalysisWorkspace.AllChromAction action =
             signalWorkspace.actionForToolTab(
@@ -2972,14 +3147,21 @@ public class VariantManagerController implements Initializable {
 
     /** Signal Sample Comparison Apply — updates Signal settings and refreshes annotation. */
     private void handleApplySignalComparison() {
+        syncActiveSignalPointers();
         if (signalSampleComparisonPanel == null) {
             return;
+        }
+        if (signalWorkspace != null) {
+            signalWorkspace.activateSessionSlice();
         }
         signalSampleComparisonPanel.syncSharedSampleRangeBoundsForSignal();
         org.baseplayer.analysis.signal.SignalComparisonSettings settings =
             new org.baseplayer.analysis.signal.SignalComparisonSettings();
         signalSampleComparisonPanel.writeTo(settings);
         org.baseplayer.analysis.AnalysisSession.get().setSignalComparison(settings);
+        org.baseplayer.analysis.ComparisonContext.get().writeToDocument(
+            org.baseplayer.project.ProjectSessionState.get().getDocument());
+        org.baseplayer.project.ProjectSessionState.get().markDirty();
         if (signalWorkspace != null) {
             signalWorkspace.refreshAnnotationFromSession();
             // Clear stale group comparison table; user re-Runs with filtered matrix.
@@ -3695,14 +3877,22 @@ public class VariantManagerController implements Initializable {
         }
         org.baseplayer.analysis.AnalysisSession session =
             org.baseplayer.analysis.AnalysisSession.get();
-        session.refilterAnnotationForVisibility();
-        if (signalWorkspace != null) {
+        String previousActive = session.getActiveSignalDatasetId();
+        for (SignalModeBundle bundle : signalModes.values()) {
+            bundle.workspace.activateSessionSlice();
+            session.refilterAnnotationForVisibility();
             org.baseplayer.analysis.groupstat.GroupStatResult signal = session.getAnnotationResult();
             if (signal != null) {
-                signalWorkspace.getResultTable().setResult(signal);
+                bundle.workspace.getResultTable().setResult(signal);
             }
-            signalWorkspace.refreshComparisonAfterGeneVisibility();
+            bundle.workspace.refreshComparisonAfterGeneVisibility();
         }
+        if (previousActive != null) {
+            session.setActiveSignalDatasetId(previousActive);
+        } else if (signalModes.isEmpty()) {
+            session.refilterAnnotationForVisibility();
+        }
+        syncActiveSignalPointers();
         if (pointEnrichmentPanel != null) {
             pointEnrichmentPanel.refreshAfterGeneVisibility();
         }
@@ -4543,7 +4733,7 @@ public class VariantManagerController implements Initializable {
     }
 
     /** Show/hide Point mutations vs Structural variants tabs based on loaded data. */
-    void updateModeTabVisibility() {
+    public void updateModeTabVisibility() {
         if (filterTabPane == null) {
             return;
         }
@@ -4555,7 +4745,9 @@ public class VariantManagerController implements Initializable {
 
         boolean hasPoint = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.POINT);
         boolean hasSv = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.STRUCTURAL);
-        boolean hasSignal = VariantManagerWindow.hasComparableSignalData();
+        boolean hasSignalDatasets =
+            !org.baseplayer.analysis.signal.SignalDatasetRegistry.get().isEmpty();
+        boolean hasSignal = hasSignalDatasets || VariantManagerWindow.hasComparableSignalData();
         // Only invent Point/SV tabs when nothing comparable is open yet (pre-load config).
         // Signal-only sessions must not show empty mutation tabs.
         if (!hasPoint && !hasSv && !hasSignal) {
@@ -4566,14 +4758,10 @@ public class VariantManagerController implements Initializable {
         boolean both = hasPoint && hasSv;
         setTabVisible(pointMutationsTab, hasPoint);
         setTabVisible(structuralVariantsTab, hasSv);
-        // Signal only when comparable numeric sources are open (BED / BigWig / methyl / tables).
-        if (hasSignal && signalModeTab == null) {
-            installSignalModeWorkspace();
-        }
-        setTabVisible(signalModeTab, hasSignal);
+        syncSignalDatasetTabs();
         VariantFilter current = vcfManager != null ? vcfManager.getCurrentFilter() : null;
         updateLohTabVisibility(current, false);
-        // Keep mode chrome when Signal is present (Point|SV|Signal) even if only one VCF class.
+        // Keep mode chrome when Signal is present (Point|SV|named datasets) even if only one VCF class.
         int modeCount = filterTabPane.getTabs().size();
         applyModeChrome(both || modeCount > 1);
 
@@ -4581,8 +4769,9 @@ public class VariantManagerController implements Initializable {
         Tab selected = filterTabPane.getSelectionModel().getSelectedItem();
         boolean selectedInvalid = selected == null || !filterTabPane.getTabs().contains(selected);
         if (selectedInvalid) {
-            if (hasSignal && signalModeTab != null && filterTabPane.getTabs().contains(signalModeTab)) {
-                filterTabPane.getSelectionModel().select(signalModeTab);
+            SignalModeBundle signal = activeSignalBundle();
+            if (signal != null && filterTabPane.getTabs().contains(signal.modeTab)) {
+                filterTabPane.getSelectionModel().select(signal.modeTab);
             } else if (pointMutationsTab != null && filterTabPane.getTabs().contains(pointMutationsTab)) {
                 filterTabPane.getSelectionModel().select(pointMutationsTab);
             } else if (structuralVariantsTab != null
@@ -4814,9 +5003,16 @@ public class VariantManagerController implements Initializable {
         }
         if (visible) {
             if (!filterTabPane.getTabs().contains(tab)) {
-                // Order: Point, SV, Signal (Signal last).
+                // Order: Point, SV, then named Signal datasets (last).
                 int index = 0;
-                if (tab == signalModeTab) {
+                boolean isSignalTab = false;
+                for (SignalModeBundle bundle : signalModes.values()) {
+                    if (bundle.modeTab == tab) {
+                        isSignalTab = true;
+                        break;
+                    }
+                }
+                if (isSignalTab) {
                     index = filterTabPane.getTabs().size();
                 } else if (tab == structuralVariantsTab && pointMutationsTab != null
                     && filterTabPane.getTabs().contains(pointMutationsTab)) {

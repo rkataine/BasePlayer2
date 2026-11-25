@@ -2,6 +2,7 @@ package org.baseplayer.analysis.signal;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -83,75 +84,68 @@ public final class SignalAnnotator {
       maxRows = Math.max(maxRows, ch.thresholds().getMaxRows());
     }
 
+    boolean alleleCnSplit = SignalChannels.isAlleleCnOnly(channels);
     GeneBiotypeVisibility visibility = GeneBiotypeVisibility.get();
     for (String unitId : bundle.unitIds()) {
       if (!visibility.isVisibleGeneName(unitId)) {
         continue;
       }
+      List<SampleTrack> roster = sampleTracks;
+      boolean anyPass = false;
+      for (SampleTrack track : roster) {
+        if (samplePassesAnyChannel(bundle, channels, unitId, track)) {
+          anyPass = true;
+          break;
+        }
+      }
+      if (!anyPass) {
+        // Sparse collect may leave only non-roster tracks; fall back to matrix tracks.
+        roster = new ArrayList<>(bundle.tracks());
+        for (SampleTrack track : roster) {
+          if (samplePassesAnyChannel(bundle, channels, unitId, track)) {
+            anyPass = true;
+            break;
+          }
+        }
+      }
+      if (!anyPass) {
+        continue;
+      }
+
       FeatureValueMatrix.Locus locus = null;
+      for (SignalChannel ch : channels) {
+        FeatureValueMatrix matrix = bundle.matrix(ch.id());
+        if (matrix != null) {
+          locus = matrix.locusOf(unitId);
+          if (locus != null) {
+            break;
+          }
+        }
+      }
+
+      if (alleleCnSplit) {
+        appendAlleleCnEventRows(
+            rows, channelValuesByUnit, bundle, channels, unitId, locus, roster);
+        continue;
+      }
+
       List<SampleTrack> deviantTracks = new ArrayList<>();
-      for (int i = 0; i < sampleTracks.size(); i++) {
-        SampleTrack track = sampleTracks.get(i);
+      for (SampleTrack track : roster) {
         if (samplePassesAnyChannel(bundle, channels, unitId, track)) {
           deviantTracks.add(track);
         }
       }
       if (deviantTracks.isEmpty()) {
-        // Sparse collect may leave only non-roster tracks; fall back to matrix tracks.
-        for (SampleTrack track : bundle.tracks()) {
-          if (samplePassesAnyChannel(bundle, channels, unitId, track)) {
-            deviantTracks.add(track);
-          }
-        }
-      }
-      if (deviantTracks.isEmpty()) {
         continue;
       }
 
-      Map<String, Double> channelMeans = new LinkedHashMap<>();
-      Double primaryMean = null;
-      for (SignalChannel ch : channels) {
-        FeatureValueMatrix matrix = bundle.matrix(ch.id());
-        if (matrix == null) {
-          continue;
-        }
-        if (locus == null) {
-          locus = matrix.locusOf(unitId);
-        }
-        // Means over observed (sparse) cells only — diploids were not stored.
-        List<Double> vals = matrix.valuesFor(unitId, sampleTracks);
-        if (vals.isEmpty()) {
-          vals = matrix.valuesFor(unitId, new ArrayList<>(matrix.tracks()));
-        }
-        double mean = GroupStatEngine.mean(vals);
-        if (Double.isFinite(mean)) {
-          channelMeans.put(ch.id(), mean);
-          if (primaryMean == null) {
-            primaryMean = mean;
-          }
-        }
-      }
+      Map<String, Double> channelMeans = channelMeansForTracks(bundle, channels, unitId, deviantTracks);
       if (channelMeans.isEmpty()) {
         continue;
       }
-
-      FeatureValueMatrix primary = bundle.primaryMatrix();
-      List<GroupStatResult.GroupSummary> summaries = new ArrayList<>();
-      if (deviantTracks.size() == 1) {
-        SampleTrack only = deviantTracks.get(0);
-        String name = only.getDisplayName() != null ? only.getDisplayName() : "Value";
-        List<Double> one = primary.valuesFor(unitId, List.of(only));
-        int nObs = primary.observedCount(unitId, List.of(only));
-        summaries.add(GroupStatEngine.summarizeGroup(-1, name, Math.max(1, nObs), nObs, one));
-      } else {
-        for (int i = 0; i < deviantTracks.size(); i++) {
-          SampleTrack track = deviantTracks.get(i);
-          List<Double> one = primary.valuesFor(unitId, List.of(track));
-          int nObs = primary.observedCount(unitId, List.of(track));
-          String name = track.getDisplayName() != null ? track.getDisplayName() : "Sample " + (i + 1);
-          summaries.add(GroupStatEngine.summarizeGroup(i, name, 1, nObs, one));
-        }
-      }
+      Double primaryMean = channelMeans.values().iterator().next();
+      List<GroupStatResult.GroupSummary> summaries =
+          sampleSummaries(bundle.primaryMatrix(), unitId, deviantTracks);
       channelValuesByUnit.put(unitId, Map.copyOf(channelMeans));
       rows.add(new GroupStatResult.Row(
           unitId,
@@ -170,7 +164,8 @@ public final class SignalAnnotator {
     rows.sort(Comparator
         .comparing((GroupStatResult.Row r) -> chromSortKey(r.chromosome()), String.CASE_INSENSITIVE_ORDER)
         .thenComparingLong(r -> Math.max(0L, r.start1Based()))
-        .thenComparing(r -> r.geneName() != null ? r.geneName() : "", String.CASE_INSENSITIVE_ORDER));
+        .thenComparing(r -> r.geneName() != null ? r.geneName() : "", String.CASE_INSENSITIVE_ORDER)
+        .thenComparingInt(r -> dirSortKey(SignalEventDirection.parseRowDirection(r.direction()))));
 
     if (maxRows > 0 && rows.size() > maxRows) {
       List<GroupStatResult.Row> byMag = new ArrayList<>(rows);
@@ -185,7 +180,9 @@ public final class SignalAnnotator {
     String score = scoreLabel != null && !scoreLabel.isBlank() ? scoreLabel : "Signal channels";
     String methodStrip = String.format(
         Locale.ROOT,
-        "Annotation: %s · %d channels · deviant samples only · Sorted by position",
+        alleleCnSplit
+            ? "Annotation: %s · %d channels · one row per gene×event · Sorted by position"
+            : "Annotation: %s · %d channels · deviant samples only · Sorted by position",
         score,
         channels.size());
     String summary = String.format(
@@ -204,6 +201,179 @@ public final class SignalAnnotator {
         methodStrip,
         channels,
         channelValuesByUnit);
+  }
+
+  /**
+   * Allele-CN: one annotation row per event type present at the gene
+   * (e.g. TP53 LOH n=5, TP53 Loss n=6, TP53 Gain n=1).
+   */
+  private static void appendAlleleCnEventRows(
+      List<GroupStatResult.Row> rows,
+      Map<String, Map<String, Double>> channelValuesByUnit,
+      FeatureValueBundle bundle,
+      List<SignalChannel> channels,
+      String geneUnitId,
+      FeatureValueMatrix.Locus locus,
+      List<SampleTrack> roster) {
+    Map<SignalEventDirection, List<SampleTrack>> byDir = new EnumMap<>(SignalEventDirection.class);
+    for (SampleTrack track : roster) {
+      if (!samplePassesAnyChannel(bundle, channels, geneUnitId, track)) {
+        continue;
+      }
+      SignalEventDirection dir =
+          SignalEventDirection.fromBundleSample(bundle, channels, geneUnitId, track);
+      if (dir == SignalEventDirection.NONE) {
+        continue;
+      }
+      byDir.computeIfAbsent(dir, d -> new ArrayList<>()).add(track);
+    }
+    for (SignalEventDirection dir : SignalEventDirection.filterTypes()) {
+      List<SampleTrack> typeTracks = byDir.get(dir);
+      if (typeTracks == null || typeTracks.isEmpty()) {
+        continue;
+      }
+      Map<String, Double> channelMeans =
+          channelMeansForTracks(bundle, channels, geneUnitId, typeTracks);
+      if (channelMeans.isEmpty()) {
+        continue;
+      }
+      Double primaryMean = channelMeans.values().iterator().next();
+      List<GroupStatResult.GroupSummary> summaries =
+          sampleSummaries(bundle.primaryMatrix(), geneUnitId, typeTracks);
+      String rowUnitId = SignalEventDirection.rowUnitId(geneUnitId, dir);
+      channelValuesByUnit.put(rowUnitId, Map.copyOf(channelMeans));
+      rows.add(new GroupStatResult.Row(
+          rowUnitId,
+          geneUnitId,
+          locus != null ? locus.chromosome() : null,
+          locus != null ? locus.start1Based() : 0L,
+          locus != null ? locus.end1Based() : 0L,
+          summaries,
+          primaryMean,
+          null,
+          null,
+          "annotation",
+          dir.name()));
+    }
+  }
+
+  private static Map<String, Double> channelMeansForTracks(
+      FeatureValueBundle bundle,
+      List<SignalChannel> channels,
+      String unitId,
+      List<SampleTrack> tracks) {
+    Map<String, Double> channelMeans = new LinkedHashMap<>();
+    for (SignalChannel ch : channels) {
+      FeatureValueMatrix matrix = bundle.matrix(ch.id());
+      if (matrix == null) {
+        continue;
+      }
+      List<Double> vals = matrix.valuesFor(unitId, tracks);
+      double mean = GroupStatEngine.mean(vals);
+      if (Double.isFinite(mean)) {
+        channelMeans.put(ch.id(), mean);
+      }
+    }
+    return channelMeans;
+  }
+
+  private static List<GroupStatResult.GroupSummary> sampleSummaries(
+      FeatureValueMatrix primary, String unitId, List<SampleTrack> tracks) {
+    List<GroupStatResult.GroupSummary> summaries = new ArrayList<>();
+    if (primary == null || tracks == null || tracks.isEmpty()) {
+      return summaries;
+    }
+    if (tracks.size() == 1) {
+      SampleTrack only = tracks.get(0);
+      String name = only.getDisplayName() != null ? only.getDisplayName() : "Value";
+      List<Double> one = primary.valuesFor(unitId, List.of(only));
+      int nObs = primary.observedCount(unitId, List.of(only));
+      summaries.add(GroupStatEngine.summarizeGroup(-1, name, Math.max(1, nObs), nObs, one));
+      return summaries;
+    }
+    for (int i = 0; i < tracks.size(); i++) {
+      SampleTrack track = tracks.get(i);
+      List<Double> one = primary.valuesFor(unitId, List.of(track));
+      int nObs = primary.observedCount(unitId, List.of(track));
+      String name = track.getDisplayName() != null ? track.getDisplayName() : "Sample " + (i + 1);
+      summaries.add(GroupStatEngine.summarizeGroup(i, name, 1, nObs, one));
+    }
+    return summaries;
+  }
+
+  private static int dirSortKey(SignalEventDirection dir) {
+    if (dir == null) {
+      return 99;
+    }
+    return switch (dir) {
+      case GAIN -> 0;
+      case LOSS -> 1;
+      case LOH -> 2;
+      case NONE -> 99;
+    };
+  }
+
+  /**
+   * Samples that currently pass multi-channel annotation thresholds for {@code unitId}
+   * (same rules as {@link #annotateBundle}).
+   */
+  public static List<SampleTrack> deviantTracksForUnit(
+      FeatureValueBundle bundle,
+      List<SignalChannel> channels,
+      List<SampleTrack> tracks,
+      String unitId) {
+    if (bundle == null || unitId == null || unitId.isBlank()) {
+      return List.of();
+    }
+    List<SignalChannel> chans = channels != null && !channels.isEmpty()
+        ? channels
+        : bundle.channels();
+    if (chans.isEmpty()) {
+      return List.of();
+    }
+    List<SampleTrack> roster = tracks != null && !tracks.isEmpty()
+        ? tracks
+        : new ArrayList<>(bundle.tracks());
+    List<SampleTrack> out = new ArrayList<>();
+    for (SampleTrack track : roster) {
+      if (samplePassesAnyChannel(bundle, chans, unitId, track)) {
+        out.add(track);
+      }
+    }
+    if (out.isEmpty() && tracks != null && !tracks.isEmpty()) {
+      for (SampleTrack track : bundle.tracks()) {
+        if (samplePassesAnyChannel(bundle, chans, unitId, track)) {
+          out.add(track);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Samples that currently pass single-grid annotation thresholds for {@code unitId}
+   * (same rules as {@link #annotate}).
+   */
+  public static List<SampleTrack> deviantTracksForUnit(
+      ValueGrid matrix,
+      List<SampleTrack> tracks,
+      SignalValueThresholds thresholds,
+      String unitId) {
+    if (matrix == null || matrix.isEmpty() || unitId == null || unitId.isBlank()) {
+      return List.of();
+    }
+    SignalValueThresholds thr = thresholds != null ? thresholds : new SignalValueThresholds();
+    List<SampleTrack> roster = tracks != null && !tracks.isEmpty()
+        ? tracks
+        : new ArrayList<>(matrix.tracks());
+    List<SampleTrack> out = new ArrayList<>();
+    for (SampleTrack track : roster) {
+      Double v = matrix.get(unitId, track);
+      if (v != null && thr.passes(v)) {
+        out.add(track);
+      }
+    }
+    return out;
   }
 
   /** True when any channel has a finite value that passes its thresholds for this sample. */

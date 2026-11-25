@@ -206,10 +206,25 @@ public class ProjectDocument {
     public String role;
   }
 
+  /** One named Signal dataset (Analysis tab) for project save/load. */
+  public static class SignalDatasetSpec {
+    public String id;
+    public String displayName;
+    public String signalValueKind;
+    public List<String> trackNames = new ArrayList<>();
+    /** Nested settings for this dataset (same fields as legacy flat block). */
+    public AnalysisComparisonSpec settings = new AnalysisComparisonSpec();
+  }
+
   /** Analysis Manager Signal settings. Group id fields are a mirror only (always all groups). */
   public static class AnalysisComparisonSpec {
     public List<Integer> participatingGroupIds = new ArrayList<>();
     public Integer baselineGroupId;
+
+    /** Named Signal datasets (multi-tab). Empty → use legacy flat fields below. */
+    public List<SignalDatasetSpec> signalDatasets = new ArrayList<>();
+    /** Active dataset id when {@link #signalDatasets} is non-empty. */
+    public String activeSignalDatasetId;
 
     public String signalValueKind;
     public String comparisonUnit;
@@ -221,6 +236,12 @@ public class ProjectDocument {
     public Boolean requireBedScores;
 
     public Boolean thresholdsEnabled;
+    /** When null on load, inferred: minAbsLog2Fc &gt; 0 → on (legacy projects). */
+    public Boolean useMinAbsLog2Fc;
+    /** When null on load, defaults to true (q filter is the default cutoff). */
+    public Boolean useMaxQ;
+    /** When null on load, inferred: minNPerGroup &gt; 1 → on (legacy projects). */
+    public Boolean useMinNPerGroup;
     public Double minAbsLog2Fc;
     public Double maxQ;
     public Integer minNPerGroup;
@@ -235,6 +256,30 @@ public class ProjectDocument {
     public String effectMode;
     /** Drop features with mean below this before testing; 0 = off. */
     public Double minMeanPrefilter;
+
+    // --- Signal value thresholds (annotation Filters) ---
+    public Boolean valueThresholdsEnabled;
+    public Double valueMin;
+    public Double valueMax;
+    public Double valueMiddle;
+    public Double valueMinAbsFromMiddle;
+    public Integer valueMaxRows;
+    public Boolean valueLohOnly;
+
+    // --- Signal Sample Comparison ---
+    public Integer signalMinSharedSamples;
+    /** Null or omitted = unlimited. */
+    public Integer signalMaxSharedSamples;
+    public Boolean signalGeneLevel;
+    public Integer signalComparisonWindowBp;
+    /** {@link org.baseplayer.variant.VariantFilter.PresentMatchMode} name. */
+    public String signalPresentMatchMode;
+    public List<GroupRoleSpec> signalTagRoles = new ArrayList<>();
+    /**
+     * Allele-CN event types kept in annotation / Sample Comparison
+     * ({@code GAIN}, {@code LOSS}, {@code LOH}). Null/empty on load → all three.
+     */
+    public List<String> signalAllowedEventDirections = new ArrayList<>();
   }
 
   public static class SampleGroupSpec {

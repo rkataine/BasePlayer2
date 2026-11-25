@@ -18,10 +18,14 @@ import java.util.function.Supplier;
 
 import org.baseplayer.annotation.AnnotationData;
 import org.baseplayer.annotation.CosmicCensusEntry;
+import org.baseplayer.components.sidebars.SampleGroupDialog;
+import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.genome.gene.GeneLocation;
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.utils.ChromosomeNames;
+import org.baseplayer.utils.DrawColors;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantNode;
 import org.baseplayer.variant.VcfVariantType;
@@ -38,6 +42,8 @@ import javafx.geometry.Bounds;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -55,6 +61,8 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.stage.Window;
 
 /**
  * Shared Gene → Variant → Sample nested table look.
@@ -1116,7 +1124,8 @@ public abstract class AbstractNestedVariantTable {
         private static final double COL_POS = 110;
         private static final double COL_TYPES = 200;
         private static final double COL_COUNT = 64;
-        private static final double COL_SAMPLES = 72;
+        /** Sample count + Group… button on gene rows. */
+        private static final double COL_SAMPLES = 108;
         private static final double COL_AF = 70;
         private static final double COL_GNOMAD = 72;
         private static final double COL_CLINVAR = 56;
@@ -1294,6 +1303,75 @@ public abstract class AbstractNestedVariantTable {
                 }
             }
             return new ArrayList<>(tracks);
+        }
+
+        /** Gene Samples column: count + Group… (same UX as Signal annotation). */
+        private Node buildGeneSamplesCell(GeneGroup group, int sampleUnion) {
+            Label count = fixedCol(String.valueOf(sampleUnion), 28, "vn-summary");
+            Button btn = new Button("Group…");
+            btn.getStyleClass().add("vn-group-samples-btn");
+            btn.setFocusTraversable(false);
+            btn.setCursor(Cursor.HAND);
+            btn.setMinHeight(22);
+            btn.setPrefHeight(22);
+            btn.setMaxHeight(22);
+            btn.setStyle("-fx-font-size: 11px; -fx-padding: 0 6 0 6;");
+            Tooltip.install(btn, new Tooltip(
+                "Create a sample group from all samples with calls on this gene"));
+            btn.setOnAction(e -> promptGroupGeneSamples(group));
+
+            HBox cell = new HBox(6, count, btn);
+            cell.setAlignment(Pos.CENTER_LEFT);
+            cell.getStyleClass().add("vn-col");
+            bindWidth(cell, widths.samples);
+            return cell;
+        }
+
+        private void promptGroupGeneSamples(GeneGroup group) {
+            List<SampleTrack> tracks = tracksOf(group);
+            SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+            Window owner = list != null && list.getScene() != null
+                ? list.getScene().getWindow()
+                : null;
+            if (tracks.isEmpty() || registry == null) {
+                Alert alert = new Alert(Alert.AlertType.INFORMATION);
+                alert.setTitle("Group samples");
+                alert.setHeaderText(null);
+                alert.setContentText("No samples found for this gene.");
+                if (owner != null) {
+                    alert.initOwner(owner);
+                }
+                alert.showAndWait();
+                return;
+            }
+            String suggested = group != null && group.name != null && !group.name.isBlank()
+                ? group.name.trim()
+                : registry.suggestNextGroupName();
+            Color initial = DrawColors.SAMPLE_GROUP_COLORS[
+                registry.getSampleGroups().size() % DrawColors.SAMPLE_GROUP_COLORS.length];
+            SampleGroupDialog.show(owner, tracks.size(), suggested, initial).ifPresent(outcome -> {
+                if (outcome instanceof SampleGroupDialog.Outcome.Add add) {
+                    registry.createGroupForTracks(tracks, add.name(), add.color());
+                    if (add.tags() != null && !add.tags().isEmpty()) {
+                        registry.setTracksTags(tracks, add.tags());
+                    }
+                    GenomicCanvas.update.set(!GenomicCanvas.update.get());
+                }
+            });
+        }
+
+        private static boolean isUnderGroupSamplesButton(Object target) {
+            if (!(target instanceof Node node)) {
+                return false;
+            }
+            Node cur = node;
+            while (cur != null) {
+                if (cur instanceof Button b && b.getStyleClass().contains("vn-group-samples-btn")) {
+                    return true;
+                }
+                cur = cur.getParent();
+            }
+            return false;
         }
 
         private void setSort(GeneSort mode) {
@@ -2143,7 +2221,7 @@ public abstract class AbstractNestedVariantTable {
             cols.add(fixedCol(formatGeneChromosome(group), widths.chr, "vn-summary"), widths.chr);
             cols.add(fixedCol(String.valueOf(group.variants.size()), widths.vars, "vn-summary"), widths.vars);
             cols.add(buildTypeCounts(group), widths.types);
-            cols.add(fixedCol(String.valueOf(sampleUnion), widths.samples, "vn-summary"), widths.samples);
+            cols.add(buildGeneSamplesCell(group, sampleUnion), widths.samples);
             cols.add(fixedCol(af, widths.af, "vn-summary"), widths.af);
             if (group.descriptionLoaded
                     && group.description != null
@@ -2456,12 +2534,18 @@ public abstract class AbstractNestedVariantTable {
                     if (e.getClickCount() >= 2) {
                         return;
                     }
+                    if (isUnderGroupSamplesButton(e.getTarget())) {
+                        return;
+                    }
                     onToggle.run();
                     e.consume();
                 });
             }
             row.addEventHandler(MouseEvent.MOUSE_CLICKED, e -> {
                 if (e.getButton() != MouseButton.PRIMARY || e.isConsumed()) {
+                    return;
+                }
+                if (isUnderGroupSamplesButton(e.getTarget())) {
                     return;
                 }
                 if (Boolean.TRUE.equals(onRowClick.apply(e))) {

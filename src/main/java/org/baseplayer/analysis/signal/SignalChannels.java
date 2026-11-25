@@ -15,21 +15,55 @@ public final class SignalChannels {
   private SignalChannels() {}
 
   /**
+   * True when every channel is allele-CN (typical ASCAT/FACETS Minor+Major pair).
+   * Those tables use multi-channel {@code TABLE_VALUES} with Gain/Loss/LOH type filters.
+   */
+  public static boolean isAlleleCnOnly(List<SignalChannel> channels) {
+    if (channels == null || channels.isEmpty()) {
+      return false;
+    }
+    for (SignalChannel ch : channels) {
+      if (ch == null || ch.type() != SignalValueType.ALLELE_CN) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Derive channels from the first usable mapped table.
    * Minor+Major → two {@link SignalValueType#ALLELE_CN} channels;
+   * Salmon gene matrix (TPM+NumReads) → two {@link SignalValueType#EXPRESSION} channels;
+   * single-value gene matrices stay channel-less (CompactTableGrid SSOT);
    * VALUE/SCORE → one {@link SignalValueType#RAW} channel.
    */
   public static List<SignalChannel> fromTable(MappedTableData table) {
     if (table == null || table.getMapping() == null) {
       return List.of();
     }
-    // Gene/region matrices: one value per sample track — use MappedTableValueSource
-    // with unit ids (not MultiChannelMappedTableSource / getRows materialization).
+    MappedTableColumnMapping mapping = table.getMapping();
+    String[] headers = table.getHeaders();
+    // Dual-channel gene matrix (Salmon TPM + NumReads).
+    if (table.isIntervalBars() && table.hasCompactSecondary()
+        && mapping.has(MappedTableColumnRole.VALUE)
+        && mapping.has(MappedTableColumnRole.SCORE)) {
+      List<SignalChannel> out = new ArrayList<>(2);
+      out.add(channel(
+          "tpm",
+          headerOr(headers, mapping, MappedTableColumnRole.VALUE, "TPM"),
+          SignalValueType.EXPRESSION,
+          MappedTableColumnRole.VALUE));
+      out.add(channel(
+          "numReads",
+          headerOr(headers, mapping, MappedTableColumnRole.SCORE, "NumReads"),
+          SignalValueType.EXPRESSION,
+          MappedTableColumnRole.SCORE));
+      return List.copyOf(out);
+    }
+    // Single-value gene/region matrices: CompactTableGrid / MappedTableValueSource.
     if (table.isIntervalBars()) {
       return List.of();
     }
-    MappedTableColumnMapping mapping = table.getMapping();
-    String[] headers = table.getHeaders();
     List<SignalChannel> out = new ArrayList<>();
     if (mapping.hasAlleleCn()) {
       out.add(channel(

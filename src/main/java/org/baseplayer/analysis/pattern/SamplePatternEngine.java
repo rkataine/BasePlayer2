@@ -3,11 +3,15 @@ package org.baseplayer.analysis.pattern;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.analysis.AnalysisMode;
+import org.baseplayer.analysis.ComparisonContext;
 import org.baseplayer.analysis.EffectMode;
 import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.grid.ValueGrid;
@@ -42,11 +46,39 @@ public final class SamplePatternEngine {
       List<String> selectedFeatures,
       GroupStatResult markers,
       String summary,
-      /** Dendrogram leaf order: indices into {@link #tracks()}. */
+      /** Dendrogram / cohort leaf order: indices into {@link #tracks()}. */
       int[] leafOrder,
       /** Rows = samples (same order as {@link #tracks()}), cols = {@link #selectedFeatures()}. */
       double[][] sampleFeature,
-      boolean zScored) {
+      boolean zScored,
+      /**
+       * Optional labels for {@link #clusterOfTrack()} ids (Pattern 1…k or group names).
+       * Empty → heatmap falls back to {@code Pattern N}.
+       */
+      List<String> clusterLabels) {
+    public Result(
+        List<SampleTrack> tracks,
+        int[] clusterOfTrack,
+        int k,
+        List<String> selectedFeatures,
+        GroupStatResult markers,
+        String summary,
+        int[] leafOrder,
+        double[][] sampleFeature,
+        boolean zScored) {
+      this(
+          tracks,
+          clusterOfTrack,
+          k,
+          selectedFeatures,
+          markers,
+          summary,
+          leafOrder,
+          sampleFeature,
+          zScored,
+          List.of());
+    }
+
     public List<SampleTrack> tracksInCluster(int cluster) {
       List<SampleTrack> out = new ArrayList<>();
       if (tracks == null || clusterOfTrack == null) {
@@ -65,6 +97,17 @@ public final class SamplePatternEngine {
           && selectedFeatures != null && selectedFeatures.size() >= 2
           && sampleFeature != null && sampleFeature.length == tracks.size()
           && leafOrder != null && leafOrder.length == tracks.size();
+    }
+
+    /** Display name for a cluster / cohort id. */
+    public String clusterLabel(int cluster) {
+      if (clusterLabels != null && cluster >= 0 && cluster < clusterLabels.size()) {
+        String name = clusterLabels.get(cluster);
+        if (name != null && !name.isBlank()) {
+          return name;
+        }
+      }
+      return "Pattern " + (cluster + 1);
     }
   }
 
@@ -147,7 +190,7 @@ public final class SamplePatternEngine {
 
   private static Result emptyResult(String summary) {
     return new Result(List.of(), new int[0], 0, List.of(), null, summary,
-        new int[0], new double[0][0], true);
+        new int[0], new double[0][0], true, List.of());
   }
 
   private static int[] identityOrder(int n) {
@@ -156,6 +199,79 @@ public final class SamplePatternEngine {
       order[i] = i;
     }
     return order;
+  }
+
+  /**
+   * Heatmap payload from a Group comparison result: DE features × samples,
+   * columns ordered by comparison cohort, z-scored values.
+   */
+  public static Result fromGroupComparison(
+      ValueGrid grid,
+      SampleRegistry registry,
+      List<Integer> groupIds,
+      GroupStatResult deResult) {
+    if (grid == null || grid.isEmpty() || registry == null
+        || groupIds == null || groupIds.size() < 2
+        || deResult == null || deResult.rows() == null || deResult.rows().size() < 2) {
+      return emptyResult("Need ≥2 groups and ≥2 DE features for heatmap");
+    }
+
+    List<String> features = new ArrayList<>();
+    for (GroupStatResult.Row row : deResult.rows()) {
+      if (row == null || row.unitId() == null || row.unitId().isBlank()) {
+        continue;
+      }
+      features.add(row.unitId());
+      if (features.size() >= 5_000) {
+        break;
+      }
+    }
+    if (features.size() < 2) {
+      return emptyResult("Need ≥2 DE features for heatmap");
+    }
+
+    List<String> labels = new ArrayList<>(groupIds.size());
+    List<SampleTrack> tracks = new ArrayList<>();
+    List<Integer> clusterOf = new ArrayList<>();
+    Map<SampleTrack, Boolean> seen = new IdentityHashMap<>();
+    for (int g = 0; g < groupIds.size(); g++) {
+      int groupId = groupIds.get(g);
+      labels.add(ComparisonContext.groupName(registry, groupId));
+      for (SampleTrack track : ComparisonContext.tracksForGroup(registry, groupId)) {
+        if (track == null || seen.put(track, Boolean.TRUE) != null) {
+          continue;
+        }
+        tracks.add(track);
+        clusterOf.add(g);
+      }
+    }
+    if (tracks.size() < 2) {
+      return emptyResult("Need ≥2 samples in compared groups");
+    }
+
+    int[] clusters = new int[clusterOf.size()];
+    for (int i = 0; i < clusterOf.size(); i++) {
+      clusters[i] = clusterOf.get(i);
+    }
+    // Stable cohort order: already appended group-by-group.
+    int[] leafOrder = identityOrder(tracks.size());
+    double[][] matrix = buildSampleFeatureMatrix(grid, tracks, features, true);
+    String summary = String.format(Locale.ROOT,
+        "Group comparison heatmap: %d features · %d samples · %d groups",
+        features.size(),
+        tracks.size(),
+        groupIds.size());
+    return new Result(
+        List.copyOf(tracks),
+        clusters,
+        groupIds.size(),
+        List.copyOf(features),
+        deResult,
+        summary,
+        leafOrder,
+        matrix,
+        true,
+        List.copyOf(labels));
   }
 
   private record FeatureOrder(List<String> features, double[][] matrix) {}

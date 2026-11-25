@@ -27,10 +27,17 @@ public final class MappedTableData {
    */
   private final boolean intervalBars;
   private final SharedMatrixLoci sharedLoci;
-  /** Parallel to {@link #sharedLoci}; {@link Float#NaN} = missing / masked. */
+  /** Parallel to {@link #sharedLoci}; {@link Float#NaN} = missing / masked. Primary VALUE. */
   private final float[] compactValues;
+  /**
+   * Optional second compact channel (e.g. Salmon NumReads as SCORE), same length as
+   * {@link #compactValues}. Null for single-value matrices.
+   */
+  private final float[] compactSecondary;
   /** Clone of loaded values before threshold masking; null until first mask. */
   private float[] rawBackup;
+  /** Clone of secondary before masking; null until first secondary mask. */
+  private float[] rawSecondaryBackup;
 
   public MappedTableData(
       Path path,
@@ -38,7 +45,7 @@ public final class MappedTableData {
       MappedTableColumnMapping mapping,
       String[] headers,
       List<MappedTableRow> rows) {
-    this(path, name, mapping, headers, rows, false, null, null);
+    this(path, name, mapping, headers, rows, false, null, null, null);
   }
 
   private MappedTableData(
@@ -49,7 +56,8 @@ public final class MappedTableData {
       List<MappedTableRow> rows,
       boolean intervalBars,
       SharedMatrixLoci sharedLoci,
-      float[] compactValues) {
+      float[] compactValues,
+      float[] compactSecondary) {
     this.path = path;
     this.name = name != null ? name : (path != null && path.getFileName() != null
         ? path.getFileName().toString()
@@ -62,11 +70,16 @@ public final class MappedTableData {
       if (compactValues == null || compactValues.length != sharedLoci.size()) {
         throw new IllegalArgumentException("compact values length must match shared loci");
       }
+      if (compactSecondary != null && compactSecondary.length != sharedLoci.size()) {
+        throw new IllegalArgumentException("compact secondary length must match shared loci");
+      }
       this.compactValues = compactValues;
+      this.compactSecondary = compactSecondary;
       this.rows = List.of();
       this.rowsByChrom = Map.of();
     } else {
       this.compactValues = null;
+      this.compactSecondary = null;
       this.rows = rows != null ? List.copyOf(rows) : List.of();
       this.rowsByChrom = indexByChrom(this.rows);
     }
@@ -84,7 +97,24 @@ public final class MappedTableData {
       SharedMatrixLoci loci,
       float[] values) {
     return new MappedTableData(
-        path, sampleName, mapping, headers, List.of(), true, loci, values);
+        path, sampleName, mapping, headers, List.of(), true, loci, values, null);
+  }
+
+  /**
+   * Compact gene-matrix sample with primary VALUE (e.g. TPM) and secondary SCORE
+   * (e.g. NumReads) on the same {@link SharedMatrixLoci}.
+   */
+  public static MappedTableData geneMatrixSample(
+      Path path,
+      String sampleName,
+      MappedTableColumnMapping mapping,
+      String[] headers,
+      SharedMatrixLoci loci,
+      float[] primaryValues,
+      float[] secondaryValues) {
+    return new MappedTableData(
+        path, sampleName, mapping, headers, List.of(), true, loci,
+        primaryValues, secondaryValues);
   }
 
   public Path getPath() {
@@ -122,6 +152,15 @@ public final class MappedTableData {
 
   public float[] compactValues() {
     return compactValues;
+  }
+
+  /** Secondary compact channel (SCORE / NumReads), or null. */
+  public float[] compactSecondary() {
+    return compactSecondary;
+  }
+
+  public boolean hasCompactSecondary() {
+    return compactSecondary != null;
   }
 
   /** True when each locus already carries a gene/feature unit id. */
@@ -212,12 +251,31 @@ public final class MappedTableData {
     return compactValues[locusIndex];
   }
 
+  /** Compact value for a payload role (VALUE / SCORE). */
+  public float compactValue(int locusIndex, MappedTableColumnRole role) {
+    if (role == null || role == MappedTableColumnRole.VALUE) {
+      return compactValue(locusIndex);
+    }
+    if (role == MappedTableColumnRole.SCORE) {
+      if (compactSecondary == null
+          || locusIndex < 0
+          || locusIndex >= compactSecondary.length) {
+        return Float.NaN;
+      }
+      return compactSecondary[locusIndex];
+    }
+    return Float.NaN;
+  }
+
   /** Snapshot loaded values once so threshold Apply can restore then re-mask. */
   public void ensureRawBackup() {
     if (compactValues == null || rawBackup != null) {
       return;
     }
     rawBackup = compactValues.clone();
+    if (compactSecondary != null && rawSecondaryBackup == null) {
+      rawSecondaryBackup = compactSecondary.clone();
+    }
   }
 
   /** Restore working values from the pre-mask backup (no-op if never masked). */
@@ -226,6 +284,9 @@ public final class MappedTableData {
       return;
     }
     System.arraycopy(rawBackup, 0, compactValues, 0, compactValues.length);
+    if (compactSecondary != null && rawSecondaryBackup != null) {
+      System.arraycopy(rawSecondaryBackup, 0, compactSecondary, 0, compactSecondary.length);
+    }
   }
 
   public boolean hasRawBackup() {
@@ -235,6 +296,7 @@ public final class MappedTableData {
   /**
    * Restore from raw (if any), then set working cells to {@link Float#NaN} where
    * {@code fail} is true. Finite cells that pass stay at their raw values.
+   * Applies to the primary VALUE channel only (canvas / single-channel path).
    */
   public void applyValueMask(java.util.function.DoublePredicate fail) {
     if (compactValues == null || fail == null) {
@@ -253,6 +315,13 @@ public final class MappedTableData {
   }
 
   private MappedTableRow toRow(int i, float v) {
+    Double score = null;
+    if (compactSecondary != null && i >= 0 && i < compactSecondary.length) {
+      float s = compactSecondary[i];
+      if (Float.isFinite(s)) {
+        score = (double) s;
+      }
+    }
     return new MappedTableRow(
         sharedLoci.chrom(i),
         sharedLoci.start1Based(i),
@@ -262,7 +331,7 @@ public final class MappedTableData {
         null,
         null,
         null,
-        null);
+        score);
   }
 
   private static Map<String, List<MappedTableRow>> indexByChrom(List<MappedTableRow> all) {

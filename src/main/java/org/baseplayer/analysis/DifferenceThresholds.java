@@ -2,12 +2,16 @@ package org.baseplayer.analysis;
 
 /**
  * Post-stat filters so only meaningful differences are shown / painted / exported.
- * Direction flags always apply; numeric thresholds apply when {@link #isEnabled()}.
+ * Direction flags always apply when {@link #isEnabled()}; each numeric cutoff is
+ * optional via its own use-flag (default: only max q = 0.05).
  */
 public final class DifferenceThresholds {
 
   /** When false, every computed gene/feature row is shown (no numeric/direction cut). */
-  private boolean enabled = false;
+  private boolean enabled = true;
+  private boolean useMinAbsLog2Fc = false;
+  private boolean useMaxQ = true;
+  private boolean useMinNPerGroup = false;
   private double minAbsLog2Fc = 0.5;
   private double maxQ = 0.05;
   private int minNPerGroup = 2;
@@ -29,6 +33,30 @@ public final class DifferenceThresholds {
 
   public void setEnabled(boolean enabled) {
     this.enabled = enabled;
+  }
+
+  public boolean isUseMinAbsLog2Fc() {
+    return useMinAbsLog2Fc;
+  }
+
+  public void setUseMinAbsLog2Fc(boolean useMinAbsLog2Fc) {
+    this.useMinAbsLog2Fc = useMinAbsLog2Fc;
+  }
+
+  public boolean isUseMaxQ() {
+    return useMaxQ;
+  }
+
+  public void setUseMaxQ(boolean useMaxQ) {
+    this.useMaxQ = useMaxQ;
+  }
+
+  public boolean isUseMinNPerGroup() {
+    return useMinNPerGroup;
+  }
+
+  public void setUseMinNPerGroup(boolean useMinNPerGroup) {
+    this.useMinNPerGroup = useMinNPerGroup;
   }
 
   public double getMinAbsLog2Fc() {
@@ -90,6 +118,9 @@ public final class DifferenceThresholds {
   public DifferenceThresholds copy() {
     DifferenceThresholds t = new DifferenceThresholds();
     t.enabled = enabled;
+    t.useMinAbsLog2Fc = useMinAbsLog2Fc;
+    t.useMaxQ = useMaxQ;
+    t.useMinNPerGroup = useMinNPerGroup;
     t.minAbsLog2Fc = minAbsLog2Fc;
     t.maxQ = maxQ;
     t.minNPerGroup = minNPerGroup;

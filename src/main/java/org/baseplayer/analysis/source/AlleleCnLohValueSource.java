@@ -1,6 +1,5 @@
 package org.baseplayer.analysis.source;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -80,7 +79,7 @@ public final class AlleleCnLohValueSource implements ValueSource {
         skipped++;
         continue;
       }
-      Map<String, List<Double>> perGene = new HashMap<>();
+      Map<String, BestScore> perGene = new HashMap<>();
       Map<String, Gene> geneMeta = new HashMap<>();
       List<MappedTableRow> rows = table.getRows();
       for (int i = 0; i < rows.size(); i++) {
@@ -118,7 +117,11 @@ public final class AlleleCnLohValueSource implements ValueSource {
               geneMeta.put(geneName, gene);
             }
           }
-          perGene.computeIfAbsent(geneName, k -> new ArrayList<>()).add(score);
+          long span = GeneOverlapIndex.overlapBp(row.start1Based(), row.end1Based(), gene);
+          BestScore prev = perGene.get(geneName);
+          if (prev == null || span > prev.span()) {
+            perGene.put(geneName, new BestScore(span, score));
+          }
         }
       }
       if (perGene.isEmpty()) {
@@ -126,15 +129,8 @@ public final class AlleleCnLohValueSource implements ValueSource {
         continue;
       }
       used++;
-      for (Map.Entry<String, List<Double>> e : perGene.entrySet()) {
-        double collapsed = FeatureValueMatrix.collapse(e.getValue(), effective.getAggregation());
-        if (Double.isNaN(collapsed)) {
-          collapsed = e.getValue().stream().mapToDouble(Double::doubleValue).max().orElse(Double.NaN);
-        }
-        if (Double.isNaN(collapsed)) {
-          continue;
-        }
-        matrix.put(e.getKey(), track, collapsed);
+      for (Map.Entry<String, BestScore> e : perGene.entrySet()) {
+        matrix.put(e.getKey(), track, e.getValue().score());
         Gene gene = geneMeta.get(e.getKey());
         if (gene != null) {
           matrix.putLocus(e.getKey(), gene.chrom(), gene.start(), gene.end());
@@ -174,6 +170,9 @@ public final class AlleleCnLohValueSource implements ValueSource {
   public static boolean trackHasAlleleCn(SampleTrack track) {
     return firstAlleleCnTable(track) != null;
   }
+
+  /** Longest overlapping segment wins so the stored score is one file value, not a mean. */
+  private record BestScore(long span, double score) {}
 
   private static AlleleCnSegment toSegment(MappedTableRow row) {
     return new AlleleCnSegment(

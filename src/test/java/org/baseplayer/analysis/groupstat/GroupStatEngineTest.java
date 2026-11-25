@@ -7,13 +7,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.baseplayer.analysis.EffectMode;
 import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.signal.SignalScaleInfer;
 import org.baseplayer.analysis.signal.SignalValueType;
+import org.baseplayer.samples.SampleGroup;
+import org.baseplayer.samples.SampleTrack;
+import org.baseplayer.services.SampleRegistry;
+
+import javafx.application.Platform;
 
 class GroupStatEngineTest {
+
+  @BeforeAll
+  static void initJavaFx() {
+    try {
+      Platform.startup(() -> {});
+    } catch (IllegalStateException ignored) {
+      // toolkit already started
+    }
+  }
 
   @Test
   void welchDetectsMeanDifference() {
@@ -145,11 +160,96 @@ class GroupStatEngineTest {
   @Test
   void autoTestPrefersModeratedForContinuous() {
     FeatureValueMatrix matrix = new FeatureValueMatrix();
-    // no missingDefault → continuous
+    // no missingDefault → continuous (same concrete test for 2 or 3+; engine is pairwise)
     assertEquals(GroupStatTest.MODERATED, GroupStatTest.AUTO.resolve(matrix, 2));
-    assertEquals(GroupStatTest.RANK, GroupStatTest.AUTO.resolve(matrix, 3));
+    assertEquals(GroupStatTest.MODERATED, GroupStatTest.AUTO.resolve(matrix, 3));
+    assertEquals("Pairwise Moderated t-test", GroupStatTest.AUTO.resolvedLabel(matrix, 3));
     matrix.setMissingDefault(0.0);
     assertEquals(GroupStatTest.FISHER, GroupStatTest.AUTO.resolve(matrix, 2));
+    assertEquals("Pairwise Fisher exact", GroupStatTest.AUTO.resolvedLabel(matrix, 3));
+  }
+
+  @Test
+  void pairwiseKeepsUnionOfSignificantGroups() {
+    SampleRegistry registry = new SampleRegistry();
+    SampleGroup gA = registry.createSampleGroup("A");
+    SampleGroup gB = registry.createSampleGroup("B");
+    SampleGroup gC = registry.createSampleGroup("C");
+
+    List<SampleTrack> tracksA = new ArrayList<>();
+    List<SampleTrack> tracksB = new ArrayList<>();
+    List<SampleTrack> tracksC = new ArrayList<>();
+    for (int i = 0; i < 6; i++) {
+      SampleTrack t = new SampleTrack("A" + i);
+      tracksA.add(t);
+      registry.getSampleTracks().add(t);
+    }
+    for (int i = 0; i < 6; i++) {
+      SampleTrack t = new SampleTrack("B" + i);
+      tracksB.add(t);
+      registry.getSampleTracks().add(t);
+    }
+    for (int i = 0; i < 6; i++) {
+      SampleTrack t = new SampleTrack("C" + i);
+      tracksC.add(t);
+      registry.getSampleTracks().add(t);
+    }
+    registry.setTracksExclusiveGroup(tracksA, gA.getId());
+    registry.setTracksExclusiveGroup(tracksB, gB.getId());
+    registry.setTracksExclusiveGroup(tracksC, gC.getId());
+
+    FeatureValueMatrix matrix = new FeatureValueMatrix();
+    // Small within-group noise so Welch variance is > 0.
+    // GeneX: A high, B+C low → A differs from both B and C (all three groups relevant).
+    for (int i = 0; i < tracksA.size(); i++) {
+      matrix.put("GeneX", tracksA.get(i), 10.0 + 0.05 * i);
+    }
+    for (int i = 0; i < tracksB.size(); i++) {
+      matrix.put("GeneX", tracksB.get(i), 1.0 + 0.05 * i);
+    }
+    for (int i = 0; i < tracksC.size(); i++) {
+      matrix.put("GeneX", tracksC.get(i), 1.1 + 0.05 * i);
+    }
+    // GeneY: only A vs B have values (C empty) → relevant groups should be A+B only.
+    for (int i = 0; i < tracksA.size(); i++) {
+      matrix.put("GeneY", tracksA.get(i), 8.0 + 0.05 * i);
+    }
+    for (int i = 0; i < tracksB.size(); i++) {
+      matrix.put("GeneY", tracksB.get(i), 0.5 + 0.05 * i);
+    }
+
+    GroupStatResult result = GroupStatEngine.compute(
+        org.baseplayer.analysis.AnalysisMode.SIGNAL,
+        matrix,
+        registry,
+        List.of(gA.getId(), gB.getId(), gC.getId()),
+        gA.getId(),
+        GroupStatTest.WELCH,
+        "test",
+        EffectMode.MEAN_DELTA,
+        SignalValueType.RAW,
+        0.0);
+
+    assertNotNull(result);
+    assertTrue(result.methodStrip().contains("Pairwise"), result.methodStrip());
+
+    GroupStatResult.Row geneX = result.rows().stream()
+        .filter(r -> "GeneX".equals(r.unitId()))
+        .findFirst()
+        .orElseThrow();
+    assertEquals(3, geneX.groups().size(), "A differs from B and C → all three groups");
+    assertTrue(geneX.pValue() != null && geneX.pValue() < 0.05, "p=" + geneX.pValue());
+
+    GroupStatResult.Row geneY = result.rows().stream()
+        .filter(r -> "GeneY".equals(r.unitId()))
+        .findFirst()
+        .orElseThrow();
+    assertEquals(2, geneY.groups().size(),
+        "C has no values → only A+B; got " + geneY.groups());
+    var geneYIds = geneY.groups().stream().map(GroupStatResult.GroupSummary::groupId).toList();
+    assertTrue(geneYIds.contains(gA.getId()) && geneYIds.contains(gB.getId()),
+        "expected A+B, got " + geneYIds);
+    assertTrue(!geneYIds.contains(gC.getId()), "C should be omitted, got " + geneYIds);
   }
 
   private static GroupStatResult.Row row(double p) {

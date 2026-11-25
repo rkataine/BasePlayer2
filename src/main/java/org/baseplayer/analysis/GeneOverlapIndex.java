@@ -77,6 +77,27 @@ public final class GeneOverlapIndex {
     return best;
   }
 
+  /**
+   * Inclusive overlap in base pairs between a segment and a gene.
+   * Uses the segment length when {@code gene} is null or the intervals do not meet.
+   */
+  public static long overlapBp(long segStart, long segEnd, Gene gene) {
+    long a0 = Math.min(segStart, segEnd);
+    long a1 = Math.max(segStart, segEnd);
+    long segLen = a1 - a0 + 1;
+    if (gene == null) {
+      return segLen;
+    }
+    long b0 = Math.min(gene.start(), gene.end());
+    long b1 = Math.max(gene.start(), gene.end());
+    long start = Math.max(a0, b0);
+    long end = Math.min(a1, b1);
+    if (end < start) {
+      return segLen;
+    }
+    return end - start + 1;
+  }
+
   /** All distinct gene names overlapping inclusive [start1, end1]. */
   public static List<String> overlappingGeneNames(
       String chromosome, long start1Based, long end1Based) {

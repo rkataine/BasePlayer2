@@ -98,9 +98,18 @@ public final class GroupStatExcelExport {
 
   /** All non-empty analysis modes currently in the session. */
   public static List<SheetSource> sheetSourcesFromSession() {
+    return sheetSourcesFromSession(AnalysisSession.get());
+  }
+
+  /**
+   * Sheets for every non-empty mode result plus the Signal annotation listing when present.
+   */
+  public static List<SheetSource> sheetSourcesFromSession(AnalysisSession session) {
     List<SheetSource> out = new ArrayList<>();
     Set<String> used = new LinkedHashSet<>();
-    AnalysisSession session = AnalysisSession.get();
+    if (session == null) {
+      return out;
+    }
     for (AnalysisMode mode : AnalysisMode.values()) {
       GroupStatResult result = session.getFilteredResult(mode);
       if (result == null || result.rows() == null || result.rows().isEmpty()) {
@@ -109,13 +118,35 @@ public final class GroupStatExcelExport {
       if (result == null || result.rows() == null || result.rows().isEmpty()) {
         continue;
       }
-      for (SheetSource sheet : sheetSources(result)) {
-        String name = uniqueName(sheet.name(), used);
-        used.add(name.toLowerCase(Locale.ROOT));
-        out.add(rename(sheet, name));
+      appendSheets(out, used, result);
+    }
+    GroupStatResult annotation = session.getAnnotationResult();
+    if (annotation != null
+        && annotation.rows() != null
+        && !annotation.rows().isEmpty()) {
+      // Prefer a stable sheet name; sheetSources() would label by mode (often SIGNAL).
+      List<SheetSource> annSheets = sheetSources(annotation);
+      if (!annSheets.isEmpty()) {
+        SheetSource results = rename(annSheets.get(0), uniqueName("Signals - annotation", used));
+        used.add(results.name().toLowerCase(Locale.ROOT));
+        out.add(results);
+        if (annSheets.size() > 1) {
+          SheetSource method = rename(annSheets.get(1), uniqueName("Signals method", used));
+          used.add(method.name().toLowerCase(Locale.ROOT));
+          out.add(method);
+        }
       }
     }
     return out;
+  }
+
+  private static void appendSheets(
+      List<SheetSource> out, Set<String> used, GroupStatResult result) {
+    for (SheetSource sheet : sheetSources(result)) {
+      String name = uniqueName(sheet.name(), used);
+      used.add(name.toLowerCase(Locale.ROOT));
+      out.add(rename(sheet, name));
+    }
   }
 
   private static SheetSource rename(SheetSource sheet, String name) {

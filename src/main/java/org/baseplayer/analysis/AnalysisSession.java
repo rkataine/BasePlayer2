@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,10 +26,13 @@ import org.baseplayer.analysis.groupstat.GroupStatEngine;
 import org.baseplayer.analysis.groupstat.GroupStatResult;
 import org.baseplayer.analysis.groupstat.GroupStatTest;
 import org.baseplayer.analysis.pattern.SamplePatternEngine;
+import org.baseplayer.analysis.signal.AlleleCnEventMatrix;
 import org.baseplayer.analysis.signal.SignalAnnotator;
 import org.baseplayer.analysis.signal.SignalChannel;
+import org.baseplayer.analysis.signal.SignalChannels;
 import org.baseplayer.analysis.signal.SignalComparisonFilter;
 import org.baseplayer.analysis.signal.SignalComparisonSettings;
+import org.baseplayer.analysis.signal.SignalEventDirection;
 import org.baseplayer.analysis.signal.SignalScaleInfer;
 import org.baseplayer.analysis.signal.SignalSourceSpec;
 import org.baseplayer.analysis.signal.SignalValueThresholds;
@@ -36,6 +40,8 @@ import org.baseplayer.analysis.signal.SignalValueType;
 
 /**
  * Holds last analysis results per mode for tables and aggregate canvas sync.
+ * Signal state is sliced per {@link org.baseplayer.analysis.signal.SignalDataset};
+ * accessors operate on the active dataset buffer.
  */
 public final class AnalysisSession {
 
@@ -49,6 +55,11 @@ public final class AnalysisSession {
   /** Group ids hidden from aggregate stack rows (clickable row labels). */
   private final Set<Integer> hiddenAggregateGroupIds = new HashSet<>();
   private AnalysisMode activeCanvasMode = AnalysisMode.SIGNAL;
+
+  /** Per-dataset Signal state; active buffer fields below mirror the selected slice. */
+  private final Map<String, SignalSlice> signalSlices = new LinkedHashMap<>();
+  private String activeSignalDatasetId;
+
   private DifferenceThresholds thresholds = new DifferenceThresholds();
   private SignalValueThresholds valueThresholds = new SignalValueThresholds();
   private GroupStatResult annotationResult;
@@ -71,6 +82,151 @@ public final class AnalysisSession {
 
   public static AnalysisSession get() {
     return INSTANCE;
+  }
+
+  /** Ensure an empty slice exists for {@code datasetId}. */
+  public synchronized void ensureSignalSlice(String datasetId) {
+    if (datasetId == null || datasetId.isBlank()) {
+      return;
+    }
+    signalSlices.computeIfAbsent(datasetId, id -> new SignalSlice());
+  }
+
+  public synchronized String getActiveSignalDatasetId() {
+    return activeSignalDatasetId;
+  }
+
+  /**
+   * Switch the active Signal buffer to {@code datasetId}, stashing the previous
+   * active slice first.
+   */
+  public synchronized void setActiveSignalDatasetId(String datasetId) {
+    if (datasetId != null && datasetId.equals(activeSignalDatasetId)) {
+      return;
+    }
+    stashActiveSlice();
+    activeSignalDatasetId = datasetId;
+    if (datasetId != null) {
+      ensureSignalSlice(datasetId);
+      restoreSlice(datasetId);
+    } else {
+      resetActiveSignalBuffer();
+    }
+    generation.set(generation.get() + 1);
+    notifyListeners();
+  }
+
+  /** Remove one dataset slice (tab closed / emptied). */
+  public synchronized void clearSignalSlice(String datasetId) {
+    if (datasetId == null) {
+      return;
+    }
+    signalSlices.remove(datasetId);
+    if (datasetId.equals(activeSignalDatasetId)) {
+      activeSignalDatasetId = null;
+      resetActiveSignalBuffer();
+      results.remove(AnalysisMode.SIGNAL);
+      filteredResults.remove(AnalysisMode.SIGNAL);
+      matrices.remove(AnalysisMode.SIGNAL);
+    }
+    generation.set(generation.get() + 1);
+    notifyListeners();
+  }
+
+  public synchronized Set<String> signalSliceIds() {
+    return Set.copyOf(signalSlices.keySet());
+  }
+
+  private void stashActiveSlice() {
+    if (activeSignalDatasetId == null) {
+      return;
+    }
+    SignalSlice slice = signalSlices.computeIfAbsent(activeSignalDatasetId, id -> new SignalSlice());
+    slice.thresholds = thresholds != null ? thresholds.copy() : new DifferenceThresholds();
+    slice.valueThresholds = valueThresholds != null
+        ? valueThresholds.copy()
+        : new SignalValueThresholds();
+    slice.annotationResult = annotationResult;
+    slice.filteredAnnotationResult = filteredAnnotationResult;
+    slice.signalBundle = signalBundle;
+    slice.signalGrid = signalGrid;
+    slice.signalComparison = signalComparison != null
+        ? signalComparison.copy()
+        : new SignalComparisonSettings();
+    slice.groupStatTest = groupStatTest;
+    slice.effectMode = effectMode;
+    slice.effectModeUserOverride = effectModeUserOverride;
+    slice.inferredValueType = inferredValueType;
+    slice.scaleDetectSummary = scaleDetectSummary;
+    slice.minMeanPrefilter = minMeanPrefilter;
+    slice.lastPatternResult = lastPatternResult;
+    slice.signalSpec = signalSpec != null ? signalSpec : new SignalSourceSpec();
+    slice.groupResult = results.get(AnalysisMode.SIGNAL);
+    slice.filteredGroupResult = filteredResults.get(AnalysisMode.SIGNAL);
+    slice.matrix = matrices.get(AnalysisMode.SIGNAL);
+  }
+
+  private void restoreSlice(String datasetId) {
+    SignalSlice slice = signalSlices.get(datasetId);
+    if (slice == null) {
+      resetActiveSignalBuffer();
+      results.remove(AnalysisMode.SIGNAL);
+      filteredResults.remove(AnalysisMode.SIGNAL);
+      matrices.remove(AnalysisMode.SIGNAL);
+      return;
+    }
+    thresholds = slice.thresholds != null ? slice.thresholds.copy() : new DifferenceThresholds();
+    valueThresholds = slice.valueThresholds != null
+        ? slice.valueThresholds.copy()
+        : new SignalValueThresholds();
+    annotationResult = slice.annotationResult;
+    filteredAnnotationResult = slice.filteredAnnotationResult;
+    signalBundle = slice.signalBundle;
+    signalGrid = slice.signalGrid;
+    signalComparison = slice.signalComparison != null
+        ? slice.signalComparison.copy()
+        : new SignalComparisonSettings();
+    groupStatTest = slice.groupStatTest != null ? slice.groupStatTest : GroupStatTest.AUTO;
+    effectMode = slice.effectMode != null ? slice.effectMode : EffectMode.AUTO;
+    effectModeUserOverride = slice.effectModeUserOverride;
+    inferredValueType = slice.inferredValueType != null ? slice.inferredValueType : SignalValueType.RAW;
+    scaleDetectSummary = slice.scaleDetectSummary != null ? slice.scaleDetectSummary : "";
+    minMeanPrefilter = slice.minMeanPrefilter;
+    lastPatternResult = slice.lastPatternResult;
+    signalSpec = slice.signalSpec != null ? slice.signalSpec : new SignalSourceSpec();
+    if (slice.groupResult != null) {
+      results.put(AnalysisMode.SIGNAL, slice.groupResult);
+    } else {
+      results.remove(AnalysisMode.SIGNAL);
+    }
+    if (slice.filteredGroupResult != null) {
+      filteredResults.put(AnalysisMode.SIGNAL, slice.filteredGroupResult);
+    } else {
+      filteredResults.remove(AnalysisMode.SIGNAL);
+    }
+    if (slice.matrix != null) {
+      matrices.put(AnalysisMode.SIGNAL, slice.matrix);
+    } else {
+      matrices.remove(AnalysisMode.SIGNAL);
+    }
+  }
+
+  private void resetActiveSignalBuffer() {
+    thresholds = new DifferenceThresholds();
+    valueThresholds = new SignalValueThresholds();
+    annotationResult = null;
+    filteredAnnotationResult = null;
+    signalBundle = null;
+    signalGrid = null;
+    signalComparison = new SignalComparisonSettings();
+    groupStatTest = GroupStatTest.AUTO;
+    effectMode = EffectMode.AUTO;
+    effectModeUserOverride = false;
+    inferredValueType = SignalValueType.RAW;
+    scaleDetectSummary = "";
+    minMeanPrefilter = 0;
+    lastPatternResult = null;
+    signalSpec = new SignalSourceSpec();
   }
 
   public IntegerProperty generationProperty() {
@@ -161,6 +317,14 @@ public final class AnalysisSession {
     if (signalSpec != null) {
       this.signalSpec = signalSpec;
     }
+  }
+
+  /** Re-apply allele-CN type filters + Sample Comparison without recollecting. */
+  public synchronized void refilterSignalAnnotation() {
+    refilterAnnotation();
+    stashActiveSlice();
+    generation.set(generation.get() + 1);
+    notifyListeners();
   }
 
   public synchronized GroupStatTest getGroupStatTest() {
@@ -300,17 +464,21 @@ public final class AnalysisSession {
       this.thresholds = appliedThresholds.copy();
     }
     if (result != null) {
-      GroupStatResult afterThr = ThresholdFilter.apply(result, this.thresholds);
+      // Allele-CN event grids use gene::EVENT unitIds — expose geneName + Dir.
+      GroupStatResult tagged = mode == AnalysisMode.SIGNAL
+          ? AlleleCnEventMatrix.tagEventRows(result)
+          : result;
+      GroupStatResult afterThr = ThresholdFilter.apply(tagged, this.thresholds);
       // When filters are on (significant-only DE), keep a single slim copy —
       // do not retain the unfiltered row list in parallel. Gene-type visibility
       // is view-only (filteredResults) so legend toggles can restore rows.
-      GroupStatResult view = applyGeneVisibility(mode, afterThr != null ? afterThr : result);
+      GroupStatResult view = applyGeneVisibility(mode, afterThr != null ? afterThr : tagged);
       if (this.thresholds != null && this.thresholds.isEnabled() && afterThr != null) {
         results.put(mode, afterThr);
         filteredResults.put(mode, view != null ? view : afterThr);
       } else {
-        results.put(mode, result);
-        filteredResults.put(mode, view != null ? view : result);
+        results.put(mode, tagged);
+        filteredResults.put(mode, view != null ? view : tagged);
       }
     } else {
       results.remove(mode);
@@ -322,6 +490,7 @@ public final class AnalysisSession {
       matrices.remove(mode);
     }
     activeCanvasMode = mode;
+    stashActiveSlice();
     generation.set(generation.get() + 1);
     notifyListeners();
   }
@@ -390,9 +559,10 @@ public final class AnalysisSession {
     results.remove(mode);
     filteredResults.remove(mode);
     annotationResult = annotation;
-    filteredAnnotationResult = applySignalSampleComparison(annotation);
+    filteredAnnotationResult = applyAnnotationViewFilters(annotation);
     activeCanvasMode = mode;
     maybeInferScaleFromGrid();
+    stashActiveSlice();
     generation.set(generation.get() + 1);
     notifyListeners();
   }
@@ -417,6 +587,7 @@ public final class AnalysisSession {
     } else {
       matrices.remove(AnalysisMode.SIGNAL);
     }
+    stashActiveSlice();
   }
 
   public synchronized SignalComparisonSettings getSignalComparison() {
@@ -429,12 +600,17 @@ public final class AnalysisSession {
     // Group results must be re-Run; clear stale comparison rows for Signal.
     results.remove(AnalysisMode.SIGNAL);
     filteredResults.remove(AnalysisMode.SIGNAL);
+    stashActiveSlice();
     generation.set(generation.get() + 1);
     notifyListeners();
   }
 
   /** Matrix for group Run with Sample Comparison units removed. */
   public synchronized FeatureValueMatrix getSignalMatrixForGroupRun() {
+    FeatureValueMatrix events = alleleCnEventMatrixOrNull();
+    if (events != null) {
+      return filterEventMatrixForComparison(events);
+    }
     FeatureValueMatrix matrix = matrices.get(AnalysisMode.SIGNAL);
     if (matrix != null && !matrix.isEmpty()) {
       return filterSignalMatrixForComparison(matrix);
@@ -444,6 +620,10 @@ public final class AnalysisSession {
 
   /** Grid for group Run (compact SSOT or sparse matrix) with Sample Comparison applied. */
   public synchronized ValueGrid getSignalGridForGroupRun() {
+    FeatureValueMatrix events = alleleCnEventMatrixOrNull();
+    if (events != null) {
+      return filterEventMatrixForComparison(events);
+    }
     ValueGrid grid = getSignalGrid();
     if (grid == null || grid.isEmpty()) {
       return grid;
@@ -455,12 +635,42 @@ public final class AnalysisSession {
   }
 
   /**
+   * Allele-CN event presence grid for pattern discovery (no Sample Comparison filter).
+   * Null when not allele-CN or bundle missing.
+   */
+  public synchronized FeatureValueMatrix getAlleleCnEventMatrixForDiscovery() {
+    return alleleCnEventMatrixOrNull();
+  }
+
+  private FeatureValueMatrix alleleCnEventMatrixOrNull() {
+    if (signalBundle == null || signalBundle.isEmpty() || signalSpec == null
+        || !signalSpec.hasChannels()
+        || !SignalChannels.isAlleleCnOnly(signalSpec.getChannels())) {
+      return null;
+    }
+    List<SampleTrack> roster = signalRoster(getSignalGrid());
+    return AlleleCnEventMatrix.build(
+        signalBundle,
+        signalSpec.getChannels(),
+        roster,
+        signalSpec.getAllowedEventDirections());
+  }
+
+  /**
    * Drop units that fail Sample Comparison. Presence = finite cell in the SSOT
    * (value thresholds already applied via compact mask when using gene matrices).
    */
   private FeatureValueMatrix filterSignalMatrixForComparison(FeatureValueMatrix matrix) {
     return SignalComparisonFilter.filterMatrixUnits(
         matrix, signalComparison, signalRoster(matrix));
+  }
+
+  /** Event matrix: present = hit (value &gt; 0); Sample Comparison on gene×event units. */
+  private FeatureValueMatrix filterEventMatrixForComparison(FeatureValueMatrix events) {
+    SignalValueThresholds hitOnly = new SignalValueThresholds();
+    hitOnly.setLohOnly(true);
+    return SignalComparisonFilter.filterMatrixUnits(
+        events, signalComparison, signalRoster(events), null, null, hitOnly);
   }
 
   private List<SampleTrack> signalRoster(ValueGrid grid) {
@@ -510,11 +720,10 @@ public final class AnalysisSession {
     results.clear();
     filteredResults.clear();
     matrices.clear();
-    annotationResult = null;
-    filteredAnnotationResult = null;
-    signalBundle = null;
-    signalGrid = null;
-    signalComparison = new SignalComparisonSettings();
+    signalSlices.clear();
+    activeSignalDatasetId = null;
+    resetActiveSignalBuffer();
+    lastPatternResult = null;
     hiddenAggregateGroupIds.clear();
     generation.set(generation.get() + 1);
     notifyListeners();
@@ -554,6 +763,7 @@ public final class AnalysisSession {
   public synchronized void refilterAnnotationForVisibility() {
     refilterAnnotation();
     refilterAll();
+    stashActiveSlice();
     generation.set(generation.get() + 1);
     notifyListeners();
   }
@@ -571,7 +781,7 @@ public final class AnalysisSession {
       List<SampleTrack> tracks = new ArrayList<>(signalBundle.tracks());
       annotationResult = SignalAnnotator.annotateBundle(
           AnalysisMode.SIGNAL, signalBundle, signalSpec.getChannels(), tracks, scoreLabel);
-      filteredAnnotationResult = applySignalSampleComparison(annotationResult);
+      filteredAnnotationResult = applyAnnotationViewFilters(annotationResult);
       return;
     }
     ValueGrid grid = getSignalGrid();
@@ -585,7 +795,17 @@ public final class AnalysisSession {
         : valueThresholds;
     annotationResult = SignalAnnotator.annotate(
         AnalysisMode.SIGNAL, grid, tracks, thr, scoreLabel);
-    filteredAnnotationResult = applySignalSampleComparison(annotationResult);
+    filteredAnnotationResult = applyAnnotationViewFilters(annotationResult);
+  }
+
+  /** Allele-CN type filter then Sample Comparison. */
+  private GroupStatResult applyAnnotationViewFilters(GroupStatResult raw) {
+    GroupStatResult directed = SignalEventDirection.filterResult(
+        raw,
+        signalSpec != null
+            ? signalSpec.getAllowedEventDirections()
+            : SignalEventDirection.defaultAllowed());
+    return applySignalSampleComparison(directed);
   }
 
   private static SignalValueThresholds topNOnly(SignalValueThresholds src) {
@@ -610,8 +830,9 @@ public final class AnalysisSession {
         matrix,
         signalBundle,
         signalSpec != null && signalSpec.hasChannels() ? signalSpec.getChannels() : List.of(),
-        null,
-        grid);
+        valueThresholds,
+        grid,
+        signalSpec != null ? signalSpec.getAllowedEventDirections() : null);
   }
 
   private void notifyListeners() {
@@ -622,5 +843,27 @@ public final class AnalysisSession {
         // ignore
       }
     }
+  }
+
+  /** Persisted / stashed Signal state for one dataset. */
+  static final class SignalSlice {
+    DifferenceThresholds thresholds = new DifferenceThresholds();
+    SignalValueThresholds valueThresholds = new SignalValueThresholds();
+    GroupStatResult annotationResult;
+    GroupStatResult filteredAnnotationResult;
+    FeatureValueBundle signalBundle;
+    ValueGrid signalGrid;
+    SignalComparisonSettings signalComparison = new SignalComparisonSettings();
+    GroupStatTest groupStatTest = GroupStatTest.AUTO;
+    EffectMode effectMode = EffectMode.AUTO;
+    boolean effectModeUserOverride;
+    SignalValueType inferredValueType = SignalValueType.RAW;
+    String scaleDetectSummary = "";
+    double minMeanPrefilter;
+    SamplePatternEngine.Result lastPatternResult;
+    SignalSourceSpec signalSpec = new SignalSourceSpec();
+    GroupStatResult groupResult;
+    GroupStatResult filteredGroupResult;
+    FeatureValueMatrix matrix;
   }
 }

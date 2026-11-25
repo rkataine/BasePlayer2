@@ -37,6 +37,7 @@
             <MenuItem fx:id="openDragenMenuItem" id="LOAD_DRAGEN" onAction="#openFileMenu" text="Open DRAGEN…" />
             <SeparatorMenuItem />
             <MenuItem fx:id="importSampleGroupsMenuItem" onAction="#importSampleGroups" text="Import Sample Groups…" />
+            <MenuItem fx:id="exportSampleGroupsMenuItem" onAction="#exportSampleGroups" text="Export Sample Groups…" disable="true" />
             <SeparatorMenuItem />
             <Menu fx:id="recentFilesMenu" text="Open Recent Samples" onShowing="#populateRecentFilesMenu" />
             <SeparatorMenuItem />

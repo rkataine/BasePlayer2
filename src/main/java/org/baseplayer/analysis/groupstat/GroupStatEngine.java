@@ -18,6 +18,9 @@ import org.baseplayer.analysis.signal.SignalValueType;
 /**
  * Pure-Java group statistics for any {@link ValueGrid} (Signal, mutations, CNV, …).
  * Selectable tests via {@link GroupStatTest}; effect vs baseline via {@link EffectMode}.
+ * With three or more groups, runs all pairwise 2-group tests and keeps one row per
+ * feature: p/q from the best (lowest-p) pair; Hits/Diff groups are the union of every
+ * group that appears in a pair with raw p ≤ {@link #PAIRWISE_GROUP_ALPHA}.
  */
 public final class GroupStatEngine {
 
@@ -25,6 +28,11 @@ public final class GroupStatEngine {
   private static final double PSEUDO = 1e-6;
   /** Direction call threshold on the chosen effect metric. */
   private static final double EFFECT_DIR_EPS = 0.05;
+  /**
+   * Pairwise raw-p cutoff for including a group in the result row.
+   * Best pair is always included even when its p is above this.
+   */
+  static final double PAIRWISE_GROUP_ALPHA = 0.05;
 
   private GroupStatEngine() {}
 
@@ -96,7 +104,8 @@ public final class GroupStatEngine {
     final Integer baselineId = baseline;
 
     GroupStatTest requested = test != null ? test : GroupStatTest.AUTO;
-    GroupStatTest concrete = requested.resolve(matrix, buckets.size());
+    // Pairwise multi-group uses the same 2-group concrete test Auto would pick.
+    GroupStatTest concrete = requested.resolve(matrix, 2);
     String testName = requested.resolvedLabel(matrix, buckets.size());
     EffectMode requestedEffect = effectMode != null ? effectMode : EffectMode.AUTO;
     SignalValueType type = valueType != null ? valueType : SignalValueType.RAW;
@@ -105,7 +114,7 @@ public final class GroupStatEngine {
     double minMean = Math.max(0.0, minMeanPrefilter);
 
     boolean twoGroup = buckets.size() == 2;
-    boolean useModerated = concrete == GroupStatTest.MODERATED && twoGroup;
+    boolean useModerated = concrete == GroupStatTest.MODERATED;
 
     List<UnitScratch> scratches = new ArrayList<>();
     for (String unitId : matrix.unitIds()) {
@@ -140,63 +149,8 @@ public final class GroupStatEngine {
         continue;
       }
 
-      double baselineMean = Double.NaN;
-      double otherMean = Double.NaN;
-      int baselineIdx = -1;
-      int otherIdx = -1;
-      for (int i = 0; i < buckets.size(); i++) {
-        if (buckets.get(i).groupId == baselineId) {
-          baselineMean = mean(series.get(i));
-          baselineIdx = i;
-        } else if (otherIdx < 0) {
-          otherMean = mean(series.get(i));
-          otherIdx = i;
-        }
-      }
-      if (!twoGroup) {
-        List<Double> nonBase = new ArrayList<>();
-        for (int i = 0; i < buckets.size(); i++) {
-          if (buckets.get(i).groupId != baselineId) {
-            nonBase.addAll(series.get(i));
-          }
-        }
-        otherMean = mean(nonBase);
-      }
-
-      Double effect = null;
-      if (!Double.isNaN(baselineMean) && !Double.isNaN(otherMean)) {
-        effect = effectValue(concreteEffect, otherMean, baselineMean);
-      }
-
-      String direction = "similar";
-      if (twoGroup) {
-        if (effect != null && !Double.isNaN(effect)) {
-          if (effect > EFFECT_DIR_EPS) {
-            direction = "up";
-          } else if (effect < -EFFECT_DIR_EPS) {
-            direction = "down";
-          }
-        }
-      } else {
-        GroupStatResult.MeanExtremes extremes = GroupStatResult.meanExtremes(summaries);
-        if (extremes != null && extremes.distinct()) {
-          double spread = Math.abs(extremes.highest().mean() - extremes.lowest().mean());
-          if (spread > 1e-6) {
-            direction = "different";
-          }
-        }
-      }
-
       FeatureValueMatrix.Locus locus = matrix.locusOf(unitId);
-      scratches.add(new UnitScratch(
-          unitId,
-          locus,
-          summaries,
-          series,
-          baselineIdx,
-          otherIdx,
-          effect,
-          direction));
+      scratches.add(new UnitScratch(unitId, locus, summaries, series));
     }
 
     double priorVar = Double.NaN;
@@ -204,12 +158,14 @@ public final class GroupStatEngine {
     if (useModerated) {
       List<Double> residualVars = new ArrayList<>();
       for (UnitScratch s : scratches) {
-        if (s.baselineIdx < 0 || s.otherIdx < 0) {
-          continue;
-        }
-        PooledVar pv = pooledVariance(s.series.get(s.baselineIdx), s.series.get(s.otherIdx));
-        if (pv != null && pv.variance > 0 && Double.isFinite(pv.variance)) {
-          residualVars.add(pv.variance);
+        int n = s.series.size();
+        for (int i = 0; i < n; i++) {
+          for (int j = i + 1; j < n; j++) {
+            PooledVar pv = pooledVariance(s.series.get(i), s.series.get(j));
+            if (pv != null && pv.variance > 0 && Double.isFinite(pv.variance)) {
+              residualVars.add(pv.variance);
+            }
+          }
         }
       }
       ModeratedPrior prior = estimateModeratedPrior(residualVars);
@@ -219,28 +175,16 @@ public final class GroupStatEngine {
 
     List<GroupStatResult.Row> rows = new ArrayList<>(scratches.size());
     for (UnitScratch s : scratches) {
-      Double pValue;
-      if (useModerated && s.baselineIdx >= 0 && s.otherIdx >= 0) {
-        pValue = moderatedP(
-            s.series.get(s.baselineIdx),
-            s.series.get(s.otherIdx),
-            priorVar,
-            priorDf);
-      } else {
-        pValue = pValueFor(concrete, s.series, s.summaries, twoGroup);
+      GroupStatResult.Row row = twoGroup
+          ? buildTwoGroupRow(
+              s, buckets, baselineId, concrete, concreteEffect, useModerated,
+              priorVar, priorDf, testName)
+          : buildPairwiseRow(
+              s, buckets, baselineId, concrete, concreteEffect, useModerated,
+              priorVar, priorDf, testName);
+      if (row != null && row.pValue() != null) {
+        rows.add(row);
       }
-      rows.add(new GroupStatResult.Row(
-          s.unitId,
-          s.unitId,
-          s.locus != null ? s.locus.chromosome() : null,
-          s.locus != null ? s.locus.start1Based() : 0L,
-          s.locus != null ? s.locus.end1Based() : 0L,
-          s.summaries,
-          s.effect,
-          pValue,
-          null,
-          testName,
-          s.direction));
     }
 
     applyBenjaminiHochberg(rows);
@@ -257,14 +201,20 @@ public final class GroupStatEngine {
     String score = scoreLabel != null && !scoreLabel.isBlank() ? scoreLabel : mode.name();
     String methodStrip = String.format(
         Locale.ROOT,
-        "Score: %s · Missing: %s · Test: %s · FDR: Benjamini–Hochberg · Effect: %s%s",
+        "Score: %s · Missing: %s · Test: %s · FDR: Benjamini–Hochberg · Effect: %s%s%s",
         score,
         missingPolicy,
         testName,
         effectLabel,
         minMean > 0
             ? String.format(Locale.ROOT, " · min mean ≥ %.4g", minMean)
-            : "");
+            : "",
+        twoGroup
+            ? ""
+            : String.format(
+                Locale.ROOT,
+                " · pairwise groups if p≤%.2g",
+                PAIRWISE_GROUP_ALPHA));
     String summary = String.format(
         Locale.ROOT,
         "%s: %d units across %d groups (%s)",
@@ -275,17 +225,182 @@ public final class GroupStatEngine {
     return new GroupStatResult(mode, groupIds, baselineId, rows, summary, methodStrip);
   }
 
-  private static Double pValueFor(
+  private static GroupStatResult.Row buildTwoGroupRow(
+      UnitScratch s,
+      List<GroupBucket> buckets,
+      int baselineId,
+      GroupStatTest concrete,
+      EffectMode concreteEffect,
+      boolean useModerated,
+      double priorVar,
+      double priorDf,
+      String testName) {
+    int baselineIdx = -1;
+    int otherIdx = -1;
+    for (int i = 0; i < buckets.size(); i++) {
+      if (buckets.get(i).groupId == baselineId) {
+        baselineIdx = i;
+      } else if (otherIdx < 0) {
+        otherIdx = i;
+      }
+    }
+    Double effect = null;
+    if (baselineIdx >= 0 && otherIdx >= 0) {
+      double baselineMean = mean(s.series.get(baselineIdx));
+      double otherMean = mean(s.series.get(otherIdx));
+      if (!Double.isNaN(baselineMean) && !Double.isNaN(otherMean)) {
+        effect = effectValue(concreteEffect, otherMean, baselineMean);
+      }
+    }
+    String direction = directionFromEffect(effect, true);
+    Double pValue;
+    if (useModerated && baselineIdx >= 0 && otherIdx >= 0) {
+      pValue = moderatedP(
+          s.series.get(baselineIdx), s.series.get(otherIdx), priorVar, priorDf);
+    } else {
+      pValue = pValueForPair(concrete, s.series, s.summaries, 0, 1);
+    }
+    return new GroupStatResult.Row(
+        s.unitId,
+        s.unitId,
+        s.locus != null ? s.locus.chromosome() : null,
+        s.locus != null ? s.locus.start1Based() : 0L,
+        s.locus != null ? s.locus.end1Based() : 0L,
+        s.summaries,
+        effect,
+        pValue,
+        null,
+        testName,
+        direction);
+  }
+
+  /**
+   * All pairwise 2-group tests; row p from the best pair; groups = union of every
+   * group in a pair with raw p ≤ {@link #PAIRWISE_GROUP_ALPHA} (best pair always kept).
+   */
+  private static GroupStatResult.Row buildPairwiseRow(
+      UnitScratch s,
+      List<GroupBucket> buckets,
+      int baselineId,
+      GroupStatTest concrete,
+      EffectMode concreteEffect,
+      boolean useModerated,
+      double priorVar,
+      double priorDf,
+      String testName) {
+    int n = buckets.size();
+    Double bestP = null;
+    int bestI = -1;
+    int bestJ = -1;
+    Double bestEffect = null;
+    boolean[] keep = new boolean[n];
+
+    for (int i = 0; i < n; i++) {
+      for (int j = i + 1; j < n; j++) {
+        if (!pairUsable(s.series.get(i), s.series.get(j))) {
+          continue;
+        }
+        Double p;
+        if (useModerated) {
+          p = moderatedP(s.series.get(i), s.series.get(j), priorVar, priorDf);
+        } else {
+          p = pValueForPair(concrete, s.series, s.summaries, i, j);
+        }
+        if (p == null || Double.isNaN(p)) {
+          continue;
+        }
+        int baseIdx = pairBaselineIndex(buckets, baselineId, i, j);
+        int otherIdx = baseIdx == i ? j : i;
+        Double effect = null;
+        double baseMean = mean(s.series.get(baseIdx));
+        double otherMean = mean(s.series.get(otherIdx));
+        if (!Double.isNaN(baseMean) && !Double.isNaN(otherMean)) {
+          effect = effectValue(concreteEffect, otherMean, baseMean);
+        }
+        if (bestP == null || p < bestP) {
+          bestP = p;
+          bestI = i;
+          bestJ = j;
+          bestEffect = effect;
+        }
+        if (p <= PAIRWISE_GROUP_ALPHA) {
+          keep[i] = true;
+          keep[j] = true;
+        }
+      }
+    }
+
+    if (bestI < 0 || bestJ < 0 || bestP == null) {
+      return null;
+    }
+
+    // Always include the best pair even when its p is above the display alpha.
+    keep[bestI] = true;
+    keep[bestJ] = true;
+
+    List<GroupStatResult.GroupSummary> relevant = new ArrayList<>();
+    for (int g = 0; g < n; g++) {
+      if (keep[g]) {
+        relevant.add(s.summaries.get(g));
+      }
+    }
+
+    String direction = directionFromEffect(bestEffect, false);
+    return new GroupStatResult.Row(
+        s.unitId,
+        s.unitId,
+        s.locus != null ? s.locus.chromosome() : null,
+        s.locus != null ? s.locus.start1Based() : 0L,
+        s.locus != null ? s.locus.end1Based() : 0L,
+        relevant,
+        bestEffect,
+        bestP,
+        null,
+        testName,
+        direction);
+  }
+
+  private static boolean pairUsable(List<Double> a, List<Double> b) {
+    return a != null && b != null && !a.isEmpty() && !b.isEmpty();
+  }
+
+  private static int pairBaselineIndex(
+      List<GroupBucket> buckets, int baselineId, int i, int j) {
+    if (buckets.get(i).groupId == baselineId) {
+      return i;
+    }
+    if (buckets.get(j).groupId == baselineId) {
+      return j;
+    }
+    return i;
+  }
+
+  private static String directionFromEffect(Double effect, boolean twoGroup) {
+    if (effect == null || Double.isNaN(effect)) {
+      return "similar";
+    }
+    if (!twoGroup) {
+      return Math.abs(effect) > EFFECT_DIR_EPS ? "different" : "similar";
+    }
+    if (effect > EFFECT_DIR_EPS) {
+      return "up";
+    }
+    if (effect < -EFFECT_DIR_EPS) {
+      return "down";
+    }
+    return "similar";
+  }
+
+  private static Double pValueForPair(
       GroupStatTest concrete,
       List<List<Double>> series,
       List<GroupStatResult.GroupSummary> summaries,
-      boolean twoGroup) {
+      int i,
+      int j) {
     return switch (concrete) {
-      case MODERATED, WELCH, AUTO ->
-          twoGroup ? welchP(series.get(0), series.get(1)) : kruskalWallisP(series);
-      case RANK -> twoGroup ? mannWhitneyP(series.get(0), series.get(1)) : kruskalWallisP(series);
-      case FISHER -> twoGroup ? fisherFromSummaries(summaries.get(0), summaries.get(1))
-          : kruskalWallisP(series);
+      case MODERATED, WELCH, AUTO -> welchP(series.get(i), series.get(j));
+      case RANK -> mannWhitneyP(series.get(i), series.get(j));
+      case FISHER -> fisherFromSummaries(summaries.get(i), summaries.get(j));
     };
   }
 
@@ -726,47 +841,6 @@ public final class GroupStatEngine {
     return 2.0 * studentTCdf(-Math.abs(t), df);
   }
 
-  static Double kruskalWallisP(List<List<Double>> groups) {
-    List<double[]> ranked = new ArrayList<>();
-    int n = 0;
-    for (int g = 0; g < groups.size(); g++) {
-      for (double v : groups.get(g)) {
-        ranked.add(new double[] {v, g});
-        n++;
-      }
-    }
-    if (n < 3) {
-      return null;
-    }
-    ranked.sort(Comparator.comparingDouble(a -> a[0]));
-    double[] ranks = averageRanks(ranked);
-    int k = groups.size();
-    double[] rankSum = new double[k];
-    int[] counts = new int[k];
-    for (int i = 0; i < ranked.size(); i++) {
-      int g = (int) ranked.get(i)[1];
-      rankSum[g] += ranks[i];
-      counts[g]++;
-    }
-    double h = 0;
-    for (int g = 0; g < k; g++) {
-      if (counts[g] == 0) {
-        continue;
-      }
-      double rg = rankSum[g] / counts[g];
-      h += counts[g] * (rg - (n + 1) / 2.0) * (rg - (n + 1) / 2.0);
-    }
-    h *= 12.0 / (n * (n + 1.0));
-    int df = 0;
-    for (int c : counts) {
-      if (c > 0) {
-        df++;
-      }
-    }
-    df = Math.max(1, df - 1);
-    return chiSquareSf(h, df);
-  }
-
   private static double[] averageRanks(List<double[]> sorted) {
     int n = sorted.size();
     double[] ranks = new double[n];
@@ -1015,11 +1089,7 @@ public final class GroupStatEngine {
       String unitId,
       FeatureValueMatrix.Locus locus,
       List<GroupStatResult.GroupSummary> summaries,
-      List<List<Double>> series,
-      int baselineIdx,
-      int otherIdx,
-      Double effect,
-      String direction) {}
+      List<List<Double>> series) {}
 
   public record PooledVar(double variance, double df) {}
 

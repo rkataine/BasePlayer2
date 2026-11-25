@@ -106,6 +106,19 @@ public class SampleTrack implements Closeable {
     }
   }
 
+  /** Replace membership with the given group ids (order preserved; negatives ignored). */
+  public void setGroupIds(Iterable<Integer> ids) {
+    groupIds.clear();
+    if (ids == null) {
+      return;
+    }
+    for (Integer id : ids) {
+      if (id != null && id >= 0) {
+        groupIds.add(id);
+      }
+    }
+  }
+
   public void addGroupId(int groupId) {
     if (groupId >= 0) {
       groupIds.add(groupId);

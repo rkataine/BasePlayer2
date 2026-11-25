@@ -240,7 +240,18 @@ public class AppDialog {
     confirmed = false;
     stage.sizeToScene();
     focusWhenShown(stage, null, false);
+    Window owner = stage.getOwner();
     stage.showAndWait();
+    // Linux/GTK: after a WINDOW_MODAL child closes, restore focus to the owner
+    // synchronously so a following native FileChooser parents to the frontmost
+    // Stage (runLater races and can leave MainApp covering Analysis).
+    if (owner instanceof Stage ownerStage && ownerStage.isShowing()) {
+      ownerStage.toFront();
+      ownerStage.requestFocus();
+    } else if (MainApp.stage != null && MainApp.stage.isShowing()) {
+      MainApp.stage.toFront();
+      MainApp.stage.requestFocus();
+    }
     return confirmed;
   }
 
@@ -333,6 +344,45 @@ public class AppDialog {
     }
     dialog.addPrimaryButton("OK");
     dialog.showAndWaitConfirmed();
+  }
+
+  /**
+   * Text prompt dialog. Returns the trimmed name when confirmed, empty on cancel.
+   * Empty field falls back to {@code suggested} when that is non-blank.
+   */
+  public static Optional<String> prompt(
+      Window owner, String windowTitle, String heading, String message, String suggested) {
+    AppDialog dialog = new AppDialog(owner, windowTitle != null ? windowTitle : "Name this data");
+    if (heading != null && !heading.isBlank()) {
+      dialog.addTitle(heading);
+    }
+    if (message != null && !message.isBlank()) {
+      dialog.addMessage(message);
+    }
+    javafx.scene.control.TextField field = new javafx.scene.control.TextField();
+    String placeholder = suggested != null && !suggested.isBlank() ? suggested.trim() : "Dataset name";
+    field.setPromptText(placeholder);
+    if (suggested != null && !suggested.isBlank()) {
+      field.setText(suggested.trim());
+    }
+    field.setStyle(
+        "-fx-background-color: #333; -fx-text-fill: #ddd; -fx-border-color: #555; -fx-font-size: 12px;"
+            + "-fx-prompt-text-fill: #777777;");
+    dialog.addContent(field);
+    dialog.addSecondaryButton("Cancel");
+    dialog.addPrimaryButton("OK");
+    focusWhenShown(dialog.stage, field, true);
+    if (!dialog.showAndWaitConfirmed()) {
+      return Optional.empty();
+    }
+    String name = field.getText() == null ? "" : field.getText().trim();
+    if (name.isEmpty() && suggested != null && !suggested.isBlank()) {
+      name = suggested.trim();
+    }
+    if (name.isEmpty()) {
+      return Optional.empty();
+    }
+    return Optional.of(name);
   }
 
   /** Same as {@link #confirm} but returned as {@link Optional} of the confirm choice. */

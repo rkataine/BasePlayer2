@@ -41,8 +41,9 @@ public final class GroupStatTestControls {
     box.setMaxWidth(Double.MAX_VALUE);
     box.setPrefWidth(240);
     Tooltip.install(box, new Tooltip(
-        "Auto picks by data: Fisher for sparse 0/1 carrier matrices (2 groups), "
-            + "Moderated t for continuous values (2 groups), Kruskal–Wallis when N>2. "
+        "Auto picks by data: Fisher for sparse 0/1 carrier matrices, "
+            + "Moderated t for continuous values. With 3+ groups, tests every pair "
+            + "and keeps the best contrast (groups with pair p≤0.05 shown). "
             + "Changing test recomputes from the last matrix when available."));
     box.valueProperty().addListener((o, a, b) -> {
       if (b == null) {

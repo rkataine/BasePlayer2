@@ -135,7 +135,15 @@ public final class SessionRuntime {
                 usedCache = VcfManager.getInstance().installCachedVariantLists(cachedVariants);
               }
 
-              if (VcfManager.getInstance().hasLoadedVcf()) {
+              // Sample tracks + matrices are live — rematch named Signal datasets now.
+              org.baseplayer.analysis.ComparisonContext.get()
+                  .restoreSignalDatasetsAfterTracks(document);
+
+              boolean hasVcf = VcfManager.getInstance().hasLoadedVcf();
+              boolean hasSignal =
+                  org.baseplayer.variant.ui.VariantManagerWindow.hasSignalDatasets()
+                      || org.baseplayer.variant.ui.VariantManagerWindow.hasComparableSignalData();
+              if (hasVcf) {
                 if (!usedCache) {
                   VcfManager.getInstance().loadVariantsForCurrentView();
                 }
@@ -143,6 +151,21 @@ public final class SessionRuntime {
                     MainApp.stage, VcfManager.getInstance(), null);
                 org.baseplayer.controllers.MainController.initializeLoadRegionButton();
                 org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
+              }
+              // Signal tracks/matrices are restored above; re-open Analysis and annotate
+              // so the Signals table is not left on the empty "Open signal data…" placeholder.
+              if (hasSignal) {
+                if (hasVcf) {
+                  org.baseplayer.variant.ui.VariantManagerController signalCtrl =
+                      org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+                  if (signalCtrl != null) {
+                    signalCtrl.refreshSignalSources();
+                    // Named Signal tabs (e.g. RNA) sit beside Point/SV — select active dataset.
+                    signalCtrl.selectSignalMode();
+                  }
+                } else {
+                  org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+                }
               }
 
               if (!warnings.isEmpty()) {
@@ -230,6 +253,8 @@ public final class SessionRuntime {
 
     // Build tracks off the FX thread; publish the ObservableList on FX only.
     List<SampleTrack> restored = new ArrayList<>();
+    List<Path> salmonPaths = new ArrayList<>();
+    List<Path> otherTablePaths = new ArrayList<>();
     for (ProjectDocument.SampleTrackSpec trackSpec : document.sampleTracks) {
       if (trackSpec == null) {
         continue;
@@ -279,6 +304,25 @@ public final class SessionRuntime {
                   + (fileSpec.path != null ? fileSpec.path : fileSpec.pathRelative));
               continue;
             }
+            // TABLE (Salmon / mapped tables): collect paths and load after tracks exist
+            // so Salmon can share one SharedMatrixLoci across samples.
+            if ("TABLE".equals(type)) {
+              if (track == null) {
+                track = new SampleTrack(
+                    trackSpec.displayName != null ? trackSpec.displayName : "Sample");
+                if (trackSpec.displayName != null && !trackSpec.displayName.isBlank()) {
+                  track.setCustomName(trackSpec.displayName);
+                }
+              }
+              if (org.baseplayer.io.table.SalmonQuantOpen.isSalmonQuantPath(path)) {
+                if (!salmonPaths.contains(path)) {
+                  salmonPaths.add(path);
+                }
+              } else if (!otherTablePaths.contains(path)) {
+                otherTablePaths.add(path);
+              }
+              continue;
+            }
             Sample sample;
             if ("BED".equals(type)) {
               BedTrack bed = new BedTrack(path);
@@ -318,7 +362,7 @@ public final class SessionRuntime {
             + trackSpec.displayName + ": " + e.getMessage());
       }
     }
-    if (restored.isEmpty()) {
+    if (restored.isEmpty() && salmonPaths.isEmpty() && otherTablePaths.isEmpty()) {
       return;
     }
     runOnFxAndWait(() -> {
@@ -326,8 +370,30 @@ public final class SessionRuntime {
         registry.getSampleTracks().add(track);
         registry.getSampleList().add(track.getDisplayName());
       }
-      registry.includeNewTracksAtEndResetHeight();
+      if (!restored.isEmpty()) {
+        registry.includeNewTracksAtEndResetHeight();
+      }
     });
+    restoreTableSamples(salmonPaths, otherTablePaths, warnings);
+  }
+
+  /**
+   * Reload Salmon {@code .sf} / mapped TABLE files after sample-track skeletons exist.
+   */
+  private static void restoreTableSamples(
+      List<Path> salmonPaths, List<Path> otherTablePaths, List<String> warnings) {
+    if ((salmonPaths == null || salmonPaths.isEmpty())
+        && (otherTablePaths == null || otherTablePaths.isEmpty())) {
+      return;
+    }
+    if (salmonPaths != null && !salmonPaths.isEmpty()) {
+      SampleDataManager.restoreSalmonQuantForSession(salmonPaths, warnings);
+    }
+    if (otherTablePaths != null) {
+      for (Path path : otherTablePaths) {
+        SampleDataManager.restoreMappedTableForSession(path, warnings);
+      }
+    }
   }
 
   /** Run {@code action} on the FX thread and wait (no-op wait when already on FX). */

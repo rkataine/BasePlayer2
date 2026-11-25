@@ -29,8 +29,14 @@ class SignalEventDirectionTest {
   }
 
   @Test
-  void hemizygousLossNotLoh() {
-    assertEquals(SignalEventDirection.LOSS, SignalEventDirection.fromAlleleCn(0.0, 1.0));
+  void hemizygousZeroOneIsLoh() {
+    // Same as LohFromAlleleCn.binary() / aggregate band: minor lost, major remains.
+    assertEquals(SignalEventDirection.LOH, SignalEventDirection.fromAlleleCn(0.0, 1.0));
+  }
+
+  @Test
+  void homozygousDeletionIsLoss() {
+    assertEquals(SignalEventDirection.LOSS, SignalEventDirection.fromAlleleCn(0.0, 0.0));
   }
 
   @Test
@@ -57,25 +63,6 @@ class SignalEventDirectionTest {
         AnalysisMode.SIGNAL, List.of(), null, List.of(), "ann", "strip",
         List.of(raw), java.util.Map.of());
     assertFalse(SignalEventDirection.resultHasAlleleCn(without));
-  }
-
-  @Test
-  void chromValueScaleUsesMinMaxWhenFewPoints() {
-    double[] range = SignalEventDirection.chromValueScale(List.of(1.0, 3.0, 2.0));
-    assertEquals(1.0, range[0], 1e-9);
-    assertEquals(3.0, range[1], 1e-9);
-  }
-
-  @Test
-  void chromValueScaleUsesPercentilesWhenManyPoints() {
-    List<Double> vals = new java.util.ArrayList<>();
-    for (int i = 0; i < 20; i++) {
-      vals.add((double) i);
-    }
-    double[] range = SignalEventDirection.chromValueScale(vals);
-    // p5 of 0..19 ≈ 0.95, p95 ≈ 18.05
-    assertTrue(range[0] > 0.5 && range[0] < 2.0);
-    assertTrue(range[1] > 17.0 && range[1] < 19.0);
   }
 
   @Test

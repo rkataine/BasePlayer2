@@ -144,7 +144,7 @@ public class VariantManagerWindow {
         if (VcfManager.getInstance().hasLoadedVcf()) {
             return true;
         }
-        return hasComparableSignalData();
+        return hasSignalDatasets() || hasComparableSignalData();
     }
 
     /**
@@ -184,6 +184,23 @@ public class VariantManagerWindow {
             controller.selectSignalMode();
             controller.refreshSignalSources();
         }
+    }
+
+    /**
+     * Open Analysis and focus a named Signal dataset tab.
+     */
+    public static void openForSignalDataset(String datasetId) {
+        bringToFrontOrOpen();
+        VariantManagerController controller = getCurrentController();
+        if (controller != null) {
+            controller.refreshSignalDataset(datasetId);
+            controller.selectSignalDataset(datasetId);
+        }
+    }
+
+    /** True when at least one named Signal dataset is registered. */
+    public static boolean hasSignalDatasets() {
+        return !org.baseplayer.analysis.signal.SignalDatasetRegistry.get().isEmpty();
     }
 
     public static void bringToFrontOrOpen() {

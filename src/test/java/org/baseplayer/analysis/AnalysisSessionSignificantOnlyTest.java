@@ -34,6 +34,8 @@ class AnalysisSessionSignificantOnlyTest {
     thr.setShowSimilar(false);
     thr.setShowUp(true);
     thr.setShowDown(true);
+    thr.setUseMaxQ(true);
+    thr.setUseMinAbsLog2Fc(true);
     thr.setMaxQ(0.05);
     thr.setMinAbsLog2Fc(0.5);
 

@@ -448,6 +448,14 @@ public final class SessionDocumentSync {
           trackSpec.samples.add(vcfSpec);
           continue;
         }
+        if (sample.getDataType() == Sample.DataType.TABLE && sample.getPath() != null) {
+          ProjectDocument.SampleFileSpec tableSpec =
+              capturePathAsSampleFile("TABLE", sample.getPath(), projectFile);
+          tableSpec.visible = sample.visible;
+          tableSpec.overlay = sample.overlay;
+          trackSpec.samples.add(tableSpec);
+          continue;
+        }
         if (sample.getBamFile() == null
             && sample.getBedTrack() == null
             && sample.getBigWigTrack() == null
@@ -460,8 +468,15 @@ public final class SessionDocumentSync {
         }
       }
 
+      // Keep tracks that only have TABLE (RNA) samples — previously skipped.
       if (trackSpec.samples.isEmpty()) {
-        continue;
+        if (track.getDisplayName() != null && !track.getDisplayName().isBlank()) {
+          ProjectDocument.SampleFileSpec nameOnly =
+              capturePathAsSampleFile("NAME", null, projectFile);
+          trackSpec.samples.add(nameOnly);
+        } else {
+          continue;
+        }
       }
       doc.sampleTracks.add(trackSpec);
     }
