@@ -1,7 +1,6 @@
 package org.baseplayer.variant;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -16,8 +15,8 @@ import javafx.application.Platform;
 
 /**
  * Resolves which sample column(s) to map from a 2-column VCF before tracks are created.
- * Uses project somatic mode, name/call heuristics on {@link VariantLoader}, and optional
- * FX dialogs for ambiguous cases.
+ * Uses project somatic mode, name / first-variant GT heuristics on {@link VariantLoader},
+ * and optional FX dialogs for ambiguous cases.
  */
 public final class SomaticSampleResolver {
 
@@ -33,8 +32,8 @@ public final class SomaticSampleResolver {
     NONE,
     /** Prefer the column whose name has an NK/TK-style {@code tk} token. */
     PREFER_TK,
-    /** Prefer the column with more non-ref genotypes from the call probe. */
-    PREFER_MORE_CALLS,
+    /** Prefer the non–hom-ref column from the first variant's GT. */
+    PREFER_FIRST_VARIANT_ALT,
     PREFER_FIRST_COLUMN,
     PREFER_SECOND_COLUMN
   }
@@ -70,11 +69,8 @@ public final class SomaticSampleResolver {
       return;
     }
 
-    // SOMATIC
-    if (loader.getDetectedNormalSample() != null) {
-      return;
-    }
-
+    // Re-run after mode/pattern may have changed in the dialog (constructor ran earlier).
+    loader.clearDetectedNormalSample();
     loader.redetectSomaticNormal();
     if (loader.getDetectedNormalSample() != null) {
       return;
@@ -89,12 +85,11 @@ public final class SomaticSampleResolver {
       return;
     }
 
-    Map<String, Integer> callCounts = loader.probeNonRefCallCounts(4000);
-    String defaultTumor = defaultTumorGuess(samples, callCounts);
+    String defaultTumor = defaultTumorGuess(loader);
     SomaticSampleDialogs.TumorPickResult pick = askTumorSample(
-        samples.get(0), samples.get(1), defaultTumor, callCounts);
+        samples.get(0), samples.get(1), defaultTumor);
     if (pick == null || pick.tumorSample() == null) {
-      // Cancelled: still skip a normal when the probe/default guess is clear.
+      // Cancelled: still skip a normal when the first-variant GT guess is clear.
       if (defaultTumor != null) {
         loader.applyTumorSample(defaultTumor);
       }
@@ -102,7 +97,7 @@ public final class SomaticSampleResolver {
     }
     loader.applyTumorSample(pick.tumorSample());
     if (batch != null && pick.applyToRestOfBatch()) {
-      batch.batchTumorRule = inferBatchRule(samples, pick.tumorSample(), callCounts);
+      batch.batchTumorRule = inferBatchRule(samples, pick.tumorSample(), defaultTumor);
     }
   }
 
@@ -118,40 +113,30 @@ public final class SomaticSampleResolver {
   private static SomaticSampleDialogs.TumorPickResult askTumorSample(
       String sample1,
       String sample2,
-      String defaultTumor,
-      Map<String, Integer> callCounts) {
+      String defaultTumor) {
     return runOnFxAndWait(() ->
-        SomaticSampleDialogs.askTumorSample(
-            MainApp.stage, sample1, sample2, defaultTumor, callCounts));
+        SomaticSampleDialogs.askTumorSample(MainApp.stage, sample1, sample2, defaultTumor));
   }
 
-  private static String defaultTumorGuess(List<String> samples, Map<String, Integer> callCounts) {
+  private static String defaultTumorGuess(VariantLoader loader) {
+    List<String> samples = loader.getVcfSampleNames();
     if (samples == null || samples.size() != 2) {
       return null;
     }
-    String a = samples.get(0);
-    String b = samples.get(1);
-    int ca = callCounts != null ? callCounts.getOrDefault(a, 0) : 0;
-    int cb = callCounts != null ? callCounts.getOrDefault(b, 0) : 0;
-    if (ca > cb) {
-      return a;
+    String pattern = ProjectSessionState.get().getSomaticTumorNamePattern();
+    String fromNames = VariantLoader.guessTumorFromNames(samples.get(0), samples.get(1), pattern);
+    if (fromNames != null) {
+      return fromNames;
     }
-    if (cb > ca) {
-      return b;
+    String fromGt = loader.guessTumorFromFirstVariantGt();
+    if (fromGt != null) {
+      return fromGt;
     }
-    String al = a.toLowerCase();
-    String bl = b.toLowerCase();
-    if (VariantLoader.hasToken(al, "tk") && !VariantLoader.hasToken(bl, "tk")) {
-      return a;
-    }
-    if (VariantLoader.hasToken(bl, "tk") && !VariantLoader.hasToken(al, "tk")) {
-      return b;
-    }
-    return a;
+    return samples.get(0);
   }
 
   private static BatchTumorRule inferBatchRule(
-      List<String> samples, String tumor, Map<String, Integer> callCounts) {
+      List<String> samples, String tumor, String gtGuessTumor) {
     if (samples == null || samples.size() != 2 || tumor == null) {
       return BatchTumorRule.NONE;
     }
@@ -163,10 +148,8 @@ public final class SomaticSampleResolver {
         && !VariantLoader.hasToken(tumorLower, "nk")) {
       return BatchTumorRule.PREFER_TK;
     }
-    int ct = callCounts != null ? callCounts.getOrDefault(tumor, 0) : 0;
-    int co = callCounts != null ? callCounts.getOrDefault(other, 0) : 0;
-    if (ct > co) {
-      return BatchTumorRule.PREFER_MORE_CALLS;
+    if (tumor.equals(gtGuessTumor)) {
+      return BatchTumorRule.PREFER_FIRST_VARIANT_ALT;
     }
     return samples.get(0).equals(tumor)
         ? BatchTumorRule.PREFER_FIRST_COLUMN
@@ -192,10 +175,9 @@ public final class SomaticSampleResolver {
         if (bTk && !aTk) {
           yield b;
         }
-        yield defaultTumorGuess(samples, loader.probeNonRefCallCounts(4000));
+        yield defaultTumorGuess(loader);
       }
-      case PREFER_MORE_CALLS ->
-          defaultTumorGuess(samples, loader.probeNonRefCallCounts(4000));
+      case PREFER_FIRST_VARIANT_ALT -> defaultTumorGuess(loader);
       case NONE -> null;
     };
     if (tumor != null) {

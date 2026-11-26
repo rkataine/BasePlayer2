@@ -9,6 +9,7 @@ import java.util.Map;
 
 import org.baseplayer.MainApp;
 import org.baseplayer.components.AppDialog;
+import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTag;
 import org.baseplayer.samples.SampleTrack;
@@ -78,6 +79,7 @@ public final class SampleOrganizationWindow {
   private final TextField renameField = new TextField();
   private final ColorPicker groupColorPicker = new ColorPicker();
   private final Label statusLabel = new Label();
+  private final ColoredToggle selectAllGroupsCb = new ColoredToggle("Select all");
   private final Map<SampleTag, ToggleButton> tagToggles = new EnumMap<>(SampleTag.class);
   private final Label tagTargetLabel = new Label();
   private final ChangeListener<Number> revisionListener =
@@ -87,6 +89,7 @@ public final class SampleOrganizationWindow {
   private boolean updatingGroupColorPicker;
   private boolean updatingTagChecks;
   private boolean syncingSelection;
+  private boolean syncingGroupIncludeChecks;
   /** Which list last received a non-empty selection for tag sync. */
   private boolean preferMemberSelection;
 
@@ -117,8 +120,10 @@ public final class SampleOrganizationWindow {
     Label title = new Label("Sample Groups & Tags");
     title.getStyleClass().add("panel-title");
     Label hint = new Label(
-        "Create named groups and assign samples. Tag tracks as Mother, Father, Child, "
-            + "Parental, or Marker; use Sample Comparison for inheritance roles.");
+        "Create named groups and assign samples. Uncheck a group to leave it out of the "
+            + "project (not drawn, not used in analysis); check it again to bring it back. "
+            + "Tag tracks as Mother, Father, Child, Parental, or Marker; use Sample Comparison "
+            + "for inheritance roles.");
     hint.getStyleClass().add("value-label");
     hint.setWrapText(true);
     VBox header = new VBox(4, title, hint);
@@ -222,7 +227,53 @@ public final class SampleOrganizationWindow {
   private VBox buildGroupsPane() {
     Label heading = sectionLabel("Groups");
 
+    selectAllGroupsCb.setTooltip(new Tooltip(
+        "Include or exclude all groups from the project"));
+    selectAllGroupsCb.setOnChanged(include -> {
+      if (syncingGroupIncludeChecks) {
+        return;
+      }
+      registry.setAllGroupsIncludedInProject(Boolean.TRUE.equals(include));
+      statusLabel.setText(Boolean.TRUE.equals(include)
+          ? "Included all groups in the project."
+          : "Excluded all groups from the project.");
+      groupList.refresh();
+      syncSelectAllCheckbox();
+    });
+
     groupList.setCellFactory(list -> new ListCell<>() {
+      private final ColoredToggle includeCb = new ColoredToggle();
+      private final Rectangle swatch = new Rectangle(10, 10);
+      private final Label nameLabel = new Label();
+      private final HBox row = new HBox(6, includeCb, swatch, nameLabel);
+
+      {
+        swatch.setArcWidth(2);
+        swatch.setArcHeight(2);
+        row.setAlignment(Pos.CENTER_LEFT);
+        includeCb.setFocusTraversable(false);
+        includeCb.setMaxWidth(Region.USE_PREF_SIZE);
+        includeCb.setTooltip(new Tooltip(
+            "Include this group in the project (drawing + analysis)"));
+        includeCb.setOnChanged(included -> {
+          if (syncingGroupIncludeChecks) {
+            return;
+          }
+          SampleGroup group = getItem();
+          if (group == null) {
+            return;
+          }
+          boolean on = Boolean.TRUE.equals(included);
+          registry.setGroupIncludedInProject(group.getId(), on);
+          statusLabel.setText(on
+              ? "Included \"" + group.getName() + "\" in the project."
+              : "Excluded \"" + group.getName() + "\" from the project.");
+          nameLabel.setOpacity(on ? 1.0 : 0.45);
+          swatch.setOpacity(on ? 1.0 : 0.45);
+          syncSelectAllCheckbox();
+        });
+      }
+
       @Override
       protected void updateItem(SampleGroup group, boolean empty) {
         super.updateItem(group, empty);
@@ -231,12 +282,21 @@ public final class SampleOrganizationWindow {
           setGraphic(null);
           return;
         }
-        Rectangle swatch = new Rectangle(10, 10, group.getColor());
-        swatch.setArcWidth(2);
-        swatch.setArcHeight(2);
+        setText(null);
+        swatch.setFill(group.getColor());
         int count = registry.countTracksInGroup(group.getId());
-        setText(group.getName() + " (" + count + ")");
-        setGraphic(swatch);
+        nameLabel.setText(group.getName() + " (" + count + ")");
+        boolean included = group.isIncludedInProject();
+        syncingGroupIncludeChecks = true;
+        try {
+          includeCb.setIndeterminate(false);
+          includeCb.setSelected(included);
+        } finally {
+          syncingGroupIncludeChecks = false;
+        }
+        nameLabel.setOpacity(included ? 1.0 : 0.45);
+        swatch.setOpacity(included ? 1.0 : 0.45);
+        setGraphic(row);
       }
     });
 
@@ -285,10 +345,43 @@ public final class SampleOrganizationWindow {
 
     HBox row1 = new HBox(8, newGroup, deleteGroup);
     HBox rowFile = new HBox(8, fromFile, toFile);
-    VBox pane = new VBox(8, heading, groupList, renameRow, row1, fromFolders, rowFile);
+    VBox pane = new VBox(
+        8, heading, selectAllGroupsCb, groupList, renameRow, row1, fromFolders, rowFile);
     VBox.setVgrow(groupList, Priority.ALWAYS);
     pane.setPadding(new Insets(0, 6, 0, 0));
+
+    groupItems.addListener((ListChangeListener<SampleGroup>) c -> syncSelectAllCheckbox());
+    syncSelectAllCheckbox();
     return pane;
+  }
+
+  private void syncSelectAllCheckbox() {
+    int included = 0;
+    int total = 0;
+    for (SampleGroup group : groupItems) {
+      if (group == null) {
+        continue;
+      }
+      total++;
+      if (group.isIncludedInProject()) {
+        included++;
+      }
+    }
+    syncingGroupIncludeChecks = true;
+    try {
+      if (total == 0 || included == 0) {
+        selectAllGroupsCb.setIndeterminate(false);
+        selectAllGroupsCb.setSelected(false);
+      } else if (included == total) {
+        selectAllGroupsCb.setIndeterminate(false);
+        selectAllGroupsCb.setSelected(true);
+      } else {
+        selectAllGroupsCb.setSelected(false);
+        selectAllGroupsCb.setIndeterminate(true);
+      }
+    } finally {
+      syncingGroupIncludeChecks = false;
+    }
   }
 
   private VBox buildMembersPane() {

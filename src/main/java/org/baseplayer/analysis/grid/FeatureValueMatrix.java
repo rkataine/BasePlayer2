@@ -10,11 +10,13 @@ import java.util.Set;
 
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.analysis.ValueAggregation;
+import org.baseplayer.variant.annotation.VariantEffect;
 
 /**
  * Sparse gene/site × sample matrix of numeric values (expression, methylation, …).
  * Optional {@link #setMissingDefault(Double)} fills absent sample cells on read
  * without densifying storage (important for CNV/mutation group scans).
+ * Optional per-cell {@link VariantEffect} for mutation heatmaps.
  */
 public final class FeatureValueMatrix implements ValueGrid {
 
@@ -22,6 +24,7 @@ public final class FeatureValueMatrix implements ValueGrid {
   public record Locus(String chromosome, long start1Based, long end1Based) {}
 
   private final Map<String, Map<SampleTrack, Double>> values = new LinkedHashMap<>();
+  private final Map<String, Map<SampleTrack, VariantEffect>> effects = new LinkedHashMap<>();
   private final Map<String, Locus> loci = new LinkedHashMap<>();
   private final Set<SampleTrack> tracks = Collections.newSetFromMap(new IdentityHashMap<>());
   /** When non-null, {@link #valuesFor} returns this for missing sample cells. */
@@ -83,6 +86,36 @@ public final class FeatureValueMatrix implements ValueGrid {
     }
     Map<SampleTrack, Double> row = values.get(unitId);
     return row != null && row.containsKey(track);
+  }
+
+  /**
+   * Store mutation effect for a unit×sample (keeps the more severe when called again).
+   */
+  public void putEffect(String unitId, SampleTrack track, VariantEffect effect) {
+    if (unitId == null || unitId.isBlank() || track == null || effect == null) {
+      return;
+    }
+    Map<SampleTrack, VariantEffect> row =
+        effects.computeIfAbsent(unitId, k -> new IdentityHashMap<>());
+    VariantEffect prev = row.get(track);
+    if (prev == null
+        || org.baseplayer.variant.annotation.VariantEffectVisuals.severity(effect)
+            > org.baseplayer.variant.annotation.VariantEffectVisuals.severity(prev)) {
+      row.put(track, effect);
+    }
+    tracks.add(track);
+  }
+
+  public VariantEffect getEffect(String unitId, SampleTrack track) {
+    if (unitId == null || track == null) {
+      return null;
+    }
+    Map<SampleTrack, VariantEffect> row = effects.get(unitId);
+    return row != null ? row.get(track) : null;
+  }
+
+  public boolean hasEffects() {
+    return !effects.isEmpty();
   }
 
   /** Count of explicit values for {@code unitId} among {@code sampleTracks}. */

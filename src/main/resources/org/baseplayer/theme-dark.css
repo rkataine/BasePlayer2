@@ -34,4 +34,7 @@
     -bp-danger: #c83232;
     -bp-warning: #ffa500;
     -bp-success: #4caf50;
+    /* Selected Analysis Manager tab chips (bright on dark chrome) */
+    -bp-tab-selected: #f0f0f0;
+    -bp-tab-selected-text: #0a0a0a;
 }

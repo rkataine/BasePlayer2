@@ -441,6 +441,11 @@ public class VariantFiltersPanel {
             }
             return false;
         }
+
+        /** Point default: Intronic / Intergenic off until the user opts in. */
+        boolean selectedByDefault() {
+            return this != INTRONIC && this != INTERGENIC;
+        }
     }
 
     private Nodes nodes;
@@ -789,8 +794,11 @@ public class VariantFiltersPanel {
 
     private Set<VariantEffect> currentAllowedEffects() {
         if (effectCategoryCheckBoxes.isEmpty()) {
-            // No annotated effects UI yet — do not over-filter.
-            return EnumSet.allOf(VariantEffect.class);
+            // No annotated effects UI yet — point default excludes intronic/intergenic;
+            // SV keeps every effect (its empty-UI writers also set allOf explicitly).
+            return variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL
+                ? EnumSet.allOf(VariantEffect.class)
+                : VariantFilter.defaultAllowedEffects();
         }
         Set<VariantEffect> effects = EnumSet.noneOf(VariantEffect.class);
         for (Map.Entry<EffectCategory, ColoredToggle> entry : effectCategoryCheckBoxes.entrySet()) {
@@ -958,7 +966,9 @@ public class VariantFiltersPanel {
                 } else if (currentFilter != null) {
                     selected = category.matchesAllowed(currentFilter.getAllowedEffects());
                 } else {
-                    selected = true;
+                    // Point: Intronic / Intergenic off by default; SV keeps its categories on.
+                    selected = variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL
+                        || category.selectedByDefault();
                 }
                 cb.setSelected(selected);
                 cb.setPrefWidth(148);
@@ -984,11 +994,10 @@ public class VariantFiltersPanel {
         if (nodes.selectAllTypesCheckBox() != null) {
             nodes.selectAllTypesCheckBox().setSelected(true);
         }
-        for (ColoredToggle cb : effectCategoryCheckBoxes.values()) {
-            cb.setSelected(true);
-        }
-        if (nodes.selectAllEffectsCheckBox() != null) {
-            nodes.selectAllEffectsCheckBox().setSelected(true);
+        for (Map.Entry<EffectCategory, ColoredToggle> entry : effectCategoryCheckBoxes.entrySet()) {
+            boolean on = variantClass == VariantTypeVisuals.VariantClass.STRUCTURAL
+                || entry.getKey().selectedByDefault();
+            entry.getValue().setSelected(on);
         }
         nodes.qualitySlider().setValue(0);
         nodes.coverageSlider().setValue(0);

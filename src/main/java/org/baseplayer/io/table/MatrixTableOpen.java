@@ -28,7 +28,7 @@ import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
+import org.baseplayer.components.ColoredToggle;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
@@ -291,9 +291,9 @@ public final class MatrixTableOpen {
         + "\n(Key columns + Sample for each value column; matched to open tracks by name)");
     dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
 
-    CheckBox headerRowBox = new CheckBox("First row is header");
+    ColoredToggle headerRowBox = new ColoredToggle("First row is header");
     headerRowBox.setSelected(initial.headerRow());
-    CheckBox zeroBased = new CheckBox("Start is 0-based");
+    ColoredToggle zeroBased = new ColoredToggle("Start is 0-based");
     zeroBased.setSelected(initial.startZeroBased());
     HBox options = new HBox(16, headerRowBox, zeroBased);
     options.setAlignment(Pos.CENTER_LEFT);
@@ -461,7 +461,7 @@ public final class MatrixTableOpen {
       HBox columnRoles,
       List<ComboBox<String>> roleCombos,
       TableView<String[]> previewTable,
-      CheckBox zeroBased,
+      ColoredToggle zeroBased,
       Runnable onRoleChanged) {
     List<String[]> lines = preview.firstLines() != null ? preview.firstLines() : List.of();
     int colCount = 0;

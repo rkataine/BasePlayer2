@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.analysis.AllChromAction;
 import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.AnalysisRunner;
 import org.baseplayer.analysis.AnalysisSession;
@@ -75,7 +76,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
@@ -104,49 +104,6 @@ import javafx.util.Duration;
 public final class SignalAnalysisWorkspace {
 
   /** What the toolbar “all chromosomes” button runs for the active Signal tool tab. */
-  public enum AllChromAction {
-    ANNOTATE(
-        "Annotate All Chromosomes",
-        "List signal units across all chromosomes (Signals table). Not group differential."),
-    DISCOVER(
-        "Discover All Chromosomes",
-        "Pattern discovery across all chromosomes; table shows significant markers only."),
-    COMPARE(
-        "Compare All Chromosomes",
-        "Group differential on every chromosome; table keeps statistically significant features only.");
-
-    private final String buttonText;
-    private final String tooltip;
-
-    AllChromAction(String buttonText, String tooltip) {
-      this.buttonText = buttonText;
-      this.tooltip = tooltip;
-    }
-
-    public String buttonText() {
-      return buttonText;
-    }
-
-    public String tooltip() {
-      return tooltip;
-    }
-
-    /** Map Signal tool-tab title → action. */
-    public static AllChromAction fromToolTabText(String tabText) {
-      if (tabText == null) {
-        return ANNOTATE;
-      }
-      String t = tabText.trim();
-      if (t.equalsIgnoreCase("Group comparison")) {
-        return COMPARE;
-      }
-      if (t.equalsIgnoreCase("Sample Comparison")) {
-        return DISCOVER;
-      }
-      return ANNOTATE;
-    }
-  }
-
   private final Label mappingSummaryLabel = new Label();
   private final Button editColumnsButton = new Button("Edit columns…");
   private final Label observedRangeLabel = new Label();
@@ -155,8 +112,8 @@ public final class SignalAnalysisWorkspace {
       new java.util.EnumMap<>(SignalEventDirection.class);
   private boolean eventTypeFilterSuppress;
   private final ColoredToggle valueThrEnabled = new ColoredToggle("Filter by value");
-  private final CheckBox useMinBound = new CheckBox("Use Min");
-  private final CheckBox useMaxBound = new CheckBox("Use Max");
+  private final ColoredToggle useMinBound = new ColoredToggle("Use Min");
+  private final ColoredToggle useMaxBound = new ColoredToggle("Use Max");
   private final Spinner<Double> minValueSpinner = new Spinner<>();
   private final Spinner<Double> maxValueSpinner = new Spinner<>();
   private final Spinner<Double> middleSpinner = new Spinner<>();
@@ -257,7 +214,7 @@ public final class SignalAnalysisWorkspace {
     applyThresholdsButton.getStyleClass().add("primary-button");
     applyThresholdsButton.setOnAction(e -> applyValueFilters());
     Tooltip.install(applyThresholdsButton, new Tooltip(
-        "Apply value filters to the Signals table (refilters collected data; no recollect)"));
+        "Apply value filters to the Annotations table (refilters collected data; no recollect)"));
 
     runButton.setText("Run differential");
     runButton.setText("Run differential");
@@ -298,10 +255,12 @@ public final class SignalAnalysisWorkspace {
     statusLabel.setStyle("-fx-font-size: 12px; -fx-opacity: 0.85;");
     annotationTable.setMeanTooltip("Signal value for this sample");
     annotationTable.setUnitColumnTitle(ComparisonUnit.GENE);
+    annotationTable.setEmptyMessage("Open signal data to annotate");
     annotationTable.setOnGoto(row -> AnalysisSession.get().setActiveCanvasMode(AnalysisMode.SIGNAL));
     VBox.setVgrow(annotationTable, Priority.ALWAYS);
     comparisonTable.setMeanTooltip("Mean of Signal values over group samples");
     comparisonTable.setUnitColumnTitle(ComparisonUnit.GENE);
+    comparisonTable.setEmptyMessage("Run group comparison");
     comparisonTable.setOnGoto(row -> AnalysisSession.get().setActiveCanvasMode(AnalysisMode.SIGNAL));
     VBox.setVgrow(comparisonTable, Priority.ALWAYS);
 
@@ -357,7 +316,41 @@ public final class SignalAnalysisWorkspace {
     activateSessionSlice();
     refreshSignalChrome();
     updateReadyState();
+    // Session restore installs finished results — do not wipe them by re-annotating.
+    if (AnalysisSession.get().getAnnotationResult() != null
+        || AnalysisSession.get().getResult(AnalysisMode.SIGNAL) != null) {
+      hydrateTablesFromSession();
+      return;
+    }
     annotateCurrentChromosome();
+  }
+
+  /**
+   * Push session annotation / DE / pattern into tables without collecting or
+   * re-running group stats (project open with analysis cache).
+   */
+  public void hydrateTablesFromSession() {
+    activateSessionSlice();
+    refreshSignalChrome();
+    updateReadyState();
+    GroupStatResult annotated = AnalysisSession.get().getAnnotationResult();
+    if (annotated != null) {
+      applyAnnotationResult(annotated);
+      refreshObservedRangeFromSession();
+    }
+    GroupStatResult compared = AnalysisSession.get().getFilteredResult(AnalysisMode.SIGNAL);
+    if (compared != null && !SignalAnnotator.isAnnotationResult(compared)) {
+      applyComparisonResult(compared);
+    } else {
+      refreshGroupHeatmapEnabled();
+    }
+    SamplePatternEngine.Result pattern = AnalysisSession.get().getLastPatternResult();
+    if (pattern != null) {
+      patternControls.refreshApplyEnabled();
+      if (pattern.summary() != null && !pattern.summary().isBlank()) {
+        patternControls.setStatus(pattern.summary());
+      }
+    }
   }
 
   /** Annotation (Signals) results table. */
@@ -455,7 +448,7 @@ public final class SignalAnalysisWorkspace {
     resultsTabPane = new TabPane();
     resultsTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
     resultsTabPane.getStyleClass().add("results-tabs");
-    signalsResultsTab = new Tab("Signals", annotationTable);
+    signalsResultsTab = new Tab("Annotations", annotationTable);
     signalsResultsTab.setClosable(false);
     signalsResultsTab.setTooltip(new Tooltip(
         "Annotated units (threshold-passing events). Expand lists deviant samples only."));
@@ -811,7 +804,7 @@ public final class SignalAnalysisWorkspace {
     }
     Label hint = new Label(
         SignalChannels.isAlleleCnOnly(activeChannels)
-            ? "Event types filter the Signals table immediately. Value filters below need Apply."
+            ? "Event types filter the Annotations table immediately. Value filters below need Apply."
             : "Keep gene if any channel passes. Filters off by default — edit, then Apply.");
     hint.setWrapText(true);
     hint.setStyle("-fx-font-size: 11px; -fx-opacity: 0.85;");
@@ -825,7 +818,7 @@ public final class SignalAnalysisWorkspace {
     Label header = new Label("Event types");
     header.getStyleClass().add("section-header");
     header.setTooltip(new Tooltip(
-        "Show Gain / Loss / LOH in the Signals table (like Point/SV type filters)."));
+        "Show Gain / Loss / LOH in the Annotations table (like Point/SV type filters)."));
 
     ColoredToggle allToggle = new ColoredToggle("All");
     Set<SignalEventDirection> allowed =
@@ -926,8 +919,8 @@ public final class SignalAnalysisWorkspace {
     SignalValueThresholds thr = ch.thresholds();
     ColoredToggle enabled = new ColoredToggle("Filter");
     enabled.setSelected(thr.isEnabled());
-    CheckBox useMin = new CheckBox("Use Min");
-    CheckBox useMax = new CheckBox("Use Max");
+    ColoredToggle useMin = new ColoredToggle("Use Min");
+    ColoredToggle useMax = new ColoredToggle("Use Max");
     // When filter is off, keep Use Min/Max ready so Apply arms bounds after editing Min.
     useMin.setSelected(thr.getMinValue() != null || !thr.isEnabled());
     useMax.setSelected(thr.getMaxValue() != null || !thr.isEnabled());
@@ -1038,13 +1031,13 @@ public final class SignalAnalysisWorkspace {
     return tables;
   }
 
-  /** Dataset membership, or all registry tracks when unbound (legacy). */
+  /** Dataset membership, or included registry tracks when unbound (legacy). */
   private List<SampleTrack> memberTracks() {
-    if (dataset != null) {
-      return dataset.trackList();
-    }
     SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-    return registry != null ? new ArrayList<>(registry.getSampleTracks()) : List.of();
+    if (dataset != null) {
+      return includedOnly(dataset.trackList(), registry);
+    }
+    return registry != null ? new ArrayList<>(registry.getIncludedSampleTracks()) : List.of();
   }
 
   private SignalSourceSpec resolveSpec() {
@@ -2237,11 +2230,28 @@ public final class SignalAnalysisWorkspace {
       return List.of();
     }
     List<SampleTrack> candidates = dataset != null
-        ? dataset.trackList()
-        : (registry != null ? new ArrayList<>(registry.getSampleTracks()) : List.of());
+        ? includedOnly(dataset.trackList(), registry)
+        : (registry != null ? new ArrayList<>(registry.getIncludedSampleTracks()) : List.of());
     List<SampleTrack> out = new ArrayList<>();
     for (SampleTrack track : candidates) {
       if (isUsable(track, spec)) {
+        out.add(track);
+      }
+    }
+    return out;
+  }
+
+  private static List<SampleTrack> includedOnly(
+      List<SampleTrack> tracks, SampleRegistry registry) {
+    if (tracks == null || tracks.isEmpty()) {
+      return List.of();
+    }
+    if (registry == null) {
+      return new ArrayList<>(tracks);
+    }
+    List<SampleTrack> out = new ArrayList<>();
+    for (SampleTrack track : tracks) {
+      if (registry.isTrackIncludedInProject(track)) {
         out.add(track);
       }
     }

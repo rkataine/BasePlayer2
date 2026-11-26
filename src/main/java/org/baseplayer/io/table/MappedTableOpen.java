@@ -13,7 +13,7 @@ import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
+import org.baseplayer.components.ColoredToggle;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
@@ -235,9 +235,9 @@ public final class MappedTableOpen {
         ? initial.headerRow()
         : preview.firstLineLooksLikeHeader();
 
-    CheckBox headerRowBox = new CheckBox("First row is header");
+    ColoredToggle headerRowBox = new ColoredToggle("First row is header");
     headerRowBox.setSelected(startAsHeader);
-    CheckBox zeroBased = new CheckBox("Start column is 0-based");
+    ColoredToggle zeroBased = new ColoredToggle("Start column is 0-based");
     zeroBased.setSelected(initial != null && initial.startZeroBased());
     HBox options = new HBox(16, headerRowBox, zeroBased);
     options.setAlignment(Pos.CENTER_LEFT);

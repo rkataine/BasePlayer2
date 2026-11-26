@@ -20,7 +20,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
@@ -41,9 +40,9 @@ import javafx.util.StringConverter;
 public final class GroupComparisonFilterControls {
 
   private final ColoredToggle thresholdsEnabled = new ColoredToggle("Filter by thresholds");
-  private final CheckBox useMinAbsDelta = new CheckBox("Min |Δ|");
-  private final CheckBox useMaxQ = new CheckBox("Max q");
-  private final CheckBox useMinN = new CheckBox("Min hits/group");
+  private final ColoredToggle useMinAbsDelta = new ColoredToggle("Min |Δ|");
+  private final ColoredToggle useMaxQ = new ColoredToggle("Max q");
+  private final ColoredToggle useMinN = new ColoredToggle("Min hits/group");
   private final Spinner<Double> minAbsDelta = new Spinner<>();
   private final Spinner<Double> maxQ = new Spinner<>();
   private final Spinner<Integer> minN = new Spinner<>();
@@ -481,7 +480,7 @@ public final class GroupComparisonFilterControls {
     maxRows.setDisable(!master);
   }
 
-  private static HBox criterionRow(CheckBox use, Node control, String tooltip) {
+  private static HBox criterionRow(ColoredToggle use, Node control, String tooltip) {
     use.setMinWidth(110);
     use.setPrefWidth(110);
     if (tooltip != null && !tooltip.isBlank()) {

@@ -1023,7 +1023,9 @@ public class SampleRegistry extends TrackViewportRegistry {
         String query = activeSampleFilterQuery == null ? "" : activeSampleFilterQuery.trim();
         if (query.isEmpty()) {
             for (int i = 0; i < sampleTracks.size(); i++) {
-                cachedDisplayedTrackIndices.add(i);
+                if (isTrackIncludedInProject(sampleTracks.get(i))) {
+                    cachedDisplayedTrackIndices.add(i);
+                }
             }
         } else {
             String needle = query.toLowerCase(Locale.ROOT);
@@ -1031,7 +1033,9 @@ public class SampleRegistry extends TrackViewportRegistry {
                 ? compileSampleGlobPattern(query, false)
                 : null;
             for (int i = 0; i < sampleTracks.size(); i++) {
-                if (matchesSampleFilter(sampleTracks.get(i), needle, globPattern)) {
+                SampleTrack track = sampleTracks.get(i);
+                if (isTrackIncludedInProject(track)
+                    && matchesSampleFilter(track, needle, globPattern)) {
                     cachedDisplayedTrackIndices.add(i);
                 }
             }
@@ -1058,6 +1062,11 @@ public class SampleRegistry extends TrackViewportRegistry {
         }
         for (Sample sample : track.getSamples()) {
             if (textMatchesSampleFilter(sample.getName(), needle, globPattern)) {
+                return true;
+            }
+        }
+        for (SampleGroup group : getGroupsForTrack(track)) {
+            if (textMatchesSampleFilter(group.getName(), needle, globPattern)) {
                 return true;
             }
         }
@@ -1150,6 +1159,9 @@ public class SampleRegistry extends TrackViewportRegistry {
     }
 
     private void bumpSampleGroupsRevision() {
+        // Text filter also matches group names, so membership/rename must refresh
+        // the displayed-track subset (not only sidebar chrome).
+        invalidateDisplayedTrackIndicesCache();
         // Property listeners (sidebar draw, toolbar) must run on the FX thread.
         // Project restore bumps this from a background ThreadRunner job.
         Runnable bump = () -> {
@@ -1209,13 +1221,100 @@ public class SampleRegistry extends TrackViewportRegistry {
         return List.copyOf(sampleGroups.values());
     }
 
+    /** Groups currently included in the project (drawing + analysis). */
+    public List<SampleGroup> getIncludedSampleGroups() {
+        List<SampleGroup> out = new ArrayList<>();
+        for (SampleGroup group : sampleGroups.values()) {
+            if (group != null && group.isIncludedInProject()) {
+                out.add(group);
+            }
+        }
+        return out;
+    }
+
     public SampleGroup getSampleGroup(int groupId) {
         return sampleGroups.get(groupId);
+    }
+
+    public boolean isGroupIncludedInProject(int groupId) {
+        SampleGroup group = sampleGroups.get(groupId);
+        return group != null && group.isIncludedInProject();
+    }
+
+    /**
+     * Ungrouped tracks stay in the project. Grouped tracks stay if they belong to
+     * at least one included group; tracks that only sit in excluded groups are out.
+     */
+    public boolean isTrackIncludedInProject(SampleTrack track) {
+        if (track == null) {
+            return false;
+        }
+        if (!track.hasGroup()) {
+            return true;
+        }
+        for (int groupId : track.getGroupIds()) {
+            if (isGroupIncludedInProject(groupId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Sample tracks currently included in the project (drawing + analysis). */
+    public List<SampleTrack> getIncludedSampleTracks() {
+        List<SampleTrack> out = new ArrayList<>();
+        for (SampleTrack track : sampleTracks) {
+            if (isTrackIncludedInProject(track)) {
+                out.add(track);
+            }
+        }
+        return out;
+    }
+
+    public void setGroupIncludedInProject(int groupId, boolean included) {
+        SampleGroup group = sampleGroups.get(groupId);
+        if (group == null || group.isIncludedInProject() == included) {
+            return;
+        }
+        group.setIncludedInProject(included);
+        ProjectSessionState.get().markDirty();
+        onGroupInclusionChanged();
+    }
+
+    public void setAllGroupsIncludedInProject(boolean included) {
+        boolean changed = false;
+        for (SampleGroup group : sampleGroups.values()) {
+            if (group == null || group.isIncludedInProject() == included) {
+                continue;
+            }
+            group.setIncludedInProject(included);
+            changed = true;
+        }
+        if (!changed) {
+            return;
+        }
+        ProjectSessionState.get().markDirty();
+        onGroupInclusionChanged();
+    }
+
+    private void onGroupInclusionChanged() {
+        invalidateDisplayedTrackIndicesCache();
+        normalizeVisibleRangeAfterDisplayedTrackCountChange();
+        bumpGeneFocusRevision();
+        notifyVariantIndexDirty();
+        bumpSampleGroupsRevision();
     }
 
     public SampleGroup getGroupForTrack(SampleTrack track) {
         if (track == null || !track.hasGroup()) {
             return null;
+        }
+        // Prefer an included group for sidebar accent when multi-assigned.
+        for (int groupId : track.getGroupIds()) {
+            SampleGroup group = sampleGroups.get(groupId);
+            if (group != null && group.isIncludedInProject()) {
+                return group;
+            }
         }
         return sampleGroups.get(track.getGroupId());
     }
@@ -1870,3 +1969,4 @@ public class SampleRegistry extends TrackViewportRegistry {
         bumpSampleGroupsRevision();
     }
 }
+

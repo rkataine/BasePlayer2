@@ -26,7 +26,7 @@ import java.util.Map;
  */
 public class ProjectDocument {
 
-  public int schemaVersion = 3;
+  public int schemaVersion = 4;
   public String name;
 
   /**
@@ -34,6 +34,12 @@ public class ProjectDocument {
    * Values: {@code UNSET}, {@code SOMATIC}, {@code NOT_SOMATIC}.
    */
   public String somaticSampleMode = "UNSET";
+  /**
+   * Optional tumor-name pattern for somatic 2-column VCFs. Same {@code *} wildcard
+   * rules as the sample filter (literal substring when no {@code *}). Empty = use
+   * built-in name cues only.
+   */
+  public String somaticTumorNamePattern = "";
 
   public GenomeSpec genome = new GenomeSpec();
   /**
@@ -56,9 +62,15 @@ public class ProjectDocument {
   public List<StackSpec> stacks = new ArrayList<>();
   /** Named sample groups (sidebar colors); membership is on {@link SampleTrackSpec#groupIds}. */
   public List<SampleGroupSpec> sampleGroups = new ArrayList<>();
-  /** Analysis Manager Signal settings (+ mirror of current groups; groups always = all). */
+  /** Analysis Manager Signal settings (+ mirror of included sample groups). */
   public AnalysisComparisonSpec analysisComparison = new AnalysisComparisonSpec();
   public List<SampleTrackSpec> sampleTracks = new ArrayList<>();
+  /**
+   * Per-VCF registry metadata so project restore can rebuild {@code VcfData}/
+   * {@code VariantLoader} without HTSJDK open or mate rescans. Mate payloads live
+   * in {@code .bpcache}; this block holds header samples, mapping, and flags.
+   */
+  public List<VcfMetaSpec> vcfMetas = new ArrayList<>();
   /**
    * Wide matrix files (gene/region keys + sample columns) reopened after sample tracks.
    * Values are not stored — the file is re-parsed with the saved open options.
@@ -216,7 +228,7 @@ public class ProjectDocument {
     public AnalysisComparisonSpec settings = new AnalysisComparisonSpec();
   }
 
-  /** Analysis Manager Signal settings. Group id fields are a mirror only (always all groups). */
+  /** Analysis Manager Signal settings. Group ids mirror included sample groups. */
   public static class AnalysisComparisonSpec {
     public List<Integer> participatingGroupIds = new ArrayList<>();
     public Integer baselineGroupId;
@@ -287,6 +299,11 @@ public class ProjectDocument {
     public String name;
     public String color;
     /**
+     * When false, the group is defined but omitted from drawing/analysis.
+     * Null on load means included (legacy projects).
+     */
+    public Boolean includedInProject;
+    /**
      * Legacy parental track name; ignored on write. Kept for load migration only.
      */
     public String parentalTrackName;
@@ -345,8 +362,47 @@ public class ProjectDocument {
   }
 
   /**
-   * One opened matrix file. Re-parsed on load via {@code MatrixTableOpen.load}
-   * then attached with {@code SampleDataManager.applyMatrixSamplePolicy}.
+   * Durable VCF registry state for one file path. Enough to register without opening
+   * the VCF; allele lists stay in {@code .bpcache}.
+   */
+  public static class VcfMetaSpec {
+    public String path;
+    public String pathRelative;
+    public long size;
+    public long mtime;
+    /** Header sample column names in VCF order (site-only stem when header empty). */
+    public List<String> sampleNames = new ArrayList<>();
+    /** Skipped normal column for somatic 2-sample VCFs; null when none. */
+    public String detectedNormalSample;
+    /** VCF sample name → track displayName at save time. */
+    public Map<String, String> sampleToTrack = new LinkedHashMap<>();
+    public String chromPrefix = "";
+    public boolean hasTbiOrCsiIndex = true;
+    public boolean canTabixQuery = true;
+    /** {@link org.baseplayer.io.readers.VcfReader.InterChromBreakendStyle} name, or null. */
+    public String breakendStyle;
+    /** True when a mate-index sidecar was written under {@code .bpcache}. */
+    public boolean mateIndexSaved;
+    /** Sidecar file name under the cache dir (e.g. {@code mates-….bpm.zst}). */
+    public String mateIndexFile;
+    public List<VcfHeaderFieldSpec> infoFields = new ArrayList<>();
+    public List<VcfHeaderFieldSpec> filterFields = new ArrayList<>();
+    public List<VcfHeaderFieldSpec> formatFields = new ArrayList<>();
+  }
+
+  /** Serializable {@link org.baseplayer.variant.VcfHeaderFieldDef}. */
+  public static class VcfHeaderFieldSpec {
+    public String kind;
+    public String id;
+    public String number;
+    public String type;
+    public String description;
+  }
+
+  /**
+   * One opened matrix file (path + open options only). Compact values live in
+   * {@code <stem>.bpcache/matrix-*.bpmx.zst} when present; otherwise the source
+   * file is re-parsed via {@code MatrixTableOpen.load}.
    */
   public static class MatrixSpec {
     public String path;

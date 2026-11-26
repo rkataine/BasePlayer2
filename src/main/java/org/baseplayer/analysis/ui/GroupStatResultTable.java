@@ -84,7 +84,7 @@ public final class GroupStatResultTable extends VBox {
   private final ListView<Entry> list = new ListView<>();
   private final ObservableList<Entry> items = FXCollections.observableArrayList();
   private final List<Entry> allEntries = new ArrayList<>();
-  private final Label emptyLabel = new Label("Open signal data to annotate");
+  private final Label emptyLabel = new Label("Run group comparison");
   private final HBox sortNameHeader;
   private final HBox sortChrHeader;
   private final HBox sortPosHeader;
@@ -186,6 +186,13 @@ public final class GroupStatResultTable extends VBox {
 
   public void setOnGoto(Consumer<GroupStatResult.Row> onGoto) {
     this.onGoto = onGoto;
+  }
+
+  /** Placeholder when the list has no rows (initial empty state or cleared result). */
+  public void setEmptyMessage(String message) {
+    emptyLabel.setText(
+        message != null && !message.isBlank() ? message : "Run group comparison");
+    list.setPlaceholder(emptyLabel);
   }
 
   /** Tooltip shown on Mean in expanded group rows (mode-specific score wording). */
@@ -575,7 +582,11 @@ public final class GroupStatResultTable extends VBox {
     visible.sort(cmp);
     items.setAll(visible);
     if (visible.isEmpty() && !allEntries.isEmpty() && !q.isEmpty()) {
-      emptyLabel.setText("No genes match search");
+      emptyLabel.setText(switch (unitMode) {
+        case GENE -> "No genes match search";
+        case WINDOW -> "No windows match search";
+        case NATIVE_FEATURE -> "No features match search";
+      });
       list.setPlaceholder(emptyLabel);
     }
     list.refresh();

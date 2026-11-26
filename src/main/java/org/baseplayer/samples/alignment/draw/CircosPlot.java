@@ -27,6 +27,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
@@ -57,8 +58,9 @@ import javafx.util.Duration;
  * calls.
  *
  * <p>When multiple samples contribute links a toggle switches between a single
- * combined plot and a grid of smaller per-sample plots. Header controls also
- * toggle cancer-gene labels, a white publication background, and vector PDF export.
+ * combined plot and a paginated grid of smaller per-sample plots (only the
+ * current page builds canvases). Header controls also toggle cancer-gene
+ * labels, a white publication background, and vector PDF export.
  */
 public final class CircosPlot {
 
@@ -136,6 +138,8 @@ public final class CircosPlot {
 
     private static final double COMBINED_SIZE   = 780;
     private static final double PER_SAMPLE_SIZE = 340;
+    /** Canvases built per page in per-sample view (avoids GPU load for large cohorts). */
+    private static final int PER_SAMPLE_PAGE_SIZE = 8;
 
     private record ChromArc(String name, long length, double startRad, double spanRad) {
         double angleFor(long pos) {
@@ -159,6 +163,8 @@ public final class CircosPlot {
     private boolean showCancerGenes = true;
     private boolean whiteBackground = false;
     private boolean combinedMode = true;
+    /** Zero-based page index for {@link #buildPerSampleView()}. */
+    private int perSamplePage;
     /** When true, re-open Options after a sticky toggle so the popup stays usable. */
     private boolean reopenOptionsAfterHide;
 
@@ -248,6 +254,9 @@ public final class CircosPlot {
                 return;
             }
             combinedMode = combinedItem.isSelected();
+            if (!combinedMode) {
+                perSamplePage = 0;
+            }
             refreshCenter();
             keepOptionsOpen();
         });
@@ -331,6 +340,13 @@ public final class CircosPlot {
 
     private javafx.scene.Node buildPerSampleView() {
         PlotTheme t = theme();
+        List<String> samples = new ArrayList<>(linksBySample.keySet());
+        int total = samples.size();
+        int pageCount = Math.max(1, (total + PER_SAMPLE_PAGE_SIZE - 1) / PER_SAMPLE_PAGE_SIZE);
+        perSamplePage = Math.max(0, Math.min(perSamplePage, pageCount - 1));
+        int from = perSamplePage * PER_SAMPLE_PAGE_SIZE;
+        int to = Math.min(from + PER_SAMPLE_PAGE_SIZE, total);
+
         TilePane tiles = new TilePane();
         tiles.setHgap(12);
         tiles.setVgap(12);
@@ -338,9 +354,9 @@ public final class CircosPlot {
         tiles.setStyle("-fx-background-color: " + t.plotAreaBg() + ";");
         tiles.setPrefColumns(2);
 
-        for (Map.Entry<String, List<Link>> e : linksBySample.entrySet()) {
-            String sample = e.getKey();
-            List<Link> sampleLinks = e.getValue();
+        for (int i = from; i < to; i++) {
+            String sample = samples.get(i);
+            List<Link> sampleLinks = linksBySample.get(sample);
             int s = 0, d = 0, v = 0;
             for (Link l : sampleLinks) {
                 switch (l.type) {
@@ -375,7 +391,40 @@ public final class CircosPlot {
         sp.setFitToWidth(true);
         sp.setStyle("-fx-background: " + t.scrollBg()
                 + "; -fx-background-color: " + t.scrollBg() + ";");
-        return sp;
+
+        if (pageCount <= 1) {
+            return sp;
+        }
+
+        Button prev = new Button("Previous");
+        Button next = new Button("Next");
+        prev.getStyleClass().add("secondary-button");
+        next.getStyleClass().add("secondary-button");
+        prev.setDisable(perSamplePage == 0);
+        next.setDisable(perSamplePage >= pageCount - 1);
+        prev.setOnAction(e -> {
+            perSamplePage--;
+            refreshCenter();
+        });
+        next.setOnAction(e -> {
+            perSamplePage++;
+            refreshCenter();
+        });
+
+        Label status = new Label(String.format(
+                "Samples %d\u2013%d of %d  (page %d/%d)",
+                from + 1, to, total, perSamplePage + 1, pageCount));
+        status.setFont(AppFonts.getUIFont());
+        status.setStyle("-fx-text-fill: " + t.sampleCountsFill() + ";");
+
+        HBox pager = new HBox(12, prev, status, next);
+        pager.setAlignment(Pos.CENTER);
+        pager.setPadding(new Insets(8, 0, 0, 0));
+
+        BorderPane pageRoot = new BorderPane();
+        pageRoot.setCenter(sp);
+        pageRoot.setBottom(pager);
+        return pageRoot;
     }
 
     public void show() {

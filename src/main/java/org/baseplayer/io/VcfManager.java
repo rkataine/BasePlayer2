@@ -120,13 +120,6 @@ public class VcfManager {
     // Track whether we've set up the update listener
     private boolean updateListenerInitialized = false;
 
-    /**
-     * Once any open SV VCF is probed as single-sided TRA/BND (mate only in INFO/ALT),
-     * treat later SV VCFs the same and build mate indexes without re-probing.
-     * Cleared when all VCFs are closed.
-     */
-    private volatile boolean sessionForceSingleSidedBreakends = false;
-    
     private VcfManager() {
         // Singleton
     }
@@ -168,6 +161,23 @@ public class VcfManager {
             return null;
         }
         VcfData vcfData = new VcfData(reader, loader, file);
+        loadedVcfs.add(vcfData);
+        initializeUpdateListener();
+        return vcfData;
+    }
+
+    /**
+     * Register a VCF rebuilt from project metadata (no HTSJDK open). Returns null if
+     * the path is already registered.
+     */
+    public synchronized VcfData registerMetadataVcf(VcfData vcfData) {
+        if (vcfData == null || vcfData.file == null) {
+            return null;
+        }
+        String normalizedPath = normalizeVcfPath(vcfData.file);
+        if (!normalizedPath.isEmpty() && isVcfPathLoadedLocked(normalizedPath)) {
+            return null;
+        }
         loadedVcfs.add(vcfData);
         initializeUpdateListener();
         return vcfData;
@@ -321,12 +331,18 @@ public class VcfManager {
 
     /** Trigger variant load for every visible stack: cached chromosome, else the on-screen window. */
     public void loadVariantsForCurrentView() {
-        syncCurrentFilterFromOpenAnalysisManager();
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        if (stackManager.isEmpty() || loadedVcfs.isEmpty()) return;
-        for (DrawStack stack : stackManager.getStacks()) {
-            loadVariantsForStack(stack);
-        }
+        // Visible-but-never-opened project VCFs register here (not on checkbox) so the
+        // track settings menu stays open for “Apply settings to all”.
+        org.baseplayer.io.SampleDataManager.ensureVisibleVcfsRegistered(() -> {
+            syncCurrentFilterFromOpenAnalysisManager();
+            DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+            if (stackManager.isEmpty() || loadedVcfs.isEmpty()) {
+                return;
+            }
+            for (DrawStack stack : stackManager.getStacks()) {
+                loadVariantsForStack(stack);
+            }
+        });
     }
 
     /**
@@ -351,25 +367,27 @@ public class VcfManager {
      * must not materialize every VCF across the contig).
      */
     public void loadVariantsForVisibleWindowOnly() {
-        syncCurrentFilterFromOpenAnalysisManager();
-        DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
-        if (stackManager.isEmpty() || loadedVcfs.isEmpty() || !hasVisibleVcfSample()) {
-            return;
-        }
-        for (DrawStack stack : stackManager.getStacks()) {
-            if (stack == null) {
-                continue;
+        org.baseplayer.io.SampleDataManager.ensureVisibleVcfsRegistered(() -> {
+            syncCurrentFilterFromOpenAnalysisManager();
+            DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
+            if (stackManager.isEmpty() || loadedVcfs.isEmpty() || !hasVisibleVcfSample()) {
+                return;
             }
-            String chrom = stack.getChromosome();
-            if (chrom == null || chrom.isBlank()) {
-                continue;
+            for (DrawStack stack : stackManager.getStacks()) {
+                if (stack == null) {
+                    continue;
+                }
+                String chrom = stack.getChromosome();
+                if (chrom == null || chrom.isBlank()) {
+                    continue;
+                }
+                if (isFullChromosomeView(stack)) {
+                    continue;
+                }
+                long[] range = visibleWindowRange(stack);
+                loadRegionVariants(chrom, range[0], range[1]);
             }
-            if (isFullChromosomeView(stack)) {
-                continue;
-            }
-            long[] range = visibleWindowRange(stack);
-            loadRegionVariants(chrom, range[0], range[1]);
-        }
+        });
     }
 
     /** Non-empty cached alleles already cover each visible stack's current window. */
@@ -466,7 +484,26 @@ public class VcfManager {
      * (gene body), cache reuse succeeds if that core is already loaded even when
      * the padded {@code start}/{@code end} view overhangs the cache.
      */
-    public synchronized void loadRegionVariants(
+    public void loadRegionVariants(
+        String chromosome,
+        long start,
+        long end,
+        boolean manualChromosomeSelection,
+        long coreStart,
+        long coreEnd) {
+        // Defer open of newly enabled project VCFs until load — not on checkbox.
+        if (org.baseplayer.io.SampleDataManager.hasUnregisteredVisibleVcfs()) {
+            final String chrom = chromosome;
+            org.baseplayer.io.SampleDataManager.ensureVisibleVcfsRegistered(() ->
+                loadRegionVariantsAfterRegister(
+                    chrom, start, end, manualChromosomeSelection, coreStart, coreEnd));
+            return;
+        }
+        loadRegionVariantsAfterRegister(
+            chromosome, start, end, manualChromosomeSelection, coreStart, coreEnd);
+    }
+
+    private synchronized void loadRegionVariantsAfterRegister(
         String chromosome,
         long start,
         long end,
@@ -989,8 +1026,11 @@ public class VcfManager {
             Platform.runLater(() -> updateCanvasesWithVariants(justLoaded));
             return;
         }
+        // Match stream/cache identity: empty unobserved class slices pass-all until
+        // Analysis Manager syncs checkbox state via applyFiltersNow.
+        VariantFilter presentFilter = loadTimeFilterSnapshot(currentFilter);
         if (justLoaded != null) {
-            justLoaded.ensureVisibleChain(currentFilter);
+            justLoaded.ensureVisibleChain(presentFilter);
         }
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         for (DrawStack stack : stackManager.getStacks()) {
@@ -1004,7 +1044,7 @@ public class VcfManager {
                 }
                 continue;
             }
-            list.ensureVisibleChain(currentFilter);
+            list.ensureVisibleChain(presentFilter);
             // Attach lists only — EventCoordinator paints via GenomicCanvas.update.
             // Drawing here + toggling update nested GC writes and corrupted NGCanvas.
             if (stack.sampleTrackCanvas != null) {
@@ -1121,7 +1161,6 @@ public class VcfManager {
             }
         }
         loadedVcfs.clear();
-        sessionForceSingleSidedBreakends = false;
 
         // Break node chains while lists may still be held by density threads / disposed UI.
         for (VariantList list : variantCache.values()) {
@@ -1162,6 +1201,11 @@ public class VcfManager {
             files.add(vcfData.file);
         }
         return files;
+    }
+
+    /** Snapshot of currently registered VCF registry entries (order preserved). */
+    public synchronized List<VcfData> getLoadedVcfDataSnapshot() {
+        return List.copyOf(loadedVcfs);
     }
 
     public ThreadRunner.RunnerTask annotateAllReferenceChromosomes(
@@ -1566,6 +1610,103 @@ public class VcfManager {
     }
 
     /**
+     * Chromosome list for streaming genomewide Discover/Compare.
+     * When {@code discardAfterFold} is true the list is not in {@code variantCache}
+     * and should be dropped after folding. When false, the list is an existing cache
+     * entry and must be left alone.
+     */
+    public record ChromFoldSource(VariantList list, boolean discardAfterFold) {}
+
+    /**
+     * Annotate one chromosome for genomewide fold without permanently caching every chrom.
+     * Reuses a compatible full-chromosome cache entry when present; otherwise builds a
+     * temporary list that is not installed into {@code variantCache}.
+     */
+    public ChromFoldSource prepareChromosomeForGenomewideFold(
+            String chromosome,
+            VariantFilter filter,
+            List<String> warnings,
+            Consumer<VariantList> afterReady) {
+        VariantFilter filterSnapshot = loadTimeFilterSnapshot(filter);
+        List<File> files = getLoadedVcfFiles();
+        if (files.isEmpty() || chromosome == null || chromosome.isBlank()) {
+            return new ChromFoldSource(null, true);
+        }
+        long loadEnd = resolveChromosomeLoadEnd(chromosome);
+        VariantList cached = findCachedVariantList(chromosome);
+        String requestedKey = filterSnapshot != null ? filterSnapshot.toLoadIdentityKey() : null;
+        boolean reusable = cached != null
+            && cached.isAnnotated()
+            && !cached.isEmpty()
+            && cached.getVcfCountWhenLoaded() == files.size()
+            && java.util.Objects.equals(requestedKey, cached.getLoadedFilterKey())
+            && isChromosomeFullyLoadedForCache(cached, loadEnd);
+        if (reusable) {
+            cached.rebuildVisibleChain(filterSnapshot);
+            if (afterReady != null) {
+                afterReady.accept(cached);
+            }
+            return new ChromFoldSource(cached, false);
+        }
+
+        VariantList variants = new VariantList(chromosome);
+        VariantAnnotator annotator = new VariantAnnotator(
+            ServiceRegistry.getInstance().getReferenceGenomeService());
+        final Set<VcfVariantType> knownTypesBeforeLoad = getSessionAvailableTypes();
+        List<VcfData> vcfsToStream = new ArrayList<>();
+        synchronized (this) {
+            for (File file : files) {
+                for (VcfData vcfData : loadedVcfs) {
+                    if (vcfData.file != null && vcfData.file.equals(file)) {
+                        vcfsToStream.add(vcfData);
+                        break;
+                    }
+                }
+            }
+        }
+        try {
+            streamVcfsIntoList(
+                chromosome,
+                1,
+                loadEnd,
+                variants,
+                vcfsToStream,
+                filterSnapshot,
+                knownTypesBeforeLoad,
+                null,
+                null,
+                () -> Thread.currentThread().isInterrupted(),
+                warnings != null ? warnings : new ArrayList<>());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new ChromFoldSource(null, true);
+        }
+        projectMateBreakpoints(chromosome, variants, 1, loadEnd);
+        if (Thread.currentThread().isInterrupted() || variants.isEmpty()) {
+            return new ChromFoldSource(variants.isEmpty() ? null : variants, true);
+        }
+        try {
+            annotator.annotate(variants, chromosome);
+            noteObservedEffectsFromList(variants);
+        } catch (Throwable t) {
+            if (warnings != null) {
+                warnings.add("Annotation failed for " + chromosome + ": " + t.getMessage());
+            }
+            return new ChromFoldSource(null, true);
+        }
+        variants.retainVariants(filterSnapshot::passesCacheRetention);
+        variants.rebuildVisibleChain(filterSnapshot);
+        if (!variants.getLohRegions().isEmpty()) {
+            annotator.annotateLohRegions(variants, chromosome);
+        }
+        if (afterReady != null) {
+            afterReady.accept(variants);
+        }
+        variants.rebuildVisibleChain(filterSnapshot);
+        return new ChromFoldSource(variants, true);
+    }
+
+    /**
      * Sole VCF→{@link VariantList} populate implementation for gene/region load and
      * annotate-all. Resets stream-merge state once, then streams every VCF through
      * {@link VariantLoader#streamRegionVariantsToList} with one shared cursor so allele
@@ -1822,6 +1963,12 @@ public class VcfManager {
         if (vcfData.mateIndex != null) {
             return;
         }
+        // Known non–single-sided (e.g. restore meta) — never full-scan.
+        if (vcfData.breakendStyle != null
+            && vcfData.breakendStyle != VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
+            vcfData.mateIndex = MateBreakpointIndex.empty();
+            return;
+        }
         // Without mapped tracks, softFill drops every BND — do not sticky-empty the index.
         if (vcfData.loader == null || vcfData.loader.getMappedSampleCount() == 0) {
             System.err.printf(
@@ -1864,28 +2011,15 @@ public class VcfManager {
     }
 
     /**
-     * Probe the first SV file (unless the session already forced single-sided), then
-     * full mate-index scan when single-sided. Later files in a multi-VCF open inherit
-     * the first single-sided result and skip the tabix probe. Loader must already have
-     * a bound reader and a non-empty sample map. Sets {@link VcfData#mateIndex}.
+     * Probe this SV file independently, then full mate-index scan only when
+     * {@link VcfReader.InterChromBreakendStyle#SINGLE_SIDED} (breakpoint reported
+     * once; mate lives in INFO/ALT). Dual-sided / none get an empty index.
+     * Loader must already have a bound reader and a non-empty sample map.
      */
     private void applyMateSupportAfterProbe(VcfData vcfData) throws IOException {
-        VcfReader.InterChromBreakendStyle style;
         int mapped = vcfData.loader != null ? vcfData.loader.getMappedSampleCount() : 0;
-        if (sessionForceSingleSidedBreakends) {
-            style = VcfReader.InterChromBreakendStyle.SINGLE_SIDED;
-            vcfData.breakendStyle = style;
-            System.err.printf(
-                "[VcfManager] mate index forced (session) file=%s mappedSamples=%d%n",
-                vcfData.file != null ? vcfData.file.getName() : "?",
-                mapped);
-        } else {
-            style = vcfData.loader.detectInterChromBreakendStyle();
-            vcfData.breakendStyle = style;
-            if (style == VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
-                sessionForceSingleSidedBreakends = true;
-            }
-        }
+        VcfReader.InterChromBreakendStyle style = vcfData.loader.detectInterChromBreakendStyle();
+        vcfData.breakendStyle = style;
         if (style != VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
             vcfData.mateIndex = MateBreakpointIndex.empty();
             System.err.printf(
@@ -2543,7 +2677,6 @@ public class VcfManager {
             it.remove();
         }
         if (loadedVcfs.isEmpty()) {
-            sessionForceSingleSidedBreakends = false;
             variantCache.clear();
             lastLoadedChromosome = null;
             clearCanvasTypeVisibility();
@@ -2884,7 +3017,10 @@ public class VcfManager {
         variantsRevision.incrementAndGet();
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
         fireAndClearChromosomeReadyCallback();
-        loadVariantsForCurrentView();
+        // Do not call loadVariantsForCurrentView() here. Session restore already
+        // installed annotated alleles (incl. control AF); a follow-up load often
+        // rematerializes the open chromosome when the UI filter key differs from
+        // the baked cache key. SessionRuntime streams only when usedCache is false.
         return true;
     }
 
@@ -3131,6 +3267,22 @@ public class VcfManager {
         public MateBreakpointIndex getMateBreakpointIndex() {
             return mateIndex;
         }
+
+        public File getFile() {
+            return file;
+        }
+
+        public VariantLoader getLoader() {
+            return loader;
+        }
+
+        public VcfReader.InterChromBreakendStyle getBreakendStyle() {
+            return breakendStyle;
+        }
+
+        public void setBreakendStyle(VcfReader.InterChromBreakendStyle style) {
+            this.breakendStyle = style;
+        }
         
         public VcfData(VcfReader reader, VariantLoader loader, File file) {
             this.reader = reader;
@@ -3140,6 +3292,35 @@ public class VcfManager {
             this.infoHeaderFields = reader != null ? reader.getInfoHeaderDefs() : List.of();
             this.filterHeaderFields = reader != null ? reader.getFilterHeaderDefs() : List.of();
             this.formatHeaderFields = reader != null ? reader.getFormatHeaderDefs() : List.of();
+        }
+
+        /** Register from project-saved metadata (no open {@link VcfReader}). */
+        public VcfData(
+                VariantLoader loader,
+                File file,
+                String chromPrefix,
+                List<VcfHeaderFieldDef> infoHeaderFields,
+                List<VcfHeaderFieldDef> filterHeaderFields,
+                List<VcfHeaderFieldDef> formatHeaderFields) {
+            this.reader = null;
+            this.loader = loader;
+            this.file = file;
+            this.chromPrefix = chromPrefix != null
+                ? chromPrefix
+                : org.baseplayer.utils.ChromosomeNames.NONE;
+            this.infoHeaderFields = infoHeaderFields != null ? List.copyOf(infoHeaderFields) : List.of();
+            this.filterHeaderFields =
+                filterHeaderFields != null ? List.copyOf(filterHeaderFields) : List.of();
+            this.formatHeaderFields =
+                formatHeaderFields != null ? List.copyOf(formatHeaderFields) : List.of();
+        }
+
+        /** Install a restored mate index and mark the build complete. */
+        public void installMateIndex(
+                MateBreakpointIndex index, VcfReader.InterChromBreakendStyle style) {
+            this.mateIndex = index != null ? index : MateBreakpointIndex.empty();
+            this.breakendStyle = style;
+            this.mateIndexBuildStarted.set(true);
         }
 
         public List<VcfHeaderFieldDef> getInfoHeaderFields() {

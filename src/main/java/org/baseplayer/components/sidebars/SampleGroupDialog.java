@@ -5,13 +5,13 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.baseplayer.components.AppDialog;
+import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.samples.SampleTag;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
@@ -174,9 +174,9 @@ public final class SampleGroupDialog {
   }
 
   private static HBox tagRoleRow(SampleTag tag, EnumSet<SampleTag> selectedTags) {
-    CheckBox box = new CheckBox();
+    ColoredToggle box = new ColoredToggle();
+    box.setMaxWidth(Region.USE_PREF_SIZE);
     box.setSelected(selectedTags.contains(tag));
-    box.setStyle("-fx-text-fill: #ddd;");
     box.selectedProperty().addListener((obs, o, on) -> {
       if (Boolean.TRUE.equals(on)) {
         selectedTags.add(tag);
@@ -201,7 +201,7 @@ public final class SampleGroupDialog {
     row.setStyle(
         "-fx-background-color: #2a2a2a; -fx-background-radius: 6; -fx-cursor: hand;");
     row.setOnMouseClicked(e -> {
-      if (e.getTarget() != box) {
+      if (!e.isConsumed()) {
         box.setSelected(!box.isSelected());
       }
     });

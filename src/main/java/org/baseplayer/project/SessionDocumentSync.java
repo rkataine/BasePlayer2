@@ -95,6 +95,7 @@ public final class SessionDocumentSync {
     writeSampleGroupsFromRegistry();
     org.baseplayer.analysis.ComparisonContext.get().writeToDocument(live());
     writeSampleTracksFromRuntime(projectFile);
+    VcfMetaPersistence.writeVcfMetasFromRuntime(projectFile, null);
     writeMatricesFromRuntime(projectFile);
     writeFeatureTracksFromRuntime(projectFile);
     writeStacksFromRuntime();
@@ -120,6 +121,7 @@ public final class SessionDocumentSync {
       groupSpec.id = group.getId();
       groupSpec.name = group.getName();
       groupSpec.color = group.toCssHex();
+      groupSpec.includedInProject = group.isIncludedInProject();
       groupSpec.parentGroupId = -1;
       doc.sampleGroups.add(groupSpec);
     }

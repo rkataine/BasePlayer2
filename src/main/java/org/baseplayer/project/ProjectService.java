@@ -128,5 +128,25 @@ public final class ProjectService {
       }
       throw new IOException("Failed to write variant session cache", e);
     }
+    try {
+      MatrixCacheStore.writeSessionCache(projectFile);
+    } catch (Exception e) {
+      System.err.println("Failed to write matrix session cache: " + e.getMessage());
+      e.printStackTrace();
+      if (e instanceof IOException io) {
+        throw io;
+      }
+      throw new IOException("Failed to write matrix session cache", e);
+    }
+    try {
+      AnalysisResultStore.writeSessionCache(projectFile);
+    } catch (Exception e) {
+      System.err.println("Failed to write analysis session cache: " + e.getMessage());
+      e.printStackTrace();
+      if (e instanceof IOException io) {
+        throw io;
+      }
+      throw new IOException("Failed to write analysis session cache", e);
+    }
   }
 }

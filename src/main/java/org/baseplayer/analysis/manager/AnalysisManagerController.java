@@ -92,6 +92,7 @@ public class AnalysisManagerController implements Initializable, PostLoadTablePo
     @FXML private Button comparisonWindowApplyButton;
     @FXML private Label commonVariantsHelpLabel;
     @FXML private VBox comparisonGroupsContainer;
+    @FXML private VBox pointPatternsHost;
     @FXML private Label groupComparisonSummaryLabel;
     @FXML private Button refreshComparisonGroupsButton;
     @FXML private RadioButton presentMatchAllRadio, presentMatchAnyRadio;
@@ -183,7 +184,7 @@ public class AnalysisManagerController implements Initializable, PostLoadTablePo
                 sharedSampleRangeSlider, geneLevelComparisonCheckBox, comparisonWindowField,
                 comparisonWindowApplyButton, commonVariantsHelpLabel, comparisonGroupsContainer,
                 groupComparisonSummaryLabel, refreshComparisonGroupsButton,
-                presentMatchAllRadio, presentMatchAnyRadio, calculateLohButton, null),
+                presentMatchAllRadio, presentMatchAnyRadio, calculateLohButton, pointPatternsHost),
             batch::scheduleFilterUpdate,
             batch::scheduleImmediateFilterApply,
             () -> ctx.suppressFilterApplyEvents);
@@ -506,6 +507,9 @@ public class AnalysisManagerController implements Initializable, PostLoadTablePo
             typeFilter = ctx.vcfManager.getCurrentFilter();
         }
         modeHost.syncWorkspaceTypesFromFilter(ctx.sourceVariantLists, typeFilter, true);
+        // Populate turns type/effect checkboxes on without writing currentFilter —
+        // push UI → applyFilter so the canvas visible chain matches (same as a nudge).
+        batch.applyFiltersNow();
         updateModeTabVisibility();
         ctx.refreshReloadBannerState();
         tables.finishPostLoad(result);

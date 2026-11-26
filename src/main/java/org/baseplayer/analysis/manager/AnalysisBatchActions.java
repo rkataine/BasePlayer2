@@ -274,6 +274,14 @@ final class AnalysisBatchActions {
         if (ctx.vcfManager == null) {
             return;
         }
+        ctx.modeHost.refreshMutationAllChromosomesButtons();
+        org.baseplayer.analysis.AllChromAction action =
+            ctx.modeHost.allChromActionForActiveMutationMode();
+        if (action == org.baseplayer.analysis.AllChromAction.DISCOVER
+            || action == org.baseplayer.analysis.AllChromAction.COMPARE) {
+            runMutationGenomewide(action);
+            return;
+        }
         List<String> chromosomes = ctx.referenceChromosomeOrder();
         if (chromosomes.isEmpty()) {
             tables.setPlaceholder("No chromosomes available in dropdown");
@@ -286,6 +294,106 @@ final class AnalysisBatchActions {
             "No chromosomes available for annotation");
     }
 
+    private void runMutationGenomewide(org.baseplayer.analysis.AllChromAction action) {
+        List<String> chromosomes = ctx.referenceChromosomeOrder();
+        if (chromosomes.isEmpty()) {
+            tables.setPlaceholder("No chromosomes available in dropdown");
+            return;
+        }
+        org.baseplayer.analysis.AnalysisMode mode = ctx.modeHost.activeMutationMode();
+        org.baseplayer.analysis.ui.MutationPatternHost patterns = ctx.modeHost.patternHost(mode);
+        org.baseplayer.analysis.pattern.SamplePatternEngine.Settings settings =
+            patterns != null ? patterns.controls().buildSettings() : null;
+        org.baseplayer.variant.VariantFilter filter = ctx.buildFilterFromUI();
+        org.baseplayer.analysis.DifferenceThresholds thr =
+            org.baseplayer.analysis.AnalysisSession.get().getThresholds();
+        ctx.busyGate.run(action.buttonText() + "…", onDone -> {
+            org.baseplayer.services.ThreadRunner.RunnerTask task =
+                org.baseplayer.analysis.mutation.MutationGenomewideRunner.run(
+                    mode,
+                    action,
+                    chromosomes,
+                    filter,
+                    thr,
+                    settings,
+                    control.afterChromosomeHook(),
+                    new org.baseplayer.analysis.mutation.MutationGenomewideRunner.Listener() {
+                        @Override
+                        public void onStarted(
+                            org.baseplayer.analysis.AnalysisMode runMode,
+                            org.baseplayer.analysis.AllChromAction act) {
+                            if (patterns != null) {
+                                patterns.controls().setBusy(true);
+                                patterns.controls().setStatus(act.buttonText() + "…");
+                            }
+                        }
+
+                        @Override
+                        public void onFinished(
+                            org.baseplayer.analysis.AnalysisMode runMode,
+                            org.baseplayer.analysis.AllChromAction act,
+                            org.baseplayer.analysis.groupstat.GroupStatResult filteredOrRaw,
+                            org.baseplayer.analysis.pattern.SamplePatternEngine.Result patternOrNull) {
+                            org.baseplayer.analysis.ui.MutationEnrichmentPanel panel =
+                                ctx.modeHost.enrichmentPanel(runMode);
+                            if (panel != null) {
+                                panel.refreshFromSession(true);
+                            }
+                            if (patterns != null) {
+                                patterns.controls().setBusy(false);
+                                patterns.controls().refreshApplyEnabled(runMode);
+                                if (patternOrNull != null) {
+                                    int kept = filteredOrRaw != null ? filteredOrRaw.rows().size() : 0;
+                                    int raw = patternOrNull.markers() != null
+                                        ? patternOrNull.markers().rows().size() : 0;
+                                    patterns.controls().setStatus(String.format(
+                                        java.util.Locale.ROOT,
+                                        "%s · showing %d / %d",
+                                        patternOrNull.summary(),
+                                        kept,
+                                        raw));
+                                } else if (filteredOrRaw != null) {
+                                    patterns.controls().setStatus(filteredOrRaw.summary());
+                                }
+                            }
+                            onDone.run();
+                        }
+
+                        @Override
+                        public void onFailed(
+                            org.baseplayer.analysis.AnalysisMode runMode,
+                            org.baseplayer.analysis.AllChromAction act,
+                            String message) {
+                            if (patterns != null) {
+                                patterns.controls().setBusy(false);
+                                patterns.controls().setStatus(
+                                    message != null ? message : "Failed");
+                            }
+                            tables.setPlaceholder(message != null ? message : "Failed");
+                            onDone.run();
+                        }
+
+                        @Override
+                        public void onCancelled(
+                            org.baseplayer.analysis.AnalysisMode runMode,
+                            org.baseplayer.analysis.AllChromAction act) {
+                            if (patterns != null) {
+                                patterns.controls().setBusy(false);
+                                patterns.controls().setStatus("Cancelled");
+                            }
+                            onDone.run();
+                        }
+                    });
+            if (task == null) {
+                onDone.run();
+            } else if (ctx.busyGate != null) {
+                ctx.busyGate.setStatusMessage(action.buttonText() + "…");
+                ctx.busyGate.sync();
+                org.baseplayer.services.ThreadRunner.get().notifyDescriptionChanged();
+            }
+        });
+    }
+
     private void annotateAllSignal() {
         ctx.modeHost.syncActiveSignalPointers();
         if (ctx.modeHost.signalWorkspace() == null) {
@@ -293,7 +401,7 @@ final class AnalysisBatchActions {
         }
         ctx.modeHost.signalWorkspace().activateSessionSlice();
         ctx.modeHost.refreshSignalAllChromosomesButton();
-        org.baseplayer.analysis.ui.SignalAnalysisWorkspace.AllChromAction action =
+        org.baseplayer.analysis.AllChromAction action =
             ctx.modeHost.signalWorkspace().actionForToolTab(
                 ctx.modeHost.signalToolTabPane() != null
                     ? ctx.modeHost.signalToolTabPane().getSelectionModel().getSelectedItem()
@@ -304,8 +412,7 @@ final class AnalysisBatchActions {
             // (CompactTableGrid fast path) or finishes mid-chain.
             ThreadRunner.RunnerTask task = ctx.modeHost.signalWorkspace().runAllChromosomes(action, onDone);
             if (task == null
-                && action
-                    == org.baseplayer.analysis.ui.SignalAnalysisWorkspace.AllChromAction.ANNOTATE) {
+                && action == org.baseplayer.analysis.AllChromAction.ANNOTATE) {
                 // Annotate always returns a task when work starts; null = nothing to run.
                 onDone.run();
             } else if (task == null

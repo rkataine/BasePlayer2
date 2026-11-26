@@ -365,11 +365,16 @@ VBox {
   -fx-background-radius: 2;
 }
 
-/* Themed checkbox for popups / settings */
+/*
+ * Safety net for any leftover javafx CheckBox. Prefer ColoredToggle in Java UI.
+ * .dark-checkbox kept as an alias for older call sites during migration.
+ */
+.check-box,
 .dark-checkbox {
   -fx-text-fill: -bp-text;
 }
 
+.check-box .box,
 .dark-checkbox .box {
   -fx-background-color: -bp-control;
   -fx-border-color: -bp-stroke;
@@ -378,16 +383,26 @@ VBox {
   -fx-background-radius: 2;
 }
 
-.dark-checkbox:selected .box {
+.check-box:selected .box,
+.check-box:indeterminate .box,
+.dark-checkbox:selected .box,
+.dark-checkbox:indeterminate .box {
   -fx-background-color: -bp-control;
   -fx-border-color: -bp-muted;
 }
 
+.check-box .mark,
 .dark-checkbox .mark {
   -fx-background-color: transparent;
 }
 
+.check-box:selected .mark,
 .dark-checkbox:selected .mark {
+  -fx-background-color: -bp-text;
+}
+
+.check-box:indeterminate .mark,
+.dark-checkbox:indeterminate .mark {
   -fx-background-color: -bp-text;
 }
 
@@ -414,6 +429,7 @@ VBox {
   -fx-background-color: rgba(255, 255, 255, 0.08);
 }
 
+.check-box:hover .box,
 .dark-checkbox:hover .box {
   -fx-border-color: -bp-muted;
 }
@@ -832,9 +848,9 @@ VBox {
 
 .filter-tabs > .tab-header-area > .headers-region > .tab:selected,
 .filter-tabs > .tab-header-area > .headers-region > .tab:selected:focused {
-  -fx-background-color: -bp-panel;
+  -fx-background-color: -bp-tab-selected;
   -fx-background-insets: 0;
-  -fx-border-color: -bp-border -bp-border -bp-panel -bp-border;
+  -fx-border-color: -bp-border -bp-border -bp-tab-selected -bp-border;
   -fx-focus-color: transparent;
   -fx-faint-focus-color: transparent;
 }
@@ -850,7 +866,7 @@ VBox {
 }
 
 .filter-tabs > .tab-header-area > .headers-region > .tab:selected .tab-label {
-  -fx-text-fill: -bp-text;
+  -fx-text-fill: -bp-tab-selected-text;
   -fx-font-weight: bold;
 }
 
@@ -934,9 +950,9 @@ VBox {
 
 .results-tabs > .tab-header-area > .headers-region > .tab:selected,
 .results-tabs > .tab-header-area > .headers-region > .tab:selected:focused {
-  -fx-background-color: -bp-surface;
+  -fx-background-color: -bp-tab-selected;
   -fx-background-insets: 0;
-  -fx-border-color: -bp-border -bp-border -bp-surface -bp-border;
+  -fx-border-color: -bp-border -bp-border -bp-tab-selected -bp-border;
   -fx-focus-color: transparent;
   -fx-faint-focus-color: transparent;
 }
@@ -951,7 +967,7 @@ VBox {
 }
 
 .results-tabs > .tab-header-area > .headers-region > .tab:selected .tab-label {
-  -fx-text-fill: -bp-text;
+  -fx-text-fill: -bp-tab-selected-text;
   -fx-font-weight: bold;
 }
 

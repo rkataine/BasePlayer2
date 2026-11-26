@@ -89,6 +89,11 @@ public class SampleComparisonPanel {
     refreshGroups();
   }
 
+  /** Host for Pattern Discovery chrome (Point/SV/Signal Sample Comparison). */
+  public VBox differentialHost() {
+    return nodes != null ? nodes.differentialHost() : null;
+  }
+
   /**
    * Signal Sample Comparison: event presence only (no genotype / inheritance LOH chrome).
    * Call after {@link #install} when the panel backs Signal, not VCF.
@@ -856,42 +861,19 @@ public class SampleComparisonPanel {
         : new HBox(12, calculateLoh, apply);
     applyRow.setAlignment(Pos.CENTER_RIGHT);
 
-    VBox differentialHost = null;
-    if (signalEvents) {
-      // Patterns first on the right; sample tags follow.
-      differentialHost = new VBox(8);
-      Label diffTitle = new Label("Patterns");
-      diffTitle.getStyleClass().add("section-header");
-      Label diffHelp = new Label(
-          "Discover sample groups from similar signal patterns; "
-              + "marker genes appear in the Group comparison table. "
-              + "Use Group comparison for DE once groups are applied.");
-      diffHelp.getStyleClass().add("subsection-label");
-      diffHelp.setWrapText(true);
-      right.getChildren().addAll(
-          diffTitle,
-          diffHelp,
-          differentialHost,
-          new Separator(),
-          groupsHeader,
-          groupsContainer,
-          summary,
-          new Separator(),
-          presentTitle,
-          presentRow,
-          new Separator(),
-          applyRow);
-    } else {
-      right.getChildren().addAll(
-          groupsHeader,
-          groupsContainer,
-          summary,
-          new Separator(),
-          presentTitle,
-          presentRow,
-          new Separator(),
-          applyRow);
-    }
+    // Patterns chrome (title + ?) is owned by PatternDiscoveryControls when mounted.
+    VBox differentialHost = new VBox(8);
+    right.getChildren().addAll(
+        differentialHost,
+        new Separator(),
+        groupsHeader,
+        groupsContainer,
+        summary,
+        new Separator(),
+        presentTitle,
+        presentRow,
+        new Separator(),
+        applyRow);
 
     ScrollPane leftScroll = new ScrollPane(left);
     leftScroll.setFitToWidth(true);

@@ -55,6 +55,45 @@ public class VariantLoader {
         this.totalVcfSampleCount = this.vcfSampleNames.size();
     }
 
+    /**
+     * Rebuild a loader from project-saved metadata without opening the VCF.
+     * Caller should {@link #bindSampleToTrack} (or pass {@code sampleToTrackIndex}).
+     */
+    public static VariantLoader fromMetadata(
+            Path vcfPath,
+            List<String> sampleNames,
+            String detectedNormalSample,
+            Map<String, Integer> sampleToTrackIndex) {
+        VariantLoader loader = new VariantLoader(vcfPath, sampleNames, detectedNormalSample);
+        if (sampleToTrackIndex != null) {
+            for (Map.Entry<String, Integer> entry : sampleToTrackIndex.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    loader.bindSampleToTrack(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+        for (String sample : loader.vcfSampleNames) {
+            if (loader.detectedNormalSample != null && loader.detectedNormalSample.equals(sample)) {
+                continue;
+            }
+            if (!loader.vcfSampleToTrackIndex.containsKey(sample)
+                    && !loader.unmappedSamples.contains(sample)) {
+                loader.unmappedSamples.add(sample);
+            }
+        }
+        return loader;
+    }
+
+    private VariantLoader(Path vcfPath, List<String> sampleNames, String detectedNormalSample) {
+        this.vcfReader = null;
+        this.vcfPath = vcfPath;
+        this.vcfSampleNames = sampleNames != null ? List.copyOf(sampleNames) : List.of();
+        this.unmappedSamples = new ArrayList<>();
+        this.detectedNormalSample = detectedNormalSample;
+        this.vcfSampleToTrackIndex = new LinkedHashMap<>();
+        this.totalVcfSampleCount = this.vcfSampleNames.size();
+    }
+
     public Path getVcfPath() {
         return vcfPath;
     }
@@ -221,7 +260,7 @@ public class VariantLoader {
         }
         detectNormalFromNames();
         if (detectedNormalSample == null) {
-            detectNormalFromCallProbe();
+            detectNormalFromFirstVariantGt();
         }
     }
 
@@ -230,9 +269,31 @@ public class VariantLoader {
         if (vcfSampleNames.size() != 2) {
             return;
         }
+        String pattern = org.baseplayer.project.ProjectSessionState.get().getSomaticTumorNamePattern();
+        String tumor = guessTumorFromNames(vcfSampleNames.get(0), vcfSampleNames.get(1), pattern);
+        if (tumor != null) {
+            for (String sample : vcfSampleNames) {
+                if (!sample.equals(tumor)) {
+                    detectedNormalSample = sample;
+                    return;
+                }
+            }
+        }
+    }
 
-        String sample1 = vcfSampleNames.get(0);
-        String sample2 = vcfSampleNames.get(1);
+    /**
+     * Pick the tumor column from names alone. Prefers the project tumor-name pattern
+     * (same {@code *} wildcard rules as the sample filter), then built-in cues
+     * ({@code tumor}/{@code tk} vs {@code normal}/{@code nk}). Null when ambiguous.
+     */
+    public static String guessTumorFromNames(String sample1, String sample2, String tumorPattern) {
+        if (sample1 == null || sample2 == null || sample1.isBlank() || sample2.isBlank()) {
+            return null;
+        }
+        String fromPattern = tumorFromCustomPattern(sample1, sample2, tumorPattern);
+        if (fromPattern != null) {
+            return fromPattern;
+        }
 
         String sample1Lower = sample1.toLowerCase();
         String sample2Lower = sample2.toLowerCase();
@@ -247,19 +308,52 @@ public class VariantLoader {
         boolean sample2Tk = hasToken(sample2Lower, "tk");
 
         if (sample1IsNormal && !sample2IsNormal) {
-            detectedNormalSample = sample1;
-        } else if (sample2IsNormal && !sample1IsNormal) {
-            detectedNormalSample = sample2;
-        } else if (sample1Nk && !sample1Tk && sample2Tk && !sample2Nk) {
-            // …NK_T + …TK_T (both end with _T) — NK is the matched normal.
-            detectedNormalSample = sample1;
-        } else if (sample2Nk && !sample2Tk && sample1Tk && !sample1Nk) {
-            detectedNormalSample = sample2;
-        } else if (sample1IsTumor && !sample2IsTumor) {
-            detectedNormalSample = sample2;
-        } else if (sample2IsTumor && !sample1IsTumor) {
-            detectedNormalSample = sample1;
+            return sample2;
         }
+        if (sample2IsNormal && !sample1IsNormal) {
+            return sample1;
+        }
+        if (sample1Nk && !sample1Tk && sample2Tk && !sample2Nk) {
+            // …NK_T + …TK_T — NK is the matched normal.
+            return sample2;
+        }
+        if (sample2Nk && !sample2Tk && sample1Tk && !sample1Nk) {
+            return sample1;
+        }
+        if (sample1IsTumor && !sample2IsTumor) {
+            return sample1;
+        }
+        if (sample2IsTumor && !sample1IsTumor) {
+            return sample2;
+        }
+        return null;
+    }
+
+    /** Exactly one column matches the tumor pattern → that column is tumor. */
+    public static String tumorFromCustomPattern(String sample1, String sample2, String tumorPattern) {
+        if (tumorPattern == null || tumorPattern.isBlank()) {
+            return null;
+        }
+        boolean m1 = nameMatchesTumorPattern(sample1, tumorPattern);
+        boolean m2 = nameMatchesTumorPattern(sample2, tumorPattern);
+        if (m1 && !m2) {
+            return sample1;
+        }
+        if (m2 && !m1) {
+            return sample2;
+        }
+        return null;
+    }
+
+    /** Same match rules as the sample-filter strip ({@code *} wildcards). */
+    public static boolean nameMatchesTumorPattern(String sampleName, String tumorPattern) {
+        if (sampleName == null || sampleName.isBlank()
+                || tumorPattern == null || tumorPattern.isBlank()) {
+            return false;
+        }
+        return !org.baseplayer.services.SampleRegistry
+            .findFilterMatchSpans(sampleName, tumorPattern.trim())
+            .isEmpty();
     }
 
     private static boolean looksNormalName(String lower) {
@@ -293,60 +387,65 @@ public class VariantLoader {
     }
 
     /**
-     * Sample first variants: if only one column has non-ref GTs, the other is normal.
-     * No-op when the reader is unavailable or both/neither have calls.
+     * Peek GT on the first variant only. If exactly one column is hom-ref ({@code 0/0}),
+     * that column is the matched normal (tumor is the other). No multi-row scan.
      */
-    private void detectNormalFromCallProbe() {
-        if (vcfReader == null || vcfSampleNames.size() != 2) {
-            return;
-        }
-        Map<String, Integer> counts = probeNonRefCallCounts(4000);
-        if (counts.isEmpty()) {
-            return;
-        }
-        String sample1 = vcfSampleNames.get(0);
-        String sample2 = vcfSampleNames.get(1);
-        int c1 = counts.getOrDefault(sample1, 0);
-        int c2 = counts.getOrDefault(sample2, 0);
-        if (c1 > 0 && c2 == 0) {
-            detectedNormalSample = sample2;
-        } else if (c2 > 0 && c1 == 0) {
-            detectedNormalSample = sample1;
+    private void detectNormalFromFirstVariantGt() {
+        String normal = normalFromFirstVariantGt();
+        if (normal != null) {
+            detectedNormalSample = normal;
         }
     }
 
     /**
-     * Count non-ref, non-missing genotypes per sample over the first {@code maxRecords}
-     * variants in file order. Empty map on failure.
+     * Tumor column implied by the first variant's GTs, or {@code null} when ambiguous.
+     * Hom-ref column → normal; the other → tumor.
      */
-    public Map<String, Integer> probeNonRefCallCounts(int maxRecords) {
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        if (vcfReader == null || vcfSampleNames.isEmpty() || maxRecords <= 0) {
-            return counts;
+    public String guessTumorFromFirstVariantGt() {
+        String normal = normalFromFirstVariantGt();
+        if (normal == null || vcfSampleNames.size() != 2) {
+            return null;
         }
         for (String sample : vcfSampleNames) {
-            counts.put(sample, 0);
-        }
-        try (var iterator = vcfReader.rawIterator()) {
-            int seen = 0;
-            while (iterator.hasNext() && seen < maxRecords) {
-                var ctx = iterator.next();
-                seen++;
-                if (ctx == null || !ctx.hasGenotypes()) {
-                    continue;
-                }
-                for (String sample : vcfSampleNames) {
-                    var gt = ctx.getGenotype(sample);
-                    if (gt == null || gt.isNoCall() || gt.isHomRef()) {
-                        continue;
-                    }
-                    counts.merge(sample, 1, Integer::sum);
-                }
+            if (!sample.equals(normal)) {
+                return sample;
             }
-        } catch (Exception e) {
-            return Map.of();
         }
-        return counts;
+        return null;
+    }
+
+    /** Matched-normal column from first-variant GT asymmetry, or null. */
+    private String normalFromFirstVariantGt() {
+        if (vcfReader == null || vcfSampleNames.size() != 2) {
+            return null;
+        }
+        String sample1 = vcfSampleNames.get(0);
+        String sample2 = vcfSampleNames.get(1);
+        try (var iterator = vcfReader.rawIterator()) {
+            if (!iterator.hasNext()) {
+                return null;
+            }
+            var ctx = iterator.next();
+            if (ctx == null || !ctx.hasGenotypes()) {
+                return null;
+            }
+            boolean s1HomRef = isCalledHomRef(ctx.getGenotype(sample1));
+            boolean s2HomRef = isCalledHomRef(ctx.getGenotype(sample2));
+            // First column 0/0 and other not → first is normal (tumor is the other).
+            if (s1HomRef && !s2HomRef) {
+                return sample1;
+            }
+            if (s2HomRef && !s1HomRef) {
+                return sample2;
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isCalledHomRef(htsjdk.variant.variantcontext.Genotype gt) {
+        return gt != null && !gt.isNoCall() && gt.isHomRef();
     }
     
     private Map<String, Integer> buildSampleMapping() {
@@ -1228,6 +1327,11 @@ public class VariantLoader {
         return vcfSampleNames;
     }
 
+    /** Live sample-column → track-index map (unmodifiable view). */
+    public Map<String, Integer> sampleToTrackIndexView() {
+        return java.util.Collections.unmodifiableMap(vcfSampleToTrackIndex);
+    }
+
     /**
      * Treat {@code tumorSample} as the only mapped column; the other (when exactly
      * two samples) becomes the skipped normal. Rebuilds the track mapping.
@@ -1271,14 +1375,14 @@ public class VariantLoader {
         return detectedNormalSample != null;
     }
 
-    /** Re-run name + call-probe detection when still ambiguous (reader must be open). */
+    /** Re-run name + first-variant GT detection when still ambiguous (reader must be open). */
     public void redetectSomaticNormal() {
         if (vcfSampleNames.size() != 2 || detectedNormalSample != null) {
             return;
         }
         detectNormalFromNames();
         if (detectedNormalSample == null) {
-            detectNormalFromCallProbe();
+            detectNormalFromFirstVariantGt();
         }
         if (detectedNormalSample != null) {
             rebuildSampleMapping();

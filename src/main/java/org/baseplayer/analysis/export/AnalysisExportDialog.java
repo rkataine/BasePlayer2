@@ -5,10 +5,11 @@ import java.util.EnumSet;
 import java.util.Map;
 
 import org.baseplayer.components.AppDialog;
+import org.baseplayer.components.ColoredToggle;
 
 import javafx.geometry.Insets;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.VBox;
 import javafx.stage.Window;
 
@@ -17,7 +18,8 @@ import javafx.stage.Window;
  */
 public final class AnalysisExportDialog extends AppDialog {
 
-  private final EnumMap<AnalysisExportKind, CheckBox> boxes = new EnumMap<>(AnalysisExportKind.class);
+  private final EnumMap<AnalysisExportKind, ColoredToggle> boxes =
+      new EnumMap<>(AnalysisExportKind.class);
   private EnumSet<AnalysisExportKind> selection = EnumSet.noneOf(AnalysisExportKind.class);
 
   private AnalysisExportDialog(Window owner, EnumSet<AnalysisExportKind> available) {
@@ -30,16 +32,13 @@ public final class AnalysisExportDialog extends AppDialog {
     VBox list = new VBox(10);
     list.setPadding(new Insets(4, 0, 0, 0));
     for (AnalysisExportKind kind : AnalysisExportKind.values()) {
-      CheckBox box = new CheckBox(kind.label());
-      box.setStyle("-fx-text-fill: #e8e8e8; -fx-font-size: 12px;");
+      ColoredToggle box = new ColoredToggle(kind.label());
       boolean enabled = avail.contains(kind);
       box.setDisable(!enabled);
       box.setSelected(enabled);
-      box.setAllowIndeterminate(false);
-      javafx.scene.control.Tooltip.install(
+      Tooltip.install(
           box,
-          new javafx.scene.control.Tooltip(
-              enabled ? kind.description() : kind.description() + " (no data)"));
+          new Tooltip(enabled ? kind.description() : kind.description() + " (no data)"));
       boxes.put(kind, box);
       list.getChildren().add(box);
     }
@@ -48,14 +47,14 @@ public final class AnalysisExportDialog extends AppDialog {
     addSecondaryButton("Cancel");
     Button exportBtn = addPrimaryButton("Export…");
     Runnable syncExportEnabled = () -> exportBtn.setDisable(!anySelected());
-    for (CheckBox box : boxes.values()) {
+    for (ColoredToggle box : boxes.values()) {
       box.selectedProperty().addListener((obs, o, n) -> syncExportEnabled.run());
     }
     syncExportEnabled.run();
   }
 
   private boolean anySelected() {
-    for (CheckBox box : boxes.values()) {
+    for (ColoredToggle box : boxes.values()) {
       if (box != null && !box.isDisable() && box.isSelected()) {
         return true;
       }
@@ -87,8 +86,8 @@ public final class AnalysisExportDialog extends AppDialog {
       return EnumSet.noneOf(AnalysisExportKind.class);
     }
     EnumSet<AnalysisExportKind> selected = EnumSet.noneOf(AnalysisExportKind.class);
-    for (Map.Entry<AnalysisExportKind, CheckBox> e : dialog.boxes.entrySet()) {
-      CheckBox box = e.getValue();
+    for (Map.Entry<AnalysisExportKind, ColoredToggle> e : dialog.boxes.entrySet()) {
+      ColoredToggle box = e.getValue();
       if (box != null && !box.isDisable() && box.isSelected()) {
         selected.add(e.getKey());
       }

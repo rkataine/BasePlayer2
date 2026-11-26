@@ -10,7 +10,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
@@ -40,7 +39,7 @@ public class SettingsDialog {
   private final Spinner<Double>  coverageFractionSpinner;
   private final Spinner<Double>  readGapSpinner;
   private final Spinner<Double>  readHeightSpinner;
-  private final CheckBox         smoothSmallFilesCheck;
+  private final ColoredToggle    smoothSmallFilesCheck;
   private final Spinner<Double>  mismatchMinFractionSpinner;
   private final Spinner<Integer> mismatchMinCountSpinner;
   private final ComboBox<ReadColorMode> readColorModeCombo;
@@ -65,7 +64,7 @@ public class SettingsDialog {
     coverageFractionSpinner   = dblSpinner(0.05, 1.0, settings.getCoverageFraction(), 0.05);
     readGapSpinner            = dblSpinner(0.0, 10.0, settings.getReadGap(), 0.5);
     readHeightSpinner         = dblSpinner(1.0, 50.0, settings.getReadHeight(), 0.5);
-    smoothSmallFilesCheck     = new CheckBox("Apply smoothing to sampled coverage");
+    smoothSmallFilesCheck     = new ColoredToggle("Apply smoothing to sampled coverage");
     smoothSmallFilesCheck.setSelected(settings.isSmoothSmallFiles());
     mismatchMinFractionSpinner = dblSpinner(0.0, 1.0, settings.getMismatchMinFraction(), 0.05);
     mismatchMinCountSpinner    = intSpinner(1, 100, settings.getMismatchMinCount(), 1);

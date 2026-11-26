@@ -6,12 +6,15 @@ import javafx.scene.paint.Color;
  * Named sample group with a sidebar accent color.
  * Membership lives on {@link SampleTrack#getGroupIds()} (multi-group allowed).
  * Groups are flat (no subgroups); within-group roles use {@link SampleTag}.
+ * When {@link #isIncludedInProject()} is false, the group (and tracks that belong
+ * only to excluded groups) are omitted from drawing and analysis.
  */
 public final class SampleGroup {
 
   private final int id;
   private String name;
   private Color color;
+  private boolean includedInProject = true;
 
   public SampleGroup(int id, String name, Color color) {
     this.id = id;
@@ -41,6 +44,15 @@ public final class SampleGroup {
     if (color != null) {
       this.color = color;
     }
+  }
+
+  /** When false, the group is kept in Sample Groups UI but left out of the project. */
+  public boolean isIncludedInProject() {
+    return includedInProject;
+  }
+
+  public void setIncludedInProject(boolean includedInProject) {
+    this.includedInProject = includedInProject;
   }
 
   public String toCssHex() {

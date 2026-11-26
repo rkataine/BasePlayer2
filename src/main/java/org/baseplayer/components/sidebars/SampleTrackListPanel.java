@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.baseplayer.components.AppDialog;
+import org.baseplayer.components.AttentionGlow;
 import org.baseplayer.components.PopupComboBoxStyler;
 import org.baseplayer.components.SampleTrackControls;
 import org.baseplayer.io.SampleDataManager;
@@ -28,7 +29,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
+import org.baseplayer.components.ColoredToggle;
 import javafx.scene.control.ColorPicker;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
@@ -42,6 +43,7 @@ import javafx.scene.control.ToggleGroup;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
@@ -77,6 +79,8 @@ public class SampleTrackListPanel extends TrackListPanel {
   private int rowReorderPressBackingIndex = -1;
   /** Final backing-list index for the moved block start while dragging, or -1. */
   private int rowReorderInsertIndex = -1;
+  /** Apply-to-all button for the open settings menu (glow target); null when closed. */
+  private Button settingsApplyAllButton;
 
   public SampleTrackListPanel(StackPane parent) {
     this(parent, ServiceRegistry.getInstance().getSampleRegistry());
@@ -90,6 +94,8 @@ public class SampleTrackListPanel extends TrackListPanel {
       Runnable refresh = () -> {
         draw();
         onAfterVisibleTrackRangeChanged();
+        org.baseplayer.draw.GenomicCanvas.update.set(
+            !org.baseplayer.draw.GenomicCanvas.update.get());
       };
       if (Platform.isFxApplicationThread()) {
         refresh.run();
@@ -828,6 +834,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     ContextMenu settingsMenu = new ContextMenu();
     settingsMenu.setStyle(
         "-fx-background-color: " + AppTheme.chrome().panelHex() + "; -fx-border-color: " + AppTheme.chrome().strokeHex() + "; -fx-border-width: 1;");
+    clearSettingsApplyAllGlow();
     addOpenedFilesMenuItems(settingsMenu, track, sampleIndex);
     addSignalLayoutMenuItems(settingsMenu, track);
     addMoveMenuItems(settingsMenu, track, sampleIndex);
@@ -836,7 +843,27 @@ public class SampleTrackListPanel extends TrackListPanel {
     addHaplotypeInformation(settingsMenu, track);
     addReadRenderingSettings(settingsMenu, track);
     addApplySettingsToAllItem(settingsMenu, track);
+    // Checkboxes only flip visibility while open; register newly enabled VCFs on hide
+    // so “Apply settings to all” still works and Load variants can appear.
+    settingsMenu.setOnHidden(e -> {
+      clearSettingsApplyAllGlow();
+      SampleDataManager.registerVisibleVcfsAfterSettingsMenu();
+    });
     settingsMenu.show(canvas, screenX, screenY);
+  }
+
+  /** Soft-glow the Apply-to-all button after a setting change (no-op if absent). */
+  private void markSettingsDirtyForApplyAll() {
+    if (settingsApplyAllButton != null) {
+      AttentionGlow.start(settingsApplyAllButton);
+    }
+  }
+
+  private void clearSettingsApplyAllGlow() {
+    if (settingsApplyAllButton != null) {
+      AttentionGlow.stop(settingsApplyAllButton);
+      settingsApplyAllButton = null;
+    }
   }
 
   private void addMoveMenuItems(ContextMenu settingsMenu, SampleTrack track, int sampleIndex) {
@@ -950,6 +977,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     overlay.setOnAction(e -> {
       track.setSignalLayout(SampleTrack.SignalLayout.OVERLAY);
       ProjectSessionState.get().markDirty();
+      markSettingsDirtyForApplyAll();
       onAfterVisibleTrackRangeChanged();
     });
     RadioMenuItem stack = new RadioMenuItem("Stack lanes");
@@ -958,6 +986,7 @@ public class SampleTrackListPanel extends TrackListPanel {
     stack.setOnAction(e -> {
       track.setSignalLayout(SampleTrack.SignalLayout.STACK);
       ProjectSessionState.get().markDirty();
+      markSettingsDirtyForApplyAll();
       onAfterVisibleTrackRangeChanged();
     });
     settingsMenu.getItems().addAll(overlay, stack);
@@ -971,7 +1000,10 @@ public class SampleTrackListPanel extends TrackListPanel {
     Button applyAll = new Button("Apply settings to all tracks");
     styleMenuActionButton(applyAll);
     applyAll.setMaxWidth(Double.MAX_VALUE);
+    settingsApplyAllButton = applyAll;
     applyAll.setOnAction(event -> {
+      AttentionGlow.stop(applyAll);
+      settingsApplyAllButton = null;
       SampleDataManager.applyTrackSettingsToAll(track);
       draw();
       onAfterVisibleTrackRangeChanged();
@@ -1170,17 +1202,16 @@ public class SampleTrackListPanel extends TrackListPanel {
     label.setStyle(track.hasMethylationData()
         ? "-fx-text-fill: #88ccff; -fx-font-size: 11; -fx-font-weight: bold;"
         : "-fx-text-fill: " + AppTheme.chrome().secondaryHex() + "; -fx-font-size: 11; -fx-font-weight: bold;");
-    CheckBox hideMismatches =
-        new CheckBox("Hide bisulfite mismatches (C→T / G→A)");
+    ColoredToggle hideMismatches =
+        new ColoredToggle("Hide bisulfite mismatches (C→T / G→A)");
     hideMismatches.setSelected(track.hasMethylationData());
-    hideMismatches.getStyleClass().add("dark-checkbox");
-    hideMismatches.setStyle("-fx-font-size: 11;");
     hideMismatches.selectedProperty().addListener((observable, oldValue, newValue) -> {
       for (Sample sample : track.getSamples()) {
         if (sample.getDataType() == Sample.DataType.BAM) {
-          sample.setSuppressMethylMismatches(newValue);
+          sample.setSuppressMethylMismatches(Boolean.TRUE.equals(newValue));
         }
       }
+      markSettingsDirtyForApplyAll();
       onAfterVisibleTrackRangeChanged();
     });
     Label information =
@@ -1194,17 +1225,16 @@ public class SampleTrackListPanel extends TrackListPanel {
         break;
       }
     }
-    CheckBox coverageOnly =
-        new CheckBox("Coverage only (skip reads — saves memory)");
+    ColoredToggle coverageOnly =
+        new ColoredToggle("Coverage only (skip reads — saves memory)");
     coverageOnly.setSelected(anyCoverageOnly);
-    coverageOnly.getStyleClass().add("dark-checkbox");
-    coverageOnly.setStyle("-fx-font-size: 11;");
     coverageOnly.selectedProperty().addListener((observable, oldValue, newValue) -> {
       for (Sample sample : track.getSamples()) {
         if (sample.getDataType() == Sample.DataType.BAM) {
           sample.setCoverageOnlyMode(Boolean.TRUE.equals(newValue));
         }
       }
+      markSettingsDirtyForApplyAll();
       onAfterVisibleTrackRangeChanged();
     });
     Label coverageOnlyInfo =
@@ -1266,6 +1296,7 @@ public class SampleTrackListPanel extends TrackListPanel {
             sample.setReadColorMode(newMode);
           }
         }
+        markSettingsDirtyForApplyAll();
         onAfterVisibleTrackRangeChanged();
       }
     });
@@ -1286,6 +1317,7 @@ public class SampleTrackListPanel extends TrackListPanel {
             sample.setReadStackingMode(newMode);
           }
         }
+        markSettingsDirtyForApplyAll();
         onAfterVisibleTrackRangeChanged();
       }
     });
@@ -1354,29 +1386,29 @@ public class SampleTrackListPanel extends TrackListPanel {
       Sample file, SampleTrack track, int fileIndex, int sampleIndex) {
     HBox row = new HBox(6);
     row.setStyle("-fx-padding: 2 4 2 4;");
-    CheckBox visibilityCheckBox = new CheckBox();
+    ColoredToggle visibilityCheckBox = new ColoredToggle();
+    visibilityCheckBox.setMaxWidth(Region.USE_PREF_SIZE);
     visibilityCheckBox.setSelected(file.visible);
-    visibilityCheckBox.getStyleClass().add("dark-checkbox");
     visibilityCheckBox.selectedProperty().addListener((observable, oldValue, newValue) -> {
       if (file.getDataType() == Sample.DataType.VCF) {
-        SampleDataManager.applyVcfSampleVisibility(track, file, newValue);
+        SampleDataManager.applyVcfSampleVisibility(track, file, Boolean.TRUE.equals(newValue));
       } else {
-        file.visible = newValue;
+        file.visible = Boolean.TRUE.equals(newValue);
       }
+      markSettingsDirtyForApplyAll();
       onAfterVisibleTrackRangeChanged();
     });
 
-    CheckBox transparentCheckBox = new CheckBox("Transparent");
+    ColoredToggle transparentCheckBox = new ColoredToggle("Transparent");
     transparentCheckBox.setSelected(file.overlay);
-    transparentCheckBox.getStyleClass().add("dark-checkbox");
-    transparentCheckBox.setStyle("-fx-font-size: 10;");
     transparentCheckBox.selectedProperty().addListener((observable, oldValue, newValue) -> {
       if (file.getDataType() == Sample.DataType.VCF) {
-        SampleDataManager.applyVcfSampleOverlay(file, newValue);
+        SampleDataManager.applyVcfSampleOverlay(file, Boolean.TRUE.equals(newValue));
       } else {
-        file.overlay = newValue;
+        file.overlay = Boolean.TRUE.equals(newValue);
         onAfterVisibleTrackRangeChanged();
       }
+      markSettingsDirtyForApplyAll();
     });
 
     Label typeLabel = new Label("[" + file.getDataType().name() + "]");

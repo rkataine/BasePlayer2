@@ -41,6 +41,8 @@ import org.baseplayer.io.dragen.DragenFolderScan;
 import org.baseplayer.io.dragen.DragenFolderScanner;
 import org.baseplayer.io.dragen.DragenLoadPlan;
 import org.baseplayer.io.readers.VcfReader;
+import org.baseplayer.project.PathResolver;
+import org.baseplayer.project.ProjectDocument;
 import org.baseplayer.project.ProjectSessionState;
 import org.baseplayer.project.SessionDocumentSync;
 import org.baseplayer.samples.Sample;
@@ -1473,6 +1475,11 @@ public class SampleDataManager {
    * without opening Analysis or prompting.
    */
   public static void restoreSalmonQuantForSession(List<Path> paths, List<String> warnings) {
+    restoreSalmonQuantForSession(paths, warnings, ProjectSessionState.get().getFile());
+  }
+
+  public static void restoreSalmonQuantForSession(
+      List<Path> paths, List<String> warnings, Path projectFile) {
     if (paths == null || paths.isEmpty()) {
       return;
     }
@@ -1485,6 +1492,11 @@ public class SampleDataManager {
       }
     }
     if (existing.isEmpty()) {
+      return;
+    }
+    if (projectFile != null
+        && org.baseplayer.project.MatrixCacheStore.tryInstallSalmon(
+            projectFile, existing, warnings)) {
       return;
     }
     try {
@@ -1512,19 +1524,12 @@ public class SampleDataManager {
         }
         return;
       }
-      SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
-      MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, result.tables());
-      MatrixApplyResult applied = applyMatrixSamplePolicy(
-          sampleRegistry,
+      installCompactMatrixTables(
           existing.get(0),
-          plan,
-          MatrixSampleMappingDialog.Policy.MERGE);
-      if (applied.created() > 0) {
-        sampleRegistry.includeNewTracksAtEndResetHeight();
-      }
-      if (applied.attached() + applied.created() == 0 && warnings != null) {
-        warnings.add("No Salmon samples were attached during project restore");
-      }
+          result.tables(),
+          MatrixSampleMappingDialog.Policy.MERGE,
+          null,
+          warnings);
     } catch (Exception e) {
       if (warnings != null) {
         warnings.add("Failed to restore Salmon: " + e.getMessage());
@@ -1596,10 +1601,58 @@ public class SampleDataManager {
     }
   }
 
+  /**
+   * Attach pre-built compact matrix/Salmon tables (session cache restore) without
+   * re-parsing the source file.
+   *
+   * @return true when at least one column was attached or created
+   */
+  public static boolean installCompactMatrixTables(
+      Path matrixPath,
+      List<MappedTableData> tables,
+      MatrixSampleMappingDialog.Policy policy,
+      org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec openSpec,
+      List<String> warnings) {
+    if (tables == null || tables.isEmpty()) {
+      return false;
+    }
+    SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
+    MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, tables);
+    MatrixSampleMappingDialog.Policy usePolicy =
+        policy != null ? policy : MatrixSampleMappingDialog.Policy.MERGE;
+    Path attachPath = matrixPath != null ? matrixPath : Path.of("matrix");
+    MatrixApplyResult applied =
+        applyMatrixSamplePolicy(sampleRegistry, attachPath, plan, usePolicy);
+    if (applied.created() > 0) {
+      sampleRegistry.includeNewTracksAtEndResetHeight();
+    }
+    if (applied.attached() + applied.created() == 0) {
+      if (warnings != null) {
+        warnings.add("No matrix columns attached from cache: "
+            + (matrixPath != null && matrixPath.getFileName() != null
+                ? matrixPath.getFileName()
+                : attachPath));
+      }
+      return false;
+    }
+    if (openSpec != null && matrixPath != null) {
+      org.baseplayer.project.OpenedMatrixRegistry.get().register(matrixPath, openSpec);
+    }
+    return true;
+  }
+
   public static void restoreMatrixForSession(
       Path path,
       org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec spec,
       List<String> warnings) {
+    restoreMatrixForSession(path, spec, warnings, ProjectSessionState.get().getFile());
+  }
+
+  public static void restoreMatrixForSession(
+      Path path,
+      org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec spec,
+      List<String> warnings,
+      Path projectFile) {
     if (path == null || spec == null) {
       return;
     }
@@ -1607,6 +1660,11 @@ public class SampleDataManager {
       if (warnings != null) {
         warnings.add("Missing matrix: " + path);
       }
+      return;
+    }
+    if (projectFile != null
+        && org.baseplayer.project.MatrixCacheStore.tryInstallMatrix(
+            projectFile, path, spec, warnings)) {
       return;
     }
     try {
@@ -1627,21 +1685,8 @@ public class SampleDataManager {
         }
         return;
       }
-      SampleRegistry sampleRegistry = ServiceRegistry.getInstance().getSampleRegistry();
-      MatrixColumnPlan plan = classifyMatrixColumns(sampleRegistry, result.tables());
-      MatrixSampleMappingDialog.Policy policy = spec.mappingPolicyOrMerge();
-      MatrixApplyResult applied = applyMatrixSamplePolicy(sampleRegistry, path, plan, policy);
-      if (applied.created() > 0) {
-        sampleRegistry.includeNewTracksAtEndResetHeight();
-      }
-      if (applied.attached() + applied.created() == 0) {
-        if (warnings != null) {
-          warnings.add("No matrix columns attached from: "
-              + (path.getFileName() != null ? path.getFileName() : path));
-        }
-        return;
-      }
-      org.baseplayer.project.OpenedMatrixRegistry.get().register(path, spec);
+      installCompactMatrixTables(
+          path, result.tables(), spec.mappingPolicyOrMerge(), spec, warnings);
     } catch (Exception e) {
       if (warnings != null) {
         warnings.add("Failed to restore matrix "
@@ -3120,10 +3165,10 @@ public class SampleDataManager {
   }
 
   /**
-   * Toggle VCF file visibility. Does not auto-stream alleles — use the canvas
-   * {@code Load variants} button (or chrom change / Load Region paths). Hiding and
-   * showing only refresh presentation; cached calls stay filtered by
-   * {@link VariantNode.SampleCall#isUiVisible()}.
+   * Toggle VCF file visibility. Does not open/register the VCF or stream alleles —
+   * registration runs when the settings menu closes
+   * ({@link #registerVisibleVcfsAfterSettingsMenu}); allele stream stays on Load
+   * variants / region load. Keeps the menu open so “Apply settings to all” works.
    */
   public static void applyVcfSampleVisibility(SampleTrack track, Sample vcfSample, boolean visible) {
     if (track == null || vcfSample == null || vcfSample.getDataType() != Sample.DataType.VCF) {
@@ -3146,6 +3191,149 @@ public class SampleDataManager {
     refreshVariantPresentation(true);
     // Visibility alone does not touch RegionFetchCache; force the overlay button to re-check.
     ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
+  }
+
+  /**
+   * Called when the sample-track settings menu closes. Registers any visible VCF
+   * paths that are not yet in {@link VcfManager} (no allele stream), mounts the
+   * Load variants overlay, and refreshes button visibility.
+   */
+  public static void registerVisibleVcfsAfterSettingsMenu() {
+    ensureVisibleVcfsRegistered(() -> {
+      org.baseplayer.controllers.MainController.initializeLoadRegionButton();
+      org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
+      ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
+    });
+  }
+
+  /** True when a visible VCF sample path is not yet registered in {@link VcfManager}. */
+  public static boolean hasUnregisteredVisibleVcfs() {
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (registry == null) {
+      return false;
+    }
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null
+            || sample.getDataType() != Sample.DataType.VCF
+            || !sample.visible
+            || sample.getPath() == null) {
+          continue;
+        }
+        File file = sample.getPath().toFile();
+        if (file.exists() && !VcfManager.getInstance().isVcfFileLoaded(file)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Register any visible VCF paths that are not yet in {@link VcfManager} (saved meta
+   * when possible; otherwise open). Invokes {@code onReady} on the FX thread when
+   * registration is complete, or immediately when nothing to do.
+   */
+  public static void ensureVisibleVcfsRegistered(Runnable onReady) {
+    Runnable done = onReady != null ? onReady : () -> {};
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    if (registry == null) {
+      done.run();
+      return;
+    }
+    List<Path> need = new ArrayList<>();
+    for (SampleTrack track : registry.getSampleTracks()) {
+      if (track == null) {
+        continue;
+      }
+      for (Sample sample : track.getSamples()) {
+        if (sample == null
+            || sample.getDataType() != Sample.DataType.VCF
+            || !sample.visible
+            || sample.getPath() == null) {
+          continue;
+        }
+        File file = sample.getPath().toFile();
+        if (!file.exists() || VcfManager.getInstance().isVcfFileLoaded(file)) {
+          continue;
+        }
+        need.add(sample.getPath().toAbsolutePath().normalize());
+      }
+    }
+    if (need.isEmpty()) {
+      done.run();
+      return;
+    }
+
+    List<File> needOpen = new ArrayList<>();
+    ProjectDocument doc = ProjectSessionState.get().getDocument();
+    Path projectFile = ProjectSessionState.get().getFile();
+    LinkedHashSet<String> seen = new LinkedHashSet<>();
+    for (Path path : need) {
+      String key = path.toString();
+      if (!seen.add(key)) {
+        continue;
+      }
+      boolean registered = tryRegisterFromSavedMeta(path, doc, projectFile);
+      if (!registered) {
+        needOpen.add(path.toFile());
+      }
+    }
+    if (needOpen.isEmpty()) {
+      ProjectSessionState.get().markDirty();
+      refreshVariantPresentation(true);
+      ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
+      done.run();
+      return;
+    }
+    String label = needOpen.size() == 1
+        ? "Opening VCF: " + needOpen.get(0).getName() + "\u2026"
+        : "Opening " + needOpen.size() + " VCF files\u2026";
+    ThreadRunner.get().submit(
+        label,
+        () -> {
+          loadVcfFilesForSessionRestore(needOpen, null);
+          return null;
+        },
+        ignored -> {
+          ProjectSessionState.get().markDirty();
+          refreshVariantPresentation(true);
+          ServiceRegistry.getInstance().getRegionFetchCache().notifyChanged();
+          done.run();
+        });
+  }
+
+  private static boolean tryRegisterFromSavedMeta(
+      Path vcfPath, ProjectDocument doc, Path projectFile) {
+    if (vcfPath == null || doc == null || doc.vcfMetas == null) {
+      return false;
+    }
+    String key = vcfPath.toAbsolutePath().normalize().toString();
+    for (ProjectDocument.VcfMetaSpec meta : doc.vcfMetas) {
+      if (meta == null) {
+        continue;
+      }
+      Path metaPath = PathResolver.resolve(meta.path, meta.pathRelative, projectFile);
+      if (metaPath == null
+          || !key.equals(metaPath.toAbsolutePath().normalize().toString())) {
+        continue;
+      }
+      VcfManager.VcfData registered =
+          org.baseplayer.project.VcfMetaPersistence.registerFromMeta(meta, projectFile, null);
+      if (registered == null) {
+        return false;
+      }
+      if (registered.getMateBreakpointIndex() == null
+          && registered.getBreakendStyle()
+              == org.baseplayer.io.readers.VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
+        VcfManager.getInstance().prepareMateSupportInline(registered);
+      }
+      return true;
+    }
+    return false;
   }
 
   /**

@@ -108,11 +108,11 @@ public final class ComparisonContext {
   }
 
   /**
-   * True when the registry has exactly one named group — ungrouped samples
-   * participate as {@link #OTHER_GROUP_NAME}.
+   * True when the registry has exactly one included named group — ungrouped
+   * samples participate as {@link #OTHER_GROUP_NAME}.
    */
   public static boolean usesAutoOther(SampleRegistry registry) {
-    return registry != null && registry.getSampleGroups().size() == 1;
+    return registry != null && registry.getIncludedSampleGroups().size() == 1;
   }
 
   public static SampleGroup otherGroup() {
@@ -158,13 +158,13 @@ public final class ComparisonContext {
     return Color.web("#888888");
   }
 
-  /** Named groups plus virtual Other when applicable. */
+  /** Included named groups plus virtual Other when applicable. */
   public static List<Integer> analysisGroupIds(SampleRegistry registry) {
     List<Integer> ids = new ArrayList<>();
     if (registry == null) {
       return ids;
     }
-    for (SampleGroup group : registry.getSampleGroups()) {
+    for (SampleGroup group : registry.getIncludedSampleGroups()) {
       ids.add(group.getId());
     }
     if (usesAutoOther(registry)) {
@@ -173,7 +173,7 @@ public final class ComparisonContext {
     return ids;
   }
 
-  /** Refresh participating ids: all named groups, plus Other when only one exists. */
+  /** Refresh participating ids: included named groups, plus Other when only one exists. */
   public void syncAllGroups(SampleRegistry registry) {
     synchronized (this) {
       participatingGroupIds.clear();
@@ -191,7 +191,7 @@ public final class ComparisonContext {
     if (registry == null) {
       return out;
     }
-    out.addAll(registry.getSampleGroups());
+    out.addAll(registry.getIncludedSampleGroups());
     if (usesAutoOther(registry)) {
       out.add(otherGroup());
     }
@@ -259,7 +259,7 @@ public final class ComparisonContext {
   private static List<SampleTrack> ungroupedTracks(SampleRegistry registry) {
     List<SampleTrack> out = new ArrayList<>();
     for (SampleTrack track : registry.getSampleTracks()) {
-      if (track != null && !track.hasGroup()) {
+      if (track != null && !track.hasGroup() && registry.isTrackIncludedInProject(track)) {
         out.add(track);
       }
     }

@@ -1,7 +1,14 @@
 package org.baseplayer.analysis.ui;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.AnalysisSession;
+import org.baseplayer.analysis.groupstat.GroupStatTest;
 import org.baseplayer.analysis.pattern.SamplePatternEngine;
+import org.baseplayer.components.HelpInfoButton;
+import org.baseplayer.components.InfoModal;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -29,6 +36,7 @@ public final class PatternDiscoveryControls {
   private final Button applyGroupsButton = new Button("Apply as groups");
   private final Button showHeatmapButton = new Button("Show heatmap");
   private final Label statusLabel = new Label();
+  private AnalysisMode patternMode = AnalysisMode.SIGNAL;
 
   public PatternDiscoveryControls() {
     topN.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(50, 50_000, 2000, 100));
@@ -64,17 +72,20 @@ public final class PatternDiscoveryControls {
   }
 
   public Node createEmbedded() {
-    Label help = new Label(
-        "Cluster samples by similar signal patterns, then Apply as groups "
-            + "for Group comparison DE.");
-    help.getStyleClass().add("subsection-label");
-    help.setWrapText(true);
+    Label title = new Label("Patterns");
+    title.getStyleClass().add("section-header");
+    Button help = HelpInfoButton.create(
+        "Pattern discovery",
+        "Sample pattern search",
+        PatternDiscoveryControls::helpSections);
+    HBox titleRow = new HBox(4, title, help);
+    titleRow.setAlignment(Pos.CENTER_LEFT);
 
     HBox actions = new HBox(8, discoverButton, applyGroupsButton, showHeatmapButton);
     actions.setAlignment(Pos.CENTER_LEFT);
 
     VBox box = new VBox(8,
-        help,
+        titleRow,
         actions,
         fieldRow("Clusters k", kClusters),
         fieldRow("Top features", topN),
@@ -82,6 +93,73 @@ public final class PatternDiscoveryControls {
         statusLabel);
     box.setPadding(new Insets(4, 0, 8, 0));
     return box;
+  }
+
+  /** Help sections for the Patterns “?” button (same InfoModal pattern as Group comparison). */
+  static List<InfoModal.Section> helpSections() {
+    GroupStatTest test = AnalysisSession.get().getGroupStatTest();
+    if (test == null) {
+      test = GroupStatTest.AUTO;
+    }
+
+    List<InfoModal.Section> sections = new ArrayList<>();
+    sections.add(new InfoModal.Section(
+        "Overview",
+        "Unsupervised search for groups of samples that share similar patterns on the "
+            + "current feature matrix. For Signal, features are value units (genes/windows/"
+            + "native features). For Point/SV, features are genes with binary carrier scores "
+            + "(0/1) from filter-passing variants. Marker features (each pattern vs the rest) "
+            + "are listed in the Group comparison results table. This is clustering + marker "
+            + "scoring — not differential analysis of predefined sample groups. Use Group "
+            + "comparison after Apply as groups when you want DE between named groups."));
+    sections.add(new InfoModal.Section(
+        "Input data",
+        "Patterns use the same filter-passing input as Group comparison. "
+            + "Point/SV: set Variant Filters first (types, effects, Q, DP, AF, sample tags, …); "
+            + "Discover scores only those variants. Types and effects are include/exclude only "
+            + "— e.g. uncheck synonymous to run missense-focused patterns; there is no automatic "
+            + "missense-vs-truncating split inside Discover. "
+            + "Signal: uses the current value/feature matrix and its thresholds."));
+    sections.add(new InfoModal.Section(
+        "Clustering method",
+        "1) Optional Min mean filter drops low-mean features. "
+            + "2) Keep the Top features most variable across samples. "
+            + "3) Z-score features, build sample–sample distances from correlation, "
+            + "then average-linkage (UPGMA) hierarchical clustering. "
+            + "4) Cut the dendrogram into Clusters k groups (Pattern 1…k)."));
+    sections.add(new InfoModal.Section(
+        "Marker test",
+        "For each feature, every pattern cluster is tested against the remaining samples; "
+            + "the strongest (lowest-p) contrast is kept, with Benjamini–Hochberg FDR. "
+            + "The test follows the Group comparison Test setting "
+            + "(currently: " + test.displayName() + "). "
+            + "Auto / Moderated → moderated t on continuous values; "
+            + "Rank → Mann–Whitney; otherwise Welch. "
+            + "For binary mutation carriers, Auto typically selects Fisher."));
+    sections.add(new InfoModal.Section(
+        "Parameters",
+        "Clusters k — number of pattern groups cut from the dendrogram. "
+            + "Top features — how many most-variable features enter clustering. "
+            + "Min mean — drop features below this mean before selecting top-N (0 = off)."));
+    sections.add(new InfoModal.Section(
+        "Apply and heatmap",
+        "Apply as groups creates or replaces Sample Groups named Pattern 1…k from the "
+            + "last discovery. Show heatmap opens a features×samples view in dendrogram "
+            + "order with group and pattern annotation bars."));
+    return sections;
+  }
+
+  /** Which AnalysisSession pattern slot Apply/Heatmap read (Signal vs Point/SV). */
+  public void setPatternMode(AnalysisMode mode) {
+    this.patternMode = mode != null ? mode : AnalysisMode.SIGNAL;
+  }
+
+  /** Refresh Apply/Heatmap using a mode-specific pattern result. */
+  public void refreshApplyEnabled(AnalysisMode mode) {
+    SamplePatternEngine.Result result = AnalysisSession.get().getLastPatternResult(
+        mode != null ? mode : patternMode);
+    applyGroupsButton.setDisable(result == null);
+    showHeatmapButton.setDisable(result == null || !result.hasHeatmapData());
   }
 
   public SamplePatternEngine.Settings buildSettings() {
@@ -137,9 +215,7 @@ public final class PatternDiscoveryControls {
   }
 
   public void refreshApplyEnabled() {
-    SamplePatternEngine.Result result = AnalysisSession.get().getLastPatternResult();
-    applyGroupsButton.setDisable(result == null);
-    showHeatmapButton.setDisable(result == null || !result.hasHeatmapData());
+    refreshApplyEnabled(patternMode);
   }
 
   public Label statusLabel() {

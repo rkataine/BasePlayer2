@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.baseplayer.annotation.CosmicCensusEntry;
 import org.baseplayer.annotation.CosmicGenes;
@@ -25,6 +26,7 @@ import org.baseplayer.io.VcfManager;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
+import org.baseplayer.variant.MateBreakpointIndex;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
@@ -46,6 +48,8 @@ public final class VariantCacheStore {
   /** v5: per-node control AF + list-level control VCF source path. */
   public static final int SCHEMA_VERSION = 6;
   private static final int MAGIC = 0x42505631; // "BPV1"
+  private static final int MATE_MAGIC = 0x42504D31; // "BPM1"
+  private static final int MATE_SCHEMA_VERSION = 1;
   private static final String META_FILE = "meta.json";
   private static final String CHROM_SUFFIX = ".bpv.zst";
 
@@ -106,9 +110,21 @@ public final class VariantCacheStore {
     }
 
     List<VcfFingerprint> fingerprints = new ArrayList<>();
-    for (File vcf : VcfManager.getInstance().getLoadedVcfFiles()) {
-      if (vcf == null || !vcf.exists()) continue;
-      fingerprints.add(VcfFingerprint.from(vcf));
+    Set<String> listed = VcfMetaPersistence.listedVcfPaths();
+    if (!listed.isEmpty()) {
+      for (String absolute : listed) {
+        File vcf = Path.of(absolute).toFile();
+        if (vcf.exists()) {
+          fingerprints.add(VcfFingerprint.from(vcf));
+        }
+      }
+    } else {
+      for (File vcf : VcfManager.getInstance().getLoadedVcfFiles()) {
+        if (vcf == null || !vcf.exists()) {
+          continue;
+        }
+        fingerprints.add(VcfFingerprint.from(vcf));
+      }
     }
 
     Map<String, VariantList> cached = VcfManager.getInstance().snapshotVariantCache();
@@ -364,23 +380,26 @@ public final class VariantCacheStore {
   }
 
   private static boolean fingerprintsMatch(List<VcfFingerprint> saved) {
-    List<File> current = VcfManager.getInstance().getLoadedVcfFiles();
-    if (saved == null) saved = List.of();
-    if (saved.size() != current.size()) return false;
-
-    Map<String, VcfFingerprint> byPath = new HashMap<>();
-    for (VcfFingerprint fp : saved) {
-      if (fp != null && fp.path != null) {
-        byPath.put(Path.of(fp.path).toAbsolutePath().normalize().toString(), fp);
-      }
+    if (saved == null || saved.isEmpty()) {
+      // No VCF identity recorded — accept cache if chrom files otherwise parse.
+      return true;
     }
-    for (File file : current) {
-      if (file == null) return false;
-      String key = file.toPath().toAbsolutePath().normalize().toString();
-      VcfFingerprint fp = byPath.get(key);
-      if (fp == null) return false;
+    // Every saved fingerprint must still match the file on disk. Do not require
+    // equal cardinality with currently listed/loaded VCFs: unchecked paths may
+    // appear in the project list without being open, and older caches only
+    // recorded loaded files.
+    for (VcfFingerprint fp : saved) {
+      if (fp == null || fp.path == null || fp.path.isBlank()) {
+        continue;
+      }
+      File file = Path.of(fp.path).toFile();
+      if (!file.exists()) {
+        return false;
+      }
       VcfFingerprint now = VcfFingerprint.from(file);
-      if (fp.size != now.size || fp.mtime != now.mtime) return false;
+      if (fp.size != now.size || fp.mtime != now.mtime) {
+        return false;
+      }
     }
     return true;
   }
@@ -559,6 +578,8 @@ public final class VariantCacheStore {
     long svEnd2 = in.readLong();
     double siteQuality = in.readDouble();
     String vcfId = readNullableString(in);
+    // Wire format still carries FILTER; discard — live FILTER= rules force VCF reload.
+    readNullableString(in);
     Map<String, String> infoFields = readStringMap(in);
 
     VariantNode node = new VariantNode(position, ref, alt, type);
@@ -567,8 +588,6 @@ public final class VariantCacheStore {
     node.svEnd2 = svEnd2;
     node.siteQuality = siteQuality;
     node.vcfId = vcfId;
-    // FILTER column values are only kept when FILTER= rules are active (reload from VCF).
-    // Drop legacy per-allele FILTER strings from older caches.
     node.vcfFilter = null;
     // INFO values: keep only canvas CNV keys from cache; user INFO filters force VCF reload.
     if (type != null && VariantTypeVisuals.isCnv(type) && infoFields != null && !infoFields.isEmpty()) {
@@ -646,6 +665,130 @@ public final class VariantCacheStore {
   private static String safeChromFileName(String chrom) {
     if (chrom == null || chrom.isBlank()) return "unknown";
     return chrom.replaceAll("[^A-Za-z0-9._-]", "_");
+  }
+
+  /**
+   * Write a mate-breakpoint index sidecar. Sample calls are keyed by track
+   * display name so restore can rebind after track order changes.
+   */
+  public static void writeMateIndex(
+      Path file, MateBreakpointIndex index, SampleRegistry registry) throws IOException {
+    if (file == null) {
+      throw new IOException("mate index path");
+    }
+    if (file.getParent() != null) {
+      Files.createDirectories(file.getParent());
+    }
+    List<MateBreakpointIndex.IndexedHit> hits =
+        index != null ? index.snapshotHits() : List.of();
+    try (OutputStream raw = new BufferedOutputStream(Files.newOutputStream(file));
+         ZstdOutputStream zstd = new ZstdOutputStream(raw);
+         DataOutputStream out = new DataOutputStream(zstd)) {
+      out.writeInt(MATE_MAGIC);
+      out.writeInt(MATE_SCHEMA_VERSION);
+      out.writeInt(hits.size());
+      for (MateBreakpointIndex.IndexedHit indexed : hits) {
+        MateBreakpointIndex.Hit hit = indexed.hit();
+        writeString(out, indexed.mateChrom() != null ? indexed.mateChrom() : "");
+        out.writeLong(hit.matePos());
+        writeString(out, hit.primaryChrom() != null ? hit.primaryChrom() : "");
+        out.writeLong(hit.primaryPos());
+        writeString(out, hit.ref() != null ? hit.ref() : "N");
+        writeString(out, hit.alt() != null ? hit.alt() : "<TRA>");
+        out.writeInt(hit.type() != null ? hit.type().ordinal() : VcfVariantType.SV_TRANSLOCATION.ordinal());
+        writeNullableString(out, hit.vcfId());
+        List<VariantNode.SampleCall> calls = hit.calls();
+        out.writeInt(calls.size());
+        for (VariantNode.SampleCall call : calls) {
+          String trackName = "";
+          if (call.getTrack() != null && call.getTrack().getDisplayName() != null) {
+            trackName = call.getTrack().getDisplayName();
+          } else if (registry != null) {
+            int idx = call.getTrackIndex();
+            if (idx >= 0 && idx < registry.getSampleTracks().size()) {
+              SampleTrack track = registry.getSampleTracks().get(idx);
+              if (track != null && track.getDisplayName() != null) {
+                trackName = track.getDisplayName();
+              }
+            }
+          }
+          writeString(out, trackName);
+          writeNullableString(out, call.gt);
+          out.writeDouble(call.quality);
+          out.writeInt(call.depth);
+          out.writeDouble(call.alleleFraction);
+        }
+      }
+    }
+  }
+
+  /** Read a mate-breakpoint index sidecar; rebinds calls via track display names. */
+  public static MateBreakpointIndex readMateIndex(Path file, SampleRegistry registry)
+      throws IOException {
+    if (file == null || !Files.isRegularFile(file)) {
+      return MateBreakpointIndex.empty();
+    }
+    Map<String, Integer> nameToTrackIndex = new HashMap<>();
+    if (registry != null) {
+      List<SampleTrack> tracks = registry.getSampleTracks();
+      for (int i = 0; i < tracks.size(); i++) {
+        SampleTrack track = tracks.get(i);
+        if (track != null && track.getDisplayName() != null) {
+          nameToTrackIndex.put(track.getDisplayName(), i);
+        }
+      }
+    }
+    try (InputStream raw = new BufferedInputStream(Files.newInputStream(file));
+         ZstdInputStream zstd = new ZstdInputStream(raw);
+         DataInputStream in = new DataInputStream(zstd)) {
+      int magic = in.readInt();
+      if (magic != MATE_MAGIC) {
+        throw new IOException("Bad mate-index magic");
+      }
+      int version = in.readInt();
+      if (version != MATE_SCHEMA_VERSION) {
+        throw new IOException("Unsupported mate-index version: " + version);
+      }
+      int hitCount = in.readInt();
+      if (hitCount < 0 || hitCount > 50_000_000) {
+        throw new IOException("Invalid mate hit count: " + hitCount);
+      }
+      List<MateBreakpointIndex.IndexedHit> hits = new ArrayList<>(hitCount);
+      for (int i = 0; i < hitCount; i++) {
+        String mateChrom = readString(in);
+        long matePos = in.readLong();
+        String primaryChrom = readString(in);
+        long primaryPos = in.readLong();
+        String ref = readString(in);
+        String alt = readString(in);
+        VcfVariantType type = ordinalToType(in.readInt());
+        String vcfId = readNullableString(in);
+        int callCount = in.readInt();
+        if (callCount < 0 || callCount > 100_000) {
+          throw new IOException("Invalid mate call count: " + callCount);
+        }
+        List<VariantNode.SampleCall> calls = new ArrayList<>(callCount);
+        for (int c = 0; c < callCount; c++) {
+          String trackName = readString(in);
+          String gt = readNullableString(in);
+          double quality = in.readDouble();
+          int depth = in.readInt();
+          double af = in.readDouble();
+          Integer liveIndex = nameToTrackIndex.get(trackName);
+          if (liveIndex != null && liveIndex >= 0) {
+            calls.add(new VariantNode.SampleCall(liveIndex, null, gt, quality, depth, af, null));
+          }
+        }
+        if (calls.isEmpty()) {
+          continue;
+        }
+        hits.add(new MateBreakpointIndex.IndexedHit(
+            mateChrom,
+            new MateBreakpointIndex.Hit(
+                matePos, primaryChrom, primaryPos, ref, alt, type, vcfId, calls)));
+      }
+      return MateBreakpointIndex.fromHits(hits);
+    }
   }
 
   private static void writeStringMap(DataOutputStream out, Map<String, String> map) throws IOException {

@@ -137,9 +137,17 @@ public class MinimizedAnalysisManagerWindow {
         minimizedStage.initStyle(StageStyle.TRANSPARENT);
         minimizedStage.setResizable(false);
         minimizedStage.setAlwaysOnTop(true);
-        // Keep the floating chip tied to the main app so it cannot outlive it.
+        // No initOwner: owned children steal MainApp focus on Linux/GTK and
+        // File/Tools menus stop opening. Couple lifecycle via showingProperty.
         if (MainApp.stage != null) {
-            minimizedStage.initOwner(MainApp.stage);
+            detachMainAppListener();
+            mainAppShowingListener = (obs, wasShowing, isShowing) -> {
+                if (!isShowing) {
+                    closeMinimizedStage();
+                    MenuBarController.updateAnalysisManagerButtonVisibility();
+                }
+            };
+            MainApp.stage.showingProperty().addListener(mainAppShowingListener);
         }
 
         FontIcon expandIcon = new FontIcon(FontAwesomeSolid.EXPAND);

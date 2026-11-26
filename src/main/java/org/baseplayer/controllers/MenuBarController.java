@@ -39,6 +39,7 @@ import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
+import javafx.scene.control.Labeled;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
@@ -55,6 +56,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import javafx.stage.Popup;
+import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
 
@@ -179,6 +181,100 @@ public class MenuBarController {
         }
       });
     }
+    installMenuBarStageActivation();
+  }
+
+  /**
+   * Linux/GTK: top-level MenuBar only opens when {@link MainApp#stage} is the
+   * focused Stage. With Analysis (or another peer Stage) focused, File/Tools
+   * clicks look live but do nothing — activate MainApp and open the hit menu.
+   */
+  private void installMenuBarStageActivation() {
+    if (menuBar == null) {
+      return;
+    }
+    menuBar.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+      if (event.getButton() != MouseButton.PRIMARY) {
+        return;
+      }
+      Menu hit = findTopLevelMenuFromTarget(event.getTarget());
+      if (hit == null) {
+        return;
+      }
+      Stage main = MainApp.stage;
+      if (main != null && main.isShowing() && !main.isFocused()) {
+        // Peer Stage (Analysis) held focus — reclaim so the menu can paint.
+        main.toFront();
+        main.requestFocus();
+      }
+      // Toggle: second click on the same open menu closes it.
+      if (hit.isShowing()) {
+        hit.hide();
+        event.consume();
+        return;
+      }
+      for (Menu menu : menuBar.getMenus()) {
+        if (menu != null && menu != hit && menu.isShowing()) {
+          menu.hide();
+        }
+      }
+      // Own show/hide so focus transfer cannot eat the open, and toggle works.
+      Platform.runLater(() -> {
+        if (!hit.isShowing()) {
+          hit.show();
+        }
+      });
+      event.consume();
+    });
+
+    // Any MainApp chrome click should reclaim focus from peer Stages.
+    menuBar.sceneProperty().addListener((obs, oldScene, newScene) -> {
+      if (oldScene != null) {
+        oldScene.removeEventFilter(MouseEvent.MOUSE_PRESSED, mainStageActivateFilter);
+      }
+      if (newScene != null) {
+        newScene.addEventFilter(MouseEvent.MOUSE_PRESSED, mainStageActivateFilter);
+      }
+    });
+    if (menuBar.getScene() != null) {
+      menuBar.getScene().addEventFilter(MouseEvent.MOUSE_PRESSED, mainStageActivateFilter);
+    }
+  }
+
+  private final EventHandler<MouseEvent> mainStageActivateFilter = event -> {
+    if (event.getButton() != MouseButton.PRIMARY) {
+      return;
+    }
+    // MenuBar has its own handler (may consume); skip duplicate work there.
+    if (isEventInsideNode(event.getTarget(), menuBar)) {
+      return;
+    }
+    Stage main = MainApp.stage;
+    if (main == null || !main.isShowing() || main.isFocused()) {
+      return;
+    }
+    main.toFront();
+    main.requestFocus();
+  };
+
+  private Menu findTopLevelMenuFromTarget(Object target) {
+    if (menuBar == null || !(target instanceof Node node)) {
+      return null;
+    }
+    for (Node n = node; n != null && n != menuBar; n = n.getParent()) {
+      if (n instanceof Labeled labeled) {
+        String text = labeled.getText();
+        if (text == null || text.isBlank()) {
+          continue;
+        }
+        for (Menu menu : menuBar.getMenus()) {
+          if (menu != null && text.equals(menu.getText())) {
+            return menu;
+          }
+        }
+      }
+    }
+    return null;
   }
   
   private void setupMemoryBar() {
@@ -969,25 +1065,33 @@ public class MenuBarController {
     boolean hasDiskCache = projectFile != null
         && org.baseplayer.project.VariantCacheStore.exists(projectFile);
     boolean hasVcfs = org.baseplayer.io.VcfManager.getInstance().hasLoadedVcf();
+    boolean hasAnalysis =
+        org.baseplayer.analysis.AnalysisSession.get().getAnnotationResult() != null
+            || org.baseplayer.analysis.AnalysisSession.get()
+                .getResult(org.baseplayer.analysis.AnalysisMode.SIGNAL) != null
+            || org.baseplayer.analysis.AnalysisSession.get()
+                .getResult(org.baseplayer.analysis.AnalysisMode.MUTATIONS_POINT) != null
+            || org.baseplayer.analysis.AnalysisSession.get()
+                .getResult(org.baseplayer.analysis.AnalysisMode.MUTATIONS_SV) != null;
 
-    if (!hasDiskCache && !hasVcfs) {
+    if (!hasDiskCache && !hasVcfs && !hasAnalysis) {
       org.baseplayer.components.AppDialog.info(
           owner,
-          "Clear variant cache",
+          "Clear session cache",
           "Nothing to clear.",
-          "No project variant cache on disk and no VCFs loaded.");
+          "No project session cache on disk and no loaded variants/analyses.");
       return;
     }
 
     String where = hasDiskCache
         ? ("Deletes "
             + org.baseplayer.project.VariantCacheStore.cacheDirectory(projectFile).getFileName()
-            + " next to the project, and drops in-memory chromosome lists.")
-        : "No saved project cache on disk. Clears in-memory chromosome lists only.";
+            + " (variants, matrices, analyses) next to the project, and drops in-memory caches.")
+        : "No saved project cache on disk. Clears in-memory variant lists and analysis results only.";
     boolean ok = org.baseplayer.components.AppDialog.confirm(
         owner,
-        "Clear variant cache",
-        "Empty variant cache?",
+        "Clear session cache",
+        "Empty session cache?",
         where + " Variants for the current view will reload from the VCF(s).",
         "Clear",
         "Cancel");
@@ -1007,6 +1111,7 @@ public class MenuBarController {
 
     org.baseplayer.io.VcfManager vcf = org.baseplayer.io.VcfManager.getInstance();
     vcf.clearAllVariantCaches();
+    org.baseplayer.analysis.AnalysisSession.get().clear();
     if (vcf.hasLoadedVcf()) {
       vcf.loadVariantsForCurrentView();
     }
@@ -1020,9 +1125,9 @@ public class MenuBarController {
     } else {
       detail.append("Disk cache: removed ").append(deleted).append(" file(s).");
     }
-    detail.append(" In-memory lists cleared.");
+    detail.append(" In-memory variants and analyses cleared.");
     org.baseplayer.components.AppDialog.info(
-        owner, "Clear variant cache", "Variant cache emptied.", detail.toString());
+        owner, "Clear session cache", "Session cache emptied.", detail.toString());
   }
 
   public void clearAllData(ActionEvent event) { FileCommands.newProject(); }

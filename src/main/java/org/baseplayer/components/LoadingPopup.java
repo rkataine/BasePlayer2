@@ -24,11 +24,11 @@ import javafx.stage.Window;
 import javafx.util.Duration;
 
 /**
- * Owned modal loading dialog with progress, ETA, and cancel.
+ * Independent loading dialog with progress, ETA, and cancel.
  *
- * <p>Uses a {@link Stage} (not a transparent {@link javafx.stage.Popup}) so Linux
- * compositors do not flash flipped canvas textures into the loading surface.
- * Message and progress can be updated from any thread.
+ * <p>Uses a non-modal {@link Stage} with no {@code initOwner} so Linux/GTK keeps
+ * minimize/maximize on the main window (owned {@code WINDOW_MODAL} children pin
+ * their owner to the front). Message and progress can be updated from any thread.
  */
 public class LoadingPopup {
 
@@ -67,12 +67,11 @@ public class LoadingPopup {
         }
       };
 
-  private final ChangeListener<Boolean> ownerShowingListener =
-      (obs, was, is) -> syncForegroundVisibility();
-
   public LoadingPopup() {
+    // Independent stage (no initOwner): owned WINDOW_MODAL children steal focus /
+    // block minimize on Linux/GTK — same pattern as SampleOrganizationWindow.
     stage = new Stage(StageStyle.UTILITY);
-    stage.initModality(Modality.WINDOW_MODAL);
+    stage.initModality(Modality.NONE);
     stage.setResizable(false);
     stage.setTitle("Loading");
     stage.setOnCloseRequest(e -> {
@@ -471,72 +470,29 @@ public class LoadingPopup {
       return;
     }
 
-    Window owner = usableOwner(ownerHint);
-    if (owner == null) {
-      owner = findAnyUsableStage();
-    }
-    if (owner == null) {
-      if (stage.isShowing()) {
-        stage.hide();
-      }
-      return;
-    }
-
-    ensureStageOwner(owner);
+    stage.sizeToScene();
+    centerOnOwner();
     if (!stage.isShowing()) {
-      stage.sizeToScene();
-      centerOnOwner();
       stage.show();
-    } else {
-      stage.sizeToScene();
-      centerOnOwner();
     }
-  }
-
-  /** Current {@link Stage#getOwner()}, or null before first show. */
-  public Window stageOwner() {
-    return stage.getOwner();
-  }
-
-  /**
-   * Tear down this popup so {@link org.baseplayer.services.LoadingManager} can
-   * create a new one owned by a different window (JavaFX forbids rebinding
-   * {@link Stage#initOwner}).
-   */
-  public void dispose() {
-    sessionActive = false;
-    modalSuppressDepth = 0;
-    stopElapsedTicker();
-    unbindOwner();
-    ownerHint = null;
-    onCancel = null;
-    if (stage.isShowing()) {
-      stage.hide();
-    }
-    stage.setOnCloseRequest(null);
-    stage.close();
-  }
-
-  /** {@link Stage#initOwner} may be called only once; prefer the first usable owner. */
-  private void ensureStageOwner(Window owner) {
-    if (stage.getOwner() != null || owner == null) {
-      return;
-    }
-    stage.initOwner(owner);
   }
 
   private void centerOnOwner() {
-    Window anchor = usableOwner(ownerHint);
-    if (anchor == null) {
-      anchor = stage.getOwner();
-    }
-    if (anchor == null) {
-      return;
-    }
+    Window anchor = usableAnchor(ownerHint);
     double w = stage.getWidth() > 0 ? stage.getWidth() : POPUP_W;
     double h = stage.getHeight() > 0 ? stage.getHeight() : POPUP_H;
-    stage.setX(anchor.getX() + (anchor.getWidth() - w) / 2);
-    stage.setY(anchor.getY() + (anchor.getHeight() - h) / 2);
+    if (anchor != null) {
+      stage.setX(anchor.getX() + (anchor.getWidth() - w) / 2);
+      stage.setY(anchor.getY() + (anchor.getHeight() - h) / 2);
+      return;
+    }
+    // No usable window (e.g. main iconified) — keep prior position or screen center.
+    if (stage.getX() == 0 && stage.getY() == 0) {
+      javafx.geometry.Rectangle2D screen =
+          javafx.stage.Screen.getPrimary().getVisualBounds();
+      stage.setX(screen.getMinX() + (screen.getWidth() - w) / 2);
+      stage.setY(screen.getMinY() + (screen.getHeight() - h) / 2);
+    }
   }
 
   private void cancel() {
@@ -558,14 +514,12 @@ public class LoadingPopup {
     if (owner == null) {
       return;
     }
+    // Follow move/resize for centering only — do not listen to iconified/showing
+    // (that fought minimize when the popup was owned + WINDOW_MODAL).
     owner.xProperty().addListener(ownerBoundsListener);
     owner.yProperty().addListener(ownerBoundsListener);
     owner.widthProperty().addListener(ownerBoundsListener);
     owner.heightProperty().addListener(ownerBoundsListener);
-    if (owner instanceof Stage ownerStage) {
-      ownerStage.showingProperty().addListener(ownerShowingListener);
-      ownerStage.iconifiedProperty().addListener(ownerShowingListener);
-    }
   }
 
   private void unbindOwner() {
@@ -577,32 +531,11 @@ public class LoadingPopup {
     owner.yProperty().removeListener(ownerBoundsListener);
     owner.widthProperty().removeListener(ownerBoundsListener);
     owner.heightProperty().removeListener(ownerBoundsListener);
-    if (owner instanceof Stage ownerStage) {
-      ownerStage.showingProperty().removeListener(ownerShowingListener);
-      ownerStage.iconifiedProperty().removeListener(ownerShowingListener);
-    }
   }
 
-  private Window findAnyUsableStage() {
-    for (Window window : Window.getWindows()) {
-      Stage s = asUsableStage(window);
-      if (s != null) {
-        return s;
-      }
-    }
-    return null;
-  }
-
-  private Window usableOwner(Window owner) {
-    return asUsableStage(owner);
-  }
-
-  private Stage asUsableStage(Window window) {
-    if (!(window instanceof Stage)) {
-      return null;
-    }
-    Stage s = (Stage) window;
-    if (s == stage) {
+  /** Prefer a showing, non-iconified stage for centering; otherwise null. */
+  private Window usableAnchor(Window owner) {
+    if (!(owner instanceof Stage s) || s == stage) {
       return null;
     }
     if (!s.isShowing() || s.isIconified()) {

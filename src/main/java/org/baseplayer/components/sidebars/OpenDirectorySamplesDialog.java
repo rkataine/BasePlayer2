@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.io.SampleFileKind;
 import org.baseplayer.ui.theme.AppTheme;
 
@@ -14,7 +15,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -77,30 +77,26 @@ public final class OpenDirectorySamplesDialog {
     Label typesHeader = new Label("Sample types");
     typesHeader.getStyleClass().add("section-header");
 
-    Map<SampleFileKind, CheckBox> typeBoxes = new LinkedHashMap<>();
+    Map<SampleFileKind, ColoredToggle> typeBoxes = new LinkedHashMap<>();
     VBox typesBox = new VBox(6);
     for (SampleFileKind kind : SampleFileKind.values()) {
       if (!availableTypes.contains(kind)) {
         continue;
       }
-      CheckBox box = new CheckBox(kind.label());
+      ColoredToggle box = new ColoredToggle(kind.label());
       box.setSelected(true);
-      box.getStyleClass().add("filter-checkbox");
       typeBoxes.put(kind, box);
       typesBox.getChildren().add(box);
     }
 
-    CheckBox separateTracks = new CheckBox("Open as separate tracks");
+    ColoredToggle separateTracks = new ColoredToggle("Open as separate tracks");
     separateTracks.setSelected(true);
-    separateTracks.getStyleClass().add("filter-checkbox");
 
-    CheckBox addToGroup = new CheckBox("Add to group (directory name)");
+    ColoredToggle addToGroup = new ColoredToggle("Add to group (directory name)");
     addToGroup.setSelected(true);
-    addToGroup.getStyleClass().add("filter-checkbox");
 
-    CheckBox applyToAll = new CheckBox("Apply settings to other directories");
+    ColoredToggle applyToAll = new ColoredToggle("Apply settings to other directories");
     applyToAll.setSelected(true);
-    applyToAll.getStyleClass().add("filter-checkbox");
     applyToAll.setVisible(directoryCount > 1);
     applyToAll.setManaged(directoryCount > 1);
 
@@ -112,7 +108,7 @@ public final class OpenDirectorySamplesDialog {
     open.setDefaultButton(true);
     open.setOnAction(e -> {
       EnumSet<SampleFileKind> selected = EnumSet.noneOf(SampleFileKind.class);
-      for (Map.Entry<SampleFileKind, CheckBox> entry : typeBoxes.entrySet()) {
+      for (Map.Entry<SampleFileKind, ColoredToggle> entry : typeBoxes.entrySet()) {
         if (entry.getValue().isSelected()) {
           selected.add(entry.getKey());
         }

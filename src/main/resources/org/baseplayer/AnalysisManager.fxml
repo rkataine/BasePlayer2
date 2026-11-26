@@ -319,6 +319,8 @@
                         <padding>
                             <Insets top="16" right="16" bottom="16" left="16"/>
                         </padding>
+                        <VBox fx:id="pointPatternsHost" spacing="8"/>
+                        <Separator/>
                         <VBox spacing="6" VBox.vgrow="ALWAYS">
                             <HBox spacing="8" alignment="CENTER_LEFT">
                                 <Label text="Sample tags" styleClass="section-header"/>

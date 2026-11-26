@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.baseplayer.MainApp;
+import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.io.dragen.DragenAnalysisKind;
 import org.baseplayer.io.dragen.DragenFolderScan;
 import org.baseplayer.ui.theme.AppTheme;
@@ -18,7 +19,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.layout.BorderPane;
@@ -117,7 +117,7 @@ public final class OpenDragenDialog {
     Map<DragenAnalysisKind, String> previewMap =
         previews != null ? previews : Map.of();
 
-    Map<DragenAnalysisKind, CheckBox> boxes = new LinkedHashMap<>();
+    Map<DragenAnalysisKind, ColoredToggle> boxes = new LinkedHashMap<>();
     VBox analysesBox = new VBox(8);
     for (DragenAnalysisKind kind : DragenAnalysisKind.values()) {
       if (!available.contains(kind)) {
@@ -127,11 +127,10 @@ public final class OpenDragenDialog {
       String boxText = preview == null || preview.isBlank()
           ? kind.label()
           : kind.label() + " — " + preview;
-      CheckBox box = new CheckBox(boxText);
+      ColoredToggle box = new ColoredToggle(boxText);
       box.setSelected(false);
       box.setWrapText(true);
       box.setMaxWidth(Double.MAX_VALUE);
-      box.getStyleClass().add("filter-checkbox");
       boxes.put(kind, box);
       analysesBox.getChildren().add(box);
     }
@@ -146,7 +145,7 @@ public final class OpenDragenDialog {
       }
     }
 
-    List<CheckBox> optionalBoxes = new ArrayList<>();
+    List<ColoredToggle> optionalBoxes = new ArrayList<>();
     VBox optionalBox = new VBox(8);
     Label optionalHeader = null;
     if (!optionalByName.isEmpty()) {
@@ -161,13 +160,12 @@ public final class OpenDragenDialog {
       optionalHint.setMaxWidth(Double.MAX_VALUE);
       optionalBox.getChildren().add(optionalHint);
       for (Map.Entry<String, File> entry : optionalByName.entrySet()) {
-        CheckBox box = new CheckBox(entry.getKey());
+        ColoredToggle box = new ColoredToggle(entry.getKey());
         box.setSelected(false);
         box.setWrapText(true);
         box.setMaxWidth(Double.MAX_VALUE);
-        box.getStyleClass().add("filter-checkbox");
         box.setUserData(entry.getValue());
-        CheckBox cnvBox = boxes.get(DragenAnalysisKind.CNV);
+        ColoredToggle cnvBox = boxes.get(DragenAnalysisKind.CNV);
         if (cnvBox != null) {
           box.disableProperty().bind(cnvBox.selectedProperty().not());
         }
@@ -200,7 +198,7 @@ public final class OpenDragenDialog {
     open.setDefaultButton(true);
     open.setOnAction(e -> {
       EnumSet<DragenAnalysisKind> selected = EnumSet.noneOf(DragenAnalysisKind.class);
-      for (Map.Entry<DragenAnalysisKind, CheckBox> entry : boxes.entrySet()) {
+      for (Map.Entry<DragenAnalysisKind, ColoredToggle> entry : boxes.entrySet()) {
         if (entry.getValue().isSelected()) {
           selected.add(entry.getKey());
         }
@@ -210,7 +208,7 @@ public final class OpenDragenDialog {
       }
       List<File> opted = new ArrayList<>();
       if (selected.contains(DragenAnalysisKind.CNV)) {
-        for (CheckBox box : optionalBoxes) {
+        for (ColoredToggle box : optionalBoxes) {
           if (box.isSelected() && box.getUserData() instanceof File file) {
             opted.add(file);
           }

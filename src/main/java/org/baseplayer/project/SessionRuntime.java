@@ -97,24 +97,25 @@ public final class SessionRuntime {
             loading.setDetailMessage("Restoring sample tracks…");
             restoreSampleTracks(document, projectFile, warnings);
 
-            loading.setProgress(0.35);
+            loading.setProgress(0.30);
             loading.setDetailMessage("Opening VCF files…");
             restoreVcfs(document, projectFile, warnings);
 
-            loading.setProgress(0.55);
-            loading.setDetailMessage("Restoring matrices…");
-            restoreMatrices(document, projectFile, warnings);
-
             Map<String, VariantList> cachedVariants = Map.of();
             try {
-              loading.setProgress(0.70);
+              loading.setProgress(0.45);
               loading.setDetailMessage("Reading variant cache…");
               cachedVariants = VariantCacheStore.readSessionCache(projectFile, warnings);
             } catch (Exception e) {
               warnings.add("Failed to read variant cache: " + e.getMessage());
             }
+
+            loading.setProgress(0.60);
+            loading.setDetailMessage("Restoring matrices…");
+            restoreMatrices(document, projectFile, warnings);
+
             loading.clearDetail();
-            loading.setProgress(0.95);
+            loading.setProgress(0.90);
             return cachedVariants;
           },
           cachedVariants -> {
@@ -139,6 +140,14 @@ public final class SessionRuntime {
               org.baseplayer.analysis.ComparisonContext.get()
                   .restoreSignalDatasetsAfterTracks(document);
 
+              // Finished Annotate/DE/enrichment/patterns — before Analysis Manager opens
+              // so tables hydrate from session without recompute.
+              try {
+                AnalysisResultStore.installSessionCache(projectFile, warnings);
+              } catch (Exception e) {
+                warnings.add("Failed to install analysis cache: " + e.getMessage());
+              }
+
               boolean hasVcf = VcfManager.getInstance().hasLoadedVcf();
               boolean hasSignal =
                   org.baseplayer.analysis.manager.AnalysisManagerFacade.hasSignalDatasets()
@@ -153,8 +162,8 @@ public final class SessionRuntime {
                 org.baseplayer.controllers.MainController.initializeLoadRegionButton();
                 org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
               }
-              // Signal tracks/matrices are restored above; re-open Analysis and annotate
-              // so the Signals table is not left on the empty "Open signal data…" placeholder.
+              // Signal tracks/matrices are restored above; open Analysis and hydrate
+              // cached results (or annotate when no analysis cache was installed).
               if (hasSignal) {
                 if (hasVcf) {
                   org.baseplayer.analysis.manager.AnalysisManagerController signalCtrl =
@@ -375,20 +384,23 @@ public final class SessionRuntime {
         registry.includeNewTracksAtEndResetHeight();
       }
     });
-    restoreTableSamples(salmonPaths, otherTablePaths, warnings);
+    restoreTableSamples(salmonPaths, otherTablePaths, warnings, projectFile);
   }
 
   /**
    * Reload Salmon {@code .sf} / mapped TABLE files after sample-track skeletons exist.
    */
   private static void restoreTableSamples(
-      List<Path> salmonPaths, List<Path> otherTablePaths, List<String> warnings) {
+      List<Path> salmonPaths,
+      List<Path> otherTablePaths,
+      List<String> warnings,
+      Path projectFile) {
     if ((salmonPaths == null || salmonPaths.isEmpty())
         && (otherTablePaths == null || otherTablePaths.isEmpty())) {
       return;
     }
     if (salmonPaths != null && !salmonPaths.isEmpty()) {
-      SampleDataManager.restoreSalmonQuantForSession(salmonPaths, warnings);
+      SampleDataManager.restoreSalmonQuantForSession(salmonPaths, warnings, projectFile);
     }
     if (otherTablePaths != null) {
       for (Path path : otherTablePaths) {
@@ -465,7 +477,10 @@ public final class SessionRuntime {
             color = null;
           }
         }
-        flatGroups.add(new SampleGroup(spec.id, spec.name, color));
+        SampleGroup group = new SampleGroup(spec.id, spec.name, color);
+        // Legacy projects omit the field → included.
+        group.setIncludedInProject(spec.includedInProject == null || spec.includedInProject);
+        flatGroups.add(group);
       }
     }
     legacySubgroupToParent = childToParent;
@@ -552,8 +567,8 @@ public final class SessionRuntime {
   }
 
   private static void restoreVcfs(ProjectDocument document, Path projectFile, List<String> warnings) {
-    LinkedHashSet<String> uniqueAbsolutePaths = new LinkedHashSet<>();
-
+    // path → visible if any listing sample is visible
+    LinkedHashMap<String, Boolean> pathVisibility = new LinkedHashMap<>();
     if (document.sampleTracks != null) {
       for (ProjectDocument.SampleTrackSpec trackSpec : document.sampleTracks) {
         if (trackSpec == null || trackSpec.samples == null) {
@@ -572,20 +587,59 @@ public final class SessionRuntime {
                 + (fileSpec.path != null ? fileSpec.path : fileSpec.pathRelative));
             continue;
           }
-          uniqueAbsolutePaths.add(path.toAbsolutePath().normalize().toString());
+          String key = path.toAbsolutePath().normalize().toString();
+          boolean visible = fileSpec.visible;
+          pathVisibility.merge(key, visible, (a, b) -> a || b);
         }
       }
     }
 
-    if (uniqueAbsolutePaths.isEmpty()) {
+    if (pathVisibility.isEmpty()) {
       return;
     }
 
-    List<File> files = new ArrayList<>(uniqueAbsolutePaths.size());
-    for (String absolute : uniqueAbsolutePaths) {
-      files.add(Path.of(absolute).toFile());
+    Map<String, ProjectDocument.VcfMetaSpec> metaByPath = new HashMap<>();
+    if (document.vcfMetas != null) {
+      for (ProjectDocument.VcfMetaSpec meta : document.vcfMetas) {
+        if (meta == null) {
+          continue;
+        }
+        Path path = PathResolver.resolve(meta.path, meta.pathRelative, projectFile);
+        if (path == null) {
+          continue;
+        }
+        metaByPath.put(path.toAbsolutePath().normalize().toString(), meta);
+      }
     }
-    SampleDataManager.loadVcfFilesForSessionRestore(files, warnings);
+
+    List<File> needOpen = new ArrayList<>();
+    for (Map.Entry<String, Boolean> entry : pathVisibility.entrySet()) {
+      String key = entry.getKey();
+      boolean visible = Boolean.TRUE.equals(entry.getValue());
+      ProjectDocument.VcfMetaSpec meta = metaByPath.get(key);
+      if (meta != null) {
+        VcfManager.VcfData registered =
+            VcfMetaPersistence.registerFromMeta(meta, projectFile, warnings);
+        if (registered != null) {
+          // Mate index missing for single-sided visible SVs — rebuild once.
+          if (visible
+              && registered.getMateBreakpointIndex() == null
+              && registered.getBreakendStyle()
+                  == org.baseplayer.io.readers.VcfReader.InterChromBreakendStyle.SINGLE_SIDED) {
+            VcfManager.getInstance().prepareMateSupportInline(registered);
+          }
+          continue;
+        }
+      }
+      // No usable meta: open only when at least one sample listing is visible.
+      if (visible) {
+        needOpen.add(Path.of(key).toFile());
+      }
+    }
+
+    if (!needOpen.isEmpty()) {
+      SampleDataManager.loadVcfFilesForSessionRestore(needOpen, warnings);
+    }
   }
 
   private static void restoreMatrices(
@@ -605,7 +659,7 @@ public final class SessionRuntime {
       }
       org.baseplayer.io.table.MatrixTableOpen.MatrixOpenSpec openSpec =
           matrixOpenSpecFromDocument(matrixSpec);
-      SampleDataManager.restoreMatrixForSession(path, openSpec, warnings);
+      SampleDataManager.restoreMatrixForSession(path, openSpec, warnings, projectFile);
     }
   }
 

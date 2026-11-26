@@ -160,11 +160,12 @@ public class LoadRegionButton extends StackPane {
             // Annotate-all / session restore used to skip RegionFetchCache; VariantList wins.
             || (loaded != null && !loaded.isEmpty() && loaded.isRegionLoaded(viewStart, viewEnd));
 
-        // Show whenever visible VCFs are open and this viewport is not loaded yet —
-        // including after restore/visibility toggles with an empty cache (no auto-stream).
-        boolean needsLoad = vcfManager.hasLoadedVcf()
-            && vcfManager.hasVisibleVcfSample()
-            && !isCached;
+        // Show when visible VCFs need alleles for this viewport — including newly
+        // enabled project VCFs that are not registered yet (open deferred to click).
+        boolean needsLoad = vcfManager.hasVisibleVcfSample()
+            && !isCached
+            && (vcfManager.hasLoadedVcf()
+                || org.baseplayer.io.SampleDataManager.hasUnregisteredVisibleVcfs());
 
         if (loading && !vcfManager.isLoading()) {
             loading = false;

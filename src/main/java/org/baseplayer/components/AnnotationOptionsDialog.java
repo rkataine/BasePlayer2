@@ -9,8 +9,8 @@ import org.baseplayer.services.ServiceRegistry;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
@@ -48,16 +48,14 @@ public final class AnnotationOptionsDialog {
 
     Label title = AppDialog.titleLabel("Gene Display Settings");
 
-    CheckBox cancerGenesCheckBox = new CheckBox("Show only cancer genes (COSMIC)");
+    ColoredToggle cancerGenesCheckBox = new ColoredToggle("Show only cancer genes (COSMIC)");
     cancerGenesCheckBox.setSelected(MainController.showOnlyCancerGenes);
-    cancerGenesCheckBox.setStyle("-fx-text-fill: white;");
 
-    CheckBox maneCheckBox = new CheckBox("Show only MANE transcripts");
+    ColoredToggle maneCheckBox = new ColoredToggle("Show only MANE transcripts");
     var stacks = stackManager.getStacks();
     if (!stacks.isEmpty() && stacks.get(0).chromosomeCanvas != null) {
       maneCheckBox.setSelected(stacks.get(0).chromosomeCanvas.isShowManeOnly());
     }
-    maneCheckBox.setStyle("-fx-text-fill: white;");
 
     Label infoLabel = AppDialog.hintLabel("""
         Cancer genes are from the COSMIC Cancer Gene Census.

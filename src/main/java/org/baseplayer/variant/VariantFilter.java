@@ -107,10 +107,15 @@ public class VariantFilter {
 
     /** Pass-all excludes synthetic LOH AA/BB (built at compare time, not VCF-loaded). */
     private Set<VcfVariantType> allowedTypes = passAllLoadedTypes();
-    private Set<VariantEffect> allowedEffects = EnumSet.allOf(VariantEffect.class);
+    /**
+     * Point-mutation default: gene-relevant effects only. Intronic / intergenic stay
+     * off until the user opts in (they dominate most VCFs and are rarely the first view).
+     * Structural slices that want every effect call {@code setAllowedEffects(allOf(...))}.
+     */
+    private Set<VariantEffect> allowedEffects = defaultAllowedEffects();
     private boolean showCoding = true;
-    private boolean showIntronic = true;
-    private boolean showIntergenic = true;
+    private boolean showIntronic = false;
+    private boolean showIntergenic = false;
     
     // Advanced filters for INFO, FILTER, and FORMAT fields
     private Map<String, String> infoFieldFilters = new HashMap<>();  // Field name -> expected value
@@ -384,7 +389,7 @@ public class VariantFilter {
         }
         SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
         List<SampleTrack> tracks = registry.getSampleTracks();
-        for (SampleGroup group : registry.getSampleGroups()) {
+        for (SampleGroup group : registry.getIncludedSampleGroups()) {
             if (group == null) {
                 continue;
             }
@@ -754,6 +759,17 @@ public class VariantFilter {
         if (next.add(type)) {
             setAllowedTypes(next);
         }
+    }
+
+    /**
+     * Default point-mutation effect set: everything except {@link VariantEffect#INTRONIC}
+     * and {@link VariantEffect#INTERGENIC}.
+     */
+    public static EnumSet<VariantEffect> defaultAllowedEffects() {
+        EnumSet<VariantEffect> effects = EnumSet.allOf(VariantEffect.class);
+        effects.remove(VariantEffect.INTRONIC);
+        effects.remove(VariantEffect.INTERGENIC);
+        return effects;
     }
 
     public Set<VariantEffect> getAllowedEffects() { return allowedEffects; }
@@ -2141,10 +2157,22 @@ public class VariantFilter {
             && !geneLevel
             && comparisonWindowBp <= 0
             && !hasActiveGroupComparison()
-            && showCoding && showIntronic && showIntergenic
+            && showCoding
+            && allowedEffectsContainsDefaults()
             && allowedTypes.equals(passAllLoadedTypes())
             && infoFieldFilters.isEmpty()
             && !filterFieldsActive;
+    }
+
+    /** True when effects are at the point default or explicitly all-inclusive (SV). */
+    private boolean allowedEffectsContainsDefaults() {
+        if (allowedEffects == null) {
+            return false;
+        }
+        if (allowedEffects.size() == VariantEffect.values().length) {
+            return true;
+        }
+        return allowedEffects.equals(defaultAllowedEffects());
     }
 
     /** All VCF-loaded types (point + SV); excludes synthetic LOH AA/BB. */

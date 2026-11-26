@@ -39,8 +39,9 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
 import javafx.scene.canvas.GraphicsContext;
+import org.baseplayer.components.ColoredToggle;
+
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.CustomMenuItem;
@@ -226,7 +227,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     sampleSearchField.setPromptText("Filter samples…");
     sampleSearchField.getStyleClass().add("filter-field");
     sampleSearchField.setTooltip(new Tooltip(
-        "Filter tracks by name. Use * as a wildcard (e.g. prefix_*). Expand ▾ to replace."));
+        "Filter tracks by sample or group name. Use * as a wildcard (e.g. prefix_*). Expand ▾ to replace."));
     HBox.setHgrow(sampleSearchField, Priority.ALWAYS);
 
     sampleReplaceToggleButton.setTooltip(new Tooltip("Show replace"));
@@ -704,10 +705,8 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     aggregateLabel.setStyle(
         "-fx-text-fill: " + AppTheme.chrome().textHex()
             + "; -fx-font-size: 12; -fx-font-weight: bold;");
-    CheckBox groupCmpCb = new CheckBox("Show group comparison overlay");
+    ColoredToggle groupCmpCb = new ColoredToggle("Show group comparison overlay");
     groupCmpCb.setSelected(org.baseplayer.analysis.AnalysisSession.get().isShowOnAggregate());
-    groupCmpCb.getStyleClass().add("dark-checkbox");
-    groupCmpCb.setStyle("-fx-font-size: 12;");
     groupCmpCb.selectedProperty().addListener((obs, o, n) -> {
       org.baseplayer.analysis.AnalysisSession.get().setShowOnAggregate(Boolean.TRUE.equals(n));
       org.baseplayer.analysis.ComparisonContext.get()
@@ -727,7 +726,7 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
     // VCF allele-frequency display (BAF dots on sample rows)
     VBox vcfDisplayBox = new VBox(4);
     vcfDisplayBox.setPadding(new Insets(4, 8, 4, 8));
-    CheckBox bafDotsCb = new CheckBox("Show VCF alleles as BAF dots (0–1)");
+    ColoredToggle bafDotsCb = new ColoredToggle("Show VCF alleles as BAF dots (0–1)");
     boolean bafOn = false;
     DrawStackManager stacks = ServiceRegistry.getInstance().getDrawStackManager();
     for (DrawStack stack : stacks.getStacks()) {
@@ -739,8 +738,6 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       }
     }
     bafDotsCb.setSelected(bafOn);
-    bafDotsCb.getStyleClass().add("dark-checkbox");
-    bafDotsCb.setStyle("-fx-font-size: 12;");
     bafDotsCb.selectedProperty().addListener((obs, o, n) -> {
       boolean on = Boolean.TRUE.equals(n);
       for (DrawStack stack : ServiceRegistry.getInstance().getDrawStackManager().getStacks()) {
@@ -770,12 +767,10 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       VBox sampledCoverageBox = new VBox(4);
       sampledCoverageBox.setPadding(new Insets(4, 8, 4, 8));
 
-      CheckBox enableCoverageCb = new CheckBox("Enable sampled coverage");
+      ColoredToggle enableCoverageCb = new ColoredToggle("Enable sampled coverage");
       enableCoverageCb.setSelected(Settings.get().isEnableSampledCoverage());
-      enableCoverageCb.getStyleClass().add("dark-checkbox");
-      enableCoverageCb.setStyle("-fx-font-size: 12;");
       enableCoverageCb.selectedProperty().addListener((obs, o, n) -> {
-        Settings.get().setEnableSampledCoverage(n);
+        Settings.get().setEnableSampledCoverage(Boolean.TRUE.equals(n));
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
 
@@ -821,23 +816,21 @@ public class SampleTrackColumnSidebar extends TrackColumnSidebar {
       Label mismatchLabel = new Label("Mismatch filtering (all tracks)");
       mismatchLabel.setStyle("-fx-text-fill: " + AppTheme.chrome().textHex() + "; -fx-font-size: 12; -fx-font-weight: bold;");
 
-      CheckBox suppressMethylCb = new CheckBox("Hide bisulfite mismatches (C->T / G->A)");
+      ColoredToggle suppressMethylCb =
+          new ColoredToggle("Hide bisulfite mismatches (C->T / G->A)");
       boolean anyMethylSuppressed = bamSamples.stream().anyMatch(Sample::isMethylationData);
       suppressMethylCb.setSelected(anyMethylSuppressed);
-      suppressMethylCb.getStyleClass().add("dark-checkbox");
-      suppressMethylCb.setStyle("-fx-font-size: 11;");
       suppressMethylCb.selectedProperty().addListener((obs, o, n) -> {
         for (Sample s : bamSamples) {
-          s.setSuppressMethylMismatches(n);
+          s.setSuppressMethylMismatches(Boolean.TRUE.equals(n));
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
       });
 
-      CheckBox coverageOnlyCb = new CheckBox("Coverage only (skip reads — saves memory)");
+      ColoredToggle coverageOnlyCb =
+          new ColoredToggle("Coverage only (skip reads — saves memory)");
       boolean anyCoverageOnly = bamSamples.stream().anyMatch(Sample::isCoverageOnlyMode);
       coverageOnlyCb.setSelected(anyCoverageOnly);
-      coverageOnlyCb.getStyleClass().add("dark-checkbox");
-      coverageOnlyCb.setStyle("-fx-font-size: 11;");
       coverageOnlyCb.selectedProperty().addListener((obs, o, n) -> {
         for (Sample s : bamSamples) {
           s.setCoverageOnlyMode(Boolean.TRUE.equals(n));

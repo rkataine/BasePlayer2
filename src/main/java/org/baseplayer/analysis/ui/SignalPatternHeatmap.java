@@ -16,6 +16,8 @@ import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.ui.theme.AppTheme;
+import org.baseplayer.variant.annotation.VariantEffect;
+import org.baseplayer.variant.annotation.VariantEffectVisuals;
 
 import javafx.application.Platform;
 import javafx.geometry.Bounds;
@@ -494,12 +496,18 @@ public final class SignalPatternHeatmap {
         featureCount,
         clusterBarLabel.toLowerCase(Locale.ROOT),
         result.k(),
-        result.zScored() ? "z-score" : "raw values",
+        result.hasMutationEffects()
+            ? "mutation effect"
+            : (result.zScored() ? "z-score" : "raw values"),
         zoom * 100));
   }
 
   private void drawLegend(
       GraphicsContext g, double x, double y, double width, double height, Color ink, Color muted) {
+    if (result.hasMutationEffects()) {
+      drawEffectLegend(g, x, y, width, height, ink, muted);
+      return;
+    }
     int steps = 64;
     for (int i = 0; i < steps; i++) {
       double t = i / (double) (steps - 1);
@@ -520,6 +528,29 @@ public final class SignalPatternHeatmap {
     } else {
       g.fillText("low", x, labelY);
       g.fillText("high", x + width - 22, labelY);
+    }
+  }
+
+  private void drawEffectLegend(
+      GraphicsContext g, double x, double y, double width, double height, Color ink, Color muted) {
+    VariantEffectVisuals.LegendEntry[] entries = VariantEffectVisuals.legendEntries();
+    int n = entries.length;
+    double swatchW = Math.min(18, width / (n * 3.5));
+    double gap = 6;
+    double cursor = x;
+    g.setFont(javafx.scene.text.Font.font(9));
+    for (VariantEffectVisuals.LegendEntry entry : entries) {
+      g.setFill(entry.color());
+      g.fillRect(cursor, y, swatchW, height);
+      g.setStroke(muted);
+      g.strokeRect(cursor, y, swatchW, height);
+      g.setFill(ink);
+      g.fillText(entry.label(), cursor + swatchW + 3, y + height - 3);
+      double textW = entry.label().length() * 5.2;
+      cursor += swatchW + 3 + textW + gap;
+      if (cursor > x + width) {
+        break;
+      }
     }
   }
 
@@ -568,9 +599,10 @@ public final class SignalPatternHeatmap {
   private void drawHeatmapBody(GraphicsContext g) {
     int[] leaf = result.leafOrder();
     double[][] matrix = result.sampleFeature();
+    VariantEffect[][] effects = result.hasMutationEffects() ? result.cellEffects() : null;
     double rawMin = Double.POSITIVE_INFINITY;
     double rawMax = Double.NEGATIVE_INFINITY;
-    if (!result.zScored()) {
+    if (effects == null && !result.zScored()) {
       for (int r = 0; r < plotRows; r++) {
         for (int col = 0; col < leaf.length; col++) {
           double v = matrix[leaf[col]][r];
@@ -589,11 +621,19 @@ public final class SignalPatternHeatmap {
     for (int r = 0; r < plotRows; r++) {
       double y = heatY + r * rowH;
       for (int col = 0; col < leaf.length; col++) {
-        double v = matrix[leaf[col]][r];
-        double mapped = result.zScored()
-            ? v
-            : (v - rawMin) / (rawMax - rawMin);
-        g.setFill(valueColor(mapped));
+        int sampleIdx = leaf[col];
+        if (effects != null) {
+          VariantEffect effect = sampleIdx < effects.length && r < effects[sampleIdx].length
+              ? effects[sampleIdx][r]
+              : null;
+          g.setFill(VariantEffectVisuals.color(effect));
+        } else {
+          double v = matrix[sampleIdx][r];
+          double mapped = result.zScored()
+              ? v
+              : (v - rawMin) / (rawMax - rawMin);
+          g.setFill(valueColor(mapped));
+        }
         g.fillRect(heatX + col * colW, y, Math.max(1, colW + 0.5), Math.max(1, rowH + 0.5));
       }
     }
@@ -661,12 +701,21 @@ public final class SignalPatternHeatmap {
       int cluster = result.clusterOfTrack()[sampleIdx];
       SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
       String groups = groupNames(track, registry);
+      String effectLine = "";
+      if (result.hasMutationEffects()) {
+        VariantEffect[][] effects = result.cellEffects();
+        VariantEffect effect = sampleIdx < effects.length && hit.row < effects[sampleIdx].length
+            ? effects[sampleIdx][hit.row]
+            : null;
+        effectLine = "\neffect=" + (effect != null ? effect.displayName() : "absent");
+      }
       hoverTip.setText(String.format(Locale.ROOT,
-          "%s\n%s\n%s%s\nvalue=%s",
+          "%s\n%s\n%s%s%s\nvalue=%s",
           track.getName(),
           feature,
           result.clusterLabel(cluster),
           groups.isEmpty() ? "" : "\ngroups: " + groups,
+          effectLine,
           formatValue(value)));
       return;
     }

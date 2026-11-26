@@ -67,16 +67,6 @@ public final class AnalysisBusyGate implements AnalysisBusyRunner {
         overlay.setStatusMessage(message);
         overlay.lockFilterControls(true);
 
-        // Keep Analysis Manager foreground so LoadingPopup resolves AM as owner
-        // (WINDOW_MODAL on MainApp looks like the manager was minimized).
-        Stage stage = stageSupplier.get();
-        if (stage != null) {
-            if (stage.isIconified()) {
-                stage.setIconified(false);
-            }
-            stage.toFront();
-        }
-
         ThreadRunner.RunnerTask gate = ThreadRunner.get().track(
             message,
             this::finishChrome);

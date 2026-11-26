@@ -200,6 +200,20 @@ public final class ProjectSessionState {
     }
   }
 
+  /** Tumor-name pattern ({@code *} wildcards); empty when unset. */
+  public String getSomaticTumorNamePattern() {
+    String pattern = getDocument().somaticTumorNamePattern;
+    return pattern != null ? pattern : "";
+  }
+
+  public void setSomaticTumorNamePattern(String pattern) {
+    String next = pattern != null ? pattern.trim() : "";
+    if (!Objects.equals(getDocument().somaticTumorNamePattern, next)) {
+      getDocument().somaticTumorNamePattern = next;
+      markDirty();
+    }
+  }
+
   /**
    * Whether the live session has anything worth saving (samples, VCFs, or user feature tracks).
    * Built-in default tracks (phyloP / gnomAD) do not count.

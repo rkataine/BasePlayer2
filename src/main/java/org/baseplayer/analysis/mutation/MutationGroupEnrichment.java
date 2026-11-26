@@ -25,6 +25,8 @@ import org.baseplayer.analysis.grid.FeatureValueMatrix;
 import org.baseplayer.analysis.groupstat.GroupStatEngine;
 import org.baseplayer.analysis.groupstat.GroupStatResult;
 import org.baseplayer.analysis.groupstat.GroupStatTest;
+import org.baseplayer.variant.annotation.VariantEffect;
+import org.baseplayer.variant.annotation.VariantEffectVisuals;
 
 /**
  * Gene-level group comparison for filter-passing variants.
@@ -49,60 +51,58 @@ public final class MutationGroupEnrichment {
 
   private MutationGroupEnrichment() {}
 
-  public static Outcome analyze(
-      AnalysisMode mode,
-      List<VariantList> chromosomeLists,
-      VariantFilter filter,
-      SampleRegistry registry,
-      List<Integer> groupIds,
-      Integer baselineGroupId) {
-    if (chromosomeLists == null || registry == null || groupIds == null || groupIds.size() < 2) {
-      return new Outcome(
-          new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Need variants and ≥2 groups"),
-          null);
-    }
+  /**
+   * Accumulates gene×sample carrier / CNV burden across chromosomes for streaming
+   * genomewide runs and cache-based analyze.
+   */
+  public static final class Accumulator {
+    private final IdentityHashMap<SampleTrack, Boolean> seen = new IdentityHashMap<>();
+    private final List<SampleTrack> tracks = new ArrayList<>();
+    private final Map<String, Map<SampleTrack, Integer>> carriers = new HashMap<>();
+    private final Map<String, Map<SampleTrack, CnvBurden>> cnvBurden = new HashMap<>();
+    private final Map<String, Map<SampleTrack, VariantEffect>> effects = new HashMap<>();
+    private final Map<String, FeatureValueMatrix.Locus> loci = new HashMap<>();
+    private boolean sawCnvMagnitude;
 
-    List<SampleTrack> allTracks = new ArrayList<>();
-    IdentityHashMap<SampleTrack, Boolean> seen = new IdentityHashMap<>();
-    for (int groupId : groupIds) {
-      for (SampleTrack track : ComparisonContext.tracksForGroup(registry, groupId)) {
-        if (seen.put(track, Boolean.TRUE) == null) {
-          allTracks.add(track);
+    public Accumulator(List<SampleTrack> tracks) {
+      if (tracks == null) {
+        return;
+      }
+      for (SampleTrack track : tracks) {
+        if (track != null && seen.put(track, Boolean.TRUE) == null) {
+          this.tracks.add(track);
         }
       }
     }
-    if (allTracks.size() < 2) {
-      return new Outcome(
-          new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Need samples in selected groups"),
-          null);
+
+    public List<SampleTrack> tracks() {
+      return List.copyOf(tracks);
     }
 
-    // Binary carriers: gene → track → 1
-    Map<String, Map<SampleTrack, Integer>> carriers = new HashMap<>();
-    // CNV signed event burden: gene → track → (gains, losses)
-    Map<String, Map<SampleTrack, CnvBurden>> cnvBurden = new HashMap<>();
-    Map<String, FeatureValueMatrix.Locus> loci = new HashMap<>();
-    boolean sawCnvMagnitude = false;
+    public boolean sawCnvMagnitude() {
+      return sawCnvMagnitude;
+    }
 
-    for (VariantList list : chromosomeLists) {
-      if (Thread.currentThread().isInterrupted()) {
-        return new Outcome(
-            new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Cancelled"), null);
-      }
-      if (list == null) {
-        continue;
+    /** Fold visible nodes from {@code list} (caller rebuilds visible chain with filter). */
+    public void fold(AnalysisMode mode, VariantList list) {
+      if (list == null || seen.isEmpty()) {
+        return;
       }
       String chrom = list.getChromosome();
       VariantNode node = list.getVisibleHead();
       while (node != null) {
         if (Thread.currentThread().isInterrupted()) {
-          return new Outcome(
-              new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Cancelled"), null);
+          return;
+        }
+        if (!acceptsMode(mode, node.type)) {
+          node = node.nextVisible;
+          continue;
         }
         List<String> genes = genesOf(node);
         if (!genes.isEmpty()) {
           boolean cnv = VariantTypeVisuals.isCnv(node.type);
           double magnitude = cnv ? CnvMagnitude.signed(node) : 0;
+          VariantEffect nodeEffect = nodeEffect(node);
           List<VariantNode.SampleCall> calls = node.getSamples();
           for (String gene : genes) {
             if (cnv) {
@@ -110,7 +110,6 @@ public final class MutationGroupEnrichment {
                   cnvBurden.computeIfAbsent(gene, key -> new IdentityHashMap<>());
               if (calls != null) {
                 for (VariantNode.SampleCall call : calls) {
-                  // Site-only CNVs often use GT=NA; presence of the call = on-canvas segment.
                   if (call == null) {
                     continue;
                   }
@@ -119,6 +118,7 @@ public final class MutationGroupEnrichment {
                     continue;
                   }
                   row.computeIfAbsent(track, key -> new CnvBurden()).addEvent(magnitude);
+                  rememberEffect(gene, track, nodeEffect);
                   sawCnvMagnitude = true;
                 }
               }
@@ -135,6 +135,7 @@ public final class MutationGroupEnrichment {
                     continue;
                   }
                   row.put(track, 1);
+                  rememberEffect(gene, track, nodeEffect);
                 }
               }
             }
@@ -145,39 +146,153 @@ public final class MutationGroupEnrichment {
       }
     }
 
-    // Sparse matrix: missing sample cells read as 0 (neutral / non-carrier).
-    FeatureValueMatrix matrix = new FeatureValueMatrix();
-    matrix.setMissingDefault(0.0);
+    private void rememberEffect(String gene, SampleTrack track, VariantEffect effect) {
+      if (gene == null || track == null || effect == null) {
+        return;
+      }
+      Map<SampleTrack, VariantEffect> row =
+          effects.computeIfAbsent(gene, key -> new IdentityHashMap<>());
+      row.put(track, VariantEffectVisuals.preferSevere(row.get(track), effect));
+    }
 
-    for (Map.Entry<String, Map<SampleTrack, CnvBurden>> geneEntry : cnvBurden.entrySet()) {
-      String gene = geneEntry.getKey();
-      matrix.touch(gene);
-      for (Map.Entry<SampleTrack, CnvBurden> e : geneEntry.getValue().entrySet()) {
-        CnvBurden burden = e.getValue();
-        if (burden != null && burden.hasEvents()) {
-          matrix.put(gene, e.getKey(), burden.signedEventScore());
+    public FeatureValueMatrix toMatrix() {
+      FeatureValueMatrix matrix = new FeatureValueMatrix();
+      matrix.setMissingDefault(0.0);
+      for (Map.Entry<String, Map<SampleTrack, CnvBurden>> geneEntry : cnvBurden.entrySet()) {
+        String gene = geneEntry.getKey();
+        matrix.touch(gene);
+        for (Map.Entry<SampleTrack, CnvBurden> e : geneEntry.getValue().entrySet()) {
+          CnvBurden burden = e.getValue();
+          if (burden != null && burden.hasEvents()) {
+            matrix.put(gene, e.getKey(), burden.signedEventScore());
+          }
+        }
+        putResolvedLocus(matrix, gene, loci.get(gene));
+      }
+      for (Map.Entry<String, Map<SampleTrack, Integer>> geneEntry : carriers.entrySet()) {
+        String gene = geneEntry.getKey();
+        if (matrix.unitIds().contains(gene)) {
+          continue;
+        }
+        matrix.touch(gene);
+        for (Map.Entry<SampleTrack, Integer> e : geneEntry.getValue().entrySet()) {
+          if (e.getValue() != null && e.getValue() > 0) {
+            matrix.put(gene, e.getKey(), e.getValue());
+          }
+        }
+        putResolvedLocus(matrix, gene, loci.get(gene));
+      }
+      // Always merge effect layer (CNV-winning genes may still have SNV effects).
+      for (String gene : effects.keySet()) {
+        putEffects(matrix, gene);
+      }
+      return matrix;
+    }
+
+    private void putEffects(FeatureValueMatrix matrix, String gene) {
+      Map<SampleTrack, VariantEffect> row = effects.get(gene);
+      if (row == null || matrix == null) {
+        return;
+      }
+      for (Map.Entry<SampleTrack, VariantEffect> e : row.entrySet()) {
+        matrix.putEffect(gene, e.getKey(), e.getValue());
+      }
+    }
+  }
+
+  private static VariantEffect nodeEffect(VariantNode node) {
+    if (node == null || node.annotation == null) {
+      return null;
+    }
+    return node.annotation.effect();
+  }
+
+  /** Point vs SV class gate for enrichment / patterns. */
+  public static boolean acceptsMode(AnalysisMode mode, org.baseplayer.variant.VcfVariantType type) {
+    if (type == null) {
+      return false;
+    }
+    if (mode == AnalysisMode.MUTATIONS_POINT) {
+      return VariantTypeVisuals.isPoint(type);
+    }
+    if (mode == AnalysisMode.MUTATIONS_SV) {
+      return VariantTypeVisuals.isStructural(type);
+    }
+    return true;
+  }
+
+  public static Accumulator accumulatorForGroups(
+      SampleRegistry registry, List<Integer> groupIds) {
+    List<SampleTrack> allTracks = new ArrayList<>();
+    if (registry == null || groupIds == null) {
+      return new Accumulator(allTracks);
+    }
+    IdentityHashMap<SampleTrack, Boolean> seen = new IdentityHashMap<>();
+    for (int groupId : groupIds) {
+      for (SampleTrack track : ComparisonContext.tracksForGroup(registry, groupId)) {
+        if (seen.put(track, Boolean.TRUE) == null) {
+          allTracks.add(track);
         }
       }
-      putResolvedLocus(matrix, gene, loci.get(gene));
     }
-    cnvBurden.clear();
+    return new Accumulator(allTracks);
+  }
 
-    for (Map.Entry<String, Map<SampleTrack, Integer>> geneEntry : carriers.entrySet()) {
-      String gene = geneEntry.getKey();
-      // Gene already scored as CNV wins (event burden); skip binary overlay.
-      if (matrix.unitIds().contains(gene)) {
+  public static Outcome analyze(
+      AnalysisMode mode,
+      List<VariantList> chromosomeLists,
+      VariantFilter filter,
+      SampleRegistry registry,
+      List<Integer> groupIds,
+      Integer baselineGroupId) {
+    if (chromosomeLists == null || registry == null || groupIds == null || groupIds.size() < 2) {
+      return new Outcome(
+          new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Need variants and ≥2 groups"),
+          null);
+    }
+
+    Accumulator acc = accumulatorForGroups(registry, groupIds);
+    if (acc.tracks().size() < 2) {
+      return new Outcome(
+          new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Need samples in selected groups"),
+          null);
+    }
+
+    for (VariantList list : chromosomeLists) {
+      if (Thread.currentThread().isInterrupted()) {
+        return new Outcome(
+            new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Cancelled"), null);
+      }
+      if (list == null) {
         continue;
       }
-      matrix.touch(gene);
-      for (Map.Entry<SampleTrack, Integer> e : geneEntry.getValue().entrySet()) {
-        if (e.getValue() != null && e.getValue() > 0) {
-          matrix.put(gene, e.getKey(), e.getValue());
-        }
+      if (filter != null) {
+        list.rebuildVisibleChain(filter);
       }
-      putResolvedLocus(matrix, gene, loci.get(gene));
+      acc.fold(mode, list);
+      if (Thread.currentThread().isInterrupted()) {
+        return new Outcome(
+            new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "Cancelled"), null);
+      }
     }
-    carriers.clear();
-    loci.clear();
+
+    return finish(mode, acc, registry, groupIds, baselineGroupId);
+  }
+
+  /** Score an accumulated gene×sample matrix (after streaming or cache fold). */
+  public static Outcome finish(
+      AnalysisMode mode,
+      Accumulator acc,
+      SampleRegistry registry,
+      List<Integer> groupIds,
+      Integer baselineGroupId) {
+    if (acc == null) {
+      return new Outcome(
+          new GroupStatResult(mode, groupIds, baselineGroupId, List.of(), "No enrichment rows"),
+          null);
+    }
+    FeatureValueMatrix matrix = acc.toMatrix();
+    boolean sawCnvMagnitude = acc.sawCnvMagnitude();
 
     String scoreLabel = sawCnvMagnitude
         ? "CNV gains−losses (event burden)"

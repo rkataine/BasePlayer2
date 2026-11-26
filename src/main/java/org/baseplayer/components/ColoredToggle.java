@@ -1,5 +1,7 @@
 package org.baseplayer.components;
 
+import java.util.function.Consumer;
+
 import org.baseplayer.ui.theme.AppTheme;
 import org.baseplayer.utils.GeneColors;
 
@@ -22,8 +24,9 @@ import javafx.scene.shape.Line;
 import javafx.scene.shape.Polyline;
 
 /**
- * Gene-sidebar-style toggle: colored swatch with strike when off, or ink checkbox chrome.
- * Exposes {@link #selectedProperty()} so callers can wire like a CheckBox.
+ * App checkbox / filter toggle. Use this instead of {@code javafx.scene.control.CheckBox}.
+ * Ink mode = checkbox chrome; colored swatch mode = type/biotype rows.
+ * Theme comes from {@link AppTheme} — no per-call-site CSS classes.
  */
 @SuppressWarnings("this-escape")
 public class ColoredToggle extends HBox {
@@ -31,16 +34,31 @@ public class ColoredToggle extends HBox {
   private final Region chrome = new Region();
   private final Polyline check = new Polyline();
   private final Line strike = new Line(1, 9, 11, 1);
+  private final Line indeterminateMark = new Line(2.5, 5, 9.5, 5);
   private final StackPane chromePane = new StackPane();
   private final Label label = new Label();
   private final BooleanProperty selected = new SimpleBooleanProperty(this, "selected", false);
+  private final BooleanProperty indeterminate =
+      new SimpleBooleanProperty(this, "indeterminate", false);
   private Color swatchColor;
   private boolean inkMode;
   private EventHandler<ActionEvent> onAction;
+  private Consumer<Boolean> onChanged;
 
   /** Ink checkbox with optional label (select-all / boolean filters). */
   public ColoredToggle(String text) {
-    this(text, null);
+    this(text, (Color) null);
+  }
+
+  /** Ink checkbox; {@code onChanged} receives the new selected value after each click. */
+  public ColoredToggle(String text, Consumer<Boolean> onChanged) {
+    this(text, (Color) null);
+    this.onChanged = onChanged;
+  }
+
+  /** Unlabeled ink checkbox with change callback. */
+  public ColoredToggle(Consumer<Boolean> onChanged) {
+    this("", onChanged);
   }
 
   /** Colored swatch row when {@code color} is non-null; otherwise ink checkbox. */
@@ -59,17 +77,19 @@ public class ColoredToggle extends HBox {
     chrome.setMaxSize(12, 10);
     chrome.setMouseTransparent(true);
 
-    if (inkMode) {
-      check.getPoints().setAll(2.4, 5.5, 5.0, 7.8, 9.8, 2.2);
-      check.setStrokeWidth(1.6);
-      check.setFill(null);
-      check.setMouseTransparent(true);
-      chromePane.getChildren().setAll(chrome, check);
-    } else {
-      strike.setStrokeWidth(1.2);
-      strike.setMouseTransparent(true);
-      chromePane.getChildren().setAll(chrome, strike);
-    }
+    check.getPoints().setAll(2.4, 5.5, 5.0, 7.8, 9.8, 2.2);
+    check.setStrokeWidth(1.6);
+    check.setFill(null);
+    check.setMouseTransparent(true);
+
+    indeterminateMark.setStrokeWidth(1.6);
+    indeterminateMark.setMouseTransparent(true);
+    indeterminateMark.setVisible(false);
+
+    strike.setStrokeWidth(1.2);
+    strike.setMouseTransparent(true);
+
+    rebuildChromeChildren();
     chromePane.setMinSize(12, 10);
     chromePane.setPrefSize(12, 10);
     chromePane.setMaxSize(12, 10);
@@ -91,14 +111,18 @@ public class ColoredToggle extends HBox {
     }
 
     selected.addListener((obs, was, is) -> applyStyle());
+    indeterminate.addListener((obs, was, is) -> applyStyle());
     addEventHandler(MouseEvent.MOUSE_CLICKED, e -> {
       if (e.isConsumed() || isDisabled()) {
         return;
       }
-      setSelected(!isSelected());
-      if (onAction != null) {
-        onAction.handle(new ActionEvent(this, this));
+      if (isIndeterminate()) {
+        setIndeterminate(false);
+        setSelected(true);
+      } else {
+        setSelected(!isSelected());
       }
+      fireChanged();
       e.consume();
     });
     setOnMouseEntered(e -> applyHover(true));
@@ -120,7 +144,29 @@ public class ColoredToggle extends HBox {
   }
 
   public void setSelected(boolean value) {
+    if (value && isIndeterminate()) {
+      indeterminate.set(false);
+    }
     selected.set(value);
+  }
+
+  public BooleanProperty indeterminateProperty() {
+    return indeterminate;
+  }
+
+  public boolean isIndeterminate() {
+    return indeterminate.get();
+  }
+
+  /**
+   * Select-all partial state. Clears the checkmark and shows a dash in ink mode.
+   * Setting selected while indeterminate clears indeterminate.
+   */
+  public void setIndeterminate(boolean value) {
+    indeterminate.set(value);
+    if (value) {
+      selected.set(false);
+    }
   }
 
   public String getText() {
@@ -148,8 +194,17 @@ public class ColoredToggle extends HBox {
     return onAction;
   }
 
+  /** Optional callback with the new selected value (not fired when only indeterminate is set). */
+  public void setOnChanged(Consumer<Boolean> onChanged) {
+    this.onChanged = onChanged;
+  }
+
   public void setTooltip(Tooltip tooltip) {
     Tooltip.install(this, tooltip);
+  }
+
+  public void setWrapText(boolean wrap) {
+    label.setWrapText(wrap);
   }
 
   /**
@@ -159,26 +214,34 @@ public class ColoredToggle extends HBox {
   public void setSwatchColor(Color color) {
     this.swatchColor = color;
     this.inkMode = color == null;
+    rebuildChromeChildren();
+    applyStyle();
+  }
+
+  private void rebuildChromeChildren() {
     if (inkMode) {
-      check.getPoints().setAll(2.4, 5.5, 5.0, 7.8, 9.8, 2.2);
-      check.setStrokeWidth(1.6);
-      check.setFill(null);
-      check.setMouseTransparent(true);
-      chromePane.getChildren().setAll(chrome, check);
+      chromePane.getChildren().setAll(chrome, check, indeterminateMark);
     } else {
-      strike.setStrokeWidth(1.2);
-      strike.setMouseTransparent(true);
       chromePane.getChildren().setAll(chrome, strike);
     }
-    applyStyle();
+  }
+
+  private void fireChanged() {
+    if (onChanged != null) {
+      onChanged.accept(isSelected());
+    }
+    if (onAction != null) {
+      onAction.handle(new ActionEvent(this, this));
+    }
   }
 
   private void applyStyle() {
     boolean on = isSelected();
+    boolean partial = isIndeterminate();
     var chromeTheme = AppTheme.chrome();
     var canvas = AppTheme.canvas();
     if (inkMode) {
-      Color stroke = on ? canvas.axisInk() : chromeTheme.muted();
+      Color stroke = (on || partial) ? canvas.axisInk() : chromeTheme.muted();
       chrome.setStyle(
           "-fx-background-color: transparent;"
               + "-fx-border-color: " + GeneColors.toHexString(stroke) + ";"
@@ -186,7 +249,10 @@ public class ColoredToggle extends HBox {
               + "-fx-border-radius: 2;"
               + "-fx-background-radius: 2;");
       check.setStroke(canvas.axisInk());
-      check.setVisible(on);
+      check.setVisible(on && !partial);
+      indeterminateMark.setStroke(canvas.axisInk());
+      indeterminateMark.setVisible(partial);
+      strike.setVisible(false);
     } else {
       Color color = swatchColor != null ? swatchColor : Color.GRAY;
       double alpha = on ? 0.95 : 0.28;
@@ -201,8 +267,10 @@ public class ColoredToggle extends HBox {
               + "-fx-background-radius: 2;");
       strike.setVisible(!on);
       strike.setStroke(chromeTheme.muted());
+      check.setVisible(false);
+      indeterminateMark.setVisible(false);
     }
-    label.setTextFill(on ? canvas.axisInk() : chromeTheme.muted());
+    label.setTextFill((on || partial) ? canvas.axisInk() : chromeTheme.muted());
   }
 
   private void applyHover(boolean hovered) {

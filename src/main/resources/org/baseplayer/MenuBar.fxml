@@ -54,7 +54,7 @@
           <MenuItem text="Sample Groups…" onAction="#openSampleGroups" />
           <SeparatorMenuItem />
           <MenuItem text="Sample open errors…" onAction="#openSampleOpenErrors" />
-          <MenuItem text="Clear variant cache…" onAction="#clearVariantCache" />
+          <MenuItem text="Clear session cache…" onAction="#clearVariantCache" />
           <MenuItem text="Clean memory" onAction="#cleanMemory" />
         </items>
       </Menu>

@@ -74,7 +74,11 @@ public final class AnalysisSession {
   private SignalValueType inferredValueType = SignalValueType.RAW;
   private String scaleDetectSummary = "";
   private double minMeanPrefilter;
+  /** Active Signal-slice pattern result (mirrored via {@link SignalSlice}). */
   private SamplePatternEngine.Result lastPatternResult;
+  /** Point/SV pattern results (not part of Signal slices). */
+  private final Map<AnalysisMode, SamplePatternEngine.Result> mutationPatternResults =
+      new EnumMap<>(AnalysisMode.class);
   private SignalSourceSpec signalSpec = new SignalSourceSpec();
   private final CopyOnWriteArrayList<Consumer<AnalysisSession>> listeners = new CopyOnWriteArrayList<>();
 
@@ -265,6 +269,28 @@ public final class AnalysisSession {
     notifyListeners();
   }
 
+  /** Show or hide every listed group on the aggregate band (one notify). */
+  public synchronized void setAggregateGroupsVisible(
+      Iterable<Integer> groupIds, boolean visible) {
+    if (groupIds == null) {
+      return;
+    }
+    boolean changed = false;
+    for (Integer groupId : groupIds) {
+      if (groupId == null) {
+        continue;
+      }
+      if (visible) {
+        changed |= hiddenAggregateGroupIds.remove(groupId);
+      } else {
+        changed |= hiddenAggregateGroupIds.add(groupId);
+      }
+    }
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
   public synchronized void toggleAggregateGroupVisible(int groupId) {
     if (hiddenAggregateGroupIds.contains(groupId)) {
       hiddenAggregateGroupIds.remove(groupId);
@@ -373,12 +399,33 @@ public final class AnalysisSession {
     notifyListeners();
   }
 
+  /** Signal-mode pattern result (active dataset slice). */
   public synchronized SamplePatternEngine.Result getLastPatternResult() {
-    return lastPatternResult;
+    return getLastPatternResult(AnalysisMode.SIGNAL);
   }
 
+  public synchronized SamplePatternEngine.Result getLastPatternResult(AnalysisMode mode) {
+    if (mode == null || mode == AnalysisMode.SIGNAL) {
+      return lastPatternResult;
+    }
+    return mutationPatternResults.get(mode);
+  }
+
+  /** Store Signal-mode pattern result on the active dataset slice. */
   public synchronized void setLastPatternResult(SamplePatternEngine.Result result) {
-    this.lastPatternResult = result;
+    setLastPatternResult(AnalysisMode.SIGNAL, result);
+  }
+
+  public synchronized void setLastPatternResult(
+      AnalysisMode mode, SamplePatternEngine.Result result) {
+    if (mode == null || mode == AnalysisMode.SIGNAL) {
+      this.lastPatternResult = result;
+      stashActiveSlice();
+    } else if (result == null) {
+      mutationPatternResults.remove(mode);
+    } else {
+      mutationPatternResults.put(mode, result);
+    }
     notifyListeners();
   }
 
@@ -724,6 +771,7 @@ public final class AnalysisSession {
     activeSignalDatasetId = null;
     resetActiveSignalBuffer();
     lastPatternResult = null;
+    mutationPatternResults.clear();
     hiddenAggregateGroupIds.clear();
     generation.set(generation.get() + 1);
     notifyListeners();

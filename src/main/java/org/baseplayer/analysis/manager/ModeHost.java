@@ -7,10 +7,12 @@ import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
+import org.baseplayer.analysis.AllChromAction;
 import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.signal.SignalDataset;
 import org.baseplayer.analysis.signal.SignalDatasetRegistry;
 import org.baseplayer.analysis.ui.MutationEnrichmentPanel;
+import org.baseplayer.analysis.ui.MutationPatternHost;
 import org.baseplayer.analysis.ui.SignalAnalysisWorkspace;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.variant.VariantFilter;
@@ -28,6 +30,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
@@ -110,6 +113,8 @@ public final class ModeHost {
     private TabPane svToolTabPane;
     private GroupComparison pointGroup;
     private GroupComparison svGroup;
+    private MutationPatternHost pointPatterns;
+    private MutationPatternHost svPatterns;
 
     private SignalModeTabs signal;
 
@@ -400,6 +405,13 @@ public final class ModeHost {
     public void wireComparisonRefresh() {
         refreshComparisonOnSelect(pointToolTabPane, pointWorkspace);
         refreshComparisonOnSelect(svToolTabPane, svWorkspace);
+        wireMutationAllChromButton(pointToolTabPane, nodes.pointAnnotateAllButton(), true);
+        wireMutationAllChromButton(svToolTabPane, nodes.svAnnotateAllButton(), false);
+        if (filterTabPane != null) {
+            filterTabPane.getSelectionModel().selectedItemProperty().addListener(
+                (o, a, b) -> refreshMutationAllChromosomesButtons());
+        }
+        refreshMutationAllChromosomesButtons();
     }
 
     private static void refreshComparisonOnSelect(TabPane tools, VariantClassWorkspace workspace) {
@@ -413,9 +425,75 @@ public final class ModeHost {
         });
     }
 
+    private void wireMutationAllChromButton(TabPane tools, Button button, boolean point) {
+        if (tools == null || button == null) {
+            return;
+        }
+        tools.getSelectionModel().selectedItemProperty().addListener(
+            (obs, oldTab, newTab) -> refreshMutationAllChromosomesButtons());
+    }
+
+    /** Update Point/SV Annotate/Discover/Compare All Chromosomes button labels. */
+    public void refreshMutationAllChromosomesButtons() {
+        if (nodes == null) {
+            return;
+        }
+        applyAllChromAction(
+            nodes.pointAnnotateAllButton(),
+            allChromActionForToolPane(pointToolTabPane));
+        applyAllChromAction(
+            nodes.svAnnotateAllButton(),
+            allChromActionForToolPane(svToolTabPane));
+    }
+
+    public AllChromAction allChromActionForActiveMutationMode() {
+        if (isSvModeSelected()) {
+            return allChromActionForToolPane(svToolTabPane);
+        }
+        return allChromActionForToolPane(pointToolTabPane);
+    }
+
+    public AnalysisMode activeMutationMode() {
+        return isSvModeSelected() ? AnalysisMode.MUTATIONS_SV : AnalysisMode.MUTATIONS_POINT;
+    }
+
+    public MutationEnrichmentPanel enrichmentPanel(AnalysisMode mode) {
+        if (mode == AnalysisMode.MUTATIONS_SV) {
+            return svGroup != null ? svGroup.panel() : null;
+        }
+        return pointGroup != null ? pointGroup.panel() : null;
+    }
+
+    public MutationPatternHost patternHost(AnalysisMode mode) {
+        if (mode == AnalysisMode.MUTATIONS_SV) {
+            return svPatterns;
+        }
+        return pointPatterns;
+    }
+
+    public boolean isSvModeSelected() {
+        return structuralVariantsTab != null
+            && filterTabPane != null
+            && filterTabPane.getSelectionModel().getSelectedItem() == structuralVariantsTab;
+    }
+
+    private static AllChromAction allChromActionForToolPane(TabPane tools) {
+        Tab tab = tools != null ? tools.getSelectionModel().getSelectedItem() : null;
+        return AllChromAction.fromToolTabText(tab != null ? tab.getText() : null);
+    }
+
+    private static void applyAllChromAction(Button button, AllChromAction action) {
+        if (button == null) {
+            return;
+        }
+        AllChromAction a = action != null ? action : AllChromAction.ANNOTATE;
+        button.setText(a.buttonText());
+        Tooltip.install(button, new Tooltip(a.tooltip()));
+    }
+
     /**
      * Signal mode workspace + Point/SV Group comparison tabs.
-     * All sample groups are compared automatically (no group-picker chrome).
+     * Included sample groups are compared automatically (toggle inclusion in Sample Groups).
      */
     public void installExtensions() {
         org.baseplayer.analysis.ComparisonContext.get().ensureBound();
@@ -437,8 +515,39 @@ public final class ModeHost {
             AnalysisMode.MUTATIONS_SV,
             svToolTabPane,
             nodes.svResultsTabPane() != null ? nodes.svResultsTabPane() : resultsTabPane);
+        pointPatterns = installPatterns(
+            AnalysisMode.MUTATIONS_POINT,
+            pointWorkspace,
+            pointGroup);
+        svPatterns = installPatterns(
+            AnalysisMode.MUTATIONS_SV,
+            svWorkspace,
+            svGroup);
         org.baseplayer.analysis.mutation.MutationGroupComparisonRunner.setAnnotateAllRunningCheck(
             busy::isAllChromosomeAnnotationRunning);
+        refreshMutationAllChromosomesButtons();
+    }
+
+    private MutationPatternHost installPatterns(
+            AnalysisMode mode,
+            VariantClassWorkspace workspace,
+            GroupComparison group) {
+        if (workspace == null || workspace.comparison() == null) {
+            return null;
+        }
+        VBox host = workspace.comparison().differentialHost();
+        if (host == null) {
+            return null;
+        }
+        MutationPatternHost patterns = new MutationPatternHost(mode);
+        patterns.setAnalysisBusyRunner(busy);
+        if (group != null && group.panel() != null) {
+            patterns.setOnResultReady(result -> {
+                group.panel().refreshFromSession(true);
+            });
+        }
+        patterns.mountInto(host);
+        return patterns;
     }
 
     /**

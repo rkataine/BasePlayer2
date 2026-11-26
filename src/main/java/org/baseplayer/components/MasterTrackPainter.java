@@ -331,9 +331,7 @@ public class MasterTrackPainter {
           break;
         }
       }
-      for (int groupId : groupIds) {
-        session.setAggregateGroupVisible(groupId, !allVisible);
-      }
+      session.setAggregateGroupsVisible(groupIds, !allVisible);
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
       if (redrawCallback != null) {
         redrawCallback.run();

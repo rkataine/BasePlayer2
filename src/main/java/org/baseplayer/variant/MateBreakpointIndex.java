@@ -111,6 +111,26 @@ public final class MateBreakpointIndex {
         return n;
     }
 
+    /** Flattened hits for project-cache serialization. */
+    public List<IndexedHit> snapshotHits() {
+        if (byMateChrom.isEmpty()) {
+            return List.of();
+        }
+        List<IndexedHit> out = new ArrayList<>(size());
+        for (Map.Entry<String, Hit[]> entry : byMateChrom.entrySet()) {
+            Hit[] arr = entry.getValue();
+            if (arr == null) {
+                continue;
+            }
+            for (Hit hit : arr) {
+                if (hit != null) {
+                    out.add(new IndexedHit(entry.getKey(), hit));
+                }
+            }
+        }
+        return out;
+    }
+
     /**
      * Hits whose mate lands on {@code mateChrom} inside inclusive {@code [start, end]}.
      * Chromosome names are stripped. Returns an empty list when nothing matches.

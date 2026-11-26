@@ -1,5 +1,6 @@
 package org.baseplayer.analysis.ui;
 
+import java.util.List;
 import java.util.function.Consumer;
 
 import org.baseplayer.analysis.AnalysisMode;
@@ -66,9 +67,13 @@ public final class MutationEnrichmentPanel extends VBox
             + "Collapsed Diff uses polarity + hit rate (not mean ↑/↓)."
         : "Mean of binary carrier score (0/1) over all group samples (missing = 0). "
             + "Collapsed Diff uses hit rate extremes (not mean ↑/↓).");
+    resultTable.setEmptyMessage(
+        "Load VCF samples, define ≥2 sample groups, then annotate chromosomes or Run");
 
     filters.loadFrom(AnalysisSession.get().getThresholds());
     filters.setOnChanged(this::onFiltersChanged);
+    filters.setOnShowHeatmap(this::showHeatmap);
+    filters.setHeatmapEnabled(false);
 
     getChildren().add(filters.createWorkspace(runButton, testChoice, statusLabel));
 
@@ -143,7 +148,11 @@ public final class MutationEnrichmentPanel extends VBox
 
   @Override
   public void onFailed(AnalysisMode runMode, String message) {
-    statusLabel.setText(message != null ? message : "Failed");
+    String msg = message != null && !message.isBlank() ? message : "Failed";
+    statusLabel.setText(msg);
+    if (lastDisplayed == null) {
+      resultTable.setEmptyMessage(msg);
+    }
     updateReady();
     finishBusy();
   }
@@ -209,6 +218,16 @@ public final class MutationEnrichmentPanel extends VBox
     refreshDisplayedResult();
   }
 
+  /** Refresh from session after genomewide Discover/Compare (or external putResult). */
+  public void refreshFromSession(boolean selectResultsTab) {
+    GroupStatResult filtered = AnalysisSession.get().getFilteredResult(mode);
+    if (filtered == null) {
+      filtered = AnalysisSession.get().getResult(mode);
+    }
+    applyDisplayed(filtered, selectResultsTab);
+    updateReady();
+  }
+
   private void applyDisplayed(GroupStatResult result, boolean notify) {
     lastDisplayed = result;
     resultTable.setResult(result);
@@ -225,9 +244,32 @@ public final class MutationEnrichmentPanel extends VBox
       refreshing = false;
     }
     updateResultsTabTitle(result);
+    filters.setHeatmapEnabled(result != null && result.rows() != null && result.rows().size() >= 2);
     if (notify && onResultReady != null && result != null) {
       onResultReady.accept(result);
     }
+  }
+
+  private void showHeatmap() {
+    GroupStatResult shown = lastDisplayed;
+    if (shown == null || shown.rows() == null || shown.rows().size() < 2) {
+      statusLabel.setText("Run group comparison first");
+      return;
+    }
+    org.baseplayer.analysis.grid.FeatureValueMatrix matrix =
+        AnalysisSession.get().getMatrix(mode);
+    SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
+    List<Integer> groupIds = ComparisonContext.get().getParticipatingGroupIds();
+    org.baseplayer.analysis.pattern.SamplePatternEngine.Result heat =
+        org.baseplayer.analysis.pattern.SamplePatternEngine.fromGroupComparison(
+            matrix, registry, groupIds, shown);
+    if (heat == null || !heat.hasHeatmapData()) {
+      statusLabel.setText(heat != null ? heat.summary() : "Need ≥2 DE features for heatmap");
+      return;
+    }
+    // Effects travel with the mutation matrix when present.
+    heat = org.baseplayer.analysis.pattern.SamplePatternEngine.withEffectsFromMatrix(heat, matrix);
+    new SignalPatternHeatmap(heat, "Group comparison heatmap", "Cohort", null).show();
   }
 
   private void updateResultsTabTitle(GroupStatResult result) {
@@ -264,8 +306,11 @@ public final class MutationEnrichmentPanel extends VBox
           && (statusLabel.getText() == null
               || statusLabel.getText().isBlank()
               || statusLabel.getText().startsWith("Ready")
-              || statusLabel.getText().startsWith("Load"))) {
-        statusLabel.setText("");
+              || statusLabel.getText().startsWith("Load")
+              || statusLabel.getText().startsWith("Annotate")
+              || statusLabel.getText().contains("sample group"))) {
+        statusLabel.setText(
+            "Annotate / Discover / Compare All Chromosomes, or Run on cached chroms");
       }
     }
   }

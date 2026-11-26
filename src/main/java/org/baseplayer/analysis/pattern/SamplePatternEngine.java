@@ -19,6 +19,7 @@ import org.baseplayer.analysis.groupstat.GroupStatEngine;
 import org.baseplayer.analysis.groupstat.GroupStatResult;
 import org.baseplayer.analysis.groupstat.GroupStatTest;
 import org.baseplayer.analysis.signal.SignalValueType;
+import org.baseplayer.variant.annotation.VariantEffect;
 
 /**
  * Unsupervised sample-pattern discovery on a {@link ValueGrid}:
@@ -55,7 +56,12 @@ public final class SamplePatternEngine {
        * Optional labels for {@link #clusterOfTrack()} ids (Pattern 1…k or group names).
        * Empty → heatmap falls back to {@code Pattern N}.
        */
-      List<String> clusterLabels) {
+      List<String> clusterLabels,
+      /**
+       * Optional mutation-effect layer (same shape as {@link #sampleFeature()}).
+       * When present, heatmaps color cells by effect instead of continuous values.
+       */
+      VariantEffect[][] cellEffects) {
     public Result(
         List<SampleTrack> tracks,
         int[] clusterOfTrack,
@@ -76,7 +82,56 @@ public final class SamplePatternEngine {
           leafOrder,
           sampleFeature,
           zScored,
-          List.of());
+          List.of(),
+          null);
+    }
+
+    public Result(
+        List<SampleTrack> tracks,
+        int[] clusterOfTrack,
+        int k,
+        List<String> selectedFeatures,
+        GroupStatResult markers,
+        String summary,
+        int[] leafOrder,
+        double[][] sampleFeature,
+        boolean zScored,
+        List<String> clusterLabels) {
+      this(
+          tracks,
+          clusterOfTrack,
+          k,
+          selectedFeatures,
+          markers,
+          summary,
+          leafOrder,
+          sampleFeature,
+          zScored,
+          clusterLabels,
+          null);
+    }
+
+    public boolean hasMutationEffects() {
+      return cellEffects != null
+          && tracks != null
+          && selectedFeatures != null
+          && cellEffects.length == tracks.size();
+    }
+
+    /** Copy with mutation-effect colors for heatmaps. */
+    public Result withCellEffects(VariantEffect[][] effects) {
+      return new Result(
+          tracks,
+          clusterOfTrack,
+          k,
+          selectedFeatures,
+          markers,
+          summary,
+          leafOrder,
+          sampleFeature,
+          zScored,
+          clusterLabels,
+          effects);
     }
 
     public List<SampleTrack> tracksInCluster(int cluster) {
@@ -190,7 +245,40 @@ public final class SamplePatternEngine {
 
   private static Result emptyResult(String summary) {
     return new Result(List.of(), new int[0], 0, List.of(), null, summary,
-        new int[0], new double[0][0], true, List.of());
+        new int[0], new double[0][0], true, List.of(), null);
+  }
+
+  /**
+   * Build a samples×features effect layer from a mutation {@link FeatureValueMatrix}.
+   * Returns null when the matrix has no effects.
+   */
+  public static VariantEffect[][] cellEffectsFromMatrix(
+      FeatureValueMatrix matrix,
+      List<SampleTrack> tracks,
+      List<String> features) {
+    if (matrix == null || !matrix.hasEffects()
+        || tracks == null || tracks.isEmpty()
+        || features == null || features.isEmpty()) {
+      return null;
+    }
+    VariantEffect[][] out = new VariantEffect[tracks.size()][features.size()];
+    for (int s = 0; s < tracks.size(); s++) {
+      SampleTrack track = tracks.get(s);
+      for (int f = 0; f < features.size(); f++) {
+        out[s][f] = matrix.getEffect(features.get(f), track);
+      }
+    }
+    return out;
+  }
+
+  /** Attach mutation effects from {@code matrix} onto an existing pattern/heatmap result. */
+  public static Result withEffectsFromMatrix(Result result, FeatureValueMatrix matrix) {
+    if (result == null) {
+      return null;
+    }
+    VariantEffect[][] effects = cellEffectsFromMatrix(
+        matrix, result.tracks(), result.selectedFeatures());
+    return effects != null ? result.withCellEffects(effects) : result;
   }
 
   private static int[] identityOrder(int n) {
@@ -261,6 +349,10 @@ public final class SamplePatternEngine {
         features.size(),
         tracks.size(),
         groupIds.size());
+    VariantEffect[][] cellEffects = null;
+    if (grid instanceof FeatureValueMatrix fvm && fvm.hasEffects()) {
+      cellEffects = cellEffectsFromMatrix(fvm, tracks, features);
+    }
     return new Result(
         List.copyOf(tracks),
         clusters,
@@ -271,7 +363,8 @@ public final class SamplePatternEngine {
         leafOrder,
         matrix,
         true,
-        List.copyOf(labels));
+        List.copyOf(labels),
+        cellEffects);
   }
 
   private record FeatureOrder(List<String> features, double[][] matrix) {}
