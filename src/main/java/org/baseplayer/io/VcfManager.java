@@ -45,7 +45,7 @@ import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.annotation.VariantAnnotator;
 import org.baseplayer.variant.annotation.TranscriptCdsCache;
 import org.baseplayer.variant.ui.VariantManagerController;
-import org.baseplayer.variant.ui.VariantManagerWindow;
+import org.baseplayer.analysis.manager.AnalysisManagerFacade;
 import org.baseplayer.utils.ChromosomeNames;
 
 import javafx.application.Platform;
@@ -682,7 +682,7 @@ public class VcfManager {
                         : loadFilterSnapshot.copy();
                     Object tablePayload = null;
                     VariantManagerController controller =
-                        VariantManagerWindow.getCurrentController();
+                        AnalysisManagerFacade.getController();
                     if (controller != null) {
                         tablePayload = controller.buildPostLoadTablesOnWorker(
                             result, targetChromosome, tableFilter, activeChromosomeLoadTask);
@@ -768,7 +768,7 @@ public class VcfManager {
                 calculateDensityOnAllCanvases();
                 variantsRevision.incrementAndGet();
 
-                VariantManagerController controller = VariantManagerWindow.getCurrentController();
+                VariantManagerController controller = AnalysisManagerFacade.getController();
                 if (!admittedCopy.isEmpty() && controller != null && currentFilter != null) {
                     controller.loadFilterState(currentFilter);
                 }
@@ -799,7 +799,7 @@ public class VcfManager {
     }
 
     private void syncCurrentFilterFromOpenVariantManager() {
-        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        VariantManagerController controller = AnalysisManagerFacade.getController();
         if (controller == null) {
             return;
         }
@@ -2148,7 +2148,7 @@ public class VcfManager {
             ThreadRunner.get().notifyDescriptionChanged();
         }
         Platform.runLater(() -> {
-            VariantManagerController controller = VariantManagerWindow.getCurrentController();
+            VariantManagerController controller = AnalysisManagerFacade.getController();
             if (controller != null) {
                 controller.setBusyStatus(status);
             }

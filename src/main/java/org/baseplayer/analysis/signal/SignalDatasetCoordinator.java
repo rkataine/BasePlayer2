@@ -215,9 +215,9 @@ public final class SignalDatasetCoordinator {
   /** Open Analysis and select the dataset tab when present. */
   public static void openAnalysisForDataset(String datasetId) {
     if (datasetId == null || datasetId.isBlank()) {
-      org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+      org.baseplayer.analysis.manager.AnalysisManagerFacade.openForSignalAnalysis();
       return;
     }
-    org.baseplayer.variant.ui.VariantManagerWindow.openForSignalDataset(datasetId);
+    org.baseplayer.analysis.manager.AnalysisManagerFacade.openForSignalDataset(datasetId);
   }
 }

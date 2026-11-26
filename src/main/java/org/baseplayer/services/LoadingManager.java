@@ -158,12 +158,12 @@ public final class LoadingManager {
       } else {
         popup.setMessage(message);
         popup.setDetailMessage(detail);
-        // Re-anchor if the previous owner (e.g. Variant Manager) was hidden.
+        // Re-anchor if the previous owner (e.g. Analysis) was hidden.
         popup.ensureVisibleOver(owner);
       }
     }
     org.baseplayer.variant.ui.VariantManagerController controller =
-        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
     if (controller != null) {
       controller.syncBusyOverlay();
     }
@@ -171,12 +171,12 @@ public final class LoadingManager {
 
   /**
    * Prefer Analysis Manager when it is open so annotate/discover-all loading stays
-   * over that window. Fall back to the main stage when VM is hidden/minimized so
+   * over that window. Fall back to the main stage when Analysis is hidden/minimized so
    * the popup is not orphaned on a non-showing owner.
    */
   private static Window resolveOwnerWindow() {
     org.baseplayer.variant.ui.VariantManagerController controller =
-        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
     if (controller != null) {
       Window vm = controller.getStage();
       if (vm instanceof javafx.stage.Stage stage

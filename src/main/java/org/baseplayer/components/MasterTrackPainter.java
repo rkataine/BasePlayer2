@@ -176,7 +176,7 @@ public class MasterTrackPainter {
   /**
    * Legend click: toggle canvas visibility for types already in the cache;
    * for types not materialized under the loaded filter, prompt to reload and
-   * select them in Variant Manager.
+   * select them in Analysis.
    */
   public boolean handleLegendClick(double x, double y) {
     GroupLabelHit groupHit = hitGroupLabel(x, y);
@@ -296,7 +296,7 @@ public class MasterTrackPainter {
         "Reload required",
         "Load " + labels + " variants?",
         "These variant types are not in the current cache because they were filtered out "
-            + "when variants were loaded. Reloading will also select them in Variant Manager.",
+            + "when variants were loaded. Reloading will also select them in Analysis.",
         "Reload",
         "Cancel");
     if (ok) {

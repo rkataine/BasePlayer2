@@ -146,7 +146,7 @@ public final class SessionDocumentSync {
 
   /**
    * Persist Control Files tab state (control VCF path + pop-freq toggles) from the
-   * open Variant Manager when present, then keep {@link ProjectDocument.ClassFilterSpec}
+   * open Analysis Manager when present, then keep {@link ProjectDocument.ClassFilterSpec}
    * control-AF fields aligned (they are what restore loads into the filter UI).
    */
   public static void writeControlFilesFromRuntime() {
@@ -155,11 +155,11 @@ public final class SessionDocumentSync {
       doc.controlFiles = new ProjectDocument.ControlFilesSpec();
     }
     org.baseplayer.variant.ui.VariantManagerController controller =
-        org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
     if (controller != null) {
       controller.writeControlFilesToDocument(doc.controlFiles);
     }
-    // ClassFilterSpec is restored into the Variant Manager; keep it in lockstep with
+    // ClassFilterSpec is restored into Analysis; keep it in lockstep with
     // ControlFilesSpec so a deferred filter-apply cannot leave max AF unsaved.
     syncControlAfIntoVariantFilter(doc);
   }

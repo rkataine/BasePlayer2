@@ -66,7 +66,7 @@ public class ChromosomeCanvas extends GenomicCanvas {
           stack.chromosomeCanvas.draw();
         }
       }
-      var controller = org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+      var controller = org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
       if (controller != null) {
         controller.onGeneBiotypeVisibilityChanged();
       }

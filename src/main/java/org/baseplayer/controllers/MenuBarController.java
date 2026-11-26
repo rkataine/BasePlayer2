@@ -676,7 +676,8 @@ public class MenuBarController {
       return;
     }
     Runnable apply = () -> {
-      boolean show = org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton();
+      boolean show =
+          org.baseplayer.analysis.manager.AnalysisManagerFacade.shouldShowToolbarButton();
       instance.variantManagerButton.setVisible(show);
       instance.variantManagerButton.setManaged(show);
       updateSampleGroupsButtonVisibility();
@@ -727,7 +728,7 @@ public class MenuBarController {
     if (org.baseplayer.variant.ui.MinimizedVariantManagerWindow.isMinimized()) {
       org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleExpand();
     } else {
-      org.baseplayer.variant.ui.VariantManagerWindow.bringToFrontOrOpen();
+      org.baseplayer.analysis.manager.AnalysisManagerFacade.bringToFrontOrOpen();
     }
     updateVariantManagerButtonVisibility();
   }

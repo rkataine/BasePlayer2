@@ -141,13 +141,14 @@ public final class SessionRuntime {
 
               boolean hasVcf = VcfManager.getInstance().hasLoadedVcf();
               boolean hasSignal =
-                  org.baseplayer.variant.ui.VariantManagerWindow.hasSignalDatasets()
-                      || org.baseplayer.variant.ui.VariantManagerWindow.hasComparableSignalData();
+                  org.baseplayer.analysis.manager.AnalysisManagerFacade.hasSignalDatasets()
+                      || org.baseplayer.analysis.manager.AnalysisManagerFacade
+                          .hasComparableSignalData();
               if (hasVcf) {
                 if (!usedCache) {
                   VcfManager.getInstance().loadVariantsForCurrentView();
                 }
-                org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+                org.baseplayer.analysis.manager.AnalysisManagerFacade.open(
                     MainApp.stage, VcfManager.getInstance(), null);
                 org.baseplayer.controllers.MainController.initializeLoadRegionButton();
                 org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
@@ -157,14 +158,14 @@ public final class SessionRuntime {
               if (hasSignal) {
                 if (hasVcf) {
                   org.baseplayer.variant.ui.VariantManagerController signalCtrl =
-                      org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+                      org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
                   if (signalCtrl != null) {
                     signalCtrl.refreshSignalSources();
                     // Named Signal tabs (e.g. RNA) sit beside Point/SV — select active dataset.
                     signalCtrl.selectSignalMode();
                   }
                 } else {
-                  org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+                  org.baseplayer.analysis.manager.AnalysisManagerFacade.openForSignalAnalysis();
                 }
               }
 

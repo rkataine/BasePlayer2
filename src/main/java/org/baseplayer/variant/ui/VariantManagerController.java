@@ -4747,7 +4747,7 @@ public class VariantManagerController implements Initializable {
         boolean hasSv = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.STRUCTURAL);
         boolean hasSignalDatasets =
             !org.baseplayer.analysis.signal.SignalDatasetRegistry.get().isEmpty();
-        boolean hasSignal = hasSignalDatasets || VariantManagerWindow.hasComparableSignalData();
+        boolean hasSignal = hasSignalDatasets || org.baseplayer.analysis.manager.AnalysisManagerFacade.hasComparableSignalData();
         // Only invent Point/SV tabs when nothing comparable is open yet (pre-load config).
         // Signal-only sessions must not show empty mutation tabs.
         if (!hasPoint && !hasSv && !hasSignal) {

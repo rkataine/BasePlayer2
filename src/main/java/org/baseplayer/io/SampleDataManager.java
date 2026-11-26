@@ -782,7 +782,7 @@ public class SampleDataManager {
 
   /**
    * @param openVariantManager when false, VCFs are still registered and variants
-   *     loaded for the current view, but the Variant Manager window is not shown
+   *     loaded for the current view, but the Analysis window is not shown
    */
   private static void loadDirectoryVcfs(
       List<File> vcfFiles,
@@ -820,7 +820,7 @@ public class SampleDataManager {
             finishVcfBatchUi(addedTracks);
             VcfManager.getInstance().loadVariantsForCurrentView();
             if (openVariantManager) {
-              org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+              org.baseplayer.analysis.manager.AnalysisManagerFacade.open(
                   MainApp.stage, VcfManager.getInstance(), null);
             }
             MainController.initializeLoadRegionButton();
@@ -1025,7 +1025,7 @@ public class SampleDataManager {
     }
     VcfManager.getInstance().bumpVariantsRevision();
     pruneSignalDatasetsAfterTrackRemoved(removedTrack);
-    org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
+    org.baseplayer.analysis.manager.AnalysisManagerFacade.notifySampleDataChanged();
     
     // Adjust visible range
     int newCount = sampleRegistry.getDisplayedTrackCount();
@@ -1053,7 +1053,7 @@ public class SampleDataManager {
     }
     javafx.application.Platform.runLater(() -> {
       org.baseplayer.variant.ui.VariantManagerController controller =
-          org.baseplayer.variant.ui.VariantManagerWindow.getCurrentController();
+          org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
       if (controller != null) {
         controller.syncSignalDatasetTabs();
         controller.updateModeTabVisibility();
@@ -1197,7 +1197,7 @@ public class SampleDataManager {
             ProjectSessionState.get().markDirty();
             GenomicCanvas.update.set(!GenomicCanvas.update.get());
             VcfManager.getInstance().loadVariantsForCurrentView();
-            org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+            org.baseplayer.analysis.manager.AnalysisManagerFacade.open(
                 MainApp.stage, VcfManager.getInstance(), null);
             org.baseplayer.controllers.MainController.initializeLoadRegionButton();
             org.baseplayer.controllers.MainController.addLoadRegionButtonToViewport();
@@ -1268,7 +1268,7 @@ public class SampleDataManager {
         }
       }
       VcfManager.getInstance().bumpVariantsRevision();
-      org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
+      org.baseplayer.analysis.manager.AnalysisManagerFacade.notifySampleDataChanged();
       refreshVariantPresentation();
     } else {
       GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -1955,8 +1955,8 @@ public class SampleDataManager {
         members.addAll(orphanTableTracks(registry));
       }
       if (members.isEmpty()) {
-        if (org.baseplayer.variant.ui.VariantManagerWindow.shouldShowToolbarButton()) {
-          org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+        if (org.baseplayer.analysis.manager.AnalysisManagerFacade.shouldShowToolbarButton()) {
+          org.baseplayer.analysis.manager.AnalysisManagerFacade.openForSignalAnalysis();
         }
         return;
       }
@@ -1966,8 +1966,8 @@ public class SampleDataManager {
       if (datasetId.isPresent()) {
         org.baseplayer.analysis.signal.SignalDatasetCoordinator.openAnalysisForDataset(
             datasetId.get());
-      } else if (org.baseplayer.variant.ui.VariantManagerWindow.hasSignalDatasets()) {
-        org.baseplayer.variant.ui.VariantManagerWindow.openForSignalAnalysis();
+      } else if (org.baseplayer.analysis.manager.AnalysisManagerFacade.hasSignalDatasets()) {
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.openForSignalAnalysis();
       }
     });
   }
@@ -2532,7 +2532,7 @@ public class SampleDataManager {
             Platform.runLater(() -> {
               finishVcfBatchUi(addedTracks);
               VcfManager.getInstance().loadVariantsForCurrentView();
-              org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+              org.baseplayer.analysis.manager.AnalysisManagerFacade.open(
                   MainApp.stage, VcfManager.getInstance(), null);
               
               // Initialize LoadRegionButton listener and add to viewport
@@ -3194,7 +3194,7 @@ public class SampleDataManager {
       invalidate.accept(cached);
     }
     VcfManager.getInstance().bumpVariantsRevision();
-    org.baseplayer.variant.ui.VariantManagerController.notifySampleDataChanged();
+    org.baseplayer.analysis.manager.AnalysisManagerFacade.notifySampleDataChanged();
     GenomicCanvas.update.set(!GenomicCanvas.update.get());
   }
 
@@ -3317,9 +3317,9 @@ public class SampleDataManager {
 
     ThreadRunner.get().cancelAll();
 
-    // Detach Variant Manager listeners before mutating sampleTracks, otherwise a
+    // Detach Analysis Manager listeners before mutating sampleTracks, otherwise a
     // queued refreshGroups can CME while this method clears the live list.
-    org.baseplayer.variant.ui.VariantManagerWindow.closeAndDispose();
+    org.baseplayer.analysis.manager.AnalysisManagerFacade.closeAndDispose();
 
     for (var track : new ArrayList<>(registry.getSampleTracks())) {
       try { track.close(); } catch (IOException e) {

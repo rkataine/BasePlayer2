@@ -53,7 +53,7 @@ public class MinimizedVariantManagerWindow {
         if (instance != null) {
             instance.expand();
         } else {
-            VariantManagerWindow.bringToFrontOrOpen();
+            org.baseplayer.analysis.manager.AnalysisManagerFacade.bringToFrontOrOpen();
         }
         MenuBarController.updateVariantManagerButtonVisibility();
     }
@@ -153,7 +153,7 @@ public class MinimizedVariantManagerWindow {
         maximizeButton.setOnMouseExited(e -> expandIcon.setIconColor(Color.web("#aaaaaa")));
         maximizeButton.setOnAction(e -> handleExpand());
 
-        Label titleLabel = new Label("Variant Manager");
+        Label titleLabel = new Label("Analysis");
         titleLabel.setStyle("-fx-text-fill: #dddddd; -fx-font-size: 12px; -fx-font-weight: bold;");
         titleLabel.setMaxWidth(Double.MAX_VALUE);
 

@@ -13,8 +13,12 @@ import org.baseplayer.io.VcfManager;
 import java.io.IOException;
 
 /**
- * Singleton Variant Manager window. Only one instance can be open at a time.
+ * Singleton Analysis Manager window. Only one instance can be open at a time.
  * Uses the unified CSS system with theme support.
+ * <p>
+ * Prefer {@link org.baseplayer.analysis.manager.AnalysisManagerFacade} for call
+ * sites outside this package; these statics remain as a thin alias until the
+ * FXML shell moves under {@code analysis.manager}.
  */
 public class VariantManagerWindow {
     private static Stage currentStage = null;

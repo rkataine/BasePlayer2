@@ -109,9 +109,9 @@ public class MainApp extends Application {
         ft.setOnFinished(e -> StartHub.show(primaryStage));
         ft.play();
         
-        // Auto-open Variant Manager if VCFs are already loaded
+        // Auto-open Analysis if VCFs are already loaded
         if (VcfManager.getInstance().hasLoadedVcf()) {
-            org.baseplayer.variant.ui.VariantManagerWindow.openVariantManager(
+            org.baseplayer.analysis.manager.AnalysisManagerFacade.open(
                 MainApp.stage, VcfManager.getInstance(), null);
         }
     }
@@ -166,7 +166,7 @@ public class MainApp extends Application {
         // Canvas zoom-line tint follows canvas palette (painters still mostly dark).
         DrawColors.lineColor = AppTheme.canvas().zoomLine();
         org.baseplayer.components.sidebars.GenomeSidebar.redrawThemeChrome();
-        org.baseplayer.variant.ui.VariantManagerWindow.refreshTheme();
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.refreshTheme();
         org.baseplayer.project.ProjectSessionState.get().markDirty();
         org.baseplayer.project.SessionDocumentSync.writeUiDarkMode(darkMode);
         GenomicCanvas.update.set(!GenomicCanvas.update.get());

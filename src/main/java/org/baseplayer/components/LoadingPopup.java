@@ -346,7 +346,7 @@ public class LoadingPopup {
   }
 
   /**
-   * Update owner hint and force a foreground sync (e.g. after Variant Manager hide).
+   * Update owner hint and force a foreground sync (e.g. after Analysis hide).
    * Must run on the FX thread.
    */
   public void ensureVisibleOver(Window owner) {

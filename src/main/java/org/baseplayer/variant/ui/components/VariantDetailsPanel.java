@@ -270,7 +270,7 @@ public final class VariantDetailsPanel {
     VariantAnnotation ann = node.annotation;
     if (ann == null) {
       Label missing = new Label(
-          "Not annotated yet. Run annotation in Variant Manager for this chromosome.");
+          "Not annotated yet. Run annotation in Analysis for this chromosome.");
       missing.getStyleClass().add("subsection-label");
       missing.setWrapText(true);
       return missing;

@@ -187,7 +187,7 @@ public class VariantInfoPopup extends InfoPopup {
     c.separator();
     c.section("Annotation");
     if (ann == null) {
-      c.text("Not annotated yet. Run annotation in Variant Manager for this chromosome.");
+      c.text("Not annotated yet. Run annotation in Analysis for this chromosome.");
     } else {
       String genes = ann.genesDisplay();
       if (genes != null && !genes.isBlank()) {
