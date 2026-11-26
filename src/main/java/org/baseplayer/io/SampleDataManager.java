@@ -781,7 +781,7 @@ public class SampleDataManager {
   }
 
   /**
-   * @param openVariantManager when false, VCFs are still registered and variants
+   * @param openAnalysisManager when false, VCFs are still registered and variants
    *     loaded for the current view, but the Analysis window is not shown
    */
   private static void loadDirectoryVcfs(
@@ -789,7 +789,7 @@ public class SampleDataManager {
       boolean addToGroup,
       Map<File, String> groupNameByDir,
       SampleOpenFailuresDialog priorFailures,
-      boolean openVariantManager) {
+      boolean openAnalysisManager) {
     if (vcfFiles == null || vcfFiles.isEmpty()) {
       if (priorFailures != null) {
         priorFailures.commitAndShowLater();
@@ -819,7 +819,7 @@ public class SampleDataManager {
           Platform.runLater(() -> {
             finishVcfBatchUi(addedTracks);
             VcfManager.getInstance().loadVariantsForCurrentView();
-            if (openVariantManager) {
+            if (openAnalysisManager) {
               org.baseplayer.analysis.manager.AnalysisManagerFacade.open(
                   MainApp.stage, VcfManager.getInstance(), null);
             }
@@ -1052,7 +1052,7 @@ public class SampleDataManager {
       }
     }
     javafx.application.Platform.runLater(() -> {
-      org.baseplayer.variant.ui.VariantManagerController controller =
+      org.baseplayer.analysis.manager.AnalysisManagerController controller =
           org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
       if (controller != null) {
         controller.syncSignalDatasetTabs();
@@ -1946,7 +1946,7 @@ public class SampleDataManager {
    * then open Analysis on that tab.
    */
   private static void afterTableSampleOpened(List<SampleTrack> tracks, List<Path> paths) {
-    org.baseplayer.controllers.MenuBarController.updateVariantManagerButtonVisibility();
+    org.baseplayer.controllers.MenuBarController.updateAnalysisManagerButtonVisibility();
     javafx.application.Platform.runLater(() -> {
       SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
       List<SampleTrack> members = tracks != null ? new ArrayList<>(tracks) : new ArrayList<>();

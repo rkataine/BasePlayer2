@@ -321,7 +321,7 @@ public class VcfManager {
 
     /** Trigger variant load for every visible stack: cached chromosome, else the on-screen window. */
     public void loadVariantsForCurrentView() {
-        syncCurrentFilterFromOpenVariantManager();
+        syncCurrentFilterFromOpenAnalysisManager();
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty() || loadedVcfs.isEmpty()) return;
         for (DrawStack stack : stackManager.getStacks()) {
@@ -351,7 +351,7 @@ public class VcfManager {
      * must not materialize every VCF across the contig).
      */
     public void loadVariantsForVisibleWindowOnly() {
-        syncCurrentFilterFromOpenVariantManager();
+        syncCurrentFilterFromOpenAnalysisManager();
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager.isEmpty() || loadedVcfs.isEmpty() || !hasVisibleVcfSample()) {
             return;
@@ -473,7 +473,7 @@ public class VcfManager {
         boolean manualChromosomeSelection,
         long coreStart,
         long coreEnd) {
-        syncCurrentFilterFromOpenVariantManager();
+        syncCurrentFilterFromOpenAnalysisManager();
         if (!manualChromosomeSelection) {
             pendingManualChromosomeScrollTarget = null;
         }
@@ -797,7 +797,7 @@ public class VcfManager {
         }
     }
 
-    private void syncCurrentFilterFromOpenVariantManager() {
+    private void syncCurrentFilterFromOpenAnalysisManager() {
         VariantFilter fromUi = AnalysisManagerFacade.snapshotUiFilter();
         if (fromUi != null) {
             this.currentFilter = fromUi;
@@ -1142,7 +1142,7 @@ public class VcfManager {
         ServiceRegistry.getInstance().getRegionFetchCache().clear("VCF");
 
         clearVariantListsFromCanvases();
-        org.baseplayer.controllers.MenuBarController.updateVariantManagerButtonVisibility();
+        org.baseplayer.controllers.MenuBarController.updateAnalysisManagerButtonVisibility();
     }
     
     /**
@@ -1973,7 +1973,7 @@ public class VcfManager {
      * {@link #projectMateBreakpoints}.
      */
     private void softRefreshMateProjections() {
-        syncCurrentFilterFromOpenVariantManager();
+        syncCurrentFilterFromOpenAnalysisManager();
         DrawStackManager stackManager = ServiceRegistry.getInstance().getDrawStackManager();
         if (stackManager == null || stackManager.isEmpty()) {
             return;

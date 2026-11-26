@@ -84,7 +84,7 @@
       <Label fx:id="viewLengthLabel" text="200Mb" styleClass="view-length-label" minWidth="70" prefWidth="70" alignment="CENTER_RIGHT" />
       <Button fx:id="zoomInButton" text="+" onAction="#zoomIn" styleClass="zoom-button" />
       <Button fx:id="zoomOutButton" text="−" onAction="#zoomOut" styleClass="zoom-button" />
-      <Button fx:id="variantManagerButton" onAction="#openVariantManager" styleClass="zoom-button"
+      <Button fx:id="analysisManagerButton" onAction="#openAnalysisManager" styleClass="zoom-button"
               prefHeight="22.0" focusTraversable="false"
               visible="false" managed="false">
         <tooltip>

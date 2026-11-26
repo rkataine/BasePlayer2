@@ -85,7 +85,7 @@ public class MenuBarController {
   @FXML private Button redoButton;
   @FXML private Button zoomInButton;
   @FXML private Button zoomOutButton;
-  @FXML private Button variantManagerButton;
+  @FXML private Button analysisManagerButton;
   @FXML private Button sampleGroupsButton;
   @FXML private Button copyPositionButton;
   @FXML private Button themeToggleButton;
@@ -95,12 +95,12 @@ public class MenuBarController {
   private FontIcon zoomInIcon;
   private FontIcon zoomOutIcon;
   private FontIcon themeToggleIcon;
-  private FontIcon variantManagerIcon;
+  private FontIcon analysisManagerIcon;
   private FontIcon sampleGroupsIcon;
   private static final Color ZOOM_IN_ACTIVE = Color.web("#709076");  // Slight green
   private static final Color ZOOM_OUT_ACTIVE = Color.web("#b68454"); // Slight orange
   private static final Color ZOOM_DISABLED = Color.web("#555555");   // Gray
-  private static final Color VARIANT_MANAGER_ICON = Color.web("#8ab4c8");
+  private static final Color ANALYSIS_MANAGER_ICON = Color.web("#8ab4c8");
   private static final Color SAMPLE_GROUPS_ICON = Color.web("#d0a050");
   
   private static MenuBarController instance;
@@ -140,7 +140,7 @@ public class MenuBarController {
     installPositionFieldDefocusHandler();
     navigationUndo = new NavigationUndoComponent(undoButton, redoButton);
     setupZoomButtons();
-    setupVariantManagerButton();
+    setupAnalysisManagerButton();
     setupSampleGroupsButton();
     setupThemeToggleButton();
     setupFileMenuIcons();
@@ -647,39 +647,39 @@ public class MenuBarController {
     zoomOutButton.setGraphic(zoomOutIcon);
   }
 
-  private void setupVariantManagerButton() {
-    if (variantManagerButton == null) {
+  private void setupAnalysisManagerButton() {
+    if (analysisManagerButton == null) {
       return;
     }
-    variantManagerIcon = new FontIcon(FontAwesomeSolid.TABLE);
-    variantManagerIcon.setIconSize(13);
-    variantManagerIcon.setIconColor(VARIANT_MANAGER_ICON);
-    variantManagerButton.setText("Analysis");
-    variantManagerButton.setGraphic(variantManagerIcon);
-    variantManagerButton.setContentDisplay(javafx.scene.control.ContentDisplay.LEFT);
-    variantManagerButton.setGraphicTextGap(6);
-    variantManagerButton.setStyle("-fx-font-size: 12px; -fx-font-weight: bold;");
-    variantManagerButton.setMinWidth(Region.USE_PREF_SIZE);
+    analysisManagerIcon = new FontIcon(FontAwesomeSolid.TABLE);
+    analysisManagerIcon.setIconSize(13);
+    analysisManagerIcon.setIconColor(ANALYSIS_MANAGER_ICON);
+    analysisManagerButton.setText("Analysis");
+    analysisManagerButton.setGraphic(analysisManagerIcon);
+    analysisManagerButton.setContentDisplay(javafx.scene.control.ContentDisplay.LEFT);
+    analysisManagerButton.setGraphicTextGap(6);
+    analysisManagerButton.setStyle("-fx-font-size: 12px; -fx-font-weight: bold;");
+    analysisManagerButton.setMinWidth(Region.USE_PREF_SIZE);
     if (MainApp.stage != null) {
-      MainApp.stage.focusedProperty().addListener((obs, o, n) -> updateVariantManagerButtonVisibility());
+      MainApp.stage.focusedProperty().addListener((obs, o, n) -> updateAnalysisManagerButtonVisibility());
     }
     ServiceRegistry.getInstance().getSampleRegistry().getSampleTracks()
         .addListener((javafx.collections.ListChangeListener<org.baseplayer.samples.SampleTrack>) c ->
             // Always defer: running inside the list-change notification iterates a
             // list that is still mid-mutation and throws ConcurrentModificationException.
-            Platform.runLater(MenuBarController::updateVariantManagerButtonVisibility));
-    updateVariantManagerButtonVisibility();
+            Platform.runLater(MenuBarController::updateAnalysisManagerButtonVisibility));
+    updateAnalysisManagerButtonVisibility();
   }
 
-  public static void updateVariantManagerButtonVisibility() {
-    if (instance == null || instance.variantManagerButton == null) {
+  public static void updateAnalysisManagerButtonVisibility() {
+    if (instance == null || instance.analysisManagerButton == null) {
       return;
     }
     Runnable apply = () -> {
       boolean show =
           org.baseplayer.analysis.manager.AnalysisManagerFacade.shouldShowToolbarButton();
-      instance.variantManagerButton.setVisible(show);
-      instance.variantManagerButton.setManaged(show);
+      instance.analysisManagerButton.setVisible(show);
+      instance.analysisManagerButton.setManaged(show);
       updateSampleGroupsButtonVisibility();
     };
     if (Platform.isFxApplicationThread()) {
@@ -724,13 +724,13 @@ public class MenuBarController {
   }
 
   @FXML
-  private void openVariantManager() {
-    if (org.baseplayer.variant.ui.MinimizedVariantManagerWindow.isMinimized()) {
-      org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleExpand();
+  private void openAnalysisManager() {
+    if (org.baseplayer.analysis.manager.MinimizedAnalysisManagerWindow.isMinimized()) {
+      org.baseplayer.analysis.manager.MinimizedAnalysisManagerWindow.handleExpand();
     } else {
       org.baseplayer.analysis.manager.AnalysisManagerFacade.bringToFrontOrOpen();
     }
-    updateVariantManagerButtonVisibility();
+    updateAnalysisManagerButtonVisibility();
   }
 
   @FXML

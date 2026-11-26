@@ -569,7 +569,7 @@ public final class SignalAnalysisWorkspace {
 
   /**
    * Optional Analysis Manager busy gate (in-window dimmer + loading popup ownership).
-   * Wired from {@code VariantManagerController} so Discover / Run match annotate-all.
+   * Wired from {@code AnalysisManagerController} so Discover / Run match annotate-all.
    */
   public void setAnalysisBusyRunner(AnalysisBusyRunner runner) {
     this.analysisBusyRunner = runner;

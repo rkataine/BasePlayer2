@@ -1,11 +1,6 @@
-package org.baseplayer.variant.ui;
+package org.baseplayer.analysis.manager;
 
 import org.baseplayer.MainApp;
-import org.baseplayer.analysis.manager.AnalysisBusyGate;
-import org.baseplayer.analysis.manager.ExportCoordinator;
-import org.baseplayer.analysis.manager.ModeHost;
-import org.baseplayer.analysis.manager.AnalysisManagerFacade;
-import org.baseplayer.analysis.manager.TableRebuildService;
 import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
@@ -70,10 +65,12 @@ import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
 import org.kordamp.ikonli.javafx.FontIcon;
 
 /**
- * Controller for the FXML-based Variant Manager dialog.
- * Composes filter/comparison/control/table panels and runs data orchestration.
+ * FXML shell for Analysis Manager.
+ * Composes mode workspaces / panels and wires manager services
+ * ({@link ModeHost}, {@link AnalysisBusyGate}, {@link ExportCoordinator},
+ * {@link TableRebuildService}).
  */
-public class VariantManagerController implements Initializable, org.baseplayer.analysis.manager.PostLoadTablePort {
+public class AnalysisManagerController implements Initializable, PostLoadTablePort {
 
     private static final String TEXT           = "white";
 
@@ -616,7 +613,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
         SplitPane signalSplit = new SplitPane(toolTabs, resultsArea);
         signalSplit.setOrientation(javafx.geometry.Orientation.VERTICAL);
         signalSplit.setDividerPositions(0.38);
-        signalSplit.getStyleClass().add("variant-manager-split");
+        signalSplit.getStyleClass().add("analysis-manager-split");
         toolTabs.setMinHeight(48);
         SplitPane.setResizableWithParent(toolTabs, true);
         SplitPane.setResizableWithParent(resultsArea, true);
@@ -871,8 +868,8 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
         if (split == null) {
             return;
         }
-        if (!split.getStyleClass().contains("variant-manager-split")) {
-            split.getStyleClass().add("variant-manager-split");
+        if (!split.getStyleClass().contains("analysis-manager-split")) {
+            split.getStyleClass().add("analysis-manager-split");
         }
         Runnable apply = () -> {
             for (Node child : split.lookupAll(".split-pane-divider")) {
@@ -1502,7 +1499,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
         vcfManager.clearFilter();
         vcfManager.setOnVcfAdded(null);
         registry.clearSubsetSource(SampleRegistry.SubsetSource.GENE_FOCUS);
-				MinimizedVariantManagerWindow.handleCleanup();
+				MinimizedAnalysisManagerWindow.handleCleanup();
     }
 
     public void clearBatchAnnotationResults() {
@@ -1599,11 +1596,11 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
     }
 
     public void handleMinimize() {
-        MinimizedVariantManagerWindow.handleMinimize(stage);
+        MinimizedAnalysisManagerWindow.handleMinimize(stage);
     }
 
     public void handleExpandMinimized() {
-        MinimizedVariantManagerWindow.handleExpand();
+        MinimizedAnalysisManagerWindow.handleExpand();
     }
 
     private void syncSharedSampleRangeBounds() {
@@ -1623,7 +1620,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
      * slider max and filtered table match currently visible VCF tracks.
      */
     public static void notifySampleVisibilityChanged() {
-        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        AnalysisManagerController controller = AnalysisManagerWindow.getCurrentController();
         if (controller == null) {
             return;
         }
@@ -1640,7 +1637,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
      * tables drop types that are no longer present in any cached list.
      */
     public static void notifySampleDataChanged() {
-        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        AnalysisManagerController controller = AnalysisManagerWindow.getCurrentController();
         if (controller == null) {
             return;
         }
@@ -1658,7 +1655,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
 
     /** Sync checkboxes when allowed types are toggled outside the Variant Manager UI. */
     public static void syncFilterUiFromExternal(VariantFilter filter) {
-        VariantManagerController controller = VariantManagerWindow.getCurrentController();
+        AnalysisManagerController controller = AnalysisManagerWindow.getCurrentController();
         if (controller == null || filter == null) {
             return;
         }
@@ -1680,7 +1677,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
                 return;
             }
 
-            VariantManagerController controller = VariantManagerWindow.getCurrentController();
+            AnalysisManagerController controller = AnalysisManagerWindow.getCurrentController();
             VariantFilter target;
             if (controller != null) {
                 target = controller.buildFilterFromUI();
@@ -2232,7 +2229,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
             }
         }
         GenomicCanvas.update.set(!GenomicCanvas.update.get());
-        MinimizedVariantManagerWindow.handleMinimize(stage);
+        MinimizedAnalysisManagerWindow.handleMinimize(stage);
     }
 
     private double estimateSampleViewportHeight(SampleRegistry registry) {
@@ -3936,7 +3933,7 @@ public class VariantManagerController implements Initializable, org.baseplayer.a
     }
 
     private void handleHostWindowStateChanged() {
-        MenuBarController.updateVariantManagerButtonVisibility();
+        MenuBarController.updateAnalysisManagerButtonVisibility();
     }
 
     /** Point/SV annotate-all / reload completion (busy chrome released by {@code onDone}). */

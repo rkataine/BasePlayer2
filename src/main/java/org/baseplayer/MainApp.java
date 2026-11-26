@@ -101,7 +101,7 @@ public class MainApp extends Application {
                 event.consume();
                 return;
             }
-            org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleCleanup();
+            org.baseplayer.analysis.manager.MinimizedAnalysisManagerWindow.handleCleanup();
         });
         stage.show();
         stage.setMaximized(true);
@@ -118,7 +118,7 @@ public class MainApp extends Application {
 
     @Override
     public void stop() {
-        org.baseplayer.variant.ui.MinimizedVariantManagerWindow.handleCleanup();
+        org.baseplayer.analysis.manager.MinimizedAnalysisManagerWindow.handleCleanup();
     }
 
     /** Taskbar / window icons: several sizes help Linux desktop environments. */

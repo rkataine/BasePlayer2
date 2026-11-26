@@ -157,7 +157,7 @@ public final class SessionRuntime {
               // so the Signals table is not left on the empty "Open signal data…" placeholder.
               if (hasSignal) {
                 if (hasVcf) {
-                  org.baseplayer.variant.ui.VariantManagerController signalCtrl =
+                  org.baseplayer.analysis.manager.AnalysisManagerController signalCtrl =
                       org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
                   if (signalCtrl != null) {
                     signalCtrl.refreshSignalSources();

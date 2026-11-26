@@ -61,7 +61,7 @@ public class AgentPanel {
         if (nodes == null) {
             return;
         }
-        Preferences prefs = Preferences.userNodeForPackage(org.baseplayer.variant.ui.VariantManagerController.class);
+        Preferences prefs = Preferences.userRoot().node("/org/baseplayer/variant/ui/VariantManagerController");
         if (nodes.apiKeyField() != null) {
             nodes.apiKeyField().setText(prefs.get(PREF_API_KEY, ""));
         }
@@ -101,7 +101,7 @@ public class AgentPanel {
             return;
         }
 
-        Preferences prefs = Preferences.userNodeForPackage(org.baseplayer.variant.ui.VariantManagerController.class);
+        Preferences prefs = Preferences.userRoot().node("/org/baseplayer/variant/ui/VariantManagerController");
         prefs.put(PREF_API_KEY, apiKey);
         prefs.put(PREF_API_MODEL, model);
 

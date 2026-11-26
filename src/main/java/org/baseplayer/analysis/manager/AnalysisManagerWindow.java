@@ -1,4 +1,4 @@
-package org.baseplayer.variant.ui;
+package org.baseplayer.analysis.manager;
 
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
@@ -14,20 +14,16 @@ import java.io.IOException;
 
 /**
  * Singleton Analysis Manager window. Only one instance can be open at a time.
- * Uses the unified CSS system with theme support.
- * <p>
- * Prefer {@link org.baseplayer.analysis.manager.AnalysisManagerFacade} for call
- * sites outside this package; these statics remain as a thin alias until the
- * FXML shell moves under {@code analysis.manager}.
+ * Prefer {@link AnalysisManagerFacade} for call sites outside this package.
  */
-public class VariantManagerWindow {
+public class AnalysisManagerWindow {
     private static Stage currentStage = null;
-    private static VariantManagerController currentController = null;
+    private static AnalysisManagerController currentController = null;
     private static boolean listenersAttached = false;
 
     public static void show(Window owner, VcfManager vcfManager, Runnable onClose) {
         if (currentStage != null) {
-            MinimizedVariantManagerWindow.clearMinimizedFlag();
+            MinimizedAnalysisManagerWindow.clearMinimizedFlag();
             if (currentStage.isIconified()) {
                 currentStage.setIconified(false);
             }
@@ -39,14 +35,14 @@ public class VariantManagerWindow {
             if (currentController != null) {
                 currentController.updateVcfManager(vcfManager);
             }
-            MenuBarController.updateVariantManagerButtonVisibility();
+            MenuBarController.updateAnalysisManagerButtonVisibility();
             return;
         }
         try {
-            FXMLLoader loader = new FXMLLoader(MainApp.getResource("VariantManager.fxml"));
+            FXMLLoader loader = new FXMLLoader(MainApp.getResource("AnalysisManager.fxml"));
             Parent root = loader.load();
 
-            VariantManagerController controller = loader.getController();
+            AnalysisManagerController controller = loader.getController();
 
             Stage stage = new Stage();
             stage.initModality(Modality.NONE);
@@ -74,22 +70,22 @@ public class VariantManagerWindow {
             stage.setOnCloseRequest(event -> {
                 event.consume();
                 stage.hide();
-                MinimizedVariantManagerWindow.clearMinimizedFlag();
+                MinimizedAnalysisManagerWindow.clearMinimizedFlag();
                 if (onClose != null) {
                     onClose.run();
                 }
-                MenuBarController.updateVariantManagerButtonVisibility();
+                MenuBarController.updateAnalysisManagerButtonVisibility();
             });
 
             // Keep manager coupled to main app lifecycle without forcing owned-window behavior.
             if (owner != null) {
                 owner.showingProperty().addListener((obs, wasShowing, isShowing) -> {
                     if (!isShowing) {
-                        MinimizedVariantManagerWindow.handleCleanup();
+                        MinimizedAnalysisManagerWindow.handleCleanup();
                         if (stage.isShowing()) {
                             stage.hide();
                         }
-                        MenuBarController.updateVariantManagerButtonVisibility();
+                        MenuBarController.updateAnalysisManagerButtonVisibility();
                     }
                 });
             }
@@ -100,7 +96,7 @@ public class VariantManagerWindow {
             attachVisibilityListeners(stage);
 
             stage.show();
-            MenuBarController.updateVariantManagerButtonVisibility();
+            MenuBarController.updateAnalysisManagerButtonVisibility();
 
         } catch (IOException e) {
            // System.err.println("Error loading Variant Manager FXML: " + e.getMessage());
@@ -113,12 +109,12 @@ public class VariantManagerWindow {
             return;
         }
         listenersAttached = true;
-        Runnable refresh = MenuBarController::updateVariantManagerButtonVisibility;
+        Runnable refresh = MenuBarController::updateAnalysisManagerButtonVisibility;
         stage.focusedProperty().addListener((obs, o, n) -> refresh.run());
         stage.iconifiedProperty().addListener((obs, o, n) -> refresh.run());
         stage.showingProperty().addListener((obs, o, n) -> {
             if (Boolean.TRUE.equals(n)) {
-                MinimizedVariantManagerWindow.clearMinimizedFlag();
+                MinimizedAnalysisManagerWindow.clearMinimizedFlag();
             }
             refresh.run();
         });
@@ -183,7 +179,7 @@ public class VariantManagerWindow {
      */
     public static void openForSignalAnalysis() {
         bringToFrontOrOpen();
-        VariantManagerController controller = getCurrentController();
+        AnalysisManagerController controller = getCurrentController();
         if (controller != null) {
             controller.selectSignalMode();
             controller.refreshSignalSources();
@@ -195,7 +191,7 @@ public class VariantManagerWindow {
      */
     public static void openForSignalDataset(String datasetId) {
         bringToFrontOrOpen();
-        VariantManagerController controller = getCurrentController();
+        AnalysisManagerController controller = getCurrentController();
         if (controller != null) {
             controller.refreshSignalDataset(datasetId);
             controller.selectSignalDataset(datasetId);
@@ -208,12 +204,12 @@ public class VariantManagerWindow {
     }
 
     public static void bringToFrontOrOpen() {
-        MinimizedVariantManagerWindow.clearMinimizedFlag();
+        MinimizedAnalysisManagerWindow.clearMinimizedFlag();
         Window owner = MainApp.stage;
-        openVariantManager(owner, VcfManager.getInstance(), null);
+        open(owner, VcfManager.getInstance(), null);
     }
 
-    public static VariantManagerController getCurrentController() {
+    public static AnalysisManagerController getCurrentController() {
         return currentController;
     }
 
@@ -222,10 +218,10 @@ public class VariantManagerWindow {
      * Used by New Project / Open Project session wipe.
      */
     public static void closeAndDispose() {
-        MinimizedVariantManagerWindow.handleCleanup();
-        MinimizedVariantManagerWindow.clearMinimizedFlag();
+        MinimizedAnalysisManagerWindow.handleCleanup();
+        MinimizedAnalysisManagerWindow.clearMinimizedFlag();
 
-        VariantManagerController controller = currentController;
+        AnalysisManagerController controller = currentController;
         Stage stage = currentStage;
         currentController = null;
         currentStage = null;
@@ -242,10 +238,10 @@ public class VariantManagerWindow {
             }
             stage.close();
         }
-        MenuBarController.updateVariantManagerButtonVisibility();
+        MenuBarController.updateAnalysisManagerButtonVisibility();
     }
 
-    public static void openVariantManager(Window owner, VcfManager vcfManager, Runnable onClose) {
+    public static void open(Window owner, VcfManager vcfManager, Runnable onClose) {
         if (vcfManager == null || owner == null) {
             return;
         }

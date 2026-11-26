@@ -154,7 +154,7 @@ public final class SessionDocumentSync {
     if (doc.controlFiles == null) {
       doc.controlFiles = new ProjectDocument.ControlFilesSpec();
     }
-    org.baseplayer.variant.ui.VariantManagerController controller =
+    org.baseplayer.analysis.manager.AnalysisManagerController controller =
         org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
     if (controller != null) {
       controller.writeControlFilesToDocument(doc.controlFiles);

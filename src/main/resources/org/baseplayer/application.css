@@ -426,13 +426,14 @@ VBox {
     -fx-background-color: -bp-panel;
 }
 
-.variant-manager-split {
+/* Analysis Manager vertical filter/results split (was .variant-manager-split). */
+.analysis-manager-split {
   -fx-background-color: -bp-panel;
   -fx-padding: 0;
 }
 
 /* Vertical split between filters/tools and results table: wide grab zone + clear bar. */
-.variant-manager-split > .split-pane-divider,
+.analysis-manager-split > .split-pane-divider,
 .variant-results-divider {
   -fx-padding: 0;
   -fx-min-height: 14;
@@ -445,7 +446,7 @@ VBox {
   -fx-cursor: v-resize;
 }
 
-.variant-manager-split > .split-pane-divider:hover,
+.analysis-manager-split > .split-pane-divider:hover,
 .variant-results-divider:hover {
   -fx-background-color: -bp-panel, -bp-focus;
   -fx-background-insets: 0, 4 0 4 0;
@@ -749,7 +750,7 @@ VBox {
   -fx-background-color: transparent;
 }
 
-.root-pane .variant-manager-split,
+.root-pane .analysis-manager-split,
 .root-pane .tab-content-split {
   -fx-background-color: transparent;
 }

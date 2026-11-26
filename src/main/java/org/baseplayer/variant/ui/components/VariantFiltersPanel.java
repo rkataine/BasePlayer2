@@ -1169,7 +1169,7 @@ public class VariantFiltersPanel {
     }
 
     public void cancelPendingFilterTimers() {
-        // Debounce lives in VariantManagerController.
+        // Debounce lives in AnalysisManagerController.
     }
 
     public void showInfoFilterDialog() {

@@ -1,4 +1,4 @@
-package org.baseplayer.variant.ui;
+package org.baseplayer.analysis.manager;
 
 import javafx.beans.value.ChangeListener;
 import javafx.geometry.Pos;
@@ -19,17 +19,17 @@ import org.kordamp.ikonli.javafx.FontIcon;
 
 import java.util.Objects;
 
-public class MinimizedVariantManagerWindow {
+public class MinimizedAnalysisManagerWindow {
     private static final double MINIMIZED_WIDTH = 280;
     private static final double MINIMIZED_HEIGHT = 78;
 
-    private static MinimizedVariantManagerWindow instance;
+    private static MinimizedAnalysisManagerWindow instance;
     private static Stage managedMainStage;
 
     private Stage minimizedStage;
     private ChangeListener<Boolean> mainAppShowingListener;
 
-    private MinimizedVariantManagerWindow(Stage mainStage) {
+    private MinimizedAnalysisManagerWindow(Stage mainStage) {
         managedMainStage = mainStage;
     }
 
@@ -38,15 +38,15 @@ public class MinimizedVariantManagerWindow {
             return;
         }
 
-        if (instance == null || !Objects.equals(MinimizedVariantManagerWindow.managedMainStage, mainStage)) {
+        if (instance == null || !Objects.equals(MinimizedAnalysisManagerWindow.managedMainStage, mainStage)) {
             if (instance != null) {
                 instance.cleanup();
             }
-            instance = new MinimizedVariantManagerWindow(mainStage);
+            instance = new MinimizedAnalysisManagerWindow(mainStage);
         }
 
         instance.minimize();
-        MenuBarController.updateVariantManagerButtonVisibility();
+        MenuBarController.updateAnalysisManagerButtonVisibility();
     }
 
     public static void handleExpand() {
@@ -55,7 +55,7 @@ public class MinimizedVariantManagerWindow {
         } else {
             org.baseplayer.analysis.manager.AnalysisManagerFacade.bringToFrontOrOpen();
         }
-        MenuBarController.updateVariantManagerButtonVisibility();
+        MenuBarController.updateAnalysisManagerButtonVisibility();
     }
 
     public static void handleCleanup() {
@@ -64,7 +64,7 @@ public class MinimizedVariantManagerWindow {
             instance = null;
             managedMainStage = null;
         }
-        MenuBarController.updateVariantManagerButtonVisibility();
+        MenuBarController.updateAnalysisManagerButtonVisibility();
     }
 
     /** True when the floating minimized widget is currently showing. */
@@ -81,7 +81,7 @@ public class MinimizedVariantManagerWindow {
     public static void clearMinimizedFlag() {
         if (instance != null && isShowing()) {
             instance.closeMinimizedStage();
-            MenuBarController.updateVariantManagerButtonVisibility();
+            MenuBarController.updateAnalysisManagerButtonVisibility();
         }
     }
 

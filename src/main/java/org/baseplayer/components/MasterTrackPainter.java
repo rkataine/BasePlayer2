@@ -300,7 +300,7 @@ public class MasterTrackPainter {
         "Reload",
         "Cancel");
     if (ok) {
-      org.baseplayer.variant.ui.VariantManagerController.enableTypesAndReload(types);
+      org.baseplayer.analysis.manager.AnalysisManagerController.enableTypesAndReload(types);
     }
   }
 

@@ -8,7 +8,7 @@
 <?import org.baseplayer.variant.ui.components.IntegerRangeSlider?>
 
 <StackPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
-         fx:controller="org.baseplayer.variant.ui.VariantManagerController"
+         fx:controller="org.baseplayer.analysis.manager.AnalysisManagerController"
          styleClass="root-pane">
 
     <TabPane fx:id="filterTabPane" tabClosingPolicy="UNAVAILABLE" styleClass="filter-tabs">
@@ -16,7 +16,7 @@
         <!-- Point mutations: filters + gene/intronic/intergenic tables -->
         <Tab fx:id="pointMutationsTab" text="Point mutations">
             <SplitPane fx:id="pointMainSplitPane" orientation="VERTICAL" dividerPositions="0.45"
-                       styleClass="variant-manager-split">
+                       styleClass="analysis-manager-split">
                 <SplitPane fx:id="variantFiltersSplitPane" dividerPositions="0.5" styleClass="tab-content-split">
                     <ScrollPane fitToWidth="true" styleClass="filter-scroll" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED">
                         <VBox spacing="8" styleClass="filter-panel">
@@ -218,7 +218,7 @@
         <!-- Structural variants: filters host + SV tables (filters built in code) -->
         <Tab fx:id="structuralVariantsTab" text="Structural variants">
             <SplitPane fx:id="svMainSplitPane" orientation="VERTICAL" dividerPositions="0.45"
-                       styleClass="variant-manager-split">
+                       styleClass="analysis-manager-split">
                 <VBox fx:id="svFiltersHost" spacing="0" styleClass="filter-panel"/>
                 <VBox spacing="0" styleClass="variant-table-area">
                 <HBox spacing="8" alignment="CENTER_LEFT" styleClass="variant-table-toolbar">
