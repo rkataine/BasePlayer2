@@ -1,31 +1,30 @@
 package org.baseplayer.variant.ui;
 
 import org.baseplayer.MainApp;
-import org.baseplayer.analysis.groupstat.GroupStatExcelExport;
+import org.baseplayer.analysis.manager.AnalysisBusyGate;
+import org.baseplayer.analysis.manager.ExportCoordinator;
+import org.baseplayer.analysis.manager.ModeHost;
+import org.baseplayer.analysis.manager.AnalysisManagerFacade;
+import org.baseplayer.analysis.manager.TableRebuildService;
 import org.baseplayer.components.ColoredToggle;
 import org.baseplayer.controllers.MenuBarController;
 import org.baseplayer.controllers.commands.NavigationCommands;
 import org.baseplayer.draw.GenomicCanvas;
 import org.baseplayer.features.BedTrack;
 import org.baseplayer.features.BedVariantAnnotation;
-import org.baseplayer.io.UserPreferences;
-import org.baseplayer.io.VariantTableExcelWriter;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.io.readers.BedFileReader.BedFeature;
-import org.baseplayer.samples.SampleGroup;
 import org.baseplayer.samples.SampleTrack;
 import org.baseplayer.services.DrawStackManager;
 import org.baseplayer.services.LoadingManager;
 import org.baseplayer.services.SampleRegistry;
 import org.baseplayer.services.ServiceRegistry;
 import org.baseplayer.services.ThreadRunner;
-import org.baseplayer.utils.GeneBiotypeVisibility;
 import org.baseplayer.variant.ComparisonProgress;
 import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantList;
 import org.baseplayer.variant.VariantNode;
-import org.baseplayer.variant.annotation.VariantAnnotation;
 import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.ui.components.ControlFilesPanel;
@@ -39,7 +38,6 @@ import org.baseplayer.variant.ui.components.AbstractNestedVariantTable;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.GeneGroup;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.NestedPanel;
 import org.baseplayer.variant.ui.components.AbstractNestedVariantTable.TableRow;
-import org.baseplayer.variant.ui.components.VariantExcelExportBuilder;
 import org.baseplayer.variant.ui.components.VariantDetailsPanel;
 import org.baseplayer.variant.ui.components.VariantFiltersPanel;
 import org.baseplayer.variant.ui.components.VariantTable;
@@ -56,12 +54,8 @@ import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.paint.Color;
-import javafx.stage.FileChooser;
 import javafx.util.Duration;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.*;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
@@ -79,7 +73,7 @@ import org.kordamp.ikonli.javafx.FontIcon;
  * Controller for the FXML-based Variant Manager dialog.
  * Composes filter/comparison/control/table panels and runs data orchestration.
  */
-public class VariantManagerController implements Initializable {
+public class VariantManagerController implements Initializable, org.baseplayer.analysis.manager.PostLoadTablePort {
 
     private static final String TEXT           = "white";
 
@@ -137,16 +131,19 @@ public class VariantManagerController implements Initializable {
     @FXML private Button refreshComparisonGroupsButton;
     @FXML private RadioButton presentMatchAllRadio, presentMatchAnyRadio;
     @FXML private Button calculateLohButton;
-    private VariantBusyOverlay busyOverlay;
+    private AnalysisBusyGate busyGate;
 
+    /** Point / SV / Signal mode ownership. */
+    private final ModeHost modeHost = new ModeHost();
+    private final ExportCoordinator exportCoordinator = new ExportCoordinator();
     /** Point and SV mode bundles (filters + comparison + control + tools + results). */
     private VariantClassWorkspace pointWorkspace;
     private VariantClassWorkspace svWorkspace;
 
     private TabPane pointToolTabPane;
-    /** Named Signal datasets → mode tab + workspace (peer to Point/SV). */
-    private final Map<String, SignalModeBundle> signalModes = new LinkedHashMap<>();
-    /** Mirrors {@link #activeSignalBundle()} for existing call sites. */
+    /** Named Signal datasets → mode tab + workspace (peer to Point/SV). Shared with {@link #modeHost}. */
+    private final Map<String, ModeHost.SignalModeBundle> signalModes = modeHost.signalModes();
+    /** Mirrors {@link ModeHost#activeSignalBundle()} for existing call sites. */
     private TabPane signalToolTabPane;
     private org.baseplayer.analysis.ui.SignalAnalysisWorkspace signalWorkspace;
     private SampleComparisonPanel signalSampleComparisonPanel;
@@ -388,15 +385,25 @@ public class VariantManagerController implements Initializable {
         pointWorkspace.setControl(controlFilesPanel);
         // Early restore for Point; SV is restored after restructureModeWorkspaces().
         restoreControlFilesFromSession(controlFilesPanel);
+        modeHost.bindChrome(filterTabPane, pointMutationsTab, structuralVariantsTab);
+        modeHost.setPointWorkspace(pointWorkspace);
+        modeHost.setSvWorkspace(svWorkspace);
+        exportCoordinator.bind(
+            () -> stage,
+            this::variantTable,
+            () -> svVariantTable);
 
-        busyOverlay = new VariantBusyOverlay();
-        busyOverlay.install(
-            new VariantBusyOverlay.Nodes(loadingModal, loadingSpinner, loadingStatusLabel));
-        busyOverlay.setLockTargets(
+        busyGate = new AnalysisBusyGate();
+        busyGate.install(
+            new VariantBusyOverlay.Nodes(loadingModal, loadingSpinner, loadingStatusLabel),
             new VariantBusyOverlay.LockTargets(
                 filterTabPane,
                 annotateLockButtons(),
-                reloadBannerButton));
+                reloadBannerButton),
+            () -> stage,
+            () -> disposed);
+        busyGate.setOnThreadRunnerIdle(this::clearStuckBusyFlags);
+        AnalysisManagerFacade.bindBusyGate(busyGate);
 
         initializeVariantTable();
         initializeSvVariantTable();
@@ -454,56 +461,11 @@ public class VariantManagerController implements Initializable {
         installMutationGroupComparisonTabs();
     }
 
-    /** One Analysis outer tab per registered {@link org.baseplayer.analysis.signal.SignalDataset}. */
-    private static final class SignalModeBundle {
-        final String datasetId;
-        final Tab modeTab;
-        final TabPane toolTabPane;
-        final org.baseplayer.analysis.ui.SignalAnalysisWorkspace workspace;
-        SampleComparisonPanel sampleComparisonPanel;
-
-        SignalModeBundle(
-            String datasetId,
-            Tab modeTab,
-            TabPane toolTabPane,
-            org.baseplayer.analysis.ui.SignalAnalysisWorkspace workspace) {
-            this.datasetId = datasetId;
-            this.modeTab = modeTab;
-            this.toolTabPane = toolTabPane;
-            this.workspace = workspace;
-        }
-    }
-
-    private SignalModeBundle activeSignalBundle() {
-        Tab selected = filterTabPane != null
-            ? filterTabPane.getSelectionModel().getSelectedItem()
-            : null;
-        if (selected != null) {
-            for (SignalModeBundle bundle : signalModes.values()) {
-                if (bundle.modeTab == selected) {
-                    return bundle;
-                }
-            }
-        }
-        String activeId = org.baseplayer.analysis.AnalysisSession.get().getActiveSignalDatasetId();
-        if (activeId != null && signalModes.containsKey(activeId)) {
-            return signalModes.get(activeId);
-        }
-        return signalModes.isEmpty() ? null : signalModes.values().iterator().next();
-    }
-
     private void syncActiveSignalPointers() {
-        SignalModeBundle bundle = activeSignalBundle();
-        if (bundle == null) {
-            signalToolTabPane = null;
-            signalWorkspace = null;
-            signalSampleComparisonPanel = null;
-            return;
-        }
-        signalToolTabPane = bundle.toolTabPane;
-        signalWorkspace = bundle.workspace;
-        signalSampleComparisonPanel = bundle.sampleComparisonPanel;
-        bundle.workspace.activateSessionSlice();
+        modeHost.syncActiveSignalPointers();
+        signalToolTabPane = modeHost.signalToolTabPane();
+        signalWorkspace = modeHost.signalWorkspace();
+        signalSampleComparisonPanel = modeHost.signalSampleComparisonPanel();
     }
 
     /**
@@ -579,29 +541,7 @@ public class VariantManagerController implements Initializable {
 
     /** Sync Analysis outer tabs with {@link org.baseplayer.analysis.signal.SignalDatasetRegistry}. */
     public void syncSignalDatasetTabs() {
-        if (filterTabPane == null) {
-            return;
-        }
-        org.baseplayer.analysis.signal.SignalDatasetRegistry registry =
-            org.baseplayer.analysis.signal.SignalDatasetRegistry.get();
-        Set<String> wanted = new LinkedHashSet<>();
-        for (org.baseplayer.analysis.signal.SignalDataset ds : registry.all()) {
-            if (ds == null || ds.isEmpty()) {
-                continue;
-            }
-            wanted.add(ds.getId());
-            ensureSignalDatasetTab(ds);
-        }
-        Iterator<Map.Entry<String, SignalModeBundle>> it = signalModes.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, SignalModeBundle> entry = it.next();
-            if (!wanted.contains(entry.getKey())) {
-                filterTabPane.getTabs().remove(entry.getValue().modeTab);
-                it.remove();
-            }
-        }
-        syncActiveSignalPointers();
-        refreshBusyOverlayLockTargets();
+        modeHost.syncSignalDatasetTabs(this::ensureSignalDatasetTab, this::refreshBusyOverlayLockTargets);
     }
 
     /** Peer mode: named dataset Filters | Group comparison above a Signals results table. */
@@ -609,7 +549,7 @@ public class VariantManagerController implements Initializable {
         if (filterTabPane == null || dataset == null) {
             return;
         }
-        SignalModeBundle existing = signalModes.get(dataset.getId());
+        ModeHost.SignalModeBundle existing = signalModes.get(dataset.getId());
         if (existing != null) {
             if (!dataset.getDisplayName().equals(existing.modeTab.getText())) {
                 existing.modeTab.setText(dataset.getDisplayName());
@@ -689,7 +629,7 @@ public class VariantManagerController implements Initializable {
             closeSignalDatasetTab(dataset.getId());
         });
 
-        SignalModeBundle bundle = new SignalModeBundle(
+        ModeHost.SignalModeBundle bundle = new ModeHost.SignalModeBundle(
             dataset.getId(), modeTab, toolTabs, workspace);
         bundle.sampleComparisonPanel = comparisonPanel;
         signalModes.put(dataset.getId(), bundle);
@@ -716,81 +656,50 @@ public class VariantManagerController implements Initializable {
     }
 
     private void closeSignalDatasetTab(String datasetId) {
-        if (datasetId == null) {
-            return;
-        }
-        SignalModeBundle bundle = signalModes.remove(datasetId);
-        if (bundle != null && filterTabPane != null) {
-            filterTabPane.getTabs().remove(bundle.modeTab);
-        }
-        org.baseplayer.analysis.signal.SignalDatasetRegistry.get().remove(datasetId);
-        org.baseplayer.analysis.AnalysisSession.get().clearSignalSlice(datasetId);
+        modeHost.closeSignalDatasetTab(datasetId, this::refreshBusyOverlayLockTargets);
         syncActiveSignalPointers();
-        refreshBusyOverlayLockTargets();
         updateModeTabVisibility();
     }
 
     private void refreshSignalAllChromosomesButton() {
+        modeHost.refreshSignalAllChromosomesButton();
         syncActiveSignalPointers();
-        if (signalWorkspace == null || signalToolTabPane == null) {
-            return;
-        }
-        Tab tool = signalToolTabPane.getSelectionModel().getSelectedItem();
-        signalWorkspace.setAllChromosomesAction(signalWorkspace.actionForToolTab(tool));
     }
 
     /** Focus the active / first Signal dataset tab. */
     public void selectSignalMode() {
-        selectSignalDataset(org.baseplayer.analysis.AnalysisSession.get().getActiveSignalDatasetId());
+        modeHost.selectSignalMode(this::ensureSignalDatasetTab, this::refreshBusyOverlayLockTargets);
+        syncActiveSignalPointers();
+        updateModeTabVisibility();
     }
 
     /** Focus a specific named Signal dataset tab. */
     public void selectSignalDataset(String datasetId) {
-        if (filterTabPane == null) {
-            return;
-        }
-        syncSignalDatasetTabs();
+        modeHost.selectSignalDataset(
+            datasetId, this::ensureSignalDatasetTab, this::refreshBusyOverlayLockTargets);
+        syncActiveSignalPointers();
         updateModeTabVisibility();
-        SignalModeBundle bundle = datasetId != null ? signalModes.get(datasetId) : null;
-        if (bundle == null) {
-            bundle = activeSignalBundle();
-        }
-        if (bundle != null && filterTabPane.getTabs().contains(bundle.modeTab)) {
-            org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(bundle.datasetId);
-            filterTabPane.getSelectionModel().select(bundle.modeTab);
-            syncActiveSignalPointers();
-            if (bundle.toolTabPane != null && !bundle.toolTabPane.getTabs().isEmpty()) {
-                bundle.toolTabPane.getSelectionModel().select(0);
-            }
-        }
     }
 
     /** Refresh Signal Value kinds after opening BAM companions / tables. */
     public void refreshSignalSources() {
-        org.baseplayer.analysis.signal.SignalDatasetCoordinator.ensureDatasetsForOpenTracks();
-        syncSignalDatasetTabs();
-        updateModeTabVisibility();
+        modeHost.refreshSignalSources(
+            this::ensureSignalDatasetTab,
+            this::refreshBusyOverlayLockTargets,
+            this::updateExcelExportVisibilityFromSignal);
         syncActiveSignalPointers();
-        if (signalWorkspace != null) {
-            signalWorkspace.refreshFromData();
-        }
-        updateExcelExportVisibilityFromSignal();
+        updateModeTabVisibility();
     }
 
     /** Refresh a specific dataset workspace after open. */
     public void refreshSignalDataset(String datasetId) {
-        syncSignalDatasetTabs();
+        modeHost.refreshSignalDataset(
+            datasetId,
+            this::ensureSignalDatasetTab,
+            this::refreshBusyOverlayLockTargets,
+            this::updateExcelExportVisibilityFromSignal);
+        syncActiveSignalPointers();
         updateModeTabVisibility();
-        SignalModeBundle bundle = datasetId != null ? signalModes.get(datasetId) : null;
-        if (bundle != null) {
-            org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(datasetId);
-            filterTabPane.getSelectionModel().select(bundle.modeTab);
-            syncActiveSignalPointers();
-            bundle.workspace.refreshFromData();
-        } else {
-            refreshSignalSources();
-        }
-        updateExcelExportVisibilityFromSignal();
     }
 
     private void updateExcelExportVisibilityFromSignal() {
@@ -808,14 +717,7 @@ public class VariantManagerController implements Initializable {
 
     /** Ordered Point then SV workspaces that have been assembled. */
     private List<VariantClassWorkspace> workspaces() {
-        List<VariantClassWorkspace> list = new ArrayList<>(2);
-        if (pointWorkspace != null) {
-            list.add(pointWorkspace);
-        }
-        if (svWorkspace != null) {
-            list.add(svWorkspace);
-        }
-        return list;
+        return modeHost.workspaces();
     }
 
     /**
@@ -1010,10 +912,10 @@ public class VariantManagerController implements Initializable {
     }
 
     private void refreshBusyOverlayLockTargets() {
-        if (busyOverlay == null) {
+        if (busyGate == null) {
             return;
         }
-        busyOverlay.setLockTargets(
+        busyGate.setLockTargets(
             new VariantBusyOverlay.LockTargets(
                 filterTabPane,
                 annotateLockButtons(),
@@ -1028,7 +930,7 @@ public class VariantManagerController implements Initializable {
         if (svAnnotateAllChromosomesButton != null) {
             buttons.add(svAnnotateAllChromosomesButton);
         }
-        for (SignalModeBundle bundle : signalModes.values()) {
+        for (ModeHost.SignalModeBundle bundle : signalModes.values()) {
             if (bundle.workspace != null && bundle.workspace.getAnnotateAllButton() != null) {
                 buttons.add(bundle.workspace.getAnnotateAllButton());
             }
@@ -1561,14 +1463,15 @@ public class VariantManagerController implements Initializable {
 
     public void cleanup() {
         disposed = true;
+        AnalysisManagerFacade.bindBusyGate(null);
         if (tableSearchDebounceTimer != null) {
             tableSearchDebounceTimer.stop();
         }
         if (svTableSearchDebounceTimer != null) {
             svTableSearchDebounceTimer.stop();
         }
-        ThreadRunner.RunnerTask task = busyOverlay != null
-            ? busyOverlay.getAllChromosomeAnnotationTask()
+        ThreadRunner.RunnerTask task = busyGate != null
+            ? busyGate.getAllChromosomeAnnotationTask()
             : null;
         if (task != null && !task.isCompleted()) {
             task.cancel();
@@ -1590,8 +1493,8 @@ public class VariantManagerController implements Initializable {
             registry.sampleGroupsRevisionProperty().removeListener(sampleGroupsRevisionListener);
             sampleGroupsRevisionListener = null;
         }
-        if (busyOverlay != null) {
-            busyOverlay.cancelDelayedLoadingModal();
+        if (busyGate != null) {
+            busyGate.cancelDelayedLoadingModal();
         }
         // Release table rows / source VariantLists so New Project can GC SV graphs
         // even if the disposed Stage is still briefly reachable.
@@ -1603,8 +1506,8 @@ public class VariantManagerController implements Initializable {
     }
 
     public void clearBatchAnnotationResults() {
-        if (busyOverlay != null) {
-            busyOverlay.setAllChromosomeAnnotationTask(null);
+        if (busyGate != null) {
+            busyGate.setAllChromosomeAnnotationTask(null);
         }
         lastSeenVariantsRevision = -1;
         sourceVariants = null;
@@ -1984,7 +1887,7 @@ public class VariantManagerController implements Initializable {
     }
 
     private boolean isAllChromosomeAnnotationRunning() {
-        return busyOverlay != null && busyOverlay.isAllChromosomeAnnotationRunning();
+        return busyGate != null && busyGate.isAllChromosomeAnnotationRunning();
     }
 
     // ── Table Setup ───────────────────────────────────────────────────────────
@@ -2440,13 +2343,7 @@ public class VariantManagerController implements Initializable {
         button.setGraphic(icon);
         button.setTooltip(new Tooltip(
             "Export to Excel (variant sheets + group comparison tabs when available)"));
-        button.setOnAction(e -> {
-            if (structural) {
-                exportVariantsToExcel(true);
-            } else {
-                exportVariantsToExcel(false);
-            }
-        });
+        button.setOnAction(e -> exportCoordinator.exportVariantsToExcel(structural));
         setExcelExportButtonVisible(button, false);
     }
 
@@ -2460,305 +2357,7 @@ public class VariantManagerController implements Initializable {
 
     @FXML
     private void handleExportExcel() {
-        exportVariantsToExcel(false);
-    }
-
-    private void exportVariantsToExcel(boolean structural) {
-        boolean hasGroupSheets = !GroupStatExcelExport.sheetSourcesFromSession().isEmpty();
-        if (structural) {
-            if ((svVariantTable == null
-                    || svVariantTable.getDisplayedAllRows() == null
-                    || svVariantTable.getDisplayedAllRows().isEmpty())
-                    && !hasGroupSheets) {
-                showExcelInfo("No variants available to export.");
-                return;
-            }
-        } else {
-            VariantTable table = variantTable();
-            if ((table == null
-                    || (isEmpty(table.getDisplayedCodingRows())
-                        && isEmpty(table.getDisplayedIntronicRows())
-                        && isEmpty(table.getDisplayedIntergenicRows())))
-                    && !hasGroupSheets) {
-                showExcelInfo("No variants available to export.");
-                return;
-            }
-        }
-
-        FileChooser chooser = new FileChooser();
-        chooser.setTitle("Export Variants to Excel");
-        chooser.getExtensionFilters().add(
-            new FileChooser.ExtensionFilter("Excel Workbook", "*.xlsx"));
-        chooser.setInitialFileName(structural ? "structural_variants.xlsx" : "variants.xlsx");
-        File lastDir = UserPreferences.getLastDirectory("XLSX");
-        if (lastDir != null) {
-            try {
-                chooser.setInitialDirectory(lastDir);
-            } catch (IllegalArgumentException ignored) {
-                // Directory unavailable; FileChooser uses its default.
-            }
-        }
-
-        // Open heatmaps sit above native dialogs unless lowered. Raise the same
-        // Stage that owns the chooser so Linux does not bury the save dialog.
-        javafx.stage.Window chooserOwner = stage != null ? stage : MainApp.stage;
-        org.baseplayer.analysis.ui.SignalPatternHeatmap.prepareForNativeDialog();
-        org.baseplayer.analysis.ui.SignalPatternHeatmap.raiseWindow(chooserOwner);
-        File chosen;
-        try {
-            chosen = chooser.showSaveDialog(chooserOwner);
-        } finally {
-            org.baseplayer.analysis.ui.SignalPatternHeatmap.restoreAfterNativeDialog(chooserOwner);
-        }
-        if (chosen == null) {
-            return;
-        }
-        File target = chosen.getName().toLowerCase(Locale.ROOT).endsWith(".xlsx")
-            ? chosen
-            : new File(chosen.getParentFile(), chosen.getName() + ".xlsx");
-        UserPreferences.setLastDirectory("XLSX", target);
-
-        // Native FileChooser often leaves no focused Stage on Linux; restore focus
-        // so LoadingPopup's foreground check does not suppress the progress UI.
-        if (stage != null) {
-            stage.requestFocus();
-        } else if (MainApp.stage != null) {
-            MainApp.stage.requestFocus();
-        }
-
-        final Path path = target.toPath();
-        final boolean exportSv = structural;
-        // Next pulse: focus restore applied, then register the export task.
-        Platform.runLater(() -> startExcelExportTask(path, exportSv));
-    }
-
-    private void startExcelExportTask(Path path, boolean exportSv) {
-        final ThreadRunner.RunnerTask[] taskRef = new ThreadRunner.RunnerTask[1];
-        taskRef[0] = ThreadRunner.get().submit(
-            "Exporting to Excel…",
-            () -> {
-                try {
-                    reportExcelProgress(taskRef[0], "Preparing sheets…", 0, 100);
-                    List<VariantTableExcelWriter.SheetSource> sheetsToWrite = exportSv
-                        ? buildSvExcelSheets()
-                        : buildPointExcelSheets();
-                    appendGroupComparisonSheets(sheetsToWrite);
-                    if (sheetsToWrite.isEmpty()) {
-                        return new IOException("No variants available to export.");
-                    }
-                    reportExcelProgress(taskRef[0], "Writing rows…", 5, 100);
-                    VariantTableExcelWriter.write(
-                        path,
-                        sheetsToWrite,
-                        (current, total) -> {
-                            int mapped = 5 + (int) ((current * 90L) / Math.max(1, total));
-                            reportExcelProgress(taskRef[0], null, Math.min(95, mapped), 100);
-                        });
-                    reportExcelProgress(taskRef[0], "Finishing…", 100, 100);
-                    return null;
-                } catch (Exception ex) {
-                    return ex;
-                }
-            },
-            error -> {
-                if (error != null) {
-                    Alert alert = new Alert(Alert.AlertType.ERROR);
-                    alert.setTitle("Export to Excel");
-                    alert.setHeaderText("Failed to write Excel file");
-                    alert.setContentText(error.getMessage() != null ? error.getMessage() : error.toString());
-                    if (stage != null) {
-                        alert.initOwner(stage);
-                    }
-                    alert.showAndWait();
-                }
-            });
-    }
-
-    private static void reportExcelProgress(
-            ThreadRunner.RunnerTask task, String suffix, int current, int total) {
-        if (task != null && suffix != null) {
-            task.setProgressSuffix(suffix);
-            ThreadRunner.get().notifyDescriptionChanged();
-        }
-        LoadingManager.get().setProgress(current, total);
-    }
-
-    private void showExcelInfo(String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle("Export to Excel");
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        if (stage != null) {
-            alert.initOwner(stage);
-        }
-        alert.showAndWait();
-    }
-
-    private static boolean isEmpty(ObservableList<?> rows) {
-        return rows == null || rows.isEmpty();
-    }
-
-    private List<VariantTableExcelWriter.SheetSource> buildPointExcelSheets() {
-        VariantTable table = variantTable();
-        if (table == null) {
-            return List.of();
-        }
-        VariantFilter filter = table.getDisplayFilter();
-        List<VariantTableExcelWriter.SheetSource> sheets = new ArrayList<>();
-        addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
-            "Coding", table.getDisplayedCodingRows(), filter, false));
-        addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
-            "Intronic", table.getDisplayedIntronicRows(), filter, false));
-        addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
-            "Intergenic", table.getDisplayedIntergenicRows(), filter, true));
-
-        // One sheet per sample group (all point categories, samples in that group only).
-        List<TableRow> allPointRows = mergeTableRows(
-            table.getDisplayedCodingRows(),
-            table.getDisplayedIntronicRows(),
-            table.getDisplayedIntergenicRows());
-        addSampleGroupSheets(sheets, allPointRows, filter, false);
-        return sheets;
-    }
-
-    private List<VariantTableExcelWriter.SheetSource> buildSvExcelSheets() {
-        if (svVariantTable == null) {
-            return List.of();
-        }
-        VariantFilter filter = svVariantTable.getDisplayFilter();
-        List<TableRow> rows = svVariantTable.getDisplayedAllRows();
-        List<VariantTableExcelWriter.SheetSource> sheets = new ArrayList<>();
-        addBuiltSheet(sheets, VariantExcelExportBuilder.structuralSheet(
-            "Structural", rows, filter));
-        addSampleGroupSheets(sheets, rows, filter, true);
-        return sheets;
-    }
-
-    /**
-     * Appends one Excel sheet per {@link SampleGroup}, filtered to that group's samples.
-     * Sheet names are unique vs category tabs (Coding / Structural / …).
-     */
-    private void addSampleGroupSheets(
-            List<VariantTableExcelWriter.SheetSource> sheets,
-            List<TableRow> rows,
-            VariantFilter filter,
-            boolean structural) {
-        if (rows == null || rows.isEmpty()) {
-            return;
-        }
-        SampleRegistry registry = ServiceRegistry.getInstance().getSampleRegistry();
-        List<SampleGroup> groups = registry != null ? registry.getSampleGroups() : List.of();
-        if (groups == null || groups.isEmpty()) {
-            return;
-        }
-        java.util.HashSet<String> usedNames = new java.util.HashSet<>();
-        for (VariantTableExcelWriter.SheetSource existing : sheets) {
-            if (existing != null && existing.name() != null) {
-                usedNames.add(existing.name().toLowerCase(Locale.ROOT));
-            }
-        }
-        for (SampleGroup group : groups) {
-            if (group == null) {
-                continue;
-            }
-            String sheetName = uniqueGroupSheetName(group.getName(), usedNames);
-            usedNames.add(sheetName.toLowerCase(Locale.ROOT));
-            var sampleFilter = VariantExcelExportBuilder.sampleInGroup(group);
-            if (structural) {
-                addBuiltSheet(sheets, VariantExcelExportBuilder.structuralSheet(
-                    sheetName, rows, filter, sampleFilter));
-            } else {
-                addBuiltSheet(sheets, VariantExcelExportBuilder.pointSheet(
-                    sheetName, rows, filter, true, sampleFilter));
-            }
-        }
-    }
-
-    private static String uniqueGroupSheetName(String groupName, java.util.Set<String> usedLower) {
-        String base = (groupName != null && !groupName.isBlank()) ? groupName.trim() : "Group";
-        // Avoid colliding with category sheets like "Coding".
-        if (usedLower.contains(base.toLowerCase(Locale.ROOT))) {
-            base = "Group - " + base;
-        }
-        String candidate = base;
-        int n = 2;
-        while (usedLower.contains(candidate.toLowerCase(Locale.ROOT))) {
-            candidate = base + " (" + n + ")";
-            n++;
-        }
-        return candidate;
-    }
-
-    @SafeVarargs
-    private static List<TableRow> mergeTableRows(List<TableRow>... lists) {
-        List<TableRow> merged = new ArrayList<>();
-        if (lists == null) {
-            return merged;
-        }
-        for (List<TableRow> list : lists) {
-            if (list == null || list.isEmpty()) {
-                continue;
-            }
-            merged.addAll(list);
-        }
-        return merged;
-    }
-
-    private static void addBuiltSheet(
-            List<VariantTableExcelWriter.SheetSource> sheets,
-            VariantTableExcelWriter.SheetSource sheet) {
-        if (sheet != null) {
-            sheets.add(sheet);
-        }
-    }
-
-    /** Append group-comparison result tabs (one per analysis mode) into the workbook. */
-    private static void appendGroupComparisonSheets(
-            List<VariantTableExcelWriter.SheetSource> sheets) {
-        if (sheets == null) {
-            return;
-        }
-        java.util.HashSet<String> used = new java.util.HashSet<>();
-        for (VariantTableExcelWriter.SheetSource existing : sheets) {
-            if (existing != null && existing.name() != null) {
-                used.add(existing.name().toLowerCase(Locale.ROOT));
-            }
-        }
-        for (VariantTableExcelWriter.SheetSource sheet : GroupStatExcelExport.sheetSourcesFromSession()) {
-            if (sheet == null) {
-                continue;
-            }
-            String name = sheet.name() != null ? sheet.name() : "Group";
-            String unique = name;
-            int n = 2;
-            while (used.contains(unique.toLowerCase(Locale.ROOT))) {
-                unique = name + " (" + n + ")";
-                n++;
-            }
-            used.add(unique.toLowerCase(Locale.ROOT));
-            final String sheetName = unique;
-            sheets.add(new VariantTableExcelWriter.SheetSource() {
-                @Override
-                public String name() {
-                    return sheetName;
-                }
-
-                @Override
-                public List<String> headers() {
-                    return sheet.headers();
-                }
-
-                @Override
-                public int estimatedRows() {
-                    return sheet.estimatedRows();
-                }
-
-                @Override
-                public void writeRows(java.util.function.Consumer<List<String>> rowConsumer) {
-                    sheet.writeRows(rowConsumer);
-                }
-            });
-        }
+        exportCoordinator.exportVariantsToExcel(false);
     }
 
     @FXML
@@ -2788,7 +2387,7 @@ public class VariantManagerController implements Initializable {
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
                 filterSnapshot,
                 chromosomes,
-                progress -> busyOverlay.updateProgress(progress),
+                progress -> busyGate.updateProgress(progress),
                 result -> {
                     finishAllChromosomeAnnotationResult(result);
                     onDone.run();
@@ -2799,7 +2398,7 @@ public class VariantManagerController implements Initializable {
                 onDone.run();
                 return;
             }
-            ThreadRunner.RunnerTask gate = busyOverlay.getAllChromosomeAnnotationTask();
+            ThreadRunner.RunnerTask gate = busyGate.getAllChromosomeAnnotationTask();
             if (gate != null) {
                 gate.setProgressSuffix(
                     "0/" + chromosomes.size() + " chromosomes, rows: 0");
@@ -2816,7 +2415,7 @@ public class VariantManagerController implements Initializable {
         if (selected == null) {
             return false;
         }
-        for (SignalModeBundle bundle : signalModes.values()) {
+        for (ModeHost.SignalModeBundle bundle : signalModes.values()) {
             if (bundle.modeTab == selected) {
                 return true;
             }
@@ -2847,98 +2446,33 @@ public class VariantManagerController implements Initializable {
                 // Annotate always returns a task when work starts; null = nothing to run.
                 onDone.run();
             } else if (task == null
-                && busyOverlay != null
-                && !busyOverlay.isAllChromosomeAnnotationRunning()) {
+                && busyGate != null
+                && !busyGate.isAllChromosomeAnnotationRunning()) {
                 onDone.run();
-            } else if (busyOverlay != null) {
-                busyOverlay.setStatusMessage(action.buttonText() + "…");
-                busyOverlay.syncBusyOverlay();
+            } else if (busyGate != null) {
+                busyGate.setStatusMessage(action.buttonText() + "…");
+                busyGate.sync();
                 ThreadRunner.get().notifyDescriptionChanged();
             }
         });
     }
 
     /**
-     * Shared busy chrome for Signal / Point / SV long ops: in-window dimmer +
-     * {@link LoadingManager} popup owned by Analysis Manager. Registers a
-     * ThreadRunner gate immediately so the popup appears before nested work
-     * (including sync CompactTableGrid prep) starts.
+     * Shared busy chrome for Signal / Point / SV long ops — delegates to
+     * {@link AnalysisBusyGate}.
      */
     private void runAnalysisBusy(
         String statusMessage,
         java.util.function.Consumer<Runnable> work) {
-        if (busyOverlay == null) {
+        if (busyGate == null) {
             if (work != null) {
                 work.accept(() -> { });
             }
             return;
         }
-        String message = statusMessage != null && !statusMessage.isBlank()
-            ? statusMessage.trim()
-            : "Working…";
-        busyOverlay.cancelDelayedLoadingModal();
-        busyOverlay.setAllChromosomeAnnotationRunning(true);
-        busyOverlay.setStatusMessage(message);
-        busyOverlay.lockFilterControls(true);
-
-        // Keep Analysis Manager foreground so LoadingPopup resolves AM as owner
-        // (WINDOW_MODAL on MainApp looks like the manager was minimized).
-        if (stage != null) {
-            if (stage.isIconified()) {
-                stage.setIconified(false);
-            }
-            stage.toFront();
-        }
-
-        ThreadRunner.RunnerTask gate = ThreadRunner.get().track(
-            message,
-            this::finishAnalysisBusyChrome);
-        busyOverlay.setAllChromosomeAnnotationTask(gate);
-        busyOverlay.syncBusyOverlay();
-
-        Platform.runLater(() -> {
-            if (gate.isCancelled() || gate.isCompleted()) {
-                return;
-            }
-            if (work == null) {
-                completeAnalysisBusy();
-                return;
-            }
-            work.accept(this::completeAnalysisBusy);
-            if (busyOverlay != null) {
-                busyOverlay.syncBusyOverlay();
-            }
-            ThreadRunner.get().notifyDescriptionChanged();
-        });
+        busyGate.run(statusMessage, work);
     }
 
-    private void completeAnalysisBusy() {
-        ThreadRunner.RunnerTask task = busyOverlay != null
-            ? busyOverlay.getAllChromosomeAnnotationTask()
-            : null;
-        if (task != null) {
-            task.setProgressSuffix("");
-            if (!task.isCompleted()) {
-                task.complete();
-            }
-        }
-        finishAnalysisBusyChrome();
-    }
-
-    /** Clear Analysis Manager dimmer / locks (LoadingPopup follows ThreadRunner). */
-    private void finishAnalysisBusyChrome() {
-        if (!Platform.isFxApplicationThread()) {
-            Platform.runLater(this::finishAnalysisBusyChrome);
-            return;
-        }
-        if (busyOverlay != null) {
-            busyOverlay.setAllChromosomeAnnotationRunning(false);
-            busyOverlay.setAllChromosomeAnnotationTask(null);
-            busyOverlay.lockFilterControls(false);
-            busyOverlay.hide();
-        }
-        org.baseplayer.project.ProjectSessionState.get().markDirty();
-    }
 
     private void applyFiltersNow() {
         if (suppressFilterApplyEvents || controlAnnotationRunning) {
@@ -3103,7 +2637,7 @@ public class VariantManagerController implements Initializable {
             ThreadRunner.RunnerTask task = vcfManager.annotateAllReferenceChromosomes(
                 filterSnapshot,
                 cachedChroms,
-                progress -> busyOverlay.updateProgress(progress),
+                progress -> busyGate.updateProgress(progress),
                 result -> {
                     finishAllChromosomeAnnotationResult(result);
                     onDone.run();
@@ -3114,7 +2648,7 @@ public class VariantManagerController implements Initializable {
                 onDone.run();
                 return;
             }
-            ThreadRunner.RunnerTask gate = busyOverlay.getAllChromosomeAnnotationTask();
+            ThreadRunner.RunnerTask gate = busyGate.getAllChromosomeAnnotationTask();
             if (gate != null) {
                 gate.setProgressSuffix(
                     "0/" + cachedChroms.size() + " chromosomes, rows: 0");
@@ -3238,7 +2772,7 @@ public class VariantManagerController implements Initializable {
                     }
                     progress.beginChrom(index, chrom, variants.size());
                     variants.calculateLohRegions(filterSnapshot, progress);
-                    appendLohTableRows(chrom, variants, filterSnapshot, lohAll, lohByType);
+                    TableRebuildService.appendLohTableRows(chrom, variants, filterSnapshot, lohAll, lohByType);
                     progress.finishChrom();
                 }
                 progress.done();
@@ -3367,9 +2901,9 @@ public class VariantManagerController implements Initializable {
             }
         }
         controlAnnotationRunning = true;
-        if (busyOverlay != null) {
-            busyOverlay.cancelDelayedLoadingModal();
-            busyOverlay.lockFilterControls(true);
+        if (busyGate != null) {
+            busyGate.cancelDelayedLoadingModal();
+            busyGate.lockFilterControls(true);
         }
         final java.util.concurrent.atomic.AtomicReference<ThreadRunner.RunnerTask> taskRef =
             new java.util.concurrent.atomic.AtomicReference<>();
@@ -3389,9 +2923,9 @@ public class VariantManagerController implements Initializable {
             result -> {
                 controlAnnotationRunning = false;
                 controlAnnotationTask = null;
-                if (busyOverlay != null) {
-                    busyOverlay.lockFilterControls(false);
-                    busyOverlay.syncBusyOverlay();
+                if (busyGate != null) {
+                    busyGate.lockFilterControls(false);
+                    busyGate.sync();
                 }
                 if (disposed) {
                     return;
@@ -3704,8 +3238,8 @@ public class VariantManagerController implements Initializable {
             // Do not stamp lastSeenVariantsRevision so completion re-enters loadData and
             // refreshes mode tabs (Point|SV) once both classes are present.
             rebuildNeeded = true;
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
+            if (busyGate != null) {
+                busyGate.cancelDelayedLoadingModal();
             }
             return;
         }
@@ -3801,7 +3335,8 @@ public class VariantManagerController implements Initializable {
         if (snapshots.isEmpty() && chrom != null && !chrom.isBlank()) {
             snapshots = List.of(new VcfManager.CachedChromosomeVariants(chrom, list));
         }
-        return buildTableRebuildResult(snapshots, filterSnapshot, false);
+        return TableRebuildService.build(
+            snapshots, filterSnapshot, false, null, null);
     }
 
     /**
@@ -3809,7 +3344,8 @@ public class VariantManagerController implements Initializable {
      * does not start another annotate/table task.
      */
     public void applyPostLoadTables(Object opaqueResult, VariantList list) {
-        if (disposed || opaqueResult == null || !(opaqueResult instanceof TableRebuildResult result)) {
+        if (disposed || opaqueResult == null
+                || !(opaqueResult instanceof TableRebuildService.TableRebuildResult result)) {
             return;
         }
         sourceVariants = list;
@@ -3878,7 +3414,7 @@ public class VariantManagerController implements Initializable {
         org.baseplayer.analysis.AnalysisSession session =
             org.baseplayer.analysis.AnalysisSession.get();
         String previousActive = session.getActiveSignalDatasetId();
-        for (SignalModeBundle bundle : signalModes.values()) {
+        for (ModeHost.SignalModeBundle bundle : signalModes.values()) {
             bundle.workspace.activateSessionSlice();
             session.refilterAnnotationForVisibility();
             org.baseplayer.analysis.groupstat.GroupStatResult signal = session.getAnnotationResult();
@@ -3910,15 +3446,15 @@ public class VariantManagerController implements Initializable {
             filterSnapshot = filter == null ? new VariantFilter() : filter.copy();
         } catch (RuntimeException ex) {
             rebuildNeeded = false;
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
+            if (busyGate != null) {
+                busyGate.cancelDelayedLoadingModal();
             }
             return;
         }
         if (sourceVariantLists == null || sourceVariantLists.isEmpty()) {
             rebuildNeeded = false;
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
+            if (busyGate != null) {
+                busyGate.cancelDelayedLoadingModal();
             }
             return;
         }
@@ -3930,254 +3466,17 @@ public class VariantManagerController implements Initializable {
         // spinner / "Updating tables…" while gene groups are built.
         tableRebuildTask = ThreadRunner.get().submit(
             "Updating tables…",
-            () -> buildTableRebuildResult(snapshots, filterSnapshot, false),
+            () -> TableRebuildService.build(
+                snapshots, filterSnapshot, false, null, null),
             this::finishTableRebuild);
     }
 
-    private TableRebuildResult buildTableRebuildResult(
-        List<VcfManager.CachedChromosomeVariants> snapshots,
-        VariantFilter filterSnapshot,
-        boolean reportProgress) {
-        List<VariantTable.TableRow> coding = new ArrayList<>();
-        List<VariantTable.TableRow> intronic = new ArrayList<>();
-        List<VariantTable.TableRow> intergenic = new ArrayList<>();
-        List<VariantTable.TableRow> svAll = new ArrayList<>();
-        Map<VcfVariantType, List<VariantTable.TableRow>> svByType = new EnumMap<>(VcfVariantType.class);
-        for (VcfVariantType type : SvVariantTable.TYPE_ORDER) {
-            svByType.put(type, new ArrayList<>());
-        }
-        List<VariantTable.TableRow> lohAll = new ArrayList<>();
-        Map<VcfVariantType, List<VariantTable.TableRow>> lohByType = new EnumMap<>(VcfVariantType.class);
-        for (VcfVariantType type : LohVariantTable.TYPE_ORDER) {
-            lohByType.put(type, new ArrayList<>());
-        }
-
-        try {
-            int total = Math.max(1, snapshots.size());
-            String cohort = reportProgress ? filterSnapshot.comparisonCohortSummary() : "";
-            ComparisonProgress progress = reportProgress
-                ? new ComparisonProgress(
-                    total,
-                    cohort,
-                    this::updateTableRebuildProgress,
-                    (cur, tot) -> LoadingManager.get().setProgress(cur, tot))
-                : null;
-
-            int index = 0;
-            for (VcfManager.CachedChromosomeVariants cached : snapshots) {
-                if (Thread.currentThread().isInterrupted()) {
-                    return null;
-                }
-                index++;
-                String sourceChromosome = cached.chromosome();
-                VariantList variants = cached.variants();
-                if (variants == null || variants.isEmpty()) {
-                    if (progress != null) {
-                        progress.beginChrom(index, sourceChromosome, 0);
-                        progress.finishChrom();
-                    }
-                    continue;
-                }
-
-                if (progress != null) {
-                    progress.beginChrom(index, sourceChromosome, variants.size());
-                }
-
-                // Basic visible-chain rebuild only. LOH regions come from Calculate LOH.
-                if (!filterSnapshot.isLohMode()) {
-                    variants.clearLohRegions();
-                }
-                variants.ensureVisibleChain(filterSnapshot);
-
-                if (progress != null) {
-                    progress.setStage("Building tables", 0.98, 1.0);
-                }
-                appendLohTableRows(
-                    sourceChromosome, variants, filterSnapshot, lohAll, lohByType);
-                appendVisibleChainTableRows(
-                    sourceChromosome, variants, filterSnapshot,
-                    coding, intronic, intergenic, svAll, svByType);
-
-                if (progress != null) {
-                    progress.finishChrom();
-                }
-            }
-            if (progress != null) {
-                progress.done();
-            }
-            return new TableRebuildResult(
-                filterSnapshot,
-                coding, intronic, intergenic, svAll, svByType, lohAll, lohByType, reportProgress);
-        } catch (Throwable t) {
-            System.err.println("Variant table rebuild failed: " + t.getMessage());
-            t.printStackTrace();
-            return null;
-        }
-    }
-
-    private static void appendLohTableRows(
-            String sourceChromosome,
-            VariantList variants,
-            VariantFilter filterSnapshot,
-            List<VariantTable.TableRow> lohAll,
-            Map<VcfVariantType, List<VariantTable.TableRow>> lohByType) {
-        for (VariantNode region : variants.getLohRegions()) {
-            if (region == null || !VariantTypeVisuals.isLohRegion(region.type)) {
-                continue;
-            }
-            int passSamples = 0;
-            for (VariantNode.SampleCall call : region.getSamples()) {
-                if (filterSnapshot.passesSampleDisplay(region, call)) {
-                    passSamples++;
-                }
-            }
-            if (passSamples <= 0) {
-                continue;
-            }
-            List<String> genes = List.of();
-            if (region.annotation != null
-                    && region.annotation.overlappingGenes() != null
-                    && !region.annotation.overlappingGenes().isEmpty()) {
-                genes = region.annotation.overlappingGenes();
-            } else if (region.annotation != null
-                    && region.annotation.geneName() != null
-                    && !region.annotation.geneName().isBlank()) {
-                genes = List.of(region.annotation.geneName());
-            }
-            if (genes.isEmpty()) {
-                VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, region);
-                lohAll.add(row);
-                List<VariantTable.TableRow> bucket = lohByType.get(region.type);
-                if (bucket != null) {
-                    bucket.add(row);
-                }
-            } else {
-                GeneBiotypeVisibility biotypes = GeneBiotypeVisibility.get();
-                for (String gene : genes) {
-                    if (gene == null || gene.isBlank()) {
-                        continue;
-                    }
-                    String trimmed = gene.trim();
-                    if (!biotypes.isVisibleGeneName(trimmed)) {
-                        continue;
-                    }
-                    VariantTable.TableRow row = new VariantTable.TableRow(
-                        sourceChromosome, region, List.of(trimmed));
-                    lohAll.add(row);
-                    List<VariantTable.TableRow> bucket = lohByType.get(region.type);
-                    if (bucket != null) {
-                        bucket.add(row);
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Emit table rows from the already-built visible chain (no third full-list filter walk).
-     * Display-eligible samples come from the chain generation display cache when present.
-     */
-    private static void appendVisibleChainTableRows(
-            String sourceChromosome,
-            VariantList variants,
-            VariantFilter filterSnapshot,
-            List<VariantTable.TableRow> coding,
-            List<VariantTable.TableRow> intronic,
-            List<VariantTable.TableRow> intergenic,
-            List<VariantTable.TableRow> svAll,
-            Map<VcfVariantType, List<VariantTable.TableRow>> svByType) {
-        VariantFilter svSlice = filterSnapshot.getSvSlice() != null
-            ? filterSnapshot.getSvSlice()
-            : filterSnapshot;
-        boolean svGeneLevel = svSlice.isGeneLevel();
-        Map<VcfVariantType, Set<String>> passingGenesByType = null;
-        if (svGeneLevel) {
-            passingGenesByType = variants.computePassingGenesByType(svSlice);
-        }
-        GeneBiotypeVisibility biotypes = GeneBiotypeVisibility.get();
-        // Snapshot under the list lock so a concurrent chain rebuild cannot empty the walk.
-        for (VariantNode node : variants.snapshotVisibleNodes(filterSnapshot)) {
-            if (node == null) {
-                continue;
-            }
-            boolean isSv = VariantTypeVisuals.isStructural(node.type);
-            int passSamples = filterSnapshot.countDisplaySamples(node);
-            if (passSamples <= 0) {
-                continue;
-            }
-            if (isSv && svGeneLevel) {
-                Set<String> passing = passingGenesByType != null
-                    ? passingGenesByType.get(node.type)
-                    : null;
-                List<String> displayGenes = VariantList.displayGenesPassing(node, passing);
-                if (displayGenes.isEmpty()) {
-                    continue;
-                }
-                for (String gene : displayGenes) {
-                    if (gene == null || gene.isBlank()) {
-                        continue;
-                    }
-                    String trimmed = gene.trim();
-                    if (!biotypes.isVisibleGeneName(trimmed)) {
-                        continue;
-                    }
-                    VariantTable.TableRow row = new VariantTable.TableRow(
-                        sourceChromosome, node, List.of(trimmed));
-                    svAll.add(row);
-                    List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
-                    if (typeBucket != null) {
-                        typeBucket.add(row);
-                    }
-                }
-                continue;
-            }
-            if (!passesGeneBiotypeVisibility(node, biotypes)) {
-                continue;
-            }
-            VariantTable.TableRow row = new VariantTable.TableRow(sourceChromosome, node);
-            if (isSv) {
-                svAll.add(row);
-                List<VariantTable.TableRow> typeBucket = svByType.get(node.type);
-                if (typeBucket != null) {
-                    typeBucket.add(row);
-                }
-            } else {
-                VariantAnnotation ann = node.annotation;
-                VariantEffect effect = ann != null ? ann.effect() : VariantEffect.INTERGENIC;
-                if (effect.isCoding() || effect.isSpliceSite() || effect.isRegulatory()) {
-                    coding.add(row);
-                } else if (effect.isIntronic()) {
-                    intronic.add(row);
-                } else {
-                    intergenic.add(row);
-                }
-            }
-        }
-    }
-
-    /** Intergenic / no-gene rows stay; gene-annotated rows respect the gene-canvas legend. */
-    private static boolean passesGeneBiotypeVisibility(
-            VariantNode node, GeneBiotypeVisibility biotypes) {
-        if (node == null || biotypes == null) {
-            return true;
-        }
-        VariantAnnotation ann = node.annotation;
-        if (ann == null) {
-            return true;
-        }
-        String geneName = ann.geneName();
-        if (geneName == null || geneName.isBlank()) {
-            return true;
-        }
-        return biotypes.isVisibleGeneName(geneName);
-    }
-
-    private void finishTableRebuild(TableRebuildResult result) {
+    private void finishTableRebuild(TableRebuildService.TableRebuildResult result) {
         if (result == null) {
             tableRebuildTask = null;
             rebuildRunning = false;
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
+            if (busyGate != null) {
+                busyGate.cancelDelayedLoadingModal();
             }
             if (rebuildNeeded && vcfManager != null) {
                 scheduleRebuild(vcfManager.getCurrentFilter());
@@ -4205,8 +3504,8 @@ public class VariantManagerController implements Initializable {
             System.err.println("Variant table apply failed: " + t.getMessage());
             t.printStackTrace();
         } finally {
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
+            if (busyGate != null) {
+                busyGate.cancelDelayedLoadingModal();
             }
             if (rebuildNeeded && vcfManager != null) {
                 scheduleRebuild(vcfManager.getCurrentFilter());
@@ -4218,7 +3517,7 @@ public class VariantManagerController implements Initializable {
      * Second loading-modal phase after comparison: prebuild {@link GeneGroup}s off FX,
      * bind them with a light FX apply, then defer canvas redraw so the popup never freezes.
      */
-    private void finishTableRebuildHeavy(TableRebuildResult result) {
+    private void finishTableRebuildHeavy(TableRebuildService.TableRebuildResult result) {
         // Prebuild unfiltered groups; selected-tab search is re-applied after bind.
         tableRebuildTask = ThreadRunner.get().submit(
             "Updating tables…",
@@ -4260,8 +3559,8 @@ public class VariantManagerController implements Initializable {
                 System.err.println("Canvas redraw after comparison failed: " + t.getMessage());
                 t.printStackTrace();
             }
-            if (busyOverlay != null) {
-                busyOverlay.cancelDelayedLoadingModal();
+            if (busyGate != null) {
+                busyGate.cancelDelayedLoadingModal();
             }
             if (rebuildNeeded && vcfManager != null) {
                 scheduleRebuild(vcfManager.getCurrentFilter());
@@ -4270,7 +3569,7 @@ public class VariantManagerController implements Initializable {
     }
 
     private PrebuiltTableUi buildPrebuiltTableUi(
-            TableRebuildResult result,
+            TableRebuildService.TableRebuildResult result,
             String pointSearch,
             String svSearch,
             String lohSearch) {
@@ -4397,7 +3696,8 @@ public class VariantManagerController implements Initializable {
      * FX-thread bind of row lists + optional prebuilt gene groups.
      * When {@code prebuilt} is null, falls back to {@code setItems} (builds groups on FX).
      */
-    private void applyTableRebuildResultLight(TableRebuildResult result, PrebuiltTableUi prebuilt) {
+    private void applyTableRebuildResultLight(
+            TableRebuildService.TableRebuildResult result, PrebuiltTableUi prebuilt) {
         VariantFilter filterSnapshot = result.filter();
 
         variantTable().setDisplayContext(filterSnapshot);
@@ -4583,17 +3883,6 @@ public class VariantManagerController implements Initializable {
         }
     }
 
-    private record TableRebuildResult(
-        VariantFilter filter,
-        List<VariantTable.TableRow> coding,
-        List<VariantTable.TableRow> intronic,
-        List<VariantTable.TableRow> intergenic,
-        List<VariantTable.TableRow> svAll,
-        Map<VcfVariantType, List<VariantTable.TableRow>> svByType,
-        List<VariantTable.TableRow> lohAll,
-        Map<VcfVariantType, List<VariantTable.TableRow>> lohByType,
-        boolean redrawCanvases) {}
-
     private boolean isCurrentChromosomeStillLoading() {
         return chromosome != null && !chromosome.isBlank() && vcfManager.isLoadingChromosome(chromosome);
     }
@@ -4682,46 +3971,50 @@ public class VariantManagerController implements Initializable {
         loadData();
     }
 
-    public void syncBusyOverlay() {
-        // LoadingPopup Cancel uses ThreadRunner.cancelAll() directly (skips onSuccess),
-        // which would otherwise leave rebuildRunning stuck true forever.
-        if (rebuildRunning && ThreadRunner.get().getActiveTasks().isEmpty()) {
+    /** Clear stuck rebuild/control flags when ThreadRunner is idle after Cancel. */
+    private void clearStuckBusyFlags() {
+        if (rebuildRunning) {
             ThreadRunner.RunnerTask t = tableRebuildTask;
             if (t == null || t.isCompleted() || t.isCancelled()) {
                 tableRebuildTask = null;
                 rebuildRunning = false;
             }
         }
-        if (controlAnnotationRunning && ThreadRunner.get().getActiveTasks().isEmpty()) {
+        if (controlAnnotationRunning) {
             ThreadRunner.RunnerTask t = controlAnnotationTask;
             if (t == null || t.isCompleted() || t.isCancelled()) {
                 controlAnnotationTask = null;
                 controlAnnotationRunning = false;
             }
         }
-        if (busyOverlay != null) {
-            busyOverlay.syncBusyOverlay();
+    }
+
+    public void syncBusyOverlay() {
+        if (busyGate != null) {
+            busyGate.sync();
+        } else {
+            clearStuckBusyFlags();
         }
     }
 
-    /** Dimmer + spinner + status on the Variant Manager (shared region-load phases). */
+    /** Dimmer + spinner + status on Analysis (shared region-load phases). */
     public void setBusyStatus(String status) {
-        if (busyOverlay != null) {
-            busyOverlay.setStatusMessage(status);
-            busyOverlay.show();
+        if (busyGate != null) {
+            busyGate.setStatus(status);
         }
     }
 
-    /** Dimmer + spinner + "Annotating" on the Variant Manager. */
+    /** Dimmer + spinner + "Annotating" on Analysis. */
     public void showAnnotatingOverlay() {
-        setBusyStatus("Annotating");
+        if (busyGate != null) {
+            busyGate.showAnnotating();
+        }
     }
 
     /** Clear status chrome; dimmer follows ThreadRunner via {@link #syncBusyOverlay()}. */
     public void clearAnnotatingOverlay() {
-        if (busyOverlay != null) {
-            busyOverlay.clearStatusMessage();
-            busyOverlay.syncBusyOverlay();
+        if (busyGate != null) {
+            busyGate.clearStatus();
         }
     }
 
@@ -4742,43 +4035,12 @@ public class VariantManagerController implements Initializable {
         if (vcfManager != null) {
             universe.addAll(vcfManager.getSessionAvailableTypes());
         }
-
-        boolean hasPoint = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.POINT);
-        boolean hasSv = VariantTypeVisuals.hasClass(universe, VariantTypeVisuals.VariantClass.STRUCTURAL);
-        boolean hasSignalDatasets =
-            !org.baseplayer.analysis.signal.SignalDatasetRegistry.get().isEmpty();
-        boolean hasSignal = hasSignalDatasets || org.baseplayer.analysis.manager.AnalysisManagerFacade.hasComparableSignalData();
-        // Only invent Point/SV tabs when nothing comparable is open yet (pre-load config).
-        // Signal-only sessions must not show empty mutation tabs.
-        if (!hasPoint && !hasSv && !hasSignal) {
-            hasPoint = true;
-            hasSv = true;
-        }
-
-        boolean both = hasPoint && hasSv;
-        setTabVisible(pointMutationsTab, hasPoint);
-        setTabVisible(structuralVariantsTab, hasSv);
         syncSignalDatasetTabs();
-        VariantFilter current = vcfManager != null ? vcfManager.getCurrentFilter() : null;
-        updateLohTabVisibility(current, false);
-        // Keep mode chrome when Signal is present (Point|SV|named datasets) even if only one VCF class.
-        int modeCount = filterTabPane.getTabs().size();
-        applyModeChrome(both || modeCount > 1);
-
-        // Leave selection alone unless it points at a hidden/removed tab.
-        Tab selected = filterTabPane.getSelectionModel().getSelectedItem();
-        boolean selectedInvalid = selected == null || !filterTabPane.getTabs().contains(selected);
-        if (selectedInvalid) {
-            SignalModeBundle signal = activeSignalBundle();
-            if (signal != null && filterTabPane.getTabs().contains(signal.modeTab)) {
-                filterTabPane.getSelectionModel().select(signal.modeTab);
-            } else if (pointMutationsTab != null && filterTabPane.getTabs().contains(pointMutationsTab)) {
-                filterTabPane.getSelectionModel().select(pointMutationsTab);
-            } else if (structuralVariantsTab != null
-                && filterTabPane.getTabs().contains(structuralVariantsTab)) {
-                filterTabPane.getSelectionModel().select(structuralVariantsTab);
-            }
-        }
+        modeHost.updateModeTabVisibility(
+            vcfManager,
+            universe,
+            filter -> updateLohTabVisibility(filter, false));
+        syncActiveSignalPointers();
     }
 
     /**
@@ -4977,53 +4239,6 @@ public class VariantManagerController implements Initializable {
         return types;
     }
 
-    /** When only one class is present, hide the outer Point|SV tab header. */
-    private void applyModeChrome(boolean showModeTabs) {
-        if (filterTabPane == null) {
-            return;
-        }
-        filterTabPane.getStyleClass().remove("single-mode");
-        if (!showModeTabs) {
-            filterTabPane.getStyleClass().add("single-mode");
-            // Collapse header (Variant Manager may not apply CSS-only hide reliably).
-            filterTabPane.setTabMinHeight(0);
-            filterTabPane.setTabMaxHeight(0);
-        } else {
-            // USE_COMPUTED_SIZE alone often fails to undo a prior 0 max-height in JavaFX.
-            filterTabPane.setTabMinHeight(Region.USE_COMPUTED_SIZE);
-            filterTabPane.setTabMaxHeight(Double.MAX_VALUE);
-            filterTabPane.applyCss();
-            filterTabPane.requestLayout();
-        }
-    }
-
-    private void setTabVisible(Tab tab, boolean visible) {
-        if (tab == null || filterTabPane == null) {
-            return;
-        }
-        if (visible) {
-            if (!filterTabPane.getTabs().contains(tab)) {
-                // Order: Point, SV, then named Signal datasets (last).
-                int index = 0;
-                boolean isSignalTab = false;
-                for (SignalModeBundle bundle : signalModes.values()) {
-                    if (bundle.modeTab == tab) {
-                        isSignalTab = true;
-                        break;
-                    }
-                }
-                if (isSignalTab) {
-                    index = filterTabPane.getTabs().size();
-                } else if (tab == structuralVariantsTab && pointMutationsTab != null
-                    && filterTabPane.getTabs().contains(pointMutationsTab)) {
-                    index = filterTabPane.getTabs().indexOf(pointMutationsTab) + 1;
-                }
-                filterTabPane.getTabs().add(Math.min(index, filterTabPane.getTabs().size()), tab);
-            }
-        } else {
-            filterTabPane.getTabs().remove(tab);
-        }
-    }
 
     private void clearTableItemsForChromosomeSwitch() {
         setTableItems(

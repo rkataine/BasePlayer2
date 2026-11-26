@@ -162,10 +162,10 @@ public final class LoadingManager {
         popup.ensureVisibleOver(owner);
       }
     }
-    org.baseplayer.variant.ui.VariantManagerController controller =
-        org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
-    if (controller != null) {
-      controller.syncBusyOverlay();
+    org.baseplayer.analysis.manager.AnalysisBusyGate gate =
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.getBusyGate();
+    if (gate != null) {
+      gate.sync();
     }
   }
 
@@ -175,14 +175,12 @@ public final class LoadingManager {
    * the popup is not orphaned on a non-showing owner.
    */
   private static Window resolveOwnerWindow() {
-    org.baseplayer.variant.ui.VariantManagerController controller =
-        org.baseplayer.analysis.manager.AnalysisManagerFacade.getController();
-    if (controller != null) {
-      Window vm = controller.getStage();
-      if (vm instanceof javafx.stage.Stage stage
-          && stage.isShowing()
-          && !stage.isIconified()) {
-        return stage;
+    org.baseplayer.analysis.manager.AnalysisBusyGate gate =
+        org.baseplayer.analysis.manager.AnalysisManagerFacade.getBusyGate();
+    if (gate != null) {
+      Window owner = gate.resolveOwnerWindow();
+      if (owner != null) {
+        return owner;
       }
     }
     if (MainApp.stage != null && MainApp.stage.isShowing()) {

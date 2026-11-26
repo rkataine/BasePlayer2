@@ -44,8 +44,8 @@ import org.baseplayer.variant.VcfVariantType;
 import org.baseplayer.variant.annotation.VariantEffect;
 import org.baseplayer.variant.annotation.VariantAnnotator;
 import org.baseplayer.variant.annotation.TranscriptCdsCache;
-import org.baseplayer.variant.ui.VariantManagerController;
 import org.baseplayer.analysis.manager.AnalysisManagerFacade;
+import org.baseplayer.analysis.manager.PostLoadTablePort;
 import org.baseplayer.utils.ChromosomeNames;
 
 import javafx.application.Platform;
@@ -681,10 +681,9 @@ public class VcfManager {
                         ? currentFilter.copy()
                         : loadFilterSnapshot.copy();
                     Object tablePayload = null;
-                    VariantManagerController controller =
-                        AnalysisManagerFacade.getController();
-                    if (controller != null) {
-                        tablePayload = controller.buildPostLoadTablesOnWorker(
+                    PostLoadTablePort tables = AnalysisManagerFacade.getPostLoadTables();
+                    if (tables != null) {
+                        tablePayload = tables.buildPostLoadTablesOnWorker(
                             result, targetChromosome, tableFilter, activeChromosomeLoadTask);
                     }
 
@@ -768,14 +767,14 @@ public class VcfManager {
                 calculateDensityOnAllCanvases();
                 variantsRevision.incrementAndGet();
 
-                VariantManagerController controller = AnalysisManagerFacade.getController();
-                if (!admittedCopy.isEmpty() && controller != null && currentFilter != null) {
-                    controller.loadFilterState(currentFilter);
+                if (!admittedCopy.isEmpty() && currentFilter != null) {
+                    AnalysisManagerFacade.loadFilterState(currentFilter);
                 }
                 // Apply prebuilt tables before the global update so loadData does not
                 // start a second annotate/table ThreadRunner task.
-                if (controller != null && outcome.tablePayload() != null) {
-                    controller.applyPostLoadTables(outcome.tablePayload(), result);
+                PostLoadTablePort tables = AnalysisManagerFacade.getPostLoadTables();
+                if (tables != null && outcome.tablePayload() != null) {
+                    tables.applyPostLoadTables(outcome.tablePayload(), result);
                 }
 
                 GenomicCanvas.update.set(!GenomicCanvas.update.get());
@@ -785,7 +784,7 @@ public class VcfManager {
             });
     }
 
-    /** Outcome of a region load: variants plus optional prebuilt Variant Manager tables. */
+    /** Outcome of a region load: variants plus optional prebuilt Analysis tables. */
     private record RegionLoadOutcome(VariantList variants, Object tablePayload) {}
 
     private void markVcfRegionFetched(
@@ -799,11 +798,7 @@ public class VcfManager {
     }
 
     private void syncCurrentFilterFromOpenVariantManager() {
-        VariantManagerController controller = AnalysisManagerFacade.getController();
-        if (controller == null) {
-            return;
-        }
-        VariantFilter fromUi = controller.snapshotUiFilter();
+        VariantFilter fromUi = AnalysisManagerFacade.snapshotUiFilter();
         if (fromUi != null) {
             this.currentFilter = fromUi;
         }
@@ -2137,7 +2132,7 @@ public class VcfManager {
 
     /**
      * Advance status on the shared region-load ThreadRunner task (LoadingPopup +
-     * Variant Manager overlay) without ending the task between phases.
+     * Analysis overlay) without ending the task between phases.
      */
     private static void updateVariantLoadPhase(ThreadRunner.RunnerTask task, String status) {
         if (status == null || status.isBlank()) {
@@ -2147,12 +2142,7 @@ public class VcfManager {
             task.setProgressSuffix("— " + status);
             ThreadRunner.get().notifyDescriptionChanged();
         }
-        Platform.runLater(() -> {
-            VariantManagerController controller = AnalysisManagerFacade.getController();
-            if (controller != null) {
-                controller.setBusyStatus(status);
-            }
-        });
+        Platform.runLater(() -> AnalysisManagerFacade.setBusyStatus(status));
     }
 
     /** Returns true if variants for this chromosome have already been annotated. */

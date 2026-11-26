@@ -2,6 +2,7 @@ package org.baseplayer.analysis.manager;
 
 import javafx.stage.Window;
 import org.baseplayer.io.VcfManager;
+import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.ui.VariantManagerController;
 import org.baseplayer.variant.ui.VariantManagerWindow;
 
@@ -13,7 +14,18 @@ import org.baseplayer.variant.ui.VariantManagerWindow;
  * Prefer this class over calling those types directly.
  */
 public final class AnalysisManagerFacade {
+    private static volatile AnalysisBusyGate busyGate;
+
     private AnalysisManagerFacade() {}
+
+    /** Bind the live busy gate from the shell (cleared on dispose). */
+    public static void bindBusyGate(AnalysisBusyGate gate) {
+        busyGate = gate;
+    }
+
+    public static AnalysisBusyGate getBusyGate() {
+        return busyGate;
+    }
 
     public static void open(Window owner, VcfManager vcfManager, Runnable onClose) {
         VariantManagerWindow.openVariantManager(owner, vcfManager, onClose);
@@ -33,6 +45,33 @@ public final class AnalysisManagerFacade {
 
     public static VariantManagerController getController() {
         return VariantManagerWindow.getCurrentController();
+    }
+
+    /**
+     * Post-load table build/apply port for {@link VcfManager}.
+     * {@code null} when Analysis is not open.
+     */
+    public static PostLoadTablePort getPostLoadTables() {
+        return VariantManagerWindow.getCurrentController();
+    }
+
+    public static void setBusyStatus(String status) {
+        AnalysisBusyGate gate = busyGate;
+        if (gate != null) {
+            gate.setStatus(status);
+        }
+    }
+
+    public static void loadFilterState(VariantFilter filter) {
+        VariantManagerController controller = getController();
+        if (controller != null && filter != null) {
+            controller.loadFilterState(filter);
+        }
+    }
+
+    public static VariantFilter snapshotUiFilter() {
+        VariantManagerController controller = getController();
+        return controller != null ? controller.snapshotUiFilter() : null;
     }
 
     public static void notifySampleDataChanged() {
