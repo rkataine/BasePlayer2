@@ -1,34 +1,79 @@
 package org.baseplayer.analysis.manager;
 
 import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
+import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
+import org.baseplayer.analysis.AnalysisMode;
 import org.baseplayer.analysis.signal.SignalDataset;
-import org.baseplayer.analysis.signal.SignalDatasetCoordinator;
 import org.baseplayer.analysis.signal.SignalDatasetRegistry;
+import org.baseplayer.analysis.ui.MutationEnrichmentPanel;
 import org.baseplayer.analysis.ui.SignalAnalysisWorkspace;
 import org.baseplayer.io.VcfManager;
 import org.baseplayer.variant.VariantFilter;
 import org.baseplayer.variant.VariantTypeVisuals;
 import org.baseplayer.variant.VcfVariantType;
+import org.baseplayer.variant.annotation.VariantEffect;
+import org.baseplayer.variant.ui.components.ControlFilesPanel;
 import org.baseplayer.variant.ui.components.SampleComparisonPanel;
+import org.baseplayer.variant.ui.components.VariantBusyOverlay;
 import org.baseplayer.variant.ui.components.VariantClassWorkspace;
+import org.baseplayer.variant.ui.components.VariantFiltersPanel;
 
+import javafx.scene.Node;
+import javafx.scene.control.Button;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+import javafx.util.Pair;
 
 /**
- * Owns Point / SV / Signal mode tab lifecycle for Analysis Manager.
- * Panel install and one-shot FXML nesting stay in the shell controller.
+ * Owns Point / SV / Signal mode chrome for Analysis Manager: outer mode tabs, per-mode
+ * tool-tab + results splits, Group comparison tabs, and Signal dataset tabs.
+ * <p>
+ * The shell supplies FXML nodes ({@link Nodes}) and callbacks ({@link Callbacks}); ModeHost
+ * assembles the mode UI and calls back for busy runs, filter apply, Excel visibility, etc.
  */
 public final class ModeHost {
+
+    /** FXML nodes the shell hands over once, after injection. */
+    public record Nodes(
+            TabPane filterTabPane,
+            Tab pointMutationsTab,
+            Tab structuralVariantsTab,
+            Tab lohRegionsTab,
+            SplitPane pointMainSplitPane,
+            SplitPane svMainSplitPane,
+            VBox svFiltersHost,
+            TabPane resultsTabPane,
+            TabPane svResultsTabPane,
+            Button pointAnnotateAllButton,
+            Button svAnnotateAllButton,
+            Button reloadBannerButton) {}
+
+    /** Shell behaviour ModeHost triggers but does not own. */
+    public record Callbacks(
+            BooleanSupplier suppressFilterEvents,
+            Runnable scheduleFilterUpdate,
+            Runnable scheduleImmediateFilterApply,
+            Runnable scheduleSignalComparison,
+            Runnable scheduleImmediateSignalComparison,
+            Runnable calculateLoh,
+            Runnable annotateAll,
+            Runnable reloadFiltered,
+            Consumer<ControlFilesPanel> wireControlPanel,
+            Runnable controlPanelsReady,
+            Runnable excelVisibilityFromSignal,
+            Runnable updateModeTabVisibility) {}
+
+    /** Group comparison tool tab + results tab + panel for one Point/SV mode. */
+    public record GroupComparison(MutationEnrichmentPanel panel, Tab toolTab, Tab resultsTab) {}
 
     /** One Analysis outer tab per registered {@link SignalDataset}. */
     public static final class SignalModeBundle {
@@ -52,21 +97,33 @@ public final class ModeHost {
 
     private VariantClassWorkspace pointWorkspace;
     private VariantClassWorkspace svWorkspace;
-    private final Map<String, SignalModeBundle> signalModes = new LinkedHashMap<>();
+
+    private Nodes nodes;
+    private Callbacks cb;
+    private AnalysisBusyGate busy;
 
     private TabPane filterTabPane;
     private Tab pointMutationsTab;
     private Tab structuralVariantsTab;
+    private TabPane resultsTabPane;
+    private TabPane pointToolTabPane;
+    private TabPane svToolTabPane;
+    private GroupComparison pointGroup;
+    private GroupComparison svGroup;
 
-    /** Mirrors {@link #activeSignalBundle()} for existing call sites. */
-    private TabPane signalToolTabPane;
-    private SignalAnalysisWorkspace signalWorkspace;
-    private SampleComparisonPanel signalSampleComparisonPanel;
+    private SignalModeTabs signal;
 
-    public void bindChrome(TabPane filterTabPane, Tab pointMutationsTab, Tab structuralVariantsTab) {
-        this.filterTabPane = filterTabPane;
-        this.pointMutationsTab = pointMutationsTab;
-        this.structuralVariantsTab = structuralVariantsTab;
+    // ── Binding ───────────────────────────────────────────────────────────────
+
+    public void bind(Nodes nodes, Callbacks callbacks, AnalysisBusyGate busy) {
+        this.nodes = nodes;
+        this.cb = callbacks;
+        this.busy = busy;
+        this.filterTabPane = nodes.filterTabPane();
+        this.pointMutationsTab = nodes.pointMutationsTab();
+        this.structuralVariantsTab = nodes.structuralVariantsTab();
+        this.resultsTabPane = nodes.resultsTabPane();
+        this.signal = new SignalModeTabs(filterTabPane, callbacks, busy, this::refreshBusyLockTargets);
     }
 
     public void setPointWorkspace(VariantClassWorkspace workspace) {
@@ -85,20 +142,36 @@ public final class ModeHost {
         return svWorkspace;
     }
 
-    public Map<String, SignalModeBundle> signalModes() {
-        return signalModes;
+    public TabPane pointToolTabPane() {
+        return pointToolTabPane;
+    }
+
+    public TabPane svToolTabPane() {
+        return svToolTabPane;
+    }
+
+    public MutationEnrichmentPanel pointEnrichmentPanel() {
+        return pointGroup != null ? pointGroup.panel() : null;
+    }
+
+    public MutationEnrichmentPanel svEnrichmentPanel() {
+        return svGroup != null ? svGroup.panel() : null;
+    }
+
+    public Tab pointGroupResultsTab() {
+        return pointGroup != null ? pointGroup.resultsTab() : null;
+    }
+
+    public Tab svGroupResultsTab() {
+        return svGroup != null ? svGroup.resultsTab() : null;
     }
 
     public TabPane signalToolTabPane() {
-        return signalToolTabPane;
+        return signal.signalToolTabPane();
     }
 
     public SignalAnalysisWorkspace signalWorkspace() {
-        return signalWorkspace;
-    }
-
-    public SampleComparisonPanel signalSampleComparisonPanel() {
-        return signalSampleComparisonPanel;
+        return signal.signalWorkspace();
     }
 
     public List<VariantClassWorkspace> workspaces() {
@@ -112,166 +185,349 @@ public final class ModeHost {
         return list;
     }
 
-    public SignalModeBundle activeSignalBundle() {
-        Tab selected = filterTabPane != null
-            ? filterTabPane.getSelectionModel().getSelectedItem()
-            : null;
-        if (selected != null) {
-            for (SignalModeBundle bundle : signalModes.values()) {
-                if (bundle.modeTab == selected) {
-                    return bundle;
-                }
-            }
-        }
-        String activeId = org.baseplayer.analysis.AnalysisSession.get().getActiveSignalDatasetId();
-        if (activeId != null && signalModes.containsKey(activeId)) {
-            return signalModes.get(activeId);
-        }
-        return signalModes.isEmpty() ? null : signalModes.values().iterator().next();
+    // ── Filter snapshot / type population ─────────────────────────────────────
+
+    public VariantFilter buildFilterFromUI() {
+        // Unobserved class panels write empty allowedTypes. Load paths expand via
+        // ensureUnobservedClassSlicesPassAll so a later VCF of that class is not blocked.
+        // Legends / checkboxes use session observed types only — never invent here.
+        VariantFilter point = pointWorkspace != null
+            ? pointWorkspace.writeSlice()
+            : emptyUnobservedSlice(VariantTypeVisuals.VariantClass.POINT);
+        VariantFilter sv = svWorkspace != null
+            ? svWorkspace.writeSlice()
+            : emptyUnobservedSlice(VariantTypeVisuals.VariantClass.STRUCTURAL);
+
+        VariantFilter merged = new VariantFilter();
+        merged.setClassSlices(point, sv);
+        return merged;
     }
 
-    public void syncActiveSignalPointers() {
-        SignalModeBundle bundle = activeSignalBundle();
-        if (bundle == null) {
-            signalToolTabPane = null;
-            signalWorkspace = null;
-            signalSampleComparisonPanel = null;
-            return;
+    private static VariantFilter emptyUnobservedSlice(VariantTypeVisuals.VariantClass mode) {
+        VariantFilter slice = new VariantFilter();
+        slice.setAllowedTypes(EnumSet.noneOf(VcfVariantType.class));
+        if (mode == VariantTypeVisuals.VariantClass.STRUCTURAL) {
+            slice.setAllowedEffects(EnumSet.allOf(VariantEffect.class));
         }
-        signalToolTabPane = bundle.toolTabPane;
-        signalWorkspace = bundle.workspace;
-        signalSampleComparisonPanel = bundle.sampleComparisonPanel;
-        bundle.workspace.activateSessionSlice();
+        return slice;
     }
 
     /**
-     * Sync Analysis outer tabs with {@link SignalDatasetRegistry}.
-     *
-     * @param ensureTab creates a missing dataset tab (shell owns panel wiring)
-     * @param afterChange e.g. refresh busy-overlay lock targets
+     * Populate type/effect checkboxes from {@code typeFilter}'s class slices and optionally
+     * capture the load-time snapshot used for the "Reload needed" banner.
      */
-    public void syncSignalDatasetTabs(
-            Consumer<SignalDataset> ensureTab,
-            Runnable afterChange) {
-        if (filterTabPane == null) {
-            return;
-        }
-        SignalDatasetRegistry registry = SignalDatasetRegistry.get();
-        Set<String> wanted = new LinkedHashSet<>();
-        for (SignalDataset ds : registry.all()) {
-            if (ds == null || ds.isEmpty()) {
-                continue;
-            }
-            wanted.add(ds.getId());
-            if (ensureTab != null) {
-                ensureTab.accept(ds);
-            }
-        }
-        Iterator<Map.Entry<String, SignalModeBundle>> it = signalModes.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, SignalModeBundle> entry = it.next();
-            if (!wanted.contains(entry.getKey())) {
-                filterTabPane.getTabs().remove(entry.getValue().modeTab);
-                it.remove();
+    public void syncWorkspaceTypesFromFilter(
+            List<VcfManager.CachedChromosomeVariants> sources,
+            VariantFilter typeFilter,
+            boolean captureSnapshot) {
+        VariantFilter pointSnap = typeFilter != null && typeFilter.getPointSlice() != null
+            ? typeFilter.getPointSlice()
+            : typeFilter;
+        VariantFilter svSnap = typeFilter != null && typeFilter.getSvSlice() != null
+            ? typeFilter.getSvSlice()
+            : typeFilter;
+        if (pointWorkspace != null) {
+            pointWorkspace.populateTypes(sources, pointSnap);
+            if (captureSnapshot) {
+                pointWorkspace.captureFilterSnapshot(pointSnap);
             }
         }
-        syncActiveSignalPointers();
-        if (afterChange != null) {
-            afterChange.run();
+        if (svWorkspace != null) {
+            svWorkspace.populateTypes(sources, svSnap);
+            if (captureSnapshot) {
+                svWorkspace.captureFilterSnapshot(svSnap);
+            }
         }
     }
 
-    public void closeSignalDatasetTab(String datasetId, Runnable afterChange) {
-        if (datasetId == null) {
+    // ── Busy lock targets ─────────────────────────────────────────────────────
+
+    public VariantBusyOverlay.LockTargets lockTargets() {
+        List<Button> buttons = new ArrayList<>();
+        if (nodes.pointAnnotateAllButton() != null) {
+            buttons.add(nodes.pointAnnotateAllButton());
+        }
+        if (nodes.svAnnotateAllButton() != null) {
+            buttons.add(nodes.svAnnotateAllButton());
+        }
+        for (SignalModeBundle bundle : signal.signalModes().values()) {
+            if (bundle.workspace != null && bundle.workspace.getAnnotateAllButton() != null) {
+                buttons.add(bundle.workspace.getAnnotateAllButton());
+            }
+        }
+        return new VariantBusyOverlay.LockTargets(
+            filterTabPane, buttons, nodes.reloadBannerButton());
+    }
+
+    private void refreshBusyLockTargets() {
+        busy.setLockTargets(lockTargets());
+    }
+
+    // ── One-shot assembly (shell calls from initialize) ───────────────────────
+
+    /**
+     * Nest Filters / Sample Comparison / Control under each mode workspace; outer
+     * {@link #filterTabPane} becomes Point | SV (Signal tabs are added afterward).
+     */
+    public void restructureWorkspaces() {
+        if (filterTabPane == null
+                || nodes.pointMainSplitPane() == null
+                || nodes.svMainSplitPane() == null) {
             return;
         }
-        SignalModeBundle bundle = signalModes.remove(datasetId);
-        if (bundle != null && filterTabPane != null) {
-            filterTabPane.getTabs().remove(bundle.modeTab);
+        SplitPane pointSplit = nodes.pointMainSplitPane();
+        SplitPane svSplit = nodes.svMainSplitPane();
+
+        // Capture shared sibling tabs before removing them from the mode pane.
+        Tab comparisonTab = ModeSplitChrome.findTabByText(filterTabPane, "Sample Comparison");
+        Tab controlTab = ModeSplitChrome.findTabByText(filterTabPane, "Control Files");
+        if (comparisonTab != null) {
+            filterTabPane.getTabs().remove(comparisonTab);
         }
-        SignalDatasetRegistry.get().remove(datasetId);
-        org.baseplayer.analysis.AnalysisSession.get().clearSignalSlice(datasetId);
-        syncActiveSignalPointers();
-        if (afterChange != null) {
-            afterChange.run();
+        if (controlTab != null) {
+            filterTabPane.getTabs().remove(controlTab);
         }
+
+        // ── Point workspace ──────────────────────────────────────────────────
+        Node pointFilters = null;
+        Node pointResults = null;
+        if (pointSplit.getItems().size() >= 2) {
+            pointFilters = pointSplit.getItems().get(0);
+            pointResults = pointSplit.getItems().get(1);
+        }
+        pointToolTabPane = newToolTabPane();
+        Tab pointFiltersTab = fixedTab(new Tab("Variant Filters", pointFilters));
+        Tab pointComparisonTab = fixedTab(
+            comparisonTab != null ? comparisonTab : new Tab("Sample Comparison"));
+        pointComparisonTab.setText("Sample Comparison");
+        Tab pointControlTab = fixedTab(controlTab != null ? controlTab : new Tab("Control Files"));
+        pointControlTab.setText("Control Files");
+        pointToolTabPane.getTabs().addAll(pointFiltersTab, pointComparisonTab, pointControlTab);
+        if (pointFilters != null && pointResults != null) {
+            ModeSplitChrome.mount(pointSplit, pointToolTabPane, pointResults, 0.45);
+        }
+
+        // ── SV workspace ─────────────────────────────────────────────────────
+        Node svResults = svSplit.getItems().size() >= 2 ? svSplit.getItems().get(1) : null;
+        svToolTabPane = newToolTabPane();
+        // Filters host may already contain the built SV filter UI.
+        Tab svFiltersTab = fixedTab(new Tab("Variant Filters", nodes.svFiltersHost()));
+
+        Pair<Node, SampleComparisonPanel.Nodes> svComp = SampleComparisonPanel.buildUi();
+        SampleComparisonPanel svSampleComparisonPanel = new SampleComparisonPanel();
+        svSampleComparisonPanel.install(
+            svComp.getValue(),
+            cb.scheduleFilterUpdate(),
+            cb.scheduleImmediateFilterApply(),
+            cb.suppressFilterEvents());
+        SampleComparisonPanel.wireApplyButton(svComp.getKey(), cb.scheduleImmediateFilterApply());
+        SampleComparisonPanel.wireCalculateLohButton(svComp.getKey(), cb.calculateLoh());
+        svWorkspace.setComparison(svSampleComparisonPanel);
+        Tab svComparisonTab = fixedTab(new Tab("Sample Comparison", svComp.getKey()));
+
+        Pair<Node, ControlFilesPanel.Nodes> svCtrl = ControlFilesPanel.buildUi();
+        ControlFilesPanel svControlFilesPanel = new ControlFilesPanel();
+        svControlFilesPanel.install(svCtrl.getValue(), true);
+        svCtrl.getKey().setUserData(svControlFilesPanel);
+        cb.wireControlPanel().accept(svControlFilesPanel);
+        svWorkspace.setControl(svControlFilesPanel);
+        cb.controlPanelsReady().run();
+        Tab svControlTab = fixedTab(new Tab("Control Files", svCtrl.getKey()));
+
+        svToolTabPane.getTabs().addAll(svFiltersTab, svComparisonTab, svControlTab);
+        if (svResults != null) {
+            ModeSplitChrome.mount(svSplit, svToolTabPane, svResults, 0.45);
+        }
+
+        pointWorkspace.setToolTabPane(pointToolTabPane);
+        svWorkspace.setToolTabPane(svToolTabPane);
+
+        // Outer pane should only carry mode tabs now (Point / SV).
+        filterTabPane.getTabs().removeIf(t ->
+            t != pointMutationsTab && t != structuralVariantsTab);
+        if (pointMutationsTab != null && !filterTabPane.getTabs().contains(pointMutationsTab)) {
+            filterTabPane.getTabs().add(0, pointMutationsTab);
+        }
+        if (structuralVariantsTab != null && !filterTabPane.getTabs().contains(structuralVariantsTab)) {
+            filterTabPane.getTabs().add(structuralVariantsTab);
+        }
+        // LOH lives under Point results (beside Intergenic); hide until LOH mode is on.
+        if (nodes.lohRegionsTab() != null && resultsTabPane != null) {
+            resultsTabPane.getTabs().remove(nodes.lohRegionsTab());
+        }
+    }
+
+    private static TabPane newToolTabPane() {
+        TabPane tabs = new TabPane();
+        // SELECTED_TAB so the dynamic Variant details tab can close; fixed tabs stay non-closable.
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.SELECTED_TAB);
+        tabs.getStyleClass().add("filter-tabs");
+        return tabs;
+    }
+
+    private static Tab fixedTab(Tab tab) {
+        tab.setClosable(false);
+        return tab;
+    }
+
+    /** SV filter panel lives in {@code svFiltersHost}; Point filters come from FXML. */
+    public void installStructuralFilters() {
+        VBox host = nodes.svFiltersHost();
+        if (host == null) {
+            return;
+        }
+        Pair<Node, VariantFiltersPanel.Nodes> built = VariantFiltersPanel.buildStructuralFiltersUi();
+        host.getChildren().setAll(built.getKey());
+        VBox.setVgrow(built.getKey(), Priority.ALWAYS);
+
+        VariantFiltersPanel.Nodes svNodes = built.getValue();
+        if (svNodes.reloadBannerButton() != null) {
+            svNodes.reloadBannerButton().setOnAction(e -> cb.reloadFiltered().run());
+        }
+        VariantFiltersPanel svFiltersPanel = new VariantFiltersPanel();
+        svFiltersPanel.install(
+            svNodes,
+            cb.scheduleFilterUpdate(),
+            cb.scheduleImmediateFilterApply(),
+            cb.suppressFilterEvents(),
+            VariantTypeVisuals.VariantClass.STRUCTURAL);
+        if (svWorkspace != null) {
+            svWorkspace.setFilters(svFiltersPanel);
+        }
+    }
+
+    /** Refresh comparison groups when the user opens a Sample Comparison tool tab. */
+    public void wireComparisonRefresh() {
+        refreshComparisonOnSelect(pointToolTabPane, pointWorkspace);
+        refreshComparisonOnSelect(svToolTabPane, svWorkspace);
+    }
+
+    private static void refreshComparisonOnSelect(TabPane tools, VariantClassWorkspace workspace) {
+        if (tools == null || workspace == null) {
+            return;
+        }
+        tools.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+            if (newTab != null && "Sample Comparison".equals(newTab.getText())) {
+                workspace.refreshComparisonGroups();
+            }
+        });
+    }
+
+    /**
+     * Signal mode workspace + Point/SV Group comparison tabs.
+     * All sample groups are compared automatically (no group-picker chrome).
+     */
+    public void installExtensions() {
+        org.baseplayer.analysis.ComparisonContext.get().ensureBound();
+        org.baseplayer.analysis.ComparisonContext.get().loadFromDocument(
+            org.baseplayer.project.ProjectSessionState.get().getDocument());
+
+        if (filterTabPane != null) {
+            // Drop legacy Expression / Methylation / Signal comparison tabs.
+            filterTabPane.getTabs().removeIf(t ->
+                t != null && ("Expression".equals(t.getText())
+                    || "Methylation".equals(t.getText())
+                    || "Signal comparison".equals(t.getText())));
+        }
+
+        signal.syncSignalDatasetTabs();
+        pointGroup = installGroupComparison(
+            AnalysisMode.MUTATIONS_POINT, pointToolTabPane, resultsTabPane);
+        svGroup = installGroupComparison(
+            AnalysisMode.MUTATIONS_SV,
+            svToolTabPane,
+            nodes.svResultsTabPane() != null ? nodes.svResultsTabPane() : resultsTabPane);
+        org.baseplayer.analysis.mutation.MutationGroupComparisonRunner.setAnnotateAllRunningCheck(
+            busy::isAllChromosomeAnnotationRunning);
+    }
+
+    /**
+     * Point/SV tool-tab run controls, with results hosted in the variant results TabPane
+     * (same pattern as Signal → Signals table).
+     */
+    private GroupComparison installGroupComparison(
+            AnalysisMode mode, TabPane toolTabs, TabPane resultsPane) {
+        if (toolTabs == null) {
+            return null;
+        }
+        MutationEnrichmentPanel panel = new MutationEnrichmentPanel(mode);
+        panel.setAnalysisBusyRunner(busy);
+        Tab toolTab = fixedTab(new Tab("Group comparison", panel));
+        toolTabs.getTabs().add(toolTab);
+
+        Tab resultsTab = fixedTab(new Tab("Group comparison", panel.getResultTable()));
+        panel.setResultsTab(resultsTab);
+        if (resultsPane != null && !resultsPane.getTabs().contains(resultsTab)) {
+            resultsPane.getTabs().add(resultsTab);
+        }
+        panel.setOnResultReady(result -> {
+            if (resultsPane != null) {
+                if (!resultsPane.getTabs().contains(resultsTab)) {
+                    resultsPane.getTabs().add(resultsTab);
+                }
+                resultsPane.getSelectionModel().select(resultsTab);
+            }
+        });
+        return new GroupComparison(panel, toolTab, resultsTab);
+    }
+
+    // ── Signal dataset tabs (see SignalModeTabs) ──────────────────────────────
+
+    public void syncSignalDatasetTabs() {
+        signal.syncSignalDatasetTabs();
+    }
+
+    public void syncActiveSignalPointers() {
+        signal.syncActiveSignalPointers();
+    }
+
+    public boolean isSignalModeSelected() {
+        return signal.isSignalModeSelected();
     }
 
     public void refreshSignalAllChromosomesButton() {
-        syncActiveSignalPointers();
-        if (signalWorkspace == null || signalToolTabPane == null) {
-            return;
-        }
-        Tab tool = signalToolTabPane.getSelectionModel().getSelectedItem();
-        signalWorkspace.setAllChromosomesAction(signalWorkspace.actionForToolTab(tool));
+        signal.refreshSignalAllChromosomesButton();
     }
 
-    public void selectSignalMode(
-            Consumer<SignalDataset> ensureTab,
-            Runnable afterSync) {
-        selectSignalDataset(
-            org.baseplayer.analysis.AnalysisSession.get().getActiveSignalDatasetId(),
-            ensureTab,
-            afterSync);
+    public void applySignalComparison() {
+        signal.applySignalComparison();
     }
 
-    public void selectSignalDataset(
-            String datasetId,
-            Consumer<SignalDataset> ensureTab,
-            Runnable afterSync) {
-        if (filterTabPane == null) {
-            return;
-        }
-        syncSignalDatasetTabs(ensureTab, afterSync);
-        SignalModeBundle bundle = datasetId != null ? signalModes.get(datasetId) : null;
-        if (bundle == null) {
-            bundle = activeSignalBundle();
-        }
-        if (bundle != null && filterTabPane.getTabs().contains(bundle.modeTab)) {
-            org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(bundle.datasetId);
-            filterTabPane.getSelectionModel().select(bundle.modeTab);
-            syncActiveSignalPointers();
-            if (bundle.toolTabPane != null && !bundle.toolTabPane.getTabs().isEmpty()) {
-                bundle.toolTabPane.getSelectionModel().select(0);
-            }
-        }
+    /** Focus the active / first Signal dataset tab. */
+    public void selectSignalMode() {
+        signal.selectSignalMode();
     }
 
-    public void refreshSignalSources(
-            Consumer<SignalDataset> ensureTab,
-            Runnable afterSync,
-            Runnable onExcelVisibility) {
-        SignalDatasetCoordinator.ensureDatasetsForOpenTracks();
-        syncSignalDatasetTabs(ensureTab, afterSync);
-        syncActiveSignalPointers();
-        if (signalWorkspace != null) {
-            signalWorkspace.refreshFromData();
+    /** Focus a specific named Signal dataset tab. */
+    public void selectSignalDataset(String datasetId) {
+        signal.selectSignalDataset(datasetId);
+    }
+
+    /** Refresh Signal Value kinds after opening BAM companions / tables. */
+    public void refreshSignalSources() {
+        signal.refreshSignalSources();
+    }
+
+    /** Refresh a specific dataset workspace after open. */
+    public void refreshSignalDataset(String datasetId) {
+        signal.refreshSignalDataset(datasetId);
+    }
+
+    /**
+     * Gene-canvas biotype legend toggled: refilter Signal annotation and group comparisons
+     * to the same visible gene types (no VCF reload / recollect).
+     */
+    public void refreshAfterGeneVisibility() {
+        signal.refreshAfterGeneVisibility();
+        if (pointEnrichmentPanel() != null) {
+            pointEnrichmentPanel().refreshAfterGeneVisibility();
         }
-        if (onExcelVisibility != null) {
-            onExcelVisibility.run();
+        if (svEnrichmentPanel() != null) {
+            svEnrichmentPanel().refreshAfterGeneVisibility();
         }
     }
 
-    public void refreshSignalDataset(
-            String datasetId,
-            Consumer<SignalDataset> ensureTab,
-            Runnable afterSync,
-            Runnable onExcelVisibility) {
-        syncSignalDatasetTabs(ensureTab, afterSync);
-        SignalModeBundle bundle = datasetId != null ? signalModes.get(datasetId) : null;
-        if (bundle != null) {
-            org.baseplayer.analysis.AnalysisSession.get().setActiveSignalDatasetId(datasetId);
-            filterTabPane.getSelectionModel().select(bundle.modeTab);
-            syncActiveSignalPointers();
-            bundle.workspace.refreshFromData();
-        } else {
-            refreshSignalSources(ensureTab, afterSync, onExcelVisibility);
-            return;
-        }
-        if (onExcelVisibility != null) {
-            onExcelVisibility.run();
-        }
-    }
+    // ── Mode tab visibility ───────────────────────────────────────────────────
 
     /**
      * Show/hide Point / SV tabs and repair selection. Caller should
@@ -311,9 +567,9 @@ public final class ModeHost {
         Tab selected = filterTabPane.getSelectionModel().getSelectedItem();
         boolean selectedInvalid = selected == null || !filterTabPane.getTabs().contains(selected);
         if (selectedInvalid) {
-            SignalModeBundle signal = activeSignalBundle();
-            if (signal != null && filterTabPane.getTabs().contains(signal.modeTab)) {
-                filterTabPane.getSelectionModel().select(signal.modeTab);
+            SignalModeBundle activeSignal = signal.activeSignalBundle();
+            if (activeSignal != null && filterTabPane.getTabs().contains(activeSignal.modeTab)) {
+                filterTabPane.getSelectionModel().select(activeSignal.modeTab);
             } else if (pointMutationsTab != null && filterTabPane.getTabs().contains(pointMutationsTab)) {
                 filterTabPane.getSelectionModel().select(pointMutationsTab);
             } else if (structuralVariantsTab != null
@@ -348,14 +604,7 @@ public final class ModeHost {
         if (visible) {
             if (!filterTabPane.getTabs().contains(tab)) {
                 int index = 0;
-                boolean isSignalTab = false;
-                for (SignalModeBundle bundle : signalModes.values()) {
-                    if (bundle.modeTab == tab) {
-                        isSignalTab = true;
-                        break;
-                    }
-                }
-                if (isSignalTab) {
+                if (signal.isSignalTab(tab)) {
                     index = filterTabPane.getTabs().size();
                 } else if (tab == structuralVariantsTab && pointMutationsTab != null
                     && filterTabPane.getTabs().contains(pointMutationsTab)) {

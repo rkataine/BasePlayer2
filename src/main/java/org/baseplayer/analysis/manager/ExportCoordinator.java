@@ -28,9 +28,15 @@ import org.baseplayer.variant.ui.components.VariantTable;
 import javafx.application.Platform;
 import javafx.collections.ObservableList;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
+import javafx.scene.control.Tooltip;
+import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+
+import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid;
+import org.kordamp.ikonli.javafx.FontIcon;
 
 /**
  * Excel export orchestration for Analysis Manager (variant sheets + group tabs).
@@ -40,6 +46,8 @@ public final class ExportCoordinator {
     private Supplier<Stage> stageSupplier = () -> null;
     private Supplier<VariantTable> pointTable = () -> null;
     private Supplier<SvVariantTable> svTable = () -> null;
+    private Button pointButton;
+    private Button svButton;
 
     public void bind(
             Supplier<Stage> stageSupplier,
@@ -48,6 +56,53 @@ public final class ExportCoordinator {
         this.stageSupplier = stageSupplier != null ? stageSupplier : () -> null;
         this.pointTable = pointTable != null ? pointTable : () -> null;
         this.svTable = svTable != null ? svTable : () -> null;
+    }
+
+    /** Style the toolbar buttons and bind them to this coordinator (hidden until data exists). */
+    public void installButtons(Button pointButton, Button svButton) {
+        this.pointButton = pointButton;
+        this.svButton = svButton;
+        installButton(pointButton, false);
+        installButton(svButton, true);
+    }
+
+    private void installButton(Button button, boolean structural) {
+        if (button == null) {
+            return;
+        }
+        FontIcon icon = new FontIcon(FontAwesomeSolid.FILE_EXCEL);
+        icon.setIconSize(14);
+        icon.setIconColor(Color.web("#217346"));
+        button.setText("");
+        button.setGraphic(icon);
+        button.setTooltip(new Tooltip(
+            "Export to Excel (variant sheets + group comparison tabs when available)"));
+        button.setOnAction(e -> exportVariantsToExcel(structural));
+        setVisible(button, false);
+    }
+
+    /**
+     * Show each Excel button when its table has rows or group-comparison sheets exist.
+     */
+    public void refreshButtonVisibility(boolean pointEmpty, boolean svEmpty) {
+        boolean hasGroupSheets = !GroupStatExcelExport.sheetSourcesFromSession().isEmpty();
+        setVisible(pointButton, !pointEmpty || hasGroupSheets);
+        setVisible(svButton, !svEmpty || hasGroupSheets);
+    }
+
+    /** Signal-only sessions: expose Excel for group sheets without touching other state. */
+    public void showButtonsForGroupSheets() {
+        if (!GroupStatExcelExport.sheetSourcesFromSession().isEmpty()) {
+            refreshButtonVisibility(true, true);
+        }
+    }
+
+    private static void setVisible(Button button, boolean visible) {
+        if (button == null) {
+            return;
+        }
+        button.setVisible(visible);
+        button.setManaged(visible);
     }
 
     public void exportVariantsToExcel(boolean structural) {
